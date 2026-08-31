@@ -209,7 +209,12 @@ _FALLBACK_CONFIG = {
     "require_purchase_order": False,
     "valid_po_prefixes": ["PO", "WO", "PR"],
     # Duplicate detection
-    "duplicate_check_enabled": False,
+    # On by default. It was shipped off, which meant a pilot ran without any
+    # duplicate check at all -- and a duplicate invoice is a duplicate payment,
+    # the most expensive routine error in accounts payable. Exact and
+    # normalised matches block; a fuzzy match only warns, so legitimate repeat
+    # billing (retainers, subscriptions) is not rejected.
+    "duplicate_check_enabled": True,
     "duplicate_check_type": "none",  # "none", "file", "database", "api"
     # Tolerances
     "balance_tolerance": 0.02,

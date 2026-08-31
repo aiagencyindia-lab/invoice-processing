@@ -464,7 +464,7 @@ config_defaults:
   waf_exempt_vendors: []
   require_purchase_order: false
   valid_po_prefixes: ["PO", "WO", "PR"]
-  duplicate_check_enabled: false
+  duplicate_check_enabled: true
   duplicate_check_type: "none"
   balance_tolerance: 0.02
   line_sum_tolerance: 1.00
