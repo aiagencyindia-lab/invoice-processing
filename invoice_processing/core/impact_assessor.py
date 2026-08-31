@@ -9,6 +9,7 @@ Uses ALF engine's ConditionEvaluator for guaranteed consistency.
 ADK-transferable: single run() entry point, structured I/O.
 """
 
+import hashlib
 import random
 from dataclasses import dataclass, field
 
@@ -111,14 +112,29 @@ class ImpactAssessorAgent:
         all_contexts = self._load_all_contexts()
 
         # Determine which cases to evaluate
-        all_case_ids = list(all_contexts.keys())
+        all_case_ids = sorted(all_contexts)
         if len(all_case_ids) > sample_size:
-            # Always include target; randomly sample the rest
+            # Always include the target; select the rest deterministically.
+            #
+            # This used `random.sample`, which meant the same rule against the
+            # same corpus produced a different impact report on every run. That
+            # is fatal to the claim the report exists to support: an SME cannot
+            # be shown a blast radius they cannot reproduce, and a reviewer
+            # cannot audit a number that changes when they re-run it.
+            #
+            # The seed is derived from the corpus and the target rather than
+            # fixed, so the sample still spreads across the case base and still
+            # changes when the case base does -- but never between two runs over
+            # the same data. hashlib rather than hash(), which is salted per
+            # process and would reintroduce exactly the problem.
             other_ids = [cid for cid in all_case_ids if cid != target_case_id]
-            sampled_others = random.sample(
+            seed = hashlib.sha256(
+                "|".join([target_case_id, *other_ids]).encode("utf-8")
+            ).hexdigest()
+            sampled_others = random.Random(seed).sample(
                 other_ids, min(sample_size - 1, len(other_ids))
             )
-            eval_case_ids = [target_case_id, *sampled_others]
+            eval_case_ids = [target_case_id, *sorted(sampled_others)]
             sampled = True
         else:
             eval_case_ids = all_case_ids
@@ -168,7 +184,7 @@ class ImpactAssessorAgent:
         if report.sampled:
             lines.append(
                 f"Sampled {report.sample_size} of {report.total_cases} cases "
-                f"(random selection; target case always included)."
+                f"(deterministic selection; target case always included)."
             )
         else:
             lines.append(f"Scanning {report.total_cases} cases...")

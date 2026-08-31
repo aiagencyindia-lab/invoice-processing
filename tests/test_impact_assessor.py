@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from invoice_processing import paths
 from invoice_processing.core.impact_assessor import (
     CaseMatch,
     ImpactAssessorAgent,
@@ -348,3 +349,66 @@ class TestSampling:
 
         assert report.sampled is False
         assert report.sample_size == _EXACT_SAMPLE_COUNT
+
+
+class TestReproducibility:
+    """The property the impact report exists to support.
+
+    Sampling used `random.sample`, so the same rule against the same corpus
+    produced a different blast radius on every run. An SME cannot be shown a
+    number they cannot reproduce, and an auditor cannot check one that changes
+    when they re-run it -- which made "measured blast radius" a claim the code
+    did not support.
+    """
+
+    CONDITIONS = [  # noqa: RUF012
+        {"field": "decision_phase1", "operator": "equals", "value": "REJECT"}
+    ]
+
+    def _sample(self, contexts):
+        agent = TestSampling()._make_agent(contexts)
+        report = agent.run(
+            self.CONDITIONS, "case_target", sample_size=_DEFAULT_SAMPLE_SIZE
+        )
+        return sorted(report.safe_cases) + sorted(
+            m.case_id for m in report.collateral_matches
+        )
+
+    def test_the_same_corpus_gives_the_same_sample(self):
+        contexts = _make_contexts(_LARGE_CASE_COUNT)
+        assert self._sample(contexts) == self._sample(contexts)
+
+    def test_repeated_runs_never_diverge(self):
+        """Once was luck; ten times is the property."""
+        contexts = _make_contexts(_LARGE_CASE_COUNT)
+        assert len({tuple(self._sample(contexts)) for _ in range(10)}) == 1
+
+    def test_the_target_is_always_included(self):
+        agent = TestSampling()._make_agent(_make_contexts(_LARGE_CASE_COUNT))
+        report = agent.run(
+            self.CONDITIONS, "case_target", sample_size=_DEFAULT_SAMPLE_SIZE
+        )
+        assert report.target_case_id == "case_target"
+
+    def test_a_different_corpus_gives_a_different_sample(self):
+        """Stability must not mean the sample ignores the case base."""
+        a = self._sample(_make_contexts(_LARGE_CASE_COUNT))
+        b = self._sample(_make_contexts(_LARGE_CASE_COUNT + 20))
+        assert a != b
+
+    def test_the_summary_no_longer_claims_randomness(self):
+        agent = TestSampling()._make_agent(_make_contexts(_LARGE_CASE_COUNT))
+        summary = agent.run(
+            self.CONDITIONS, "case_target", sample_size=_DEFAULT_SAMPLE_SIZE
+        ).summary
+        assert "random" not in summary.lower(), summary
+        assert "deterministic" in summary.lower()
+
+    def test_the_module_does_not_use_unseeded_sampling(self):
+        """`random.sample` at module scope is the defect itself."""
+        source = (
+            paths.AGENT_PKG_DIR / "core" / "impact_assessor.py"
+        ).read_text(encoding="utf-8")
+        assert "random.sample(" not in source, (
+            "unseeded random.sample makes the impact report non-reproducible"
+        )
