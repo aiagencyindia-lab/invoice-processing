@@ -13,7 +13,7 @@ import logging
 import sys
 
 from .. import paths
-from ..adapters import JsonlAuditSink
+from ..api import service
 from .queue import LocalQueue, get_queue
 from .runner import ClaimStore, Worker
 
@@ -42,7 +42,10 @@ def main(argv: list[str] | None = None) -> int:
     worker = Worker(
         queue=queue,
         claims=ClaimStore(paths.DATA_DIR / "claims"),
-        audit=JsonlAuditSink(),
+        # The resolved sink, not a hardcoded file: a worker writing its audit
+        # trail to container-local disk loses it on every restart, which is
+        # exactly the events an auditor would ask about.
+        audit=service.get_audit(),
     )
     if args.once:
         for outcome in worker.run_once():

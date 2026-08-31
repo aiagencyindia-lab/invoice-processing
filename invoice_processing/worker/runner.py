@@ -287,7 +287,7 @@ class Worker:
             actor="worker",
         )
         return process_document(
-            ctx, document, service.get_blobs(tenant_id), service._cases
+            ctx, document, service.get_blobs(tenant_id), service.get_cases()
         )
 
     def _dead_letter(self, message: Message, reason: str) -> None:

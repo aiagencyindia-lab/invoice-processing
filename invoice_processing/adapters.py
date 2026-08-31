@@ -325,5 +325,25 @@ class JsonDocumentRepository:
         return document_id
 
     def tenant_id_for_slug(self, slug: str) -> str | None:
-        """Local development has one tenant, named by its own slug."""
-        return slug or None
+        """Resolve an inbound-email local part to a tenant, or refuse.
+
+        This used to `return slug or None`, which meant every recipient
+        local-part resolved to a tenant id of the same name -- so inbound mail
+        addressed to anything at all was accepted and filed under an invented
+        tenant. The test suite did not catch it because the fake used in tests
+        held a real tenant map and was therefore *stricter* than the code it
+        stood in for.
+
+        Local development has exactly one tenant, so that is the only slug that
+        resolves. Anything else returns None and the webhook answers 404, which
+        is what the Postgres implementation does for an unknown or suspended
+        tenant.
+        """
+        if not slug:
+            return None
+        known = os.getenv("AUTH_DEV_TENANT", "default")
+        if slug == known:
+            return slug
+        # A tenant already holding documents is also legitimate, so a local
+        # corpus built up before AUTH_DEV_TENANT was set keeps working.
+        return slug if slug in self._read() else None

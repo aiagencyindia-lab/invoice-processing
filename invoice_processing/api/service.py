@@ -50,17 +50,68 @@ from .auth import Principal, current_principal, require_role
 
 app = FastAPI(title="Invoice Review Workbench", version="0.1.0")
 
-# The local case adapter is single-tenant, so it must serve the same tenant the
-# dev principal presents -- otherwise every read is silently empty. In
-# production this is a PgCaseRepository and the question does not arise.
-_cases = FsCaseRepository(tenant_id=os.getenv("AUTH_DEV_TENANT", "default"))
-_documents = JsonDocumentRepository()
 _corrections_path = paths.DATA_DIR / "corrections.jsonl"
 
-# Resolved on first use, not at import: the environment a test sets up must be
-# able to take effect, and importing this module must never open a connection.
+# All three storage adapters resolve the same way: lazily, from configuration,
+# memoized. Lazily because a module import must never open a connection and
+# because a test's environment has to be able to take effect; from configuration
+# because the local implementations are single-tenant and cannot serve a real
+# deployment.
+#
+# These were previously module-level constants pinned to the filesystem
+# implementations, which meant `PgCaseRepository` and `PgDocumentRepository`
+# were unreachable: case artifacts went to a package-relative directory that is
+# ephemeral on Cloud Run, and every processed invoice would be lost on restart.
+_cases = None
+_documents = None
 _audit = None
 
+
+def _database_configured() -> bool:
+    """True when a real database is available to persist to."""
+    from ..db.session import cloud_sql_instance  # noqa: PLC0415
+
+    return bool(cloud_sql_instance() or os.getenv("DATABASE_URL"))
+
+
+def get_cases():
+    """Case artifacts: Postgres when configured, local files otherwise.
+
+    The filesystem adapter is bound to a single tenant (it serves one
+    directory), so in local development it must be pinned to whatever tenant the
+    dev principal presents -- otherwise every read is silently empty.
+    """
+    global _cases
+    if _cases is None:
+        if _database_configured():
+            from ..db.repositories import PgCaseRepository  # noqa: PLC0415
+
+            _cases = PgCaseRepository()
+        else:
+            _cases = FsCaseRepository(
+                tenant_id=os.getenv("AUTH_DEV_TENANT", "default")
+            )
+    return _cases
+
+
+def get_documents():
+    """Ingested-document registry: Postgres when configured, JSON file otherwise.
+
+    Not interchangeable in behaviour, and the difference matters: the Postgres
+    implementation resolves an inbound-email recipient by looking up an *active
+    tenant*, while the local one echoes the slug back. On the local adapter any
+    recipient local-part becomes a tenant id, so it must never front a real
+    deployment.
+    """
+    global _documents
+    if _documents is None:
+        if _database_configured():
+            from ..db.repositories import PgDocumentRepository  # noqa: PLC0415
+
+            _documents = PgDocumentRepository()
+        else:
+            _documents = JsonDocumentRepository()
+    return _documents
 
 def get_audit():
     """The audit sink: Postgres when a database is configured, else a file.
@@ -77,19 +128,13 @@ def get_audit():
     """
     global _audit
     if _audit is None:
-        from ..db.session import cloud_sql_instance  # noqa: PLC0415
-
-        if cloud_sql_instance() or os.getenv("DATABASE_URL"):
+        if _database_configured():
             from ..db.repositories import PgAuditSink  # noqa: PLC0415
 
             _audit = PgAuditSink()
         else:
             _audit = JsonlAuditSink()
     return _audit
-
-
-def get_documents():
-    return _documents
 
 
 def get_queue():
@@ -242,8 +287,8 @@ def list_invoices(
     need a human at the top; a chronological queue buries them.
     """
     items = []
-    for case_id in _cases.iter_case_ids(principal.tenant_id):
-        artifacts = _cases.get_artifacts(principal.context(case_id))
+    for case_id in get_cases().iter_case_ids(principal.tenant_id):
+        artifacts = get_cases().get_artifacts(principal.context(case_id))
         if artifacts:
             items.append(_summarize(case_id, artifacts))
 
@@ -268,7 +313,7 @@ def list_invoices(
 def get_invoice(
     case_id: str, principal: Annotated[Principal, Depends(current_principal)]
 ) -> dict:
-    artifacts = _cases.get_artifacts(principal.context(case_id))
+    artifacts = get_cases().get_artifacts(principal.context(case_id))
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
 
@@ -316,7 +361,7 @@ def get_document(
     """
     # Confirm the case belongs to the caller's tenant before serving bytes:
     # otherwise this endpoint would hand over any document by guessing an id.
-    if not _cases.get_artifacts(principal.context(case_id)):
+    if not get_cases().get_artifacts(principal.context(case_id)):
         raise HTTPException(status_code=404, detail="No document for this case")
     for name in ("invoice.pdf", "waf.pdf"):
         candidate = paths.EXEMPLARY_DIR / case_id / name
@@ -337,7 +382,7 @@ def edit_fields(
     what accuracy is measured from and what the learning loop mines for rules.
     """
     ctx = principal.context(case_id)
-    artifacts = _cases.get_artifacts(ctx)
+    artifacts = get_cases().get_artifacts(ctx)
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
 
@@ -366,7 +411,7 @@ def edit_fields(
 
     if recorded:
         extraction["invoice"] = invoice
-        _cases.put_artifact(ctx, "extraction", extraction)
+        get_cases().put_artifact(ctx, "extraction", extraction)
         get_audit().emit(
             ctx,
             "fields_corrected",
@@ -397,7 +442,7 @@ def act(
         )
 
     ctx = principal.context(case_id)
-    artifacts = _cases.get_artifacts(ctx)
+    artifacts = get_cases().get_artifacts(ctx)
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
 
@@ -452,12 +497,12 @@ def _workflow(ctx) -> dict:
     and the export path had no way to honour "post only after approval". This
     is where that fact lives.
     """
-    return (_cases.get_artifacts(ctx) or {}).get(WORKFLOW_ARTIFACT) or {}
+    return (get_cases().get_artifacts(ctx) or {}).get(WORKFLOW_ARTIFACT) or {}
 
 
 def _record_workflow(ctx, **changes) -> dict:
     state = {**_workflow(ctx), **changes}
-    _cases.put_artifact(ctx, WORKFLOW_ARTIFACT, state)
+    get_cases().put_artifact(ctx, WORKFLOW_ARTIFACT, state)
     return state
 
 
@@ -560,7 +605,7 @@ def export_invoice(
       are the expensive mistake in accounts payable.
     """
     ctx = principal.context(case_id)
-    artifacts = _cases.get_artifacts(ctx)
+    artifacts = get_cases().get_artifacts(ctx)
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
 

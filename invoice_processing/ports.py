@@ -120,7 +120,20 @@ class CaseRepository(Protocol):
 
 @runtime_checkable
 class RuleRepository(Protocol):
-    """Stores the ALF rule base."""
+    """Stores the ALF rule base.
+
+    **Status: aspirational. No live consumer.** Both implementations exist and
+    are tested (`JsonRuleRepository`, `PgRuleRepository`), but nothing routes
+    through them: `core/rule_writer.py` and `alf_engine.load_rule_base` each do
+    their own file I/O against a path. So the optimistic-concurrency and
+    id-allocation guarantees described below are available and unused -- two
+    concurrent SME sessions can still lose a rule.
+
+    Stated here rather than left to be discovered, because a port that looks
+    wired and is not is worse than an absent one. Closing it means giving
+    `RuleWriter` and `ALFEngine` an injected repository instead of a path, which
+    is a refactor of the learning path, not a configuration change.
+    """
 
     def load(self, tenant_id: str) -> tuple[dict, int]:
         """Return (document, version). The document includes disabled rules and
