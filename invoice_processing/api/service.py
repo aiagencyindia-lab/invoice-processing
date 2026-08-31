@@ -50,6 +50,18 @@ from .auth import Principal, current_principal, require_role
 
 app = FastAPI(title="Invoice Review Workbench", version="0.1.0")
 
+
+@app.on_event("startup")
+def _preflight() -> None:
+    """Refuse to serve a deployed environment that is misconfigured.
+
+    The alternative is a process that starts happily and loses documents.
+    """
+    from .preflight import enforce  # noqa: PLC0415
+
+    enforce()
+
+
 _corrections_path = paths.DATA_DIR / "corrections.jsonl"
 
 # All three storage adapters resolve the same way: lazily, from configuration,

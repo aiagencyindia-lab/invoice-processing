@@ -44,6 +44,11 @@ logger = logging.getLogger(__name__)
 # so a typo in a claim locks a user out rather than promoting them.
 ROLE_RANK = {"viewer": 0, "clerk": 1, "approver": 2, "admin": 3}
 
+# The only environments in which authentication may be disabled. An allow-list,
+# because the cost of an unlisted-but-safe value is an inconvenience and the
+# cost of an unlisted-but-production value is an open door.
+LOCAL_ENVIRONMENTS = {"local", "dev", "development", "test"}
+
 
 # ---------------------------------------------------------------------------
 # Principal
@@ -183,10 +188,16 @@ def dev_principal() -> Principal | None:
     if os.getenv("AUTH_DISABLED", "").lower() not in ("1", "true", "yes"):
         return None
     env = os.getenv("ENV", "").lower()
-    if env in ("production", "prod", "staging"):
+    if env not in LOCAL_ENVIRONMENTS:
+        # An allow-list, not a deny-list. A deny-list has to anticipate every
+        # spelling of "production" -- `prd`, `live`, `production-eu`, or an
+        # unset ENV would all have slipped through and handed out an
+        # unauthenticated admin principal.
         logger.error(
-            "AUTH_DISABLED is set but ENV=%s; refusing to disable authentication.",
+            "AUTH_DISABLED is set but ENV=%r is not a known local environment "
+            "(%s); refusing to disable authentication.",
             env,
+            ", ".join(sorted(LOCAL_ENVIRONMENTS)),
         )
         return None
     logger.warning(

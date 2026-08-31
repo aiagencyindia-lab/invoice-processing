@@ -45,3 +45,47 @@ def never_touch_cloud_sql(monkeypatch):
     """
     monkeypatch.setenv("DATABASE_URL", os.getenv("DATABASE_URL", "sqlite://"))
     monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def never_touch_pubsub(monkeypatch):
+    """Fail loudly if a test would open a real Pub/Sub client.
+
+    `get_queue()` returns a real `PubSubQueue` whenever `PUBSUB_TOPIC` and
+    `GOOGLE_CLOUD_PROJECT` are both set, and `.env` already carries the project.
+    One added line in `.env` would turn a test run into live publishes against a
+    production subscription.
+    """
+
+    def refuse(*args, **kwargs):
+        raise AssertionError(
+            "A test tried to open a real Pub/Sub client. Inject fake "
+            "publisher/subscriber objects into PubSubQueue instead."
+        )
+
+    monkeypatch.delenv("PUBSUB_TOPIC", raising=False)
+    for name in ("PublisherClient", "SubscriberClient"):
+        monkeypatch.setattr(
+            f"google.cloud.pubsub_v1.{name}", refuse, raising=False
+        )
+
+
+@pytest.fixture(autouse=True)
+def never_open_the_cloud_sql_connector(monkeypatch):
+    """Block the connector itself, not just the environment that selects it.
+
+    The `never_touch_cloud_sql` guard works by clearing `CLOUD_SQL_INSTANCE`,
+    but several modules call `load_dotenv()` at import time -- so a module first
+    imported inside a test body can put the variable straight back. Blocking the
+    Connector class closes that path regardless of import order.
+    """
+
+    def refuse(*args, **kwargs):
+        raise AssertionError(
+            "A test tried to open a Cloud SQL connection. Pass an explicit "
+            "sqlite:// URL to get_engine() instead."
+        )
+
+    monkeypatch.setattr(
+        "google.cloud.sql.connector.Connector", refuse, raising=False
+    )
