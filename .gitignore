@@ -1,0 +1,31 @@
+# Environment / credentials — .env references a service-account key path
+.env
+
+# Virtualenv and ADK local state
+.venv/
+.adk/
+
+# Caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+
+# Regenerated at runtime — the agent rewrites these on every run
+invoice_processing/data/agent_output/
+invoice_processing/data/alf_output/
+invoice_processing/data/investigation_output/
+invoice_processing/data/eval_results/
+invoice_processing/data/learning_sessions/
+
+# Rule base backups (rule_base.json itself is tracked — it holds learned rules)
+invoice_processing/data/*.bak.*
+
+# Runtime state created by the platform (Phase 1)
+invoice_processing/data/queue/
+invoice_processing/data/claims/
+invoice_processing/data/blobs/
+invoice_processing/data/documents.json
+invoice_processing/data/corrections.jsonl
+invoice_processing/data/audit.jsonl

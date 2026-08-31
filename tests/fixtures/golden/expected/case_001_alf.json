@@ -1,0 +1,102 @@
+{
+  "audit": {
+    "alf_version": "2.0.0",
+    "any_rules_fired": false,
+    "execution_log": [],
+    "original_decision": null,
+    "revised_decision": null,
+    "revision_plan": {
+      "deterministic_edits": [],
+      "execution_order": [],
+      "field_patches": null,
+      "pipeline_continuation": null,
+      "total_rules_aggregated": 0
+    },
+    "rule_base_version": "2.0.0",
+    "rules_applied": [],
+    "rules_matched": 0,
+    "rules_skipped": [
+      {
+        "applied": false,
+        "conditions_evaluated": [
+          {
+            "actual": null,
+            "expected": "REJECT",
+            "field": "decision_phase4",
+            "operator": "equals",
+            "passed": false
+          },
+          {
+            "actual": null,
+            "expected": "Invoice does not match work authorization",
+            "field": "phase4.rejection_template",
+            "operator": "contains",
+            "passed": false
+          },
+          {
+            "actual": true,
+            "expected": null,
+            "field": "has_waf",
+            "operator": "is_false",
+            "passed": false
+          },
+          {
+            "actual": 733.7,
+            "expected": 2000,
+            "field": "invoice.invoice_total_inc_tax",
+            "operator": "less_than",
+            "passed": true
+          },
+          {
+            "actual": [
+              {
+                "amount_ex_tax": 638.0,
+                "amount_inc_tax": null,
+                "description": "Emergency call-out - overtime rate",
+                "quantity": 5.8,
+                "tax_amount": 95.7,
+                "tax_code": "GST",
+                "unit_price": 110.0
+              }
+            ],
+            "expected": "repair|maintenance|technician|labour",
+            "field": "extraction.invoice.line_items",
+            "operator": "any_item_contains",
+            "passed": false
+          }
+        ],
+        "matched": false,
+        "priority": 50,
+        "reason": "Conditions not met",
+        "rule_id": "ALF-001",
+        "rule_name": "Override Phase 4 WAF Rejection for Low-Value Repair Invoices",
+        "scope": "WAF_EXEMPTION_REPAIR_LOW_VALUE"
+      }
+    ],
+    "scope_matches": {},
+    "total_rules_evaluated": 1
+  },
+  "revised_postprocessing": {
+    "Invoice Details": {
+      "Currency": "AUD",
+      "Invoice Date": "2026-01-07",
+      "Invoice Total": "733.70",
+      "Pretax Total": "638.00",
+      "Tax Amount": "95.70",
+      "Vendor Invoice": "INV-00001"
+    },
+    "Invoice Processing": {
+      "Invoice Source": "Email",
+      "Invoice Status": "Rejected",
+      "Invoice Type": "Normal"
+    },
+    "Line Items": "[{\"line_number\": 1, \"item_code\": \"LABOUR_AH\", \"description\": \"Emergency call-out - overtime rate\", \"quantity\": \"5.80\", \"unit_cost\": \"110.00\", \"line_cost\": \"638.00\", \"tax\": \"95.70\", \"tax_code\": \"TAX\"}]",
+    "Outcome Message": {
+      "Outcome Message": "Invoice rejected on 30/08/2026 17:06:56: Vendor tax ID invalid"
+    },
+    "Vendor Information": {
+      "Tax ID": "64 560 747 633",
+      "Vendor Name": "FastTrack Logistics"
+    }
+  }
+}

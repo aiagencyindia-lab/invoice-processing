@@ -1,0 +1,28 @@
+{
+  "agent": "audit_logger",
+  "version": "1.0",
+  "timestamp": "2026-08-30T22:31:30.190306",
+  "input_refs": [],
+  "case_id": "case_005",
+  "source_folder": "/Users/vineet/Downloads/ADK/invoice-processing/invoice_processing/exemplary_data/case_005",
+  "output_folder": "/Users/vineet/Downloads/ADK/invoice-processing/invoice_processing/data/agent_output/case_005",
+  "processing_summary": {
+    "decision": "REJECT",
+    "processing_time_seconds": 42.61,
+    "total_llm_calls": 3,
+    "total_tokens": 2844,
+    "total_cost_usd": 0.0061
+  },
+  "artifacts": [
+    "01_classification.json",
+    "02_extraction.json",
+    "03_phase1_validation.json",
+    "04_phase2_validation.json",
+    "05_phase3_validation.json",
+    "06_phase4_validation.json",
+    "07_transformation.json",
+    "08_decision.json",
+    "09_audit_log.json",
+    "Postprocessing_Data.json"
+  ]
+}

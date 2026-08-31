@@ -1,0 +1,28 @@
+{
+  "agent": "audit_logger",
+  "version": "1.0",
+  "timestamp": "2026-08-30T17:07:53.144423",
+  "input_refs": [],
+  "case_id": "case_002",
+  "source_folder": "/Users/vineet/Downloads/ADK/adk-samples/python/agents/invoice-processing/invoice_processing/exemplary_data/case_002",
+  "output_folder": "/Users/vineet/Downloads/ADK/adk-samples/python/agents/invoice-processing/invoice_processing/data/agent_output/case_002",
+  "processing_summary": {
+    "decision": "ACCEPT",
+    "processing_time_seconds": 56.61,
+    "total_llm_calls": 5,
+    "total_tokens": 4822,
+    "total_cost_usd": 0.010035
+  },
+  "artifacts": [
+    "01_classification.json",
+    "02_extraction.json",
+    "03_phase1_validation.json",
+    "04_phase2_validation.json",
+    "05_phase3_validation.json",
+    "06_phase4_validation.json",
+    "07_transformation.json",
+    "08_decision.json",
+    "09_audit_log.json",
+    "Postprocessing_Data.json"
+  ]
+}

@@ -1,0 +1,82 @@
+# Continuous integration.
+#
+# Everything here runs offline. No GCP credentials, no database, no bucket: the
+# test suite injects fakes for all three, and two autouse guards in
+# `tests/conftest.py` fail any test that tries to open a real Cloud Storage or
+# Cloud SQL connection. That is deliberate -- a CI job holding production
+# credentials is a credential that leaks from a pull request.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  # A new push supersedes an in-flight run on the same ref.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so no code path can fall back to a real service if a default changes.
+  DATABASE_URL: "sqlite://"
+  AUTH_DISABLED: ""
+  ENV: "ci"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --frozen || uv sync
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Tests
+        run: uv run pytest tests/ -q
+
+      # Split out so a cross-tenant failure is legible in the job list rather
+      # than buried in the full run. A leak here is a disclosure, not a bug.
+      - name: Tenant isolation
+        run: |
+          uv run pytest tests/test_tenant_isolation_api.py \
+                        tests/test_auth.py \
+                        tests/test_db_repositories.py -q
+
+      - name: Evaluation gate
+        run: |
+          uv run python eval/eval.py \
+            --ground-truth invoice_processing/exemplary_data \
+            --agent-output invoice_processing/data/agent_output \
+            --skip-llm \
+            --require-baseline
+
+      - name: Secret scan
+        run: |
+          # A committed .env or service-account key is the one mistake that
+          # cannot be undone by a revert -- the credential is already public.
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "::error::.env is tracked by git. Remove it and rotate the secrets."
+            exit 1
+          fi
+          if git ls-files | grep -E '\.json$' | xargs -r grep -l '"private_key"' ; then
+            echo "::error::A service-account key appears to be committed."
+            exit 1
+          fi
+          echo "No committed credentials found."

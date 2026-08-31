@@ -1,0 +1,48 @@
+{
+  "engine_builder": {
+    "decision": {
+      "agent": "output_generator",
+      "decision_class": "REJECT",
+      "final_decision": "REJECT",
+      "input_refs": [],
+      "invoice_status": "Rejected",
+      "rejection_phase": "Phase 4",
+      "rejection_reason": null,
+      "rejection_template": "Invoice does not match work authorization",
+      "timestamp": "2026-08-30T22:31:30.189949",
+      "version": "1.0"
+    },
+    "decision_phase1": "CONTINUE",
+    "decision_phase2": "CONTINUE",
+    "decision_phase3": "CONTINUE",
+    "decision_phase4": "REJECT",
+    "has_waf": false,
+    "waf_count": 0,
+    "waf_exempt": null,
+    "waf_exempt_reason": null,
+    "work_type": null
+  },
+  "loader_builder": {
+    "decision": {
+      "agent": "output_generator",
+      "decision_class": "REJECT",
+      "final_decision": "REJECT",
+      "input_refs": [],
+      "invoice_status": "Rejected",
+      "rejection_phase": "Phase 4",
+      "rejection_reason": null,
+      "rejection_template": "Invoice does not match work authorization",
+      "timestamp": "2026-08-30T22:31:30.189949",
+      "version": "1.0"
+    },
+    "decision_phase1": "CONTINUE",
+    "decision_phase2": "CONTINUE",
+    "decision_phase3": "CONTINUE",
+    "decision_phase4": "REJECT",
+    "has_waf": false,
+    "waf_count": 0,
+    "waf_exempt": null,
+    "waf_exempt_reason": null,
+    "work_type": null
+  }
+}

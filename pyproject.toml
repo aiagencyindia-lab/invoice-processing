@@ -1,0 +1,103 @@
+[project]
+name = "invoice-processing"
+version = "1.0.0"
+description = "Invoice Processing -- Unified inference and learning agent for invoice processing"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+keywords = ['agent-catalog', 'adk', 'agent']
+readme = "README.md"
+
+authors = [
+    { name = "Pouya Ghiasnezhad Omran", email = "pgomran@google.com" },
+    { name = "Tanya Dixit", email = "dixittanya@google.com" },
+]
+
+dependencies = [
+    "google-adk>=1.0.0",
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.13.0",
+    "psycopg[binary]>=3.1.0",
+    "google-cloud-storage>=2.14.0",
+    "google-cloud-aiplatform>=1.38.0",
+    "vertexai>=1.38.0",
+    "pydantic>=2.8.0",
+    "pdfplumber>=0.10.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "python-multipart>=0.0.9",
+    "google-cloud-pubsub>=2.20.0",
+    # Reaches Cloud SQL over an IAM-authenticated tunnel, so the application
+    # needs no database password and the instance needs no public IP.
+    "cloud-sql-python-connector[pg8000]>=1.7.0",
+    "requests>=2.31.0",
+]
+
+[project.urls]
+Repository = "https://github.com/GoogleCloudPlatform/adk-samples"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.9",
+    "agent-starter-pack>=0.14.1",
+    "pytest>=8.0.0",
+]
+
+[tool.agent_packs]
+template = "adk"
+
+[tool.agent-starter-pack]
+example_question = "Process the invoice for case_001."
+
+[tool.agent-starter-pack.settings]
+agent_directory = "invoice_processing"
+
+[[tool.uv.index]]
+name = "default"
+url = "https://pypi.org/simple"
+default = true
+
+[tool.ruff]
+# Inlined from the adk-samples root pyproject. This agent now lives outside
+# that repo, so the previous `extend = "../../../pyproject.toml"` resolved to a
+# path that does not exist and broke every ruff invocation.
+line-length = 80
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle
+    "F",  # pyflakes
+    "I",  # isort
+    "C",  # flake8-comprehensions
+    "PL", # pylint
+    "B",  # flake8-bugbear
+    "UP", # pyupgrade
+    "RUF",
+]
+ignore = [
+    "E501",    # Long LLM prompts and log messages need long strings
+    "PLR0913", # Agents and tools legitimately have many parameters
+    "PLR2004", # HTTP status codes are universally understood
+    "PLR0917", # too-many-positional-arguments
+    "PLR0911", # too-many-return-statements
+    "PLR0912", # too-many-branches
+    "PLR0915", # too-many-statements
+    "C901",    # complex-structure
+    "PLW0603", # Module-level singletons and caches
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"

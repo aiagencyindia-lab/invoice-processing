@@ -1,0 +1,120 @@
+{
+  "audit": {
+    "alf_version": "2.0.0",
+    "any_rules_fired": false,
+    "execution_log": [],
+    "original_decision": null,
+    "revised_decision": null,
+    "revision_plan": {
+      "deterministic_edits": [],
+      "execution_order": [],
+      "field_patches": null,
+      "pipeline_continuation": null,
+      "total_rules_aggregated": 0
+    },
+    "rule_base_version": "2.0.0",
+    "rules_applied": [],
+    "rules_matched": 0,
+    "rules_skipped": [
+      {
+        "applied": false,
+        "conditions_evaluated": [
+          {
+            "actual": "ACCEPT",
+            "expected": "REJECT",
+            "field": "decision_phase4",
+            "operator": "equals",
+            "passed": false
+          },
+          {
+            "actual": null,
+            "expected": "Invoice does not match work authorization",
+            "field": "phase4.rejection_template",
+            "operator": "contains",
+            "passed": false
+          },
+          {
+            "actual": true,
+            "expected": null,
+            "field": "has_waf",
+            "operator": "is_false",
+            "passed": false
+          },
+          {
+            "actual": 555.5,
+            "expected": 2000,
+            "field": "invoice.invoice_total_inc_tax",
+            "operator": "less_than",
+            "passed": true
+          },
+          {
+            "actual": [
+              {
+                "amount_ex_tax": 330.0,
+                "amount_inc_tax": null,
+                "description": "Technician labour (3.0 hrs)",
+                "quantity": 3.0,
+                "tax_amount": 33.0,
+                "tax_code": "GST",
+                "unit_price": 110.0
+              },
+              {
+                "amount_ex_tax": 90.0,
+                "amount_inc_tax": null,
+                "description": "Air filter replacement (x2 units)",
+                "quantity": 2.0,
+                "tax_amount": 9.0,
+                "tax_code": "GST",
+                "unit_price": 45.0
+              },
+              {
+                "amount_ex_tax": 85.0,
+                "amount_inc_tax": null,
+                "description": "System calibration & diagnostics",
+                "quantity": 1.0,
+                "tax_amount": 8.5,
+                "tax_code": "GST",
+                "unit_price": 85.0
+              }
+            ],
+            "expected": "repair|maintenance|technician|labour",
+            "field": "extraction.invoice.line_items",
+            "operator": "any_item_contains",
+            "passed": true
+          }
+        ],
+        "matched": false,
+        "priority": 50,
+        "reason": "Conditions not met",
+        "rule_id": "ALF-001",
+        "rule_name": "Override Phase 4 WAF Rejection for Low-Value Repair Invoices",
+        "scope": "WAF_EXEMPTION_REPAIR_LOW_VALUE"
+      }
+    ],
+    "scope_matches": {},
+    "total_rules_evaluated": 1
+  },
+  "revised_postprocessing": {
+    "Invoice Details": {
+      "Currency": "AUD",
+      "Invoice Date": "2025-12-27",
+      "Invoice Total": "555.50",
+      "Pretax Total": "505.00",
+      "Tax Amount": "50.50",
+      "Vendor Invoice": "INV-00002"
+    },
+    "Invoice Processing": {
+      "Invoice Source": "Email",
+      "Invoice Status": "Pending Payment",
+      "Invoice Type": "Normal"
+    },
+    "Line Items": "[{\"line_number\": 1, \"item_code\": \"LABOUR\", \"description\": \"Technician labour (3.0 hrs)\", \"quantity\": \"3.00\", \"unit_cost\": \"110.00\", \"line_cost\": \"330.00\", \"tax\": \"33.00\", \"tax_code\": \"TAX\"}, {\"line_number\": 2, \"item_code\": \"PARTS\", \"description\": \"Air filter replacement (x2 units)\", \"quantity\": \"2.00\", \"unit_cost\": \"45.00\", \"line_cost\": \"90.00\", \"tax\": \"9.00\", \"tax_code\": \"TAX\"}, {\"line_number\": 3, \"item_code\": \"LABOUR\", \"description\": \"System calibration & diagnostics\", \"quantity\": \"1.00\", \"unit_cost\": \"85.00\", \"line_cost\": \"85.00\", \"tax\": \"8.50\", \"tax_code\": \"TAX\"}]",
+    "Outcome Message": {
+      "Outcome Message": "Invoice accepted for payment on 30/08/2026 17:07:53"
+    },
+    "Vendor Information": {
+      "Tax ID": "51 824 753 556",
+      "Vendor Name": "Precision Tech Co Pty Ltd"
+    }
+  }
+}

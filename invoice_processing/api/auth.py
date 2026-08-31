@@ -1,0 +1,268 @@
+"""Authentication and tenant scoping.
+
+One rule governs this module, and every design choice below follows from it:
+
+    **The tenant comes from the signed token. Never from the request.**
+
+A path parameter, a query string, a JSON body or a header supplied by the caller
+is an assertion by the caller. A custom claim inside an Identity Platform ID
+token is an assertion by Google, signed with a key we verify. Only the second
+one may decide which tenant's data a request can see. Every cross-tenant leak in
+this class of system is some version of trusting the first kind.
+
+Consequences worth stating, because they look like inconveniences until you see
+what they prevent:
+
+* Endpoints do **not** take a `tenant_id` parameter. There is nowhere for a
+  caller to put one, so there is nothing for a handler to forget to validate.
+* A token with no `tenant_id` claim is rejected. It does not fall back to a
+  default tenant -- a misconfigured user would silently read someone's invoices.
+* The dev bypass refuses to activate when `ENV=production`, so the one mechanism
+  that could hand out an unauthenticated principal cannot follow the code into
+  the environment where it would matter.
+
+Verification is injectable (`TokenVerifier`) so tests never touch the network
+and never need a real Google key. The production implementation is
+`IdentityPlatformVerifier`, which checks the signature, issuer, audience and
+expiry through `google.oauth2.id_token`.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass
+from typing import Annotated, Any, Protocol, runtime_checkable
+
+from fastapi import Depends, HTTPException, Request
+
+from ..ports import RunContext
+
+logger = logging.getLogger(__name__)
+
+# Ascending privilege. A role not in this map is treated as no privilege at all,
+# so a typo in a claim locks a user out rather than promoting them.
+ROLE_RANK = {"viewer": 0, "clerk": 1, "approver": 2, "admin": 3}
+
+
+# ---------------------------------------------------------------------------
+# Principal
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Principal:
+    """Who is making this request, and which tenant they belong to.
+
+    Frozen: a handler that could rewrite `tenant_id` mid-request would defeat
+    the whole point of deriving it from the token.
+    """
+
+    user_id: str
+    email: str
+    tenant_id: str
+    role: str = "viewer"
+
+    @property
+    def rank(self) -> int:
+        return ROLE_RANK.get(self.role, -1)
+
+    def can(self, required: str) -> bool:
+        return self.rank >= ROLE_RANK.get(required, 99)
+
+    def context(self, case_id: str = "", run_id: str = "") -> RunContext:
+        """The RunContext for work done on this request's behalf."""
+        return RunContext(
+            tenant_id=self.tenant_id,
+            case_id=case_id,
+            run_id=run_id,
+            actor=self.email,
+        )
+
+
+class AuthError(HTTPException):
+    def __init__(self, detail: str, status_code: int = 401):
+        super().__init__(status_code=status_code, detail=detail)
+
+
+# ---------------------------------------------------------------------------
+# Token verification
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class TokenVerifier(Protocol):
+    """Turns a bearer token into claims, or raises.
+
+    A Protocol rather than a concrete class so tests inject a fake and never
+    depend on Google's key endpoint being reachable.
+    """
+
+    def verify(self, token: str) -> dict[str, Any]: ...
+
+
+class IdentityPlatformVerifier:
+    """Verifies Google Identity Platform (Firebase Auth) ID tokens.
+
+    `verify_firebase_token` checks the RS256 signature against Google's rotating
+    public keys, and checks issuer, audience and expiry. We do not re-implement
+    any of that; the value we add is refusing to proceed when the project id is
+    unset, since an unset audience would mean accepting tokens minted for any
+    other Google project.
+    """
+
+    def __init__(self, project_id: str | None = None):
+        self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT", "")
+        if not self.project_id:
+            raise ValueError(
+                "No project id configured for token verification. Set "
+                "GOOGLE_CLOUD_PROJECT; without an audience to check, tokens "
+                "issued for any Google project would be accepted."
+            )
+        self._request = None
+
+    def verify(self, token: str) -> dict[str, Any]:
+        # Imported lazily: this pulls in google.auth's transport stack, which
+        # tests never need and which would otherwise cost every import of the app.
+        from google.auth.transport import requests as gr  # noqa: PLC0415
+        from google.oauth2 import id_token  # noqa: PLC0415
+
+        if self._request is None:
+            self._request = gr.Request()
+        try:
+            return id_token.verify_firebase_token(
+                token, self._request, audience=self.project_id
+            )
+        except Exception as exc:
+            raise AuthError(f"Invalid token: {exc}") from exc
+
+
+def principal_from_claims(claims: dict[str, Any]) -> Principal:
+    """Build a Principal from verified claims.
+
+    `tenant_id` is required. Defaulting it would mean a user whose claim was
+    never set reads a real tenant's invoices, which is the exact failure this
+    module exists to prevent.
+    """
+    tenant_id = claims.get("tenant_id") or claims.get("tenantId")
+    if not tenant_id:
+        raise AuthError(
+            "Token carries no tenant_id claim. Set it as a custom claim when "
+            "provisioning the user.",
+            status_code=403,
+        )
+    email = claims.get("email")
+    if not email:
+        raise AuthError("Token carries no email claim.", status_code=403)
+    if claims.get("email_verified") is False:
+        # Unverified email means anyone who can receive at that address can
+        # claim it, and our audit trail is keyed on email.
+        raise AuthError("Email address is not verified.", status_code=403)
+
+    return Principal(
+        user_id=str(claims.get("user_id") or claims.get("sub") or ""),
+        email=str(email),
+        tenant_id=str(tenant_id),
+        role=str(claims.get("role") or "viewer"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dev bypass
+# ---------------------------------------------------------------------------
+
+
+def dev_principal() -> Principal | None:
+    """The unauthenticated principal used for local development, or None.
+
+    Guarded twice. `AUTH_DISABLED` must be explicitly truthy, and `ENV` must not
+    be a production-like value -- so if this setting ever escapes into a
+    deployed environment it fails closed instead of disabling authentication in
+    front of real data.
+    """
+    if os.getenv("AUTH_DISABLED", "").lower() not in ("1", "true", "yes"):
+        return None
+    env = os.getenv("ENV", "").lower()
+    if env in ("production", "prod", "staging"):
+        logger.error(
+            "AUTH_DISABLED is set but ENV=%s; refusing to disable authentication.",
+            env,
+        )
+        return None
+    logger.warning(
+        "AUTH_DISABLED is set: every request runs as a local dev principal. "
+        "This must never be set outside local development."
+    )
+    return Principal(
+        user_id="dev",
+        email=os.getenv("AUTH_DEV_EMAIL", "dev@localhost"),
+        tenant_id=os.getenv("AUTH_DEV_TENANT", "default"),
+        role="admin",
+    )
+
+
+# ---------------------------------------------------------------------------
+# FastAPI wiring
+# ---------------------------------------------------------------------------
+
+_verifier: TokenVerifier | None = None
+
+
+def set_verifier(verifier: TokenVerifier | None) -> None:
+    """Install the verifier. Tests inject a fake; startup installs the real one."""
+    global _verifier
+    _verifier = verifier
+
+
+def get_verifier() -> TokenVerifier:
+    global _verifier
+    if _verifier is None:
+        _verifier = IdentityPlatformVerifier()
+    return _verifier
+
+
+def bearer_token(request: Request) -> str | None:
+    header = request.headers.get("authorization") or ""
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+def current_principal(request: Request) -> Principal:
+    """FastAPI dependency: the authenticated caller.
+
+    Order matters. The token is tried first, so that in a dev environment a real
+    token still identifies the real user rather than being shadowed by the
+    bypass.
+    """
+    token = bearer_token(request)
+    if token:
+        return principal_from_claims(get_verifier().verify(token))
+
+    dev = dev_principal()
+    if dev is not None:
+        return dev
+
+    raise AuthError("Authentication required.")
+
+
+def require_role(required: str):
+    """Dependency factory enforcing a minimum role.
+
+    Returns 403, not 404: the caller is authenticated and the resource exists;
+    hiding that would make a permissions problem look like a bug.
+    """
+
+    def dependency(
+        principal: Annotated[Principal, Depends(current_principal)],
+    ) -> Principal:
+        if not principal.can(required):
+            raise AuthError(
+                f"Role '{principal.role}' cannot perform this action; "
+                f"'{required}' or higher is required.",
+                status_code=403,
+            )
+        return principal
+
+    return dependency

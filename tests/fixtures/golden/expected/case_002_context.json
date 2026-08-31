@@ -1,0 +1,48 @@
+{
+  "engine_builder": {
+    "decision": {
+      "agent": "output_generator",
+      "decision_class": "ACCEPT",
+      "final_decision": "ACCEPT",
+      "input_refs": [],
+      "invoice_status": "Pending Payment",
+      "rejection_phase": null,
+      "rejection_reason": null,
+      "rejection_template": null,
+      "timestamp": "2026-08-30T17:07:53.142979",
+      "version": "1.0"
+    },
+    "decision_phase1": "CONTINUE",
+    "decision_phase2": "CONTINUE",
+    "decision_phase3": "CONTINUE",
+    "decision_phase4": "ACCEPT",
+    "has_waf": true,
+    "waf_count": 1,
+    "waf_exempt": null,
+    "waf_exempt_reason": null,
+    "work_type": null
+  },
+  "loader_builder": {
+    "decision": {
+      "agent": "output_generator",
+      "decision_class": "ACCEPT",
+      "final_decision": "ACCEPT",
+      "input_refs": [],
+      "invoice_status": "Pending Payment",
+      "rejection_phase": null,
+      "rejection_reason": null,
+      "rejection_template": null,
+      "timestamp": "2026-08-30T17:07:53.142979",
+      "version": "1.0"
+    },
+    "decision_phase1": "CONTINUE",
+    "decision_phase2": "CONTINUE",
+    "decision_phase3": "CONTINUE",
+    "decision_phase4": "ACCEPT",
+    "has_waf": true,
+    "waf_count": 1,
+    "waf_exempt": null,
+    "waf_exempt_reason": null,
+    "work_type": null
+  }
+}

@@ -1,0 +1,29 @@
+[
+  {
+    "case_id": "case_001",
+    "original_exists": true,
+    "alf_exists": false,
+    "identical": false,
+    "differences": [
+      "ALF file does not exist"
+    ]
+  },
+  {
+    "case_id": "case_002",
+    "original_exists": true,
+    "alf_exists": false,
+    "identical": false,
+    "differences": [
+      "ALF file does not exist"
+    ]
+  },
+  {
+    "case_id": "case_005",
+    "original_exists": true,
+    "alf_exists": false,
+    "identical": false,
+    "differences": [
+      "ALF file does not exist"
+    ]
+  }
+]

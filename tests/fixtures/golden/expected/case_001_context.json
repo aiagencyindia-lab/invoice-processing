@@ -1,0 +1,48 @@
+{
+  "engine_builder": {
+    "decision": {
+      "agent": "output_generator",
+      "decision_class": "REJECT",
+      "final_decision": "REJECT",
+      "input_refs": [],
+      "invoice_status": "Rejected",
+      "rejection_phase": "Phase 3",
+      "rejection_reason": null,
+      "rejection_template": "Vendor tax ID invalid",
+      "timestamp": "2026-08-30T17:06:56.525464",
+      "version": "1.0"
+    },
+    "decision_phase1": "CONTINUE",
+    "decision_phase2": "CONTINUE",
+    "decision_phase3": "REJECT",
+    "decision_phase4": null,
+    "has_waf": true,
+    "waf_count": 1,
+    "waf_exempt": null,
+    "waf_exempt_reason": null,
+    "work_type": null
+  },
+  "loader_builder": {
+    "decision": {
+      "agent": "output_generator",
+      "decision_class": "REJECT",
+      "final_decision": "REJECT",
+      "input_refs": [],
+      "invoice_status": "Rejected",
+      "rejection_phase": "Phase 3",
+      "rejection_reason": null,
+      "rejection_template": "Vendor tax ID invalid",
+      "timestamp": "2026-08-30T17:06:56.525464",
+      "version": "1.0"
+    },
+    "decision_phase1": "CONTINUE",
+    "decision_phase2": "CONTINUE",
+    "decision_phase3": "REJECT",
+    "decision_phase4": null,
+    "has_waf": true,
+    "waf_count": 1,
+    "waf_exempt": null,
+    "waf_exempt_reason": null,
+    "work_type": null
+  }
+}

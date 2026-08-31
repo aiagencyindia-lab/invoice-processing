@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Invoice Review</title>
+<style>
+  :root {
+    --bg:#fbfaf7; --panel:#fff; --ink:#1f2933; --muted:#6b7280; --line:#e2e0d9;
+    --accent:#1f6f8b; --flag:#a8471f; --flag-bg:#fdf0e9; --ok:#2f7d5b; --ok-bg:#e8f3ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14181c; --panel:#1b2126; --ink:#e6e3dc; --muted:#94a1ab;
+            --line:#2e373e; --accent:#6fb3c9; --flag:#d98d6a; --flag-bg:#33231c;
+            --ok:#6bb694; --ok-bg:#1b2f26; }
+  }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif }
+  /* Three type sizes: 22 / 14 / 11. A review screen is scanned, not read, so
+     the hierarchy has to survive peripheral vision. */
+  header { display:flex; align-items:baseline; gap:16px; padding:10px 18px;
+           border-bottom:1px solid var(--line); background:var(--panel) }
+  header h1 { font-size:22px; margin:0; font-weight:600; letter-spacing:-.01em }
+  header .stats { color:var(--muted); font-size:11px }
+  kbd { font:11px ui-monospace,monospace; border:1px solid var(--line);
+        border-bottom-width:2px; border-radius:4px; padding:1px 5px; color:var(--muted) }
+  main { display:grid; grid-template-columns:270px 1fr 1fr; height:calc(100vh - 45px) }
+  .col { overflow:auto; border-right:1px solid var(--line) }
+  .queue button { display:block; width:100%; text-align:left; background:none;
+        border:0; border-bottom:1px solid var(--line); padding:10px 14px;
+        cursor:pointer; color:inherit; font:inherit }
+  .queue button:hover { background:var(--flag-bg) }
+  .queue button[aria-current="true"] { background:var(--flag-bg) }
+  .queue button[aria-current="true"] .who { color:var(--accent) }
+  .queue .who { font-weight:600 }
+  .queue .meta { color:var(--muted); font-size:11px; display:flex; gap:8px;
+        justify-content:space-between; margin-top:2px }
+  .pill { font:11px ui-monospace,monospace; padding:1px 7px; border-radius:999px }
+  .pill.review { background:var(--flag-bg); color:var(--flag) }
+  .pill.auto { background:var(--ok-bg); color:var(--ok) }
+  .pane { padding:14px 18px }
+  .pane h2 { font-size:11px; text-transform:uppercase; letter-spacing:.09em;
+        color:var(--muted); margin:0 0 10px; font-weight:600 }
+  .field { display:grid; grid-template-columns:150px 1fr; gap:8px; align-items:center;
+        padding:5px 8px; border-radius:6px; margin:0 -8px }
+  .field.flagged { background:var(--flag-bg) }
+  .field label { color:var(--muted); font-size:11px }
+  .field input { width:100%; font:inherit; padding:5px 8px; border-radius:5px;
+        border:1px solid var(--line); background:var(--panel); color:inherit }
+  .field input:focus { outline:2px solid var(--accent); outline-offset:1px }
+  .why { grid-column:2; font-size:11px; color:var(--flag); margin-top:-2px }
+  .why.unchecked { color:var(--muted) }
+  table { width:100%; border-collapse:collapse; font-size:14px;
+       font-variant-numeric:tabular-nums }
+  th { text-align:left; color:var(--muted); font-weight:600; font-size:11px;
+       text-transform:uppercase; letter-spacing:.06em; border-bottom:1px solid var(--line); padding:5px 6px }
+  td { padding:5px 6px; border-bottom:1px solid var(--line) }
+  .finding { padding:7px 10px; margin-bottom:6px; background:var(--panel);
+        border:1px solid var(--line); border-radius:5px }
+  /* Verdict reads as a chip rather than a stripe down the card edge: the
+     same information, carried by something a reviewer can actually read. */
+  .finding .v { font:11px ui-monospace,monospace; padding:1px 6px;
+        border-radius:999px; flex:none }
+  .finding.fail .v { background:var(--flag-bg); color:var(--flag) }
+  .finding.pass .v { background:var(--ok-bg); color:var(--ok) }
+  .finding .t { font-weight:600; font-size:14px; display:flex; gap:7px;
+        align-items:baseline }
+  .finding .e { color:var(--muted); font-size:11px; margin-top:2px }
+  .actions { position:sticky; bottom:0; background:var(--panel);
+        border-top:1px solid var(--line); padding:10px 18px; display:flex; gap:8px; align-items:center }
+  button.act { font:inherit; padding:6px 14px; border-radius:6px; cursor:pointer;
+        border:1px solid var(--line); background:var(--panel); color:inherit }
+  button.act.primary { background:var(--accent); color:#fff; border-color:transparent }
+  .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
+        background:var(--ink); color:var(--bg); padding:8px 16px; border-radius:6px;
+        font-size:14px; opacity:0; transition:opacity .2s; pointer-events:none }
+  .toast.show { opacity:1 }
+  embed { width:100%; height:100%; border:0 }
+  .empty { color:var(--muted); padding:20px 18px }
+</style>
+</head>
+<body>
+<header>
+  <h1>Invoice Review</h1>
+  <span class="stats" id="stats">loading…</span>
+  <span style="margin-left:auto" class="stats">
+    <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>Tab</kbd> fields · <kbd>a</kbd> approve · <kbd>r</kbd> reject · <kbd>s</kbd> save
+  </span>
+</header>
+
+<main>
+  <div class="col queue" id="queue"></div>
+  <div class="col">
+    <div class="pane">
+      <h2>Fields <span id="flagcount" class="stats"></span></h2>
+      <div id="fields"></div>
+      <h2 style="margin-top:18px">Line items</h2>
+      <div id="lines"></div>
+      <h2 style="margin-top:18px">Validation</h2>
+      <div id="findings"></div>
+    </div>
+    <div class="actions">
+      <button class="act primary" onclick="save()">Save edits <kbd>s</kbd></button>
+      <button class="act" onclick="act('approve')">Approve <kbd>a</kbd></button>
+      <button class="act" onclick="act('reject')">Reject <kbd>r</kbd></button>
+      <span class="stats" id="dirty"></span>
+    </div>
+  </div>
+  <div class="col"><embed id="doc" type="application/pdf"></div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+let queue = [], current = null, detail = null, edits = {};
+
+const money = (v, c) => v == null ? "" : `${c || ""} ${Number(v).toLocaleString(undefined,{minimumFractionDigits:2})}`.trim();
+const toast = m => { const t = document.getElementById("toast"); t.textContent = m;
+  t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800); };
+
+async function loadQueue() {
+  const data = await (await fetch("/api/invoices")).json();
+  queue = data.invoices;
+  const c = data.counts;
+  document.getElementById("stats").textContent =
+    `${c.total} invoices · ${c.needs_review} need review · ${c.auto} auto`;
+  document.getElementById("queue").innerHTML = queue.map((i, n) => `
+    <button onclick="open_(${n})" aria-current="${current === n}">
+      <div class="who">${i.vendor || "(unknown vendor)"}</div>
+      <div class="meta">
+        <span>${i.invoice_number || "—"}</span>
+        <span class="pill ${i.routing === "REVIEW" ? "review" : "auto"}">${i.routing}</span>
+      </div>
+      <div class="meta"><span>${money(i.total, i.currency)}</span><span>${i.decision || ""}</span></div>
+    </button>`).join("");
+  if (current === null && queue.length) open_(0);
+}
+
+async function open_(n) {
+  current = n; edits = {};
+  const id = queue[n].case_id;
+  detail = await (await fetch(`/api/invoices/${id}`)).json();
+  document.getElementById("doc").src = `/api/invoices/${id}/document`;
+  render();
+  loadQueue();
+  // Focus the first flagged field: a reviewer should never hunt for it.
+  const first = document.querySelector(".field.flagged input");
+  (first || document.querySelector(".field input"))?.focus();
+}
+
+function render() {
+  const flagged = detail.fields.filter(f => f.checked && f.confidence < 1);
+  document.getElementById("flagcount").textContent =
+    flagged.length ? `— ${flagged.length} need attention` : "— all corroborated";
+
+  document.getElementById("fields").innerHTML = detail.fields.map(f => {
+    const flag = f.checked && f.confidence < 1;
+    // Only explain fields we actually checked. An unchecked field has no
+    // verdict, and labelling it "not found" or "no text layer" would send the
+    // reviewer chasing a problem that does not exist.
+    let why = "";
+    if (f.checked) {
+      why = f.grounded === false ? "not found in the document"
+          : f.grounded === null ? "could not be checked against the document"
+          : f.confidence < 1 ? "arithmetic did not corroborate" : "";
+    }
+    const note = f.checked ? "" : `<div class="why unchecked">not corroborated</div>`;
+    return `<div class="field ${flag ? "flagged" : ""}">
+      <label for="f_${f.name}">${f.name}</label>
+      <input id="f_${f.name}" value="${f.value ?? ""}" oninput="edits['${f.name}']=this.value; markDirty()">
+      ${why ? `<div class="why">${why}</div>` : note}
+    </div>`;
+  }).join("");
+
+  document.getElementById("lines").innerHTML = detail.line_items.length ? `
+    <table><tr><th>Description</th><th>Qty</th><th>Unit</th><th>Amount</th></tr>
+    ${detail.line_items.map(l => `<tr>
+      <td>${l.description ?? ""}</td><td>${l.quantity ?? ""}</td>
+      <td>${l.unit_price ?? ""}</td><td>${l.amount_ex_tax ?? ""}</td></tr>`).join("")}
+    </table>` : `<div class="empty">No line items</div>`;
+
+  document.getElementById("findings").innerHTML = detail.findings.map(f => `
+    <div class="finding ${f.passed ? "pass" : "fail"}">
+      <div class="t"><span class="v">${f.passed ? "pass" : "fail"}</span>
+        <span>${f.step} ${f.rule || ""} ${f.informational ? "(informational)" : ""}</span></div>
+      <div class="e">${f.evidence ?? ""}</div>
+    </div>`).join("") || `<div class="empty">No validation records</div>`;
+  markDirty();
+}
+
+function markDirty() {
+  const n = Object.keys(edits).length;
+  document.getElementById("dirty").textContent = n ? `${n} unsaved edit${n > 1 ? "s" : ""}` : "";
+}
+
+async function save() {
+  const payload = Object.entries(edits).map(([field, value]) => ({ field, value }));
+  if (!payload.length) return toast("Nothing to save");
+  const r = await (await fetch(`/api/invoices/${detail.case_id}/fields`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ edits: payload, actor: "reviewer@local" })
+  })).json();
+  edits = {};
+  toast(`${r.count} correction${r.count === 1 ? "" : "s"} recorded`);
+  open_(current);
+}
+
+async function act(action) {
+  let reason = null;
+  if (action === "reject") {
+    reason = prompt("Reason for rejection (required):");
+    // A rejection with no reason cannot be actioned by the vendor or explained
+    // to an auditor, so the API refuses it too.
+    if (!reason) return toast("Rejection needs a reason");
+  }
+  await fetch(`/api/invoices/${detail.case_id}/actions`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, reason, actor: "reviewer@local" })
+  });
+  toast(`${action === "approve" ? "Approved" : "Rejected"} ${detail.case_id}`);
+  if (current < queue.length - 1) open_(current + 1);
+}
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") {
+    if (e.key === "Enter") { e.preventDefault(); save(); }
+    return;
+  }
+  const k = e.key.toLowerCase();
+  if (k === "j" && current < queue.length - 1) open_(current + 1);
+  else if (k === "k" && current > 0) open_(current - 1);
+  else if (k === "a") act("approve");
+  else if (k === "r") act("reject");
+  else if (k === "s") save();
+});
+
+loadQueue();
+</script>
+</body>
+</html>

@@ -1,0 +1,281 @@
+"""GCS blob storage and the schema migration.
+
+Two properties carry the weight here.
+
+For storage: in a bucket shared by tenants, every key must land under that
+tenant's prefix, and a key that tries to climb out must be refused. A key like
+`../other-tenant/invoice.pdf` is the entire isolation failure, and GCS will not
+stop it -- it treats `..` as a literal character, so the check has to be ours.
+
+For the migration: it must apply and roll back cleanly, and it must carry the
+row-level security policies. A schema that deploys without them is a
+multi-tenant database with no database-level isolation at all.
+
+No test touches GCS; a fake client records calls.
+"""
+
+import glob
+import sqlite3
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from invoice_processing.gcs import GcsBlobStore, for_tenant
+from invoice_processing.ports import BlobStore
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+# ---------------------------------------------------------------------------
+# Fake GCS
+# ---------------------------------------------------------------------------
+
+
+class FakeBlob:
+    def __init__(self, name, store):
+        self.name = name
+        self._store = store
+
+    def upload_from_string(self, data, content_type="application/octet-stream"):
+        self._store.objects[self.name] = (data, content_type)
+
+    def download_as_bytes(self):
+        if self.name not in self._store.objects:
+            raise FileNotFoundError(self.name)
+        return self._store.objects[self.name][0]
+
+    def exists(self):
+        return self.name in self._store.objects
+
+    def delete(self):
+        self._store.objects.pop(self.name, None)
+
+    def generate_signed_url(self, version, expiration, method):
+        self._store.signed.append((self.name, expiration, method))
+        return f"https://signed.example/{self.name}?exp={int(expiration.total_seconds())}"
+
+
+class FakeBucket:
+    def __init__(self, store):
+        self._store = store
+
+    def blob(self, name):
+        return FakeBlob(name, self._store)
+
+
+class FakeGcsClient:
+    def __init__(self):
+        self.objects = {}
+        self.signed = []
+
+    def bucket(self, name):
+        return FakeBucket(self)
+
+    def list_blobs(self, bucket_name, prefix=""):
+        return [
+            FakeBlob(name, self)
+            for name in sorted(self.objects)
+            if name.startswith(prefix)
+        ]
+
+
+@pytest.fixture
+def gcs():
+    client = FakeGcsClient()
+    return GcsBlobStore("test-bucket", tenant_id="acme", client=client), client
+
+
+# ---------------------------------------------------------------------------
+# Storage
+# ---------------------------------------------------------------------------
+
+
+class TestTenantIsolation:
+    """The property whose failure is a breach."""
+
+    def test_keys_land_under_the_tenant_prefix(self, gcs):
+        store, client = gcs
+        store.put("case_005/invoice.pdf", b"%PDF")
+        assert "t/acme/case_005/invoice.pdf" in client.objects
+
+    def test_two_tenants_do_not_collide(self):
+        client = FakeGcsClient()
+        acme = GcsBlobStore("b", tenant_id="acme", client=client)
+        globex = GcsBlobStore("b", tenant_id="globex", client=client)
+
+        acme.put("case_001/invoice.pdf", b"acme bytes")
+        globex.put("case_001/invoice.pdf", b"globex bytes")
+
+        assert acme.get("case_001/invoice.pdf") == b"acme bytes"
+        assert globex.get("case_001/invoice.pdf") == b"globex bytes"
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "../globex/invoice.pdf",
+            "case_001/../../globex/invoice.pdf",
+            "..",
+            "a/../../b",
+        ],
+    )
+    def test_keys_cannot_escape_the_prefix(self, gcs, key):
+        """GCS treats '..' as a literal, so this check has to be ours."""
+        store, _ = gcs
+        with pytest.raises(ValueError, match="escapes"):
+            store.put(key, b"x")
+
+    def test_leading_slash_does_not_escape(self, gcs):
+        store, client = gcs
+        store.put("/case_001/x.pdf", b"x")
+        assert "t/acme/case_001/x.pdf" in client.objects
+
+    def test_empty_key_is_rejected(self, gcs):
+        store, _ = gcs
+        with pytest.raises(ValueError, match="must not be empty"):
+            store.put("", b"x")
+
+    def test_listing_is_scoped_to_the_tenant(self):
+        """An unprefixed list would enumerate every tenant's documents."""
+        client = FakeGcsClient()
+        acme = GcsBlobStore("b", tenant_id="acme", client=client)
+        globex = GcsBlobStore("b", tenant_id="globex", client=client)
+
+        acme.put("case_001/a.pdf", b"1")
+        globex.put("case_002/b.pdf", b"2")
+
+        assert acme.list_keys() == ["case_001/a.pdf"]
+        assert globex.list_keys() == ["case_002/b.pdf"]
+
+
+class TestBlobStoreContract:
+    def test_satisfies_the_port(self, gcs):
+        store, _ = gcs
+        assert isinstance(store, BlobStore)
+
+    def test_round_trip(self, gcs):
+        store, _ = gcs
+        store.put(
+            "case_005/invoice.pdf", b"%PDF-1.4", content_type="application/pdf"
+        )
+        assert store.exists("case_005/invoice.pdf")
+        assert store.get("case_005/invoice.pdf") == b"%PDF-1.4"
+
+    def test_put_returns_a_gs_uri(self, gcs):
+        store, _ = gcs
+        uri = store.put("case_005/invoice.pdf", b"x")
+        assert uri == "gs://test-bucket/t/acme/case_005/invoice.pdf"
+
+    def test_missing_key(self, gcs):
+        store, _ = gcs
+        assert store.exists("nope.pdf") is False
+
+    def test_content_type_is_preserved(self, gcs):
+        store, client = gcs
+        store.put("a.pdf", b"x", content_type="application/pdf")
+        assert client.objects["t/acme/a.pdf"][1] == "application/pdf"
+
+
+class TestSignedUrls:
+    def test_url_is_read_only_and_expiring(self, gcs):
+        """Long-lived or writable URLs turn a review link into durable access."""
+        store, client = gcs
+        store.put("case_005/invoice.pdf", b"x")
+        store.signed_url("case_005/invoice.pdf", ttl_seconds=300)
+
+        name, expiration, method = client.signed[0]
+        assert name == "t/acme/case_005/invoice.pdf"
+        assert method == "GET", "signed URLs must not permit writes"
+        assert expiration.total_seconds() == 300
+
+    def test_default_ttl_is_bounded(self, gcs):
+        store, client = gcs
+        store.signed_url("a.pdf")
+        assert client.signed[0][1].total_seconds() <= 3600
+
+
+class TestConfiguration:
+    def test_missing_bucket_fails_loudly(self, monkeypatch):
+        """Better than silently writing into a default bucket."""
+        monkeypatch.delenv("GCS_BUCKET", raising=False)
+        with pytest.raises(ValueError, match="No GCS bucket"):
+            GcsBlobStore()
+
+    def test_bucket_from_environment(self, monkeypatch):
+        monkeypatch.setenv("GCS_BUCKET", "from-env")
+        assert GcsBlobStore(client=FakeGcsClient()).bucket_name == "from-env"
+
+    def test_for_tenant_helper(self):
+        store = for_tenant("globex", bucket_name="b", client=FakeGcsClient())
+        assert store.prefix == "t/globex"
+
+
+# ---------------------------------------------------------------------------
+# Migration
+# ---------------------------------------------------------------------------
+
+
+def _alembic(command: str, db_path: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", *command.split()],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+        env={
+            **dict(__import__("os").environ),
+            "DATABASE_URL": f"sqlite:///{db_path}",
+        },
+    )
+
+
+class TestMigration:
+    def test_upgrade_then_downgrade(self, tmp_path):
+        """A migration that cannot roll back is a one-way door in production."""
+        db = tmp_path / "m.db"
+
+        up = _alembic("upgrade head", db)
+        assert up.returncode == 0, up.stderr
+
+        tables = {
+            row[0]
+            for row in sqlite3.connect(db).execute(
+                "select name from sqlite_master where type='table'"
+            )
+        }
+        for expected in ("tenants", "invoices", "audit_events", "rules"):
+            assert expected in tables, f"{expected} not created"
+
+        down = _alembic("downgrade base", db)
+        assert down.returncode == 0, down.stderr
+
+        remaining = {
+            row[0]
+            for row in sqlite3.connect(db).execute(
+                "select name from sqlite_master where type='table'"
+            )
+        }
+        assert remaining == {"alembic_version"}, f"left behind: {remaining}"
+
+    def test_migration_carries_rls(self):
+        """A schema deployed without RLS has no database-level isolation."""
+        path = glob.glob(
+            str(
+                REPO
+                / "invoice_processing/db/migrations/versions/*_initial_schema.py"
+            )
+        )[0]
+        source = Path(path).read_text()
+        assert "enable_rls_statements" in source
+        assert "revoke_audit_mutation_statements" in source
+        assert 'dialect.name == "postgresql"' in source, (
+            "RLS must be guarded: these statements are Postgres-only"
+        )
+
+    def test_no_connection_string_is_committed(self):
+        """The URL comes from DATABASE_URL, so no password reaches the repo."""
+        ini = (REPO / "alembic.ini").read_text()
+        assert "sqlalchemy.url =" not in ini
+        assert "password" not in ini.lower()

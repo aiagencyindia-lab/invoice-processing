@@ -1,0 +1,15 @@
+{
+  "cases": [
+    "case_001",
+    "case_002",
+    "case_005"
+  ],
+  "metrics": {
+    "decision_accuracy": 100.0,
+    "group.financials": 100.0,
+    "group.header": 100.0,
+    "group.line_items": 100.0,
+    "group.vendor": 100.0,
+    "pass_rate": 100.0
+  }
+}

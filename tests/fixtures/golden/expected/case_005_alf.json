@@ -1,0 +1,147 @@
+{
+  "audit": {
+    "alf_version": "2.0.0",
+    "any_rules_fired": true,
+    "execution_log": [
+      {
+        "action_type": "set_field",
+        "after": "Pending Payment",
+        "before": "Rejected",
+        "source_rule": "ALF-001",
+        "step": 3,
+        "target": "Invoice Processing.Invoice Status"
+      },
+      {
+        "action_type": "set_field",
+        "after": "Invoice accepted for payment: WAF exemption applies (repair/maintenance under $2,000 per procurement policy)",
+        "before": "Invoice rejected on 30/08/2026 22:31:30: Invoice does not match work authorization",
+        "source_rule": "ALF-001",
+        "step": 3,
+        "target": "Outcome Message.Outcome Message"
+      }
+    ],
+    "original_decision": null,
+    "revised_decision": null,
+    "revision_plan": {
+      "deterministic_edits": [
+        {
+          "description": "WAF exemption applies - accept for payment",
+          "source_rule": "ALF-001",
+          "target": "Invoice Processing.Invoice Status",
+          "type": "set_field",
+          "value": "Pending Payment"
+        },
+        {
+          "description": "Replace rejection outcome message",
+          "source_rule": "ALF-001",
+          "target": "Outcome Message.Outcome Message",
+          "type": "set_field",
+          "value": "Invoice accepted for payment: WAF exemption applies (repair/maintenance under $2,000 per procurement policy)"
+        }
+      ],
+      "execution_order": [
+        "1. deterministic_edits (2 actions)"
+      ],
+      "field_patches": null,
+      "pipeline_continuation": null,
+      "total_rules_aggregated": 1
+    },
+    "rule_base_version": "2.0.0",
+    "rules_applied": [
+      {
+        "applied": true,
+        "conditions_evaluated": [
+          {
+            "actual": "REJECT",
+            "expected": "REJECT",
+            "field": "decision_phase4",
+            "operator": "equals",
+            "passed": true
+          },
+          {
+            "actual": "Invoice does not match work authorization",
+            "expected": "Invoice does not match work authorization",
+            "field": "phase4.rejection_template",
+            "operator": "contains",
+            "passed": true
+          },
+          {
+            "actual": false,
+            "expected": null,
+            "field": "has_waf",
+            "operator": "is_false",
+            "passed": true
+          },
+          {
+            "actual": 1069.32,
+            "expected": 2000,
+            "field": "invoice.invoice_total_inc_tax",
+            "operator": "less_than",
+            "passed": true
+          },
+          {
+            "actual": [
+              {
+                "amount_ex_tax": 659.61,
+                "amount_inc_tax": null,
+                "description": "Gasket and seal kit",
+                "quantity": 3.0,
+                "tax_amount": 65.96,
+                "tax_code": "GST",
+                "unit_price": 219.87
+              },
+              {
+                "amount_ex_tax": 312.5,
+                "amount_inc_tax": null,
+                "description": "Technician labour - standard rate",
+                "quantity": 2.5,
+                "tax_amount": 31.25,
+                "tax_code": "GST",
+                "unit_price": 125.0
+              }
+            ],
+            "expected": "repair|maintenance|technician|labour",
+            "field": "extraction.invoice.line_items",
+            "operator": "any_item_contains",
+            "passed": true
+          }
+        ],
+        "matched": true,
+        "priority": 50,
+        "reason": null,
+        "rule_id": "ALF-001",
+        "rule_name": "Override Phase 4 WAF Rejection for Low-Value Repair Invoices",
+        "scope": "WAF_EXEMPTION_REPAIR_LOW_VALUE"
+      }
+    ],
+    "rules_matched": 1,
+    "rules_skipped": [],
+    "scope_matches": {
+      "WAF_EXEMPTION_REPAIR_LOW_VALUE": "ALF-001"
+    },
+    "total_rules_evaluated": 1
+  },
+  "revised_postprocessing": {
+    "Invoice Details": {
+      "Currency": "AUD",
+      "Invoice Date": "2026-02-11",
+      "Invoice Total": "1,069.32",
+      "Pretax Total": "972.11",
+      "Tax Amount": "97.21",
+      "Vendor Invoice": "INV-00005"
+    },
+    "Invoice Processing": {
+      "Invoice Source": "Email",
+      "Invoice Status": "Pending Payment",
+      "Invoice Type": "Normal"
+    },
+    "Line Items": "[{\"line_number\": 1, \"item_code\": \"OTHER\", \"description\": \"Gasket and seal kit\", \"quantity\": \"3.00\", \"unit_cost\": \"219.87\", \"line_cost\": \"659.61\", \"tax\": \"65.96\", \"tax_code\": \"TAX\"}, {\"line_number\": 2, \"item_code\": \"LABOUR\", \"description\": \"Technician labour - standard rate\", \"quantity\": \"2.50\", \"unit_cost\": \"125.00\", \"line_cost\": \"312.50\", \"tax\": \"31.25\", \"tax_code\": \"TAX\"}]",
+    "Outcome Message": {
+      "Outcome Message": "Invoice accepted for payment: WAF exemption applies (repair/maintenance under $2,000 per procurement policy) [ALF corrections applied: ALF-001]"
+    },
+    "Vendor Information": {
+      "Tax ID": "51 824 753 556",
+      "Vendor Name": "QuickFix HVAC Repairs"
+    }
+  }
+}

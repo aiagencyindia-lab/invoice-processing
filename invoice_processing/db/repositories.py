@@ -1,0 +1,274 @@
+"""Postgres implementations of the storage ports.
+
+These satisfy the same protocols as the filesystem adapters from Phase 0.5, so
+the engines move from local files to a database without changing.
+
+Every query filters on `tenant_id` explicitly, in addition to the row-level
+security policies. That redundancy is the point: RLS catches a forgotten filter,
+and the filter catches a misconfigured policy. Relying on either alone puts one
+mistake between a customer and another customer's invoices.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Iterator
+
+from sqlalchemy import select
+
+from ..ports import RuleBaseConflict, RunContext
+from .models import AuditEvent, Document, Invoice, PipelineRun, Rule, Tenant
+from .session import tenant_session
+
+
+class PgCaseRepository:
+    """Case artifacts, stored as the invoice row plus its pipeline run.
+
+    Artifacts live in the invoice's `fields` JSON rather than as ten separate
+    blobs: they are read together, always, and a single row keeps a case
+    atomically consistent.
+    """
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    def get_artifacts(self, ctx: RunContext) -> dict[str, dict]:
+        with tenant_session(ctx.tenant_id, self.url) as session:
+            invoice = session.scalar(
+                select(Invoice).where(
+                    Invoice.tenant_id == ctx.tenant_id,
+                    Invoice.case_id == ctx.case_id,
+                )
+            )
+            return dict(invoice.fields or {}) if invoice else {}
+
+    def put_artifact(self, ctx: RunContext, key: str, payload: dict) -> None:
+        with tenant_session(ctx.tenant_id, self.url) as session:
+            invoice = session.scalar(
+                select(Invoice).where(
+                    Invoice.tenant_id == ctx.tenant_id,
+                    Invoice.case_id == ctx.case_id,
+                )
+            )
+            if invoice is None:
+                invoice = Invoice(
+                    tenant_id=ctx.tenant_id, case_id=ctx.case_id, fields={}
+                )
+                session.add(invoice)
+            # Reassign rather than mutate: SQLAlchemy does not track in-place
+            # edits to a JSON column, so a mutation would silently not persist.
+            invoice.fields = {**(invoice.fields or {}), key: payload}
+
+    def iter_case_ids(self, tenant_id: str) -> Iterator[str]:
+        """Deterministic order -- impact assessment depends on it."""
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(Invoice.case_id)
+                .where(
+                    Invoice.tenant_id == tenant_id, Invoice.case_id.is_not(None)
+                )
+                .order_by(Invoice.case_id)
+            ).all()
+        return iter(rows)
+
+    def get_many_artifacts(
+        self, tenant_id: str, case_ids: list[str]
+    ) -> dict[str, dict[str, dict]]:
+        """One query, not N. Impact assessment scans every case."""
+        if not case_ids:
+            return {}
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(Invoice).where(
+                    Invoice.tenant_id == tenant_id,
+                    Invoice.case_id.in_(case_ids),
+                )
+            ).all()
+            return {row.case_id: dict(row.fields or {}) for row in rows}
+
+
+class PgRuleRepository:
+    """The ALF rule base, per tenant, with optimistic concurrency.
+
+    Version is a hash of the stored rules, so a write made by any path -- API,
+    another session, a migration -- invalidates a stale writer's expectation.
+    """
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    @staticmethod
+    def _version(rules: list[dict]) -> int:
+        payload = json.dumps(rules, sort_keys=True, default=str)
+        return int(hashlib.sha256(payload.encode()).hexdigest()[:12], 16)
+
+    @staticmethod
+    def _to_dict(rule: Rule) -> dict:
+        return {
+            "id": rule.rule_id,
+            "name": rule.name,
+            "description": rule.description,
+            "scope": rule.scope,
+            "priority": rule.priority,
+            "enabled": rule.enabled,
+            "conditions": rule.conditions,
+            "actions": rule.actions,
+            "metadata": rule.rule_metadata,
+        }
+
+    def load(self, tenant_id: str) -> tuple[dict, int]:
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(Rule)
+                .where(Rule.tenant_id == tenant_id)
+                .order_by(Rule.priority, Rule.rule_id)
+            ).all()
+            rules = [self._to_dict(r) for r in rows]
+        return (
+            {"schema_version": "2.0.0", "metadata": {}, "rules": rules},
+            self._version(rules),
+        )
+
+    def save(self, tenant_id: str, doc: dict, *, expected_version: int) -> int:
+        incoming = doc.get("rules", [])
+        with tenant_session(tenant_id, self.url) as session:
+            existing = session.scalars(
+                select(Rule).where(Rule.tenant_id == tenant_id)
+            ).all()
+            current = self._version(
+                sorted(
+                    (self._to_dict(r) for r in existing),
+                    key=lambda r: (r["priority"], r["id"]),
+                )
+            )
+            if current != expected_version:
+                raise RuleBaseConflict(
+                    "The rule base changed since it was read "
+                    f"(expected {expected_version}, found {current}). "
+                    "Re-read and reapply rather than overwriting."
+                )
+
+            by_id = {r.rule_id: r for r in existing}
+            for payload in incoming:
+                rule = by_id.get(payload["id"])
+                if rule is None:
+                    rule = Rule(
+                        tenant_id=tenant_id, rule_id=payload["id"], name=""
+                    )
+                    session.add(rule)
+                rule.name = payload.get("name", "")
+                rule.description = payload.get("description")
+                rule.scope = payload.get("scope", "global")
+                rule.priority = payload.get("priority", 100)
+                rule.enabled = payload.get("enabled", True)
+                rule.conditions = payload.get("conditions", [])
+                rule.actions = payload.get("actions", [])
+                rule.rule_metadata = payload.get("metadata", {})
+
+        return self._version(incoming)
+
+    def next_rule_id(self, tenant_id: str) -> str:
+        """Allocated from stored rules; the version check makes racing visible."""
+        with tenant_session(tenant_id, self.url) as session:
+            ids = session.scalars(
+                select(Rule.rule_id).where(Rule.tenant_id == tenant_id)
+            ).all()
+        highest = 0
+        for rule_id in ids:
+            if str(rule_id).startswith("ALF-"):
+                try:
+                    highest = max(highest, int(str(rule_id).split("-")[1]))
+                except (IndexError, ValueError):
+                    continue
+        return f"ALF-{highest + 1:03d}"
+
+
+class PgDocumentRepository:
+    """Ingested documents, keyed by content.
+
+    `find_by_sha` is what makes ingestion idempotent: a provider retry or a
+    double-clicked upload finds the existing row instead of creating a second
+    invoice to pay.
+    """
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    def find_by_sha(self, tenant_id: str, sha256: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            document = session.scalar(
+                select(Document).where(
+                    Document.tenant_id == tenant_id,
+                    Document.sha256 == sha256,
+                )
+            )
+            if document is None:
+                return None
+            return {
+                "id": document.id,
+                "storage_key": document.storage_key,
+                "filename": document.filename,
+                "sha256": document.sha256,
+            }
+
+    def create(self, tenant_id: str, **fields) -> str:
+        with tenant_session(tenant_id, self.url) as session:
+            document = Document(tenant_id=tenant_id, **fields)
+            session.add(document)
+            session.flush()
+            return document.id
+
+    def tenant_id_for_slug(self, slug: str) -> str | None:
+        """Resolve an inbound-email local part to a tenant.
+
+        Not tenant-scoped -- it is what *decides* the tenant. Kept to an exact
+        match on an active tenant so a lookup can never widen into a scan that
+        returns somebody else.
+        """
+        with tenant_session("", self.url) as session:
+            tenant = session.scalar(
+                select(Tenant).where(
+                    Tenant.slug == slug, Tenant.status == "active"
+                )
+            )
+            return tenant.id if tenant else None
+
+
+class PgAuditSink:
+    """Append-only audit trail. Durable on call."""
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    def emit(self, ctx: RunContext, event_type: str, payload: dict) -> None:
+        with tenant_session(ctx.tenant_id, self.url) as session:
+            session.add(
+                AuditEvent(
+                    tenant_id=ctx.tenant_id,
+                    actor=ctx.actor,
+                    actor_type="user" if ctx.actor else "system",
+                    action=event_type,
+                    entity_type="invoice" if ctx.case_id else None,
+                    entity_id=ctx.case_id or None,
+                    after=payload,
+                    request_id=ctx.run_id or None,
+                )
+            )
+
+    def query(self, tenant_id: str, limit: int = 100) -> list[AuditEvent]:
+        with tenant_session(tenant_id, self.url) as session:
+            return list(
+                session.scalars(
+                    select(AuditEvent)
+                    .where(AuditEvent.tenant_id == tenant_id)
+                    .order_by(AuditEvent.occurred_at.desc())
+                    .limit(limit)
+                ).all()
+            )
+
+
+def record_pipeline_run(ctx: RunContext, **fields) -> None:
+    """Persist reproducibility metadata for one run."""
+    with tenant_session(ctx.tenant_id) as session:
+        session.add(PipelineRun(tenant_id=ctx.tenant_id, **fields))

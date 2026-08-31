@@ -1,0 +1,12 @@
+{
+  "agent": "output_generator",
+  "version": "1.0",
+  "timestamp": "2026-08-30T17:06:56.525464",
+  "input_refs": [],
+  "final_decision": "REJECT",
+  "decision_class": "REJECT",
+  "invoice_status": "Rejected",
+  "rejection_template": "Vendor tax ID invalid",
+  "rejection_reason": null,
+  "rejection_phase": "Phase 3"
+}

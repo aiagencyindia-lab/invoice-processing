@@ -1,0 +1,45 @@
+{
+  "agent": "classifier",
+  "version": "1.0",
+  "timestamp": "2026-08-30T17:06:12.093879",
+  "input_refs": [],
+  "source_folder": "case_001",
+  "files": {
+    "waf.pdf": {
+      "type": "pdf",
+      "extraction_method": "gemini",
+      "has_invoice": false,
+      "has_waf": true
+    },
+    "Postprocessing_Data.json": {
+      "type": "json"
+    },
+    "invoice.pdf": {
+      "type": "pdf",
+      "extraction_method": "gemini",
+      "has_invoice": true,
+      "has_waf": false
+    },
+    "case_metadata.json": {
+      "type": "json"
+    },
+    "invoice_sources": [
+      {
+        "path": "invoice.pdf",
+        "full_path": "/Users/vineet/Downloads/ADK/adk-samples/python/agents/invoice-processing/invoice_processing/exemplary_data/case_001/invoice.pdf",
+        "content": "FastTrack Logistics\nΑΒΝ: 64 560 747 633\n123 Business Street, Sydney NSW 2000\nPhone: (02) 9123 4567\nTAX INVOICE\nInvoice Number:\nINV-00001\nInvoice Date:\n07/01/2026\nCustomer:\nACME Corporation\nDescription\nQty\nUnit Price\nGST\nAmount\nEmergency call-out - overtime rate\n5.80\n$110.00\n$95.70\n$733.70\nSubtotal:\n$638.00\nGST (10%):\n$95.70\nTOTAL:\n$733.70\nPayment Terms: Net 30 days\nPlease make payment to:\nBank: Commonwealth Bank\nBSB: 062-000\nAccount: 1234 5678"
+      }
+    ],
+    "waf_sources": [
+      {
+        "path": "waf.pdf",
+        "full_path": "/Users/vineet/Downloads/ADK/adk-samples/python/agents/invoice-processing/invoice_processing/exemplary_data/case_001/waf.pdf",
+        "content": "WORK AUTHORIZATION FORM\nReference:\nDate:\nVendor:\nSite:\nWAF-76948\n01/01/2026\nFastTrack Logistics\nSite 403\nEmma Williams\nTechnician:\nAuthorized Hours:\n5.7\nWork Description:\ncleaning services\nAuthorization:\nAuthorized By:\nTechnician:\nDate:\nDate:"
+      }
+    ]
+  },
+  "summary": {
+    "invoice_count": 1,
+    "waf_count": 1
+  }
+}
