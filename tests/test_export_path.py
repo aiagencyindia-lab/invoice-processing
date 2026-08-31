@@ -76,6 +76,13 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("XERO_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("XERO_TENANT_ID", raising=False)
     monkeypatch.setattr(auth, "_verifier", FakeVerifier())
+
+    # Start every test from "not yet reviewed". Approval is persisted as an
+    # artifact, so a case approved by hand -- in a browser, or by an earlier
+    # run -- would otherwise be copied in and make the refusal tests vacuous.
+    for case in root.iterdir():
+        (case / "workflow.json").unlink(missing_ok=True)
+
     return TestClient(app, headers={"Authorization": "Bearer boss"})
 
 

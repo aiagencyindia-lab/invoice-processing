@@ -77,14 +77,28 @@
   .toast.show { opacity:1 }
   embed { width:100%; height:100%; border:0 }
   .empty { color:var(--muted); padding:20px 18px }
+  /* Upload lives in the header because it acts on the queue, not on the
+     invoice currently open. */
+  .upload { display:inline-flex; align-items:center; gap:6px }
+  .upload input[type=file] { display:none }
+  button.ghost { font:inherit; font-size:11px; padding:3px 10px; border-radius:5px;
+        cursor:pointer; border:1px solid var(--line); background:var(--panel); color:inherit }
+  button.ghost:hover { background:var(--flag-bg) }
+  button.act[disabled], button.ghost[disabled] { opacity:.5; cursor:default }
 </style>
 </head>
 <body>
 <header>
   <h1>Invoice Review</h1>
   <span class="stats" id="stats">loading…</span>
+  <span class="upload">
+    <input type="file" id="file" accept="application/pdf" onchange="upload()">
+    <button class="ghost" onclick="document.getElementById('file').click()">
+      Upload PDF <kbd>u</kbd>
+    </button>
+  </span>
   <span style="margin-left:auto" class="stats">
-    <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>Tab</kbd> fields · <kbd>a</kbd> approve · <kbd>r</kbd> reject · <kbd>s</kbd> save
+    <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>a</kbd> approve · <kbd>r</kbd> reject · <kbd>s</kbd> save · <kbd>e</kbd> export
   </span>
 </header>
 
@@ -103,6 +117,7 @@
       <button class="act primary" onclick="save()">Save edits <kbd>s</kbd></button>
       <button class="act" onclick="act('approve')">Approve <kbd>a</kbd></button>
       <button class="act" onclick="act('reject')">Reject <kbd>r</kbd></button>
+      <button class="act" id="exportBtn" onclick="exportCsv()">Export CSV <kbd>e</kbd></button>
       <span class="stats" id="dirty"></span>
     </div>
   </div>
@@ -220,6 +235,50 @@ async function act(action) {
   if (current < queue.length - 1) open_(current + 1);
 }
 
+async function upload() {
+  const input = document.getElementById("file");
+  const file = input.files[0];
+  if (!file) return;
+  const body = new FormData();
+  body.append("file", file);
+
+  const response = await fetch("/api/documents", { method: "POST", body });
+  const data = await response.json();
+  input.value = "";                      // so the same file can be re-picked
+
+  if (!response.ok) return toast(data.detail || "Upload failed");
+  // Say what actually happened. The document is stored and queued, not
+  // extracted -- claiming otherwise sends the reviewer looking for an invoice
+  // that is not in the queue yet.
+  toast(data.duplicate
+    ? `Already received — ${file.name} matches a document we hold`
+    : `${file.name} stored and queued for processing`);
+  loadQueue();
+}
+
+async function exportCsv() {
+  const response = await fetch(`/api/invoices/${detail.case_id}/export`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target: "csv" })
+  });
+  const data = await response.json();
+
+  if (!response.ok) {
+    // 409 means it has not been approved. Say so rather than "failed": the
+    // reviewer needs to know what to do next, and approving is one key away.
+    return toast(response.status === 409
+      ? "Approve the invoice before exporting"
+      : (data.detail || "Export failed"));
+  }
+
+  const url = URL.createObjectURL(new Blob([data.csv], { type: "text/csv" }));
+  const link = Object.assign(document.createElement("a"),
+    { href: url, download: `${detail.case_id}.csv` });
+  link.click();
+  URL.revokeObjectURL(url);
+  toast(`Exported ${detail.case_id}.csv`);
+}
+
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") {
     if (e.key === "Enter") { e.preventDefault(); save(); }
@@ -231,6 +290,8 @@ document.addEventListener("keydown", e => {
   else if (k === "a") act("approve");
   else if (k === "r") act("reject");
   else if (k === "s") save();
+  else if (k === "e") exportCsv();
+  else if (k === "u") document.getElementById("file").click();
 });
 
 loadQueue();
