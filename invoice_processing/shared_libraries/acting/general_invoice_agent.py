@@ -65,10 +65,11 @@ except ImportError:
 # ============================================================================
 
 try:
-    from ... import confidence, duplicates, tax_ids
+    from ... import confidence, duplicates, po_matching, tax_ids
     from ...paths import (
         AGENT_ROOT,
         ITEM_CODE_CACHE_PATH,
+        PURCHASE_ORDER_FILE,
     )
     from ...paths import (
         AGENTIC_FLOW_OUT as OUTPUT_BASE_DIR,
@@ -86,10 +87,11 @@ except ImportError:  # executed as a script: no parent package context
         if (p / "invoice_processing").is_dir()
     )
     _sys.path.insert(0, str(_repo_root))
-    from invoice_processing import confidence, duplicates, tax_ids
+    from invoice_processing import confidence, duplicates, po_matching, tax_ids
     from invoice_processing.paths import (
         AGENT_ROOT,
         ITEM_CODE_CACHE_PATH,
+        PURCHASE_ORDER_FILE,
     )
     from invoice_processing.paths import (
         AGENTIC_FLOW_OUT as OUTPUT_BASE_DIR,
@@ -207,6 +209,11 @@ _FALLBACK_CONFIG = {
     "waf_exempt_vendors": [],
     # PO validation
     "require_purchase_order": False,
+    # 2% or $50, whichever is larger. A pure percentage is unhelpful on small
+    # POs, where rounding and freight routinely exceed it; a pure absolute is
+    # noise on large ones.
+    "po_tolerance_pct": 0.02,
+    "po_tolerance_abs": 50.0,
     "valid_po_prefixes": ["PO", "WO", "PR"],
     # Duplicate detection
     # On by default. It was shipped off, which meant a pilot ran without any
@@ -1190,28 +1197,30 @@ class Phase2ValidatorAgent(BaseAgent):
             }
         )
 
-        # Step 2.2: PO Validation (if required)
-        # NOT IMPLEMENTED. There is no PO number in the extraction schema, so
-        # there is nothing to match against. Marked rather than silently passed.
-        if _get_config().get("require_purchase_order"):
-            print(
-                "   WARNING: require_purchase_order is on, but PO validation "
-                "is NOT IMPLEMENTED. No purchase order check was performed."
+        # Step 2.2: two-way match against the purchase order.
+        #
+        # Runs whenever the invoice quotes a PO, not only when POs are
+        # mandatory: an invoice that names a purchase order is asserting a
+        # commitment, and checking that assertion is worthwhile even where a PO
+        # is optional. `require_purchase_order` decides whether a *missing* one
+        # is a failure.
+        config = _get_config()
+        if config.get("require_purchase_order") or invoice.get("po_number"):
+            match = po_matching.match_invoice_to_po(
+                invoice,
+                _load_purchase_orders(),
+                required=bool(config.get("require_purchase_order")),
+                tolerance_pct=config.get(
+                    "po_tolerance_pct", po_matching.DEFAULT_TOLERANCE_PCT
+                ),
+                tolerance_abs=config.get(
+                    "po_tolerance_abs", po_matching.DEFAULT_TOLERANCE_ABS
+                ),
             )
-            validations.append(
-                {
-                    "step": "2.2",
-                    "rule": "Valid purchase order",
-                    "passed": True,
-                    "implemented": False,
-                    "status": "NOT_IMPLEMENTED",
-                    "evidence": (
-                        "NOT IMPLEMENTED - no purchase order check was "
-                        "performed. The extraction schema carries no PO number "
-                        "to match against."
-                    ),
-                }
-            )
+            entry = po_matching.to_validation(match)
+            if not entry["passed"]:
+                print(f"   PO match: {entry['evidence']}")
+            validations.append(entry)
 
         # Determine decision
         failed = [v for v in validations if not v.get("passed")]
@@ -1237,6 +1246,56 @@ class Phase2ValidatorAgent(BaseAgent):
 # ============================================================================
 # AGENT 5: PHASE 3 VALIDATOR (External)
 # ============================================================================
+
+
+class _PurchaseOrderFile:
+    """Purchase orders read from a JSON file next to the case data.
+
+    The local stand-in for an ERP query, exactly as `_load_seen_invoices` is
+    the local stand-in for an indexed duplicate lookup. Purchase orders
+    originate in the customer's ERP; a pilot loads an export of the open ones
+    here, and the connector replaces this without the matching logic changing.
+
+    Missing file means no purchase orders are known, which surfaces as
+    "purchase order not found" rather than as a silent pass -- a PO check that
+    cannot see any POs must not report success.
+    """
+
+    def __init__(self, path=None):
+        self.path = Path(path) if path else PURCHASE_ORDER_FILE
+        self._index: dict[str, dict] | None = None
+
+    def _load(self) -> dict[str, dict]:
+        if self._index is not None:
+            return self._index
+        self._index = {}
+        if self.path.exists():
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                print(
+                    f"   WARNING: {self.path.name} is not valid JSON; no POs loaded."
+                )
+                return self._index
+            records = (
+                raw.get("purchase_orders", raw)
+                if isinstance(raw, dict)
+                else raw
+            )
+            if isinstance(records, dict):
+                records = list(records.values())
+            for record in records or []:
+                key = po_matching.normalize_po_number(record.get("po_number"))
+                if key:
+                    self._index[key] = record
+        return self._index
+
+    def find(self, po_number: str) -> dict | None:
+        return self._load().get(po_matching.normalize_po_number(po_number))
+
+
+def _load_purchase_orders() -> "_PurchaseOrderFile":
+    return _PurchaseOrderFile()
 
 
 def _load_seen_invoices(exclude_case_id: str = "") -> list:

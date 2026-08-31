@@ -319,6 +319,57 @@ def duplicate_detection_is_real():
     return "implemented, wired, enabled"
 
 
+def po_matching_is_real():
+    """Step 2.2 reported passed=True while checking nothing."""
+    from invoice_processing import po_matching
+
+    text = source(
+        "invoice_processing/shared_libraries/acting/general_invoice_agent.py"
+    )
+    code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+    assert (
+        "NOT_IMPLEMENTED" not in code
+        or "2.2" not in code.split("NOT_IMPLEMENTED")[0][-400:]
+    ), "step 2.2 still reports NOT_IMPLEMENTED"
+    assert "po_matching.match_invoice_to_po" in code, (
+        "the pipeline does not call the matcher"
+    )
+
+    class NoOrders:
+        def find(self, po_number):
+            return None
+
+    # A check that can see no purchase orders must not report success.
+    blocked = po_matching.match_invoice_to_po(
+        {"po_number": "PO-1", "vendor_name": "A", "invoice_total_inc_tax": 10},
+        NoOrders(),
+    )
+    assert blocked.blocking, "an unknown purchase order passed"
+
+    # The failure that matters most: someone else's commitment.
+    class OneOrder:
+        def find(self, po_number):
+            return {
+                "po_number": "PO-1",
+                "vendor_name": "Acme Pty Ltd",
+                "total_amount": 1000.0,
+                "currency": "AUD",
+                "status": "open",
+            }
+
+    wrong_vendor = po_matching.match_invoice_to_po(
+        {
+            "po_number": "PO-1",
+            "vendor_name": "Globex Inc",
+            "invoice_total_inc_tax": 10,
+            "currency": "AUD",
+        },
+        OneOrder(),
+    )
+    assert wrong_vendor.outcome == po_matching.VENDOR_MISMATCH
+    return "two-way match; unknown PO and vendor mismatch both block"
+
+
 # -- 1.8 workbench ----------------------------------------------------------
 def the_workbench_serves_a_review_ui():
     from invoice_processing.api.service import app
@@ -688,6 +739,7 @@ OFFLINE = [
     ("1.5", "inbound webhook fails closed", the_webhook_fails_closed),
     ("1.6", "confidence drives routing", confidence_routing_is_applied),
     ("1.7", "duplicate detection is real", duplicate_detection_is_real),
+    ("2.2", "PO two-way match is real", po_matching_is_real),
     ("1.8", "workbench serves the review UI", the_workbench_serves_a_review_ui),
     (
         "1.9",

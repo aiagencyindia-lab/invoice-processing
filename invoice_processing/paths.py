@@ -39,6 +39,12 @@ RULE_BASE_PATH = DATA_DIR / "rule_base.json"
 RULES_BOOK_PATH = DATA_DIR / "reconstructed_rules_book.md"
 RULE_DISCOVERY_CACHE_PATH = DATA_DIR / "rule_discovery_cache.json"
 ITEM_CODE_CACHE_PATH = DATA_DIR / "item_code_cache.json"
+
+# Open purchase orders, for the Step 2.2 two-way match. A pilot drops an ERP
+# export here; the connector replaces the file without the matching logic
+# changing. Absent means no POs are known, which surfaces as "not found" rather
+# than as a silent pass.
+PURCHASE_ORDER_FILE = DATA_DIR / "purchase_orders.json"
 MASTER_DATA_PATH = SHARED_LIBS_DIR / "invoice_master_data.yaml"
 
 # Environment file, loaded by core.config on import.

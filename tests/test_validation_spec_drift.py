@@ -118,7 +118,14 @@ class TestUnimplementedChecksAreMarked:
         yield
         reset_config()
 
-    def test_po_check_is_flagged_when_enabled(self, tmp_path):
+    def test_po_check_is_now_implemented(self, tmp_path):
+        """Step 2.2 was a stub reporting success. It now really matches.
+
+        With POs required and none quoted on the invoice, the step must fail --
+        the stub passed this exact case, so an account demanding purchase
+        orders got no purchase-order check at all. The matching logic itself is
+        covered by test_po_matching.py.
+        """
         set_config(require_purchase_order=True)
         result = Phase2ValidatorAgent().run(
             tmp_path,
@@ -127,9 +134,12 @@ class TestUnimplementedChecksAreMarked:
         )
         s22 = find_step(result, "2.2")
         assert s22 is not None, "step 2.2 should appear when the flag is on"
-        assert s22["implemented"] is False
-        assert s22["status"] == "NOT_IMPLEMENTED"
-        assert "NOT IMPLEMENTED" in s22["evidence"]
+        assert s22["implemented"] is True
+        assert s22.get("status") != "NOT_IMPLEMENTED"
+        assert s22["passed"] is False, (
+            "a missing PO passed while POs were required"
+        )
+        assert "NOT IMPLEMENTED" not in s22["evidence"]
 
     def test_duplicate_check_is_now_implemented(self, tmp_path):
         """Step 3.1 was a stub reporting success. It now really runs.

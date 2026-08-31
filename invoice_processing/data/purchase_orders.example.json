@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "Open purchase orders for the Step 2.2 two-way match. Copy to",
+    "purchase_orders.json and replace with an export from your ERP.",
+    "amount_invoiced is what earlier invoices have already consumed -- without",
+    "it, over-billing split across several invoices is invisible, since each",
+    "one can sit under the PO total while the sum does not.",
+    "status must be one of: open, approved, partially_invoiced,",
+    "partially_received. Anything else is treated as closed to invoicing."
+  ],
+  "purchase_orders": [
+    {
+      "po_number": "PO-4471",
+      "vendor_name": "Acme Pty Ltd",
+      "total_amount": 10000.00,
+      "currency": "AUD",
+      "status": "open",
+      "amount_invoiced": 6000.00
+    }
+  ]
+}

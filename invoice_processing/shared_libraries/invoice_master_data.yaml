@@ -463,6 +463,9 @@ config_defaults:
   waf_exempt_work_types: ["PREVENTATIVE", "CLEANING"]
   waf_exempt_vendors: []
   require_purchase_order: false
+  # Two-way match tolerance: the larger of the two applies.
+  po_tolerance_pct: 0.02
+  po_tolerance_abs: 50.0
   valid_po_prefixes: ["PO", "WO", "PR"]
   duplicate_check_enabled: true
   duplicate_check_type: "none"
