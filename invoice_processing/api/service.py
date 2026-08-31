@@ -113,6 +113,7 @@ def get_documents():
             _documents = JsonDocumentRepository()
     return _documents
 
+
 def get_audit():
     """The audit sink: Postgres when a database is configured, else a file.
 

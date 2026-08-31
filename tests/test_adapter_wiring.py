@@ -58,7 +58,9 @@ class TestResolution:
         assert isinstance(service.get_documents(), JsonDocumentRepository)
         assert isinstance(service.get_audit(), JsonlAuditSink)
 
-    def test_postgres_adapters_when_a_database_is_configured(self, with_database):
+    def test_postgres_adapters_when_a_database_is_configured(
+        self, with_database
+    ):
         assert isinstance(service.get_cases(), PgCaseRepository)
         assert isinstance(service.get_documents(), PgDocumentRepository)
         assert isinstance(service.get_audit(), PgAuditSink)
@@ -94,8 +96,11 @@ class TestNoHardcodedAdapters:
         offenders = [
             line
             for line in source.splitlines()
-            if re.match(r"^_(cases|documents|audit)\s*=\s*\w+Repository\(|"
-                        r"^_audit\s*=\s*\w*AuditSink\(", line)
+            if re.match(
+                r"^_(cases|documents|audit)\s*=\s*\w+Repository\(|"
+                r"^_audit\s*=\s*\w*AuditSink\(",
+                line,
+            )
         ]
         assert not offenders, (
             f"adapter pinned at import: {offenders}. Use the accessor so the "
@@ -133,7 +138,9 @@ class TestTenantResolutionParity:
         repo = JsonDocumentRepository(tmp_path / "documents.json")
         assert repo.tenant_id_for_slug(slug) is None
 
-    def test_a_tenant_holding_documents_still_resolves(self, tmp_path, monkeypatch):
+    def test_a_tenant_holding_documents_still_resolves(
+        self, tmp_path, monkeypatch
+    ):
         """A local corpus predating AUTH_DEV_TENANT keeps working."""
         monkeypatch.setenv("AUTH_DEV_TENANT", "acme")
         repo = JsonDocumentRepository(tmp_path / "documents.json")
