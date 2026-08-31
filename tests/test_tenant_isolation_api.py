@@ -29,21 +29,21 @@ from invoice_processing.ports import RunContext
 
 ACME, GLOBEX = "tenant-acme", "tenant-globex"
 
+ROLES = ("viewer", "clerk", "approver", "admin")
+
+# A token per (tenant, role). Isolation must hold at every privilege level, not
+# just for admin: a viewer who can read across tenants is the same disclosure,
+# and an approver who can approve across them is worse.
 CLAIMS = {
-    "acme": {
-        "sub": "u-acme",
-        "email": "admin@acme.test",
+    f"{slug}-{role}": {
+        "sub": f"u-{slug}-{role}",
+        "email": f"{role}@{slug}.test",
         "email_verified": True,
-        "tenant_id": ACME,
-        "role": "admin",
-    },
-    "globex": {
-        "sub": "u-globex",
-        "email": "admin@globex.test",
-        "email_verified": True,
-        "tenant_id": GLOBEX,
-        "role": "admin",
-    },
+        "tenant_id": tenant,
+        "role": role,
+    }
+    for slug, tenant in (("acme", ACME), ("globex", GLOBEX))
+    for role in ROLES
 }
 
 
@@ -72,10 +72,12 @@ def clients(tmp_path, monkeypatch):
     monkeypatch.delenv("AUTH_DISABLED", raising=False)
     monkeypatch.setattr(auth, "_verifier", FakeVerifier())
 
-    return (
-        TestClient(app, headers={"Authorization": "Bearer acme"}),
-        TestClient(app, headers={"Authorization": "Bearer globex"}),
-    )
+    def client_for(slug, role="admin"):
+        return TestClient(
+            app, headers={"Authorization": f"Bearer {slug}-{role}"}
+        )
+
+    return client_for
 
 
 # ---------------------------------------------------------------------------
@@ -85,32 +87,32 @@ def clients(tmp_path, monkeypatch):
 
 class TestReadsDoNotCross:
     def test_owner_sees_their_invoices(self, clients):
-        acme, _ = clients
+        acme = clients("acme")
         assert acme.get("/api/invoices").json()["counts"]["total"] >= 3
 
     def test_other_tenant_sees_nothing(self, clients):
         """The same repository, the same directory, a different tenant."""
-        _, globex = clients
+        globex = clients("globex")
         assert globex.get("/api/invoices").json()["counts"]["total"] == 0
 
     def test_a_known_case_id_is_not_readable_across_tenants(self, clients):
         """Guessing an id must not be enough; ids are not a secret."""
-        _, globex = clients
+        globex = clients("globex")
         assert globex.get("/api/invoices/case_005").status_code == 404
 
     def test_the_document_bytes_are_not_readable_across_tenants(self, clients):
         """The PDF is served from a shared directory, so this needs its own check."""
-        acme, globex = clients
+        acme, globex = clients("acme"), clients("globex")
         assert acme.get("/api/invoices/case_005/document").status_code == 200
         assert globex.get("/api/invoices/case_005/document").status_code == 404
 
     def test_stats_do_not_leak_volume(self, clients):
         """Even a count tells a competitor how much business the other does."""
-        _, globex = clients
+        globex = clients("globex")
         assert globex.get("/api/stats").json()["total"] == 0
 
     def test_corrections_do_not_leak_between_tenants(self, clients):
-        acme, globex = clients
+        acme, globex = clients("acme"), clients("globex")
         acme.patch(
             "/api/invoices/case_002/fields",
             json={
@@ -128,7 +130,7 @@ class TestReadsDoNotCross:
 
 class TestWritesDoNotCross:
     def test_cannot_edit_another_tenants_invoice(self, clients):
-        _, globex = clients
+        globex = clients("globex")
         response = globex.patch(
             "/api/invoices/case_002/fields",
             json={
@@ -139,7 +141,7 @@ class TestWritesDoNotCross:
 
     def test_a_refused_edit_changes_nothing(self, clients):
         """A 404 that still wrote would be the worst of both worlds."""
-        acme, globex = clients
+        acme, globex = clients("acme"), clients("globex")
         before = acme.get("/api/invoices/case_002").json()
         globex.patch(
             "/api/invoices/case_002/fields",
@@ -150,7 +152,7 @@ class TestWritesDoNotCross:
         assert acme.get("/api/invoices/case_002").json() == before
 
     def test_cannot_approve_another_tenants_invoice(self, clients):
-        _, globex = clients
+        globex = clients("globex")
         response = globex.post(
             "/api/invoices/case_002/actions", json={"action": "approve"}
         )
@@ -158,19 +160,79 @@ class TestWritesDoNotCross:
 
     def test_cannot_export_another_tenants_invoice(self, clients):
         """Export creates a payable. Doing it across tenants is a real bill."""
-        _, globex = clients
+        globex = clients("globex")
         response = globex.post(
             "/api/invoices/case_002/export", json={"target": "csv"}
         )
         assert response.status_code == 404
 
     def test_cannot_reject_another_tenants_invoice(self, clients):
-        _, globex = clients
+        globex = clients("globex")
         response = globex.post(
             "/api/invoices/case_002/actions",
             json={"action": "reject", "reason": "mine now"},
         )
         assert response.status_code == 404
+
+
+class TestEveryRoleIsIsolated:
+    """Part D requires isolation across all roles, not just admin."""
+
+    @pytest.mark.parametrize("role", ROLES)
+    def test_no_role_can_list_another_tenants_invoices(self, clients, role):
+        assert (
+            clients("globex", role)
+            .get("/api/invoices")
+            .json()["counts"]["total"]
+            == 0
+        )
+
+    @pytest.mark.parametrize("role", ROLES)
+    def test_no_role_can_read_another_tenants_invoice(self, clients, role):
+        response = clients("globex", role).get("/api/invoices/case_002")
+        assert response.status_code == 404
+
+    @pytest.mark.parametrize("role", ROLES)
+    def test_no_role_can_download_another_tenants_document(self, clients, role):
+        response = clients("globex", role).get(
+            "/api/invoices/case_002/document"
+        )
+        assert response.status_code == 404
+
+    @pytest.mark.parametrize("role", ROLES)
+    def test_no_role_leaks_volume_through_stats(self, clients, role):
+        assert clients("globex", role).get("/api/stats").json()["total"] == 0
+
+    @pytest.mark.parametrize("role", ROLES)
+    def test_no_role_can_edit_another_tenants_invoice(self, clients, role):
+        """403 for insufficient privilege, 404 for the wrong tenant -- never 200."""
+        response = clients("globex", role).patch(
+            "/api/invoices/case_002/fields",
+            json={"edits": [{"field": "vendor_name", "value": "Attacker"}]},
+        )
+        assert response.status_code in (403, 404)
+
+    @pytest.mark.parametrize("role", ROLES)
+    def test_no_role_can_approve_another_tenants_invoice(self, clients, role):
+        response = clients("globex", role).post(
+            "/api/invoices/case_002/actions", json={"action": "approve"}
+        )
+        assert response.status_code in (403, 404)
+
+    @pytest.mark.parametrize("role", ROLES)
+    def test_no_role_can_export_another_tenants_invoice(self, clients, role):
+        response = clients("globex", role).post(
+            "/api/invoices/case_002/export", json={"target": "csv"}
+        )
+        assert response.status_code in (403, 404)
+
+    def test_the_owning_tenant_can_still_read_at_every_role(self, clients):
+        """A sweep that passes by denying everyone would prove nothing."""
+        for role in ROLES:
+            body = clients("acme", role).get("/api/invoices").json()
+            assert body["counts"]["total"] >= 3, (
+                f"{role} cannot read its own tenant"
+            )
 
 
 # ---------------------------------------------------------------------------
