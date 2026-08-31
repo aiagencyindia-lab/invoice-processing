@@ -59,11 +59,15 @@ jobs:
                         tests/test_auth.py \
                         tests/test_db_repositories.py -q
 
+      # Runs against the frozen corpus in tests/fixtures/eval, not the
+      # gitignored agent_output directory -- a fresh checkout has no such
+      # directory, and the gate must measure a fixed corpus for its baseline to
+      # mean anything.
       - name: Evaluation gate
         run: |
           uv run python eval/eval.py \
             --ground-truth invoice_processing/exemplary_data \
-            --agent-output invoice_processing/data/agent_output \
+            --agent-output tests/fixtures/eval/agent_output \
             --skip-llm \
             --require-baseline
 
