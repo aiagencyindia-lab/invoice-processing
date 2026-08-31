@@ -481,9 +481,7 @@ def impact_assessment_is_reproducible():
     # naive substring search would match the prose describing the bug rather
     # than the bug. A check that reports a fixed defect is as misleading as one
     # that misses a live one.
-    code = "\n".join(
-        line.split("#", 1)[0] for line in text.splitlines()
-    )
+    code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
     if "random.sample(" in code:
         raise AssertionError(
             "random.sample makes the impact report non-reproducible; the "
