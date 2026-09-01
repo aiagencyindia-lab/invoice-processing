@@ -206,6 +206,23 @@ def _ensure_gcp_initialized():
     _gcp_config["initialized"] = True
 
 
+def _build_model(model_name: str, **generation_kwargs) -> "GenerativeModel":
+    """Construct a Vertex model, initialising Vertex first.
+
+    `_ensure_gcp_initialized` existed and nothing called it. Every
+    `GenerativeModel(...)` below therefore relied on the SDK resolving a
+    project on its own -- which works on a developer machine with gcloud
+    configured and on Cloud Run with a metadata server, and fails everywhere
+    else with an auth error rather than the clear "PROJECT_ID not found"
+    message this module already wrote for that case.
+    """
+    _ensure_gcp_initialized()
+    return GenerativeModel(
+        model_name,
+        generation_config=GenerationConfig(**generation_kwargs),
+    )
+
+
 # ============================================================================
 # INVESTIGATION CONFIGURATION (v1.4.0)
 # ============================================================================
@@ -989,11 +1006,10 @@ class RuleDiscoveryEngine:
         self.tenant_id = tenant_id
         self.budget = budget
         self.discovered_rules = {}
-        self.model = GenerativeModel(
+        self.model = _build_model(
             self.model_name,
-            generation_config=GenerationConfig(
-                temperature=0, response_mime_type="application/json"
-            ),
+            temperature=0,
+            response_mime_type="application/json",
         )
 
     def discover_rules(self, force_refresh: bool = False) -> dict:
@@ -1213,11 +1229,10 @@ class PerGroupValidator:
     ):
         self.model_name = model_name or _gcp_config["GEMINI_PRO_MODEL"]
         self.config = config or INVESTIGATION_CONFIG
-        self.model = GenerativeModel(
+        self.model = _build_model(
             self.model_name,
-            generation_config=GenerationConfig(
-                temperature=0, response_mime_type="application/json"
-            ),
+            temperature=0,
+            response_mime_type="application/json",
         )
 
     def validate_all_groups(
@@ -2651,11 +2666,10 @@ is HIGHER than the cost of FALSE NEGATIVES (missing a minor violation). Therefor
         self.rules_extractor = rules_extractor
         self.model_name = model_name or _gcp_config["GEMINI_PRO_MODEL"]
         self.config = config or INVESTIGATION_CONFIG
-        self.model = GenerativeModel(
+        self.model = _build_model(
             self.model_name,
-            generation_config=GenerationConfig(
-                temperature=0, response_mime_type="application/json"
-            ),
+            temperature=0,
+            response_mime_type="application/json",
         )
 
     def _build_prompt(self, specific_prompt: str) -> str:

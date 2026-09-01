@@ -232,8 +232,15 @@ class TestPipelineIntegration:
         assert entry["implemented"] is True
         assert entry["passed"] is True, "an unseen vendor is not a duplicate"
 
-    def test_reprocessing_a_known_case_is_detected(self, tmp_path):
-        """The real scenario: the same invoice submitted twice."""
+    def test_reprocessing_a_known_case_is_detected(self, tmp_path, monkeypatch):
+        """The real scenario: the same invoice submitted twice.
+
+        The corpus of already-seen invoices is pinned to the frozen cases.
+        Left pointing at the live output directory this passed only on a
+        machine that had run the pipeline, and matched against whatever real
+        invoices happened to be sitting there.
+        """
+        monkeypatch.setattr(gia, "OUTPUT_BASE_DIR", GOLDEN_CASES)
         invoice = json.loads(
             (GOLDEN_CASES / "case_005" / "02_extraction.json").read_text()
         )["invoice"]
