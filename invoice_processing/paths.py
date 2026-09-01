@@ -14,6 +14,7 @@ which point path resolution stops being global state. Until then this at least
 guarantees every module agrees on where things are.
 """
 
+import os
 from pathlib import Path
 
 # invoice_processing/ -- the Python package itself.
@@ -27,7 +28,17 @@ SHARED_LIBS_DIR = AGENT_PKG_DIR / "shared_libraries"
 EXEMPLARY_DIR = AGENT_PKG_DIR / "exemplary_data"
 
 # Runtime data. Everything the pipeline writes lives under DATA_DIR.
-DATA_DIR = AGENT_PKG_DIR / "data"
+#
+# `INVOICE_DATA_DIR` relocates the whole tree. It exists so a test harness can
+# run the real service against a scratch copy instead of the developer's own
+# invoices -- three separate test suites have written into live data because
+# there was no way to point them elsewhere. It is equally the hook for a
+# mounted volume in a container.
+#
+# The directory holds tracked configuration as well as output (the rules book,
+# the rule base), so a relocated tree must be seeded from this one rather than
+# created empty.
+DATA_DIR = Path(os.getenv("INVOICE_DATA_DIR") or (AGENT_PKG_DIR / "data"))
 AGENTIC_FLOW_OUT = DATA_DIR / "agent_output"
 ALF_OUT_DIR = DATA_DIR / "alf_output"
 INVESTIGATION_OUT_DIR = DATA_DIR / "investigation_output"

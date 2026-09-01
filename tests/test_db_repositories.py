@@ -15,6 +15,7 @@ test_rls_policies.py.
 
 import pytest
 
+from invoice_processing.db import session as session_module
 from invoice_processing.db.models import (
     TENANT_TABLES,
     Base,
@@ -270,3 +271,26 @@ def test_rls_forces_policies_on_the_table_owner():
     statements = enable_rls_statements()
     for table in TENANT_TABLES:
         assert f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY;" in statements
+
+
+class TestAnEmptyUrlIsNotAUrl:
+    """`DATABASE_URL=` means "unset", and must not crash.
+
+    Blanking a variable that way is how this repo's own run commands and the
+    end-to-end harness switch off cloud services. A getenv default does not
+    apply to a variable that is present but empty, so the empty string reached
+    `create_engine` and failed with "Could not parse SQLAlchemy URL" -- a
+    message naming neither the variable nor the fix.
+    """
+
+    def test_empty_falls_back_to_sqlite(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", "")
+        assert session_module.database_url() == "sqlite://"
+
+    def test_absent_falls_back_to_sqlite(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        assert session_module.database_url() == "sqlite://"
+
+    def test_a_configured_url_still_wins(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", "sqlite:///configured.db")
+        assert session_module.database_url() == "sqlite:///configured.db"

@@ -5,3 +5,8 @@ next-env.d.ts
 
 # Local Identity Platform config
 .env.local
+
+# End-to-end run artefacts
+e2e/.data/
+test-results/
+playwright-report/

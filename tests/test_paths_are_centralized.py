@@ -90,3 +90,31 @@ def test_configured_files_exist():
     assert paths.RULES_BOOK_PATH.is_file()
     assert paths.MASTER_DATA_PATH.is_file()
     assert paths.EXEMPLARY_DIR.is_dir()
+
+
+class TestTheDataDirectoryCanBeRelocated:
+    """`INVOICE_DATA_DIR` is what lets a test run the real service safely.
+
+    Three suites have written into live data because there was no way to point
+    the app at a scratch tree. The end-to-end harness relocates it; without
+    this it would drive a browser against the developer's own invoices.
+    """
+
+    def test_the_environment_overrides_the_default(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("INVOICE_DATA_DIR", str(tmp_path / "scratch"))
+        reloaded = importlib.reload(paths)
+        try:
+            assert reloaded.DATA_DIR == tmp_path / "scratch"
+            # Everything derived must move with it, or half the app writes to
+            # the scratch tree and half to the real one.
+            assert reloaded.AGENTIC_FLOW_OUT.is_relative_to(reloaded.DATA_DIR)
+            assert reloaded.RULE_BASE_PATH.is_relative_to(reloaded.DATA_DIR)
+            assert reloaded.SESSIONS_DIR.is_relative_to(reloaded.DATA_DIR)
+        finally:
+            monkeypatch.delenv("INVOICE_DATA_DIR", raising=False)
+            importlib.reload(paths)
+
+    def test_unset_keeps_the_package_directory(self, monkeypatch):
+        monkeypatch.delenv("INVOICE_DATA_DIR", raising=False)
+        reloaded = importlib.reload(paths)
+        assert reloaded.DATA_DIR == reloaded.AGENT_PKG_DIR / "data"

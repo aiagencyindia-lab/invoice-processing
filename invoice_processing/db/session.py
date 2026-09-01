@@ -27,7 +27,15 @@ _Session: sessionmaker | None = None
 
 
 def database_url() -> str:
-    return os.getenv("DATABASE_URL", "sqlite://")
+    """The configured URL, or local SQLite.
+
+    `or` rather than a getenv default: a default applies only when the variable
+    is *absent*, and `DATABASE_URL=` is how this project's own run commands and
+    CI blank a setting. Set-but-empty therefore reached create_engine as "" and
+    failed with "Could not parse SQLAlchemy URL", which names neither the
+    variable nor the fix.
+    """
+    return os.getenv("DATABASE_URL") or "sqlite://"
 
 
 def cloud_sql_instance() -> str:
