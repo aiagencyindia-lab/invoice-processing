@@ -29,3 +29,6 @@ invoice_processing/data/blobs/
 invoice_processing/data/documents.json
 invoice_processing/data/corrections.jsonl
 invoice_processing/data/audit.jsonl
+
+# Worker stdout when run detached
+worker.log
