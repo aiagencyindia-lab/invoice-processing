@@ -44,7 +44,31 @@ ITEM_CODE_CACHE_PATH = DATA_DIR / "item_code_cache.json"
 # export here; the connector replaces the file without the matching logic
 # changing. Absent means no POs are known, which surfaces as "not found" rather
 # than as a silent pass.
+# Legacy shared location. Kept so an existing single-tenant setup keeps
+# working, but every new write goes to the per-tenant path below.
 PURCHASE_ORDER_FILE = DATA_DIR / "purchase_orders.json"
+PURCHASE_ORDER_DIR = DATA_DIR / "purchase_orders"
+
+
+def purchase_order_file(tenant_id: str):
+    """The purchase-order source for one tenant.
+
+    Purchase orders name suppliers and commitment amounts, so a single shared
+    file across tenants is a disclosure: one customer would see another's
+    supplier list, and could overwrite it. Scoped per tenant from the start.
+
+    Falls back to the legacy shared file when a tenant has none of its own, so
+    an existing local setup keeps matching without being migrated.
+    """
+    safe = "".join(
+        c if c.isalnum() or c in "-_" else "_" for c in str(tenant_id or "")
+    )
+    scoped = PURCHASE_ORDER_DIR / f"{safe or 'default'}.json"
+    if scoped.exists() or not PURCHASE_ORDER_FILE.exists():
+        return scoped
+    return PURCHASE_ORDER_FILE
+
+
 MASTER_DATA_PATH = SHARED_LIBS_DIR / "invoice_master_data.yaml"
 
 # Environment file, loaded by core.config on import.

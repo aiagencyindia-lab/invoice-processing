@@ -82,6 +82,7 @@ _corrections_path = paths.DATA_DIR / "corrections.jsonl"
 _cases = None
 _documents = None
 _audit = None
+_tenant_settings = None
 
 
 def _database_configured() -> bool:
@@ -192,6 +193,21 @@ def get_exporter(tenant_id: str):
         ),
         account_code_map=account_codes,
     )
+
+
+def get_tenant_settings():
+    """Per-tenant configuration: Postgres when configured, a JSON file otherwise."""
+    global _tenant_settings
+    if _tenant_settings is None:
+        if _database_configured():
+            from ..tenant_settings import PgTenantSettings  # noqa: PLC0415
+
+            _tenant_settings = PgTenantSettings()
+        else:
+            from ..tenant_settings import JsonTenantSettings  # noqa: PLC0415
+
+            _tenant_settings = JsonTenantSettings()
+    return _tenant_settings
 
 
 def get_blobs(tenant_id: str):
@@ -704,11 +720,13 @@ def export_invoice(
     }
 
 
+from .config_routes import router as config_router  # noqa: E402
 from .ingest import router as ingest_router  # noqa: E402
 from .system import router as system_router  # noqa: E402
 
 app.include_router(ingest_router)
 app.include_router(system_router)
+app.include_router(config_router)
 
 
 @app.get("/", response_class=HTMLResponse)

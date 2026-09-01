@@ -27,6 +27,7 @@ from invoice_processing.adapters import FsCaseRepository, JsonDocumentRepository
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
 from invoice_processing.ports import RunContext
+from invoice_processing.tenant_settings import JsonTenantSettings
 from invoice_processing.worker.queue import LocalQueue
 
 ACME, GLOBEX = "tenant-acme", "tenant-globex"
@@ -203,6 +204,20 @@ class TestWritesDoNotCross:
         assert set(body) == {"worker", "queue", "storage"}
         assert "invoices" not in json.dumps(body)
 
+    def test_settings_do_not_cross_tenants(
+        self, clients, tmp_path, monkeypatch
+    ):
+        """Organisation names decide which invoices are accepted at all."""
+        store = JsonTenantSettings(tmp_path / "settings.json")
+        monkeypatch.setattr(service, "_tenant_settings", store)
+
+        clients("acme").put(
+            "/api/settings",
+            json={"settings": {"organization_names": ["Acme Pty Ltd"]}},
+        )
+        globex = clients("globex").get("/api/settings").json()["settings"]
+        assert "Acme Pty Ltd" not in (globex["organization_names"] or [])
+
     def test_cannot_reject_another_tenants_invoice(self, clients):
         globex = clients("globex")
         response = globex.post(
@@ -334,6 +349,8 @@ class TestCoverage:
         "/api/documents/{document_id}/retry",
         "/api/audit",
         "/api/system/status",
+        "/api/settings",
+        "/api/purchase-orders",
     }
 
     def test_every_route_is_covered(self):

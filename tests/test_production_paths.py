@@ -19,11 +19,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from invoice_processing.api import service
 from invoice_processing.connectors.xero import HttpTransport, Transport
 from invoice_processing.ports import RunContext
 from invoice_processing.shared_libraries.acting.general_invoice_agent import (
     _money,
 )
+from invoice_processing.tenant_settings import JsonTenantSettings
 from invoice_processing.worker import runner
 from invoice_processing.worker.queue import (
     LocalQueue,
@@ -294,6 +296,16 @@ def pipeline(monkeypatch, tmp_path):
         "invoice_processing.shared_libraries.acting.general_invoice_agent.get_output_folder",
         lambda case_id: output,
     )
+    # The pipeline now loads per-tenant settings before extracting, so the test
+    # needs a store. Left unset it resolves to Postgres against a schema-less
+    # test database -- and that failure is deliberate: if settings cannot be
+    # read, processing with the wrong organisation names would reject invoices
+    # for belonging to someone else, which is worse than retrying.
+    monkeypatch.setattr(
+        service,
+        "_tenant_settings",
+        JsonTenantSettings(tmp_path / "settings.json"),
+    )
     return calls, output
 
 
@@ -410,8 +422,11 @@ class TestPipelineFailuresReachTheQueue:
     """
 
     def test_an_error_decision_raises_so_the_message_is_retried(
-        self, monkeypatch
+        self, monkeypatch, tmp_path
     ):
+        monkeypatch.setattr(
+            service, "_tenant_settings", JsonTenantSettings(tmp_path / "s.json")
+        )
         monkeypatch.setattr(
             "invoice_processing.shared_libraries.acting.general_invoice_agent.process_invoice",
             lambda source_folder: {"decision": "ERROR", "error": "boom"},

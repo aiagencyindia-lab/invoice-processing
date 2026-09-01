@@ -146,6 +146,15 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
         source.mkdir(parents=True)
         (source / "invoice.pdf").write_bytes(blobs.get(document["storage_key"]))
 
+        # Load this tenant's settings into the engine before extracting. The
+        # pipeline reads a module-level config dict, so a worker handling two
+        # tenants in sequence must reload between them -- otherwise the second
+        # invoice is validated against the first tenant's organisation names
+        # and rejected for belonging to somebody else.
+        from ..tenant_settings import apply_to_pipeline  # noqa: PLC0415
+
+        apply_to_pipeline(ctx.tenant_id)
+
         result = process_invoice(source)
 
         # `process_invoice` catches its own exceptions and returns

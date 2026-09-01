@@ -1262,7 +1262,14 @@ class _PurchaseOrderFile:
     """
 
     def __init__(self, path=None):
-        self.path = Path(path) if path else PURCHASE_ORDER_FILE
+        # The tenant's file, injected through config by the worker. Falls back
+        # to the shared legacy path only when no tenant is in play (a direct
+        # CLI run), never when one is.
+        if path is None:
+            path = (
+                _get_config().get("purchase_order_file") or PURCHASE_ORDER_FILE
+            )
+        self.path = Path(path)
         self._index: dict[str, dict] | None = None
 
     def _load(self) -> dict[str, dict]:
