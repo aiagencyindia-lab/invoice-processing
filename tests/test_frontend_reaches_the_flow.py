@@ -147,6 +147,66 @@ class TestKeyboard:
         assert 'target?.tagName === "INPUT"' in invoices
 
 
+class TestSignIn:
+    """The app must be able to authenticate, not just to run locally.
+
+    For a whole phase `setToken` was exported and never called, so no request
+    ever carried a bearer token and the app worked only against an API started
+    with AUTH_DISABLED. Pointed at a real deployment, every request was a 401.
+    """
+
+    def shell(self) -> str:
+        return (FRONTEND / "components" / "AppShell.tsx").read_text(
+            encoding="utf-8"
+        )
+
+    def test_a_sign_in_screen_exists(self):
+        assert (FRONTEND / "components" / "SignIn.tsx").exists()
+
+    def test_every_request_can_carry_a_token(self):
+        assert "setTokenProvider" in self.shell()
+        assert "currentIdToken" in self.shell()
+
+    def test_the_token_is_fetched_per_request_not_stored(self):
+        """Identity Platform tokens last an hour.
+
+        One captured at sign-in makes every request after that a 401, and the
+        failure arrives long after the code that caused it.
+        """
+        api = (FRONTEND / "lib" / "api.ts").read_text(encoding="utf-8")
+        assert "provider ? await provider() : null" in api
+        assert "let token: string | null = null" not in api, (
+            "a stored token goes stale an hour after sign-in"
+        )
+
+    def test_the_server_decides_whether_sign_in_is_required(self):
+        """Not a client-side guess: a deployment with authentication disabled
+        must never show anyone a sign-in screen."""
+        shell = self.shell()
+        assert "caught.status === 401" in shell
+        assert "/api/me" in shell
+
+    def test_signing_out_is_possible(self):
+        assert "signOut" in self.shell()
+
+    def test_dev_mode_is_announced(self):
+        """An API answering without a token is a fact worth putting on screen
+        -- it is the difference between a demo and a system holding real
+        money."""
+        assert "dev mode" in self.shell()
+
+    def test_no_secret_is_baked_into_the_bundle(self):
+        """The Firebase client config is public by design; a service-account
+        key or an API secret is not, and must never be read here."""
+        auth = (FRONTEND / "lib" / "auth.ts").read_text(encoding="utf-8")
+        for forbidden in ("private_key", "client_secret", "SERVICE_ACCOUNT"):
+            assert forbidden not in auth, forbidden
+        # Anything reaching the browser must be explicitly public-prefixed.
+        for line in auth.splitlines():
+            if "process.env." in line:
+                assert "process.env.NEXT_PUBLIC_" in line, line
+
+
 class TestNoEndpointTakesATenant:
     """The API's central rule, restated where a client could break it.
 

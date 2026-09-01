@@ -23,20 +23,24 @@ export class ApiError extends Error {
   }
 }
 
-let token: string | null = null;
+/** Where the bearer token comes from.
+ *
+ *  A provider function rather than a stored string: Identity Platform tokens
+ *  expire after an hour, so a token captured at sign-in would turn every
+ *  request after that into a 401. The provider is asked on each request and
+ *  hands back a refreshed token when the old one is close to expiring.
+ */
+type TokenProvider = () => Promise<string | null>;
 
-/** Set once sign-in lands; until then the API is reached in dev mode,
- *  where the service issues a local principal and ignores the header. */
-export function setToken(value: string | null): void {
-  token = value;
-}
+let provider: TokenProvider | null = null;
 
-export function hasToken(): boolean {
-  return token !== null;
+export function setTokenProvider(value: TokenProvider | null): void {
+  provider = value;
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
+  const token = provider ? await provider() : null;
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");

@@ -2,8 +2,28 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { can, hasToken, type Me, type SystemStatus } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import {
+  ApiError,
+  api,
+  can,
+  setTokenProvider,
+  type Me,
+  type SystemStatus,
+} from "@/lib/api";
+import {
+  currentIdToken,
+  signOut,
+  watchUser,
+  type SignedInUser,
+} from "@/lib/auth";
+import { SignIn } from "@/components/SignIn";
 import { usePoll } from "@/lib/hooks";
+
+// Every request asks Identity Platform for a token. Registered here, at import
+// of the shell, because the shell wraps every page -- there is no route that
+// should be making unauthenticated calls.
+setTokenProvider(currentIdToken);
 
 /** `min` is the role the *server* requires for that view's main endpoint.
  *  Hiding a link the caller cannot use is a courtesy; `require_role` on the
@@ -38,13 +58,64 @@ function pausedMessage(status: SystemStatus): string | null {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { data: status } = usePoll<SystemStatus>("/api/system/status", POLL_MS);
-  const { data: me } = usePoll<Me>("/api/me");
+
+  // `undefined` while unknown, so a first paint never guesses. Guessing
+  // "signed out" flashes a sign-in screen at someone who is signed in, and
+  // guessing "signed in" flashes the whole application at someone who is not.
+  const [me, setMe] = useState<Me | null | undefined>(undefined);
+  const [user, setUser] = useState<SignedInUser | null>(null);
+
+  /** Ask the API who we are. The server is the authority on whether a token
+   *  is required at all: a deployment with authentication disabled answers
+   *  this happily and nobody is ever shown a sign-in screen. */
+  const identify = useCallback(() => {
+    api<Me>("/api/me")
+      .then(setMe)
+      .catch((caught) => {
+        if (caught instanceof ApiError && caught.status === 401) setMe(null);
+        // Anything else -- a 403, the API being down -- is not a sign-in
+        // problem, and bouncing to a login screen would misdescribe it.
+        else setMe((previous) => previous ?? null);
+      });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+
+    watchUser((value) => {
+      if (cancelled) return;
+      setUser(value);
+      identify();
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unsubscribe = stop;
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [identify]);
+
+  const { data: status } = usePoll<SystemStatus>(
+    me ? "/api/system/status" : null,
+    POLL_MS,
+  );
+
+  if (me === undefined) {
+    return (
+      <main style={{ padding: "4rem 2rem" }}>
+        <p className="muted">Loading…</p>
+      </main>
+    );
+  }
+
+  if (me === null) {
+    return <SignIn onSignedIn={identify} />;
+  }
 
   const paused = status ? pausedMessage(status) : null;
-  // Until /api/me answers, show the unrestricted views only. Briefly hiding a
-  // link a user does have is harmless; briefly showing one they do not invites
-  // a click that ends in a 403.
   const nav = NAV.filter((item) => !item.min || can(me, item.min));
 
   return (
@@ -112,15 +183,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               gap: 12,
             }}
           >
-            {me ? (
-              <span className="faint" style={{ fontSize: 12 }}>
-                {me.email} · {me.role} · {me.tenant_id}
-              </span>
-            ) : null}
-            {hasToken() ? null : (
+            <span className="faint" style={{ fontSize: 12 }}>
+              {me.email} · {me.role} · {me.tenant_id}
+            </span>
+            {user ? (
+              <button
+                type="button"
+                className="btn-chip"
+                onClick={() => signOut().then(identify)}
+              >
+                Sign out
+              </button>
+            ) : (
+              // No signed-in user, yet the API answered: this deployment is
+              // running with authentication disabled. Say so plainly -- it is
+              // the difference between a demo and a system holding real money.
               <span
-                className="badge badge-neutral"
-                title="No bearer token is being sent; the API is running with authentication disabled."
+                className="badge badge-warn"
+                title="The API accepted this request without a token, so it is running with AUTH_DISABLED. Never correct for production."
               >
                 dev mode
               </span>
