@@ -9,7 +9,7 @@ import { api, ApiError } from "@/lib/api";
  *  tenant, and a socket would be a second delivery path to keep alive for
  *  no gain. `intervalMs = 0` fetches once.
  */
-export function usePoll<T>(path: string, intervalMs = 0) {
+export function usePoll<T>(path: string | null, intervalMs = 0) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Starts true so a first paint shows "loading", not a misleading "none".
@@ -20,6 +20,9 @@ export function usePoll<T>(path: string, intervalMs = 0) {
 
   useEffect(() => {
     let cancelled = false;
+    // A null path means "nothing selected yet", not an error: the workbench
+    // has no detail to fetch until a case is chosen.
+    if (path === null) return;
 
     const load = () =>
       api<T>(path)
@@ -48,5 +51,6 @@ export function usePoll<T>(path: string, intervalMs = 0) {
     };
   }, [path, intervalMs, nonce]);
 
-  return { data, error, loading, reload };
+  // A null path is never loading -- there is nothing on its way.
+  return { data, error, loading: path !== null && loading, reload };
 }

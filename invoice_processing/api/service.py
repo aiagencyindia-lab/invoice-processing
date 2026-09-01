@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
 from .. import paths
@@ -441,7 +441,39 @@ def get_document(
         candidate = paths.EXEMPLARY_DIR / case_id / name
         if candidate.exists():
             return FileResponse(candidate, media_type="application/pdf")
+
+    # Everything that is not one of the three bundled sample cases lives in the
+    # blob store, keyed by content hash. Serving only the samples meant the
+    # reviewer's document pane was blank for every invoice a customer had
+    # actually uploaded -- a review screen with no document to review.
+    key = _storage_key_for_case(principal.tenant_id, case_id)
+    if key:
+        try:
+            data = get_blobs(principal.tenant_id).get(key)
+        except (OSError, KeyError):
+            data = None
+        if data:
+            return Response(content=data, media_type="application/pdf")
+
     raise HTTPException(status_code=404, detail="No document for this case")
+
+
+def _storage_key_for_case(tenant_id: str, case_id: str) -> str | None:
+    """Where this case's source PDF is stored, if we still hold it.
+
+    A case id is the id of the document it came from. Scanning the tenant's
+    listing rather than adding a lookup keeps both repositories on the methods
+    they already implement.
+    # ponytail: linear scan; add DocumentRepository.get() if listings outgrow it.
+    """
+    try:
+        documents = get_documents().list_documents(tenant_id, limit=1000)
+    except Exception:
+        return None
+    for document in documents or []:
+        if document.get("id") == case_id:
+            return document.get("storage_key")
+    return None
 
 
 @app.patch("/api/invoices/{case_id}/fields")

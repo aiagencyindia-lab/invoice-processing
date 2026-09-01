@@ -306,3 +306,127 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition-duration: 0.001ms !important; }
 }
+
+/* ---------------------------------------------------------------------
+   Review workbench: queue | fields and findings | document.
+
+   Three panes side by side because the reviewer's job is a comparison --
+   the extracted value against the page it came from. Stacking them on a
+   narrow screen keeps the order, so the document is never above the
+   field it is meant to corroborate.
+   --------------------------------------------------------------------- */
+
+.workbench {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  /* Fills the content area so each pane scrolls independently rather than
+     the whole page scrolling as one very tall column. */
+  height: calc(100vh - 150px);
+  min-height: 480px;
+}
+
+.workbench > * { min-height: 0; overflow: auto; }
+
+.queue-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
+.queue-item:hover { border-color: var(--border-strong); }
+.queue-item[aria-current="true"] {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+
+.queue-vendor { font: 600 13px var(--font-ui); }
+.queue-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+/* A flagged field gets a left bar as well as its explanation, so it is
+   findable at a glance without relying on colour. */
+.field { padding: 8px 0; border-bottom: 1px solid var(--divider); }
+.field.flagged {
+  border-left: 3px solid var(--warning);
+  padding-left: 10px;
+  margin-left: -13px;
+}
+.field label {
+  display: block;
+  font: 600 11px var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 4px;
+}
+.field .why { font-size: 11.5px; color: var(--warning); margin-top: 3px; }
+.field .why.unchecked { color: var(--text-faint); }
+
+.finding {
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  margin-bottom: 6px;
+  font-size: 12.5px;
+}
+.finding.pass { border-left-color: var(--success); }
+.finding.fail { border-left-color: var(--error); }
+.finding .evidence { color: var(--text-muted); margin-top: 3px; line-height: 1.5; }
+
+.doc-frame {
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+kbd {
+  font: 600 10px var(--font-mono);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-left: 5px;
+  color: var(--text-faint);
+  background: var(--surface);
+}
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  z-index: 200;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+@media (max-width: 1100px) {
+  .workbench { grid-template-columns: 220px minmax(0, 1fr); height: auto; }
+  .workbench > * { overflow: visible; }
+  .doc-frame { height: 70vh; grid-column: 1 / -1; }
+}
+
+@media (max-width: 760px) {
+  .workbench { grid-template-columns: minmax(0, 1fr); }
+}

@@ -22,9 +22,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from invoice_processing import paths
-from invoice_processing.adapters import FsCaseRepository
+from invoice_processing.adapters import (
+    FsCaseRepository,
+    JsonDocumentRepository,
+    LocalBlobStore,
+)
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
+from invoice_processing.ports import RunContext
 
 TENANT = "tenant-acme"
 ADMIN_CLAIMS = {
@@ -156,6 +161,46 @@ class TestDocument:
 
     def test_unknown_case_is_404(self, client):
         assert client.get("/api/invoices/nope/document").status_code == 404
+
+    def test_serves_an_uploaded_pdf_from_the_blob_store(
+        self, client, tmp_path, monkeypatch
+    ):
+        """Only the three bundled sample cases used to have a document.
+
+        Every invoice a customer actually uploads has a case id that is not a
+        sample directory, so the reviewer's document pane was blank for all of
+        them -- a review screen with nothing to review against.
+        """
+        case_id = "8f14e45f-ea2b-4c9d-9d3f-2c0b6ad0e001"
+        key = "documents/deadbeef.pdf"
+        pdf = b"%PDF-1.4\n%uploaded\n"
+
+        blobs = LocalBlobStore(tmp_path / "blobs")
+        blobs.put(key, pdf, "application/pdf")
+        monkeypatch.setattr(service, "get_blobs", lambda tenant_id: blobs)
+
+        documents = JsonDocumentRepository(tmp_path / "documents.json")
+        documents.create(
+            TENANT,
+            id=case_id,
+            sha256="deadbeef",
+            storage_key=key,
+            filename="uploaded.pdf",
+        )
+        monkeypatch.setattr(service, "_documents", documents)
+
+        # The case must exist for the tenant, or the endpoint refuses before it
+        # ever reaches the blob store -- that guard is what stops a stranger
+        # downloading a document by guessing an id.
+        service.get_cases().put_artifact(
+            RunContext(tenant_id=TENANT, case_id=case_id),
+            "extraction",
+            {"invoice": {"vendor_name": "Uploaded Pty Ltd"}},
+        )
+
+        response = client.get(f"/api/invoices/{case_id}/document")
+        assert response.status_code == 200
+        assert response.content == pdf
 
 
 class TestCorrections:

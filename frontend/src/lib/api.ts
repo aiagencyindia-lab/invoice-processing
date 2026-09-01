@@ -130,3 +130,59 @@ export type SettingsResponse = {
   settings: Record<string, unknown>;
   fields: SettingField[];
 };
+
+export type InvoiceSummary = {
+  case_id: string;
+  vendor: string | null;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  currency: string | null;
+  total: number | null;
+  decision: string | null;
+  rejection_reason: string | null;
+  routing: string;
+  min_confidence: number | null;
+  fields_needing_review: string[];
+  has_text_layer: boolean | null;
+};
+
+export type InvoiceList = {
+  invoices: InvoiceSummary[];
+  counts: { total: number; needs_review: number; auto: number };
+};
+
+export type InvoiceField = {
+  name: string;
+  value: unknown;
+  confidence: number | null;
+  grounded: boolean | null;
+  page: number | null;
+  checked: boolean;
+};
+
+export type Finding = {
+  phase: string;
+  step: string | null;
+  rule: string | null;
+  passed: boolean | null;
+  informational: boolean;
+  implemented: boolean;
+  evidence: string | null;
+  rejection_template: string | null;
+};
+
+export type Correction = {
+  case_id: string;
+  field_path: string;
+  old_value: unknown;
+  new_value: unknown;
+  actor: string;
+  at: string;
+};
+
+export type InvoiceDetail = InvoiceSummary & {
+  fields: InvoiceField[];
+  line_items: Record<string, unknown>[];
+  findings: Finding[];
+  corrections: Correction[];
+};
