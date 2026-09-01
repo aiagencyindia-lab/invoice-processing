@@ -326,7 +326,14 @@ class TestProcessDocument:
         assert result["decision"] == "ACCEPT"
 
     def test_artifacts_are_written_through_the_port(self, pipeline):
-        """Not straight to disk: the port is where the tenant boundary lives."""
+        """Not straight to disk: the port is where the tenant boundary lives.
+
+        The keys are the logical ones every reader uses. This asserted the
+        file stems -- "02_extraction" -- and so pinned the defect that made a
+        deployed invoice unreadable: the filesystem repository maps a stem
+        back on the way out, the Postgres one does not, and the assertion
+        matched whichever the test happened to use.
+        """
         cases, blobs = RecordingCases(), StubBlobs()
         runner.process_document(
             RunContext(tenant_id="t-1", case_id="case_x"),
@@ -334,8 +341,8 @@ class TestProcessDocument:
             blobs,
             cases,
         )
-        assert "02_extraction" in cases.written
-        assert "08_decision" in cases.written
+        assert "extraction" in cases.written
+        assert "decision" in cases.written
 
     def test_an_unparseable_artifact_is_skipped_not_fatal(self, pipeline):
         """One bad file must not discard the whole case's results."""
