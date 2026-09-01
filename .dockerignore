@@ -1,0 +1,16 @@
+.git
+.venv
+frontend
+node_modules
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+tests
+eval
+.env
+worker.log
+invoice_processing/data/agent_output
+invoice_processing/data/blobs
+invoice_processing/data/queue
+invoice_processing/data/claims
