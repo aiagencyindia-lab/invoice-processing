@@ -1,7 +1,7 @@
 {
   "agent": "extractor",
   "version": "1.0",
-  "timestamp": "2026-08-30T17:06:43.846426",
+  "timestamp": "2026-08-31T04:20:23.519599",
   "input_refs": [
     "01_classification.json"
   ],
@@ -26,10 +26,107 @@
         "amount_inc_tax": null
       }
     ],
+    "po_number": null,
+    "due_date": null,
+    "payment_terms": "Net 30 days",
+    "vendor_address": "123 Business Street, Sydney NSW 2000",
+    "bank_account_name": null,
+    "bank_account_number": "1234 5678",
+    "bank_code": "062-000",
+    "bank_iban": null,
+    "tax_breakdown": [
+      {
+        "rate": 0.1,
+        "taxable_base": 638.0,
+        "tax_amount": 95.7,
+        "tax_code": "GST"
+      }
+    ],
     "_tax_id_validation": {
       "valid": false,
       "reason": "Invalid checksum (mod 89 = 50)"
-    }
+    },
+    "_evidence": {
+      "invoice_number": {
+        "value": "INV-00001",
+        "page": 1,
+        "bbox": null,
+        "grounded": true,
+        "checks": {},
+        "confidence": 1.0
+      },
+      "invoice_date": {
+        "value": "2026-01-07",
+        "page": 1,
+        "bbox": null,
+        "grounded": true,
+        "checks": {},
+        "confidence": 1.0
+      },
+      "vendor_name": {
+        "value": "FastTrack Logistics",
+        "page": 1,
+        "bbox": null,
+        "grounded": true,
+        "checks": {},
+        "confidence": 1.0
+      },
+      "vendor_tax_id": {
+        "value": "64 560 747 633",
+        "page": 1,
+        "bbox": null,
+        "grounded": true,
+        "checks": {},
+        "confidence": 1.0
+      },
+      "invoice_total_inc_tax": {
+        "value": 733.7,
+        "page": 1,
+        "bbox": null,
+        "grounded": true,
+        "checks": {
+          "totals_reconcile": true,
+          "lines_sum_to_subtotal": true,
+          "line_maths_consistent": true
+        },
+        "confidence": 1.0
+      },
+      "invoice_total_ex_tax": {
+        "value": 638.0,
+        "page": 1,
+        "bbox": null,
+        "grounded": true,
+        "checks": {
+          "totals_reconcile": true,
+          "lines_sum_to_subtotal": true,
+          "line_maths_consistent": true
+        },
+        "confidence": 1.0
+      },
+      "tax_amount": {
+        "value": 95.7,
+        "page": 1,
+        "bbox": null,
+        "grounded": true,
+        "checks": {
+          "totals_reconcile": true,
+          "lines_sum_to_subtotal": true,
+          "line_maths_consistent": true
+        },
+        "confidence": 1.0
+      },
+      "_summary": {
+        "has_text_layer": true,
+        "arithmetic": {
+          "totals_reconcile": true,
+          "lines_sum_to_subtotal": true,
+          "line_maths_consistent": true
+        },
+        "min_confidence": 1.0,
+        "fields_needing_review": []
+      }
+    },
+    "_routing": "AUTO"
   },
   "work_authorization": {
     "reference_number": "WAF-76948",

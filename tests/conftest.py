@@ -9,6 +9,33 @@ import pytest
 # Ensure the agent package is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# So `tests/golden.py` is importable from the test modules beside it.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+
+@pytest.fixture(autouse=True)
+def a_project_id_that_is_not_real(monkeypatch):
+    """Give Vertex a project so construction never needs a configured machine.
+
+    `google.cloud.aiplatform` resolves its project at client construction and
+    raises when it cannot find one. Anything that builds a model -- including
+    `RuleDiscoveryEngine`, whose cache-key test only wants a hash -- therefore
+    failed on a machine with no `GOOGLE_CLOUD_PROJECT`, while passing on a
+    developer's because `.env` supplies one.
+
+    Set unconditionally rather than only when absent, so the suite behaves the
+    same everywhere and can never construct a client pointed at a real project.
+    No network call happens at construction; the other guards in this file stop
+    anything that would.
+    """
+    for name in (
+        "GOOGLE_CLOUD_PROJECT",
+        "GCP_PROJECT",
+        "GOOGLE_CLOUD_PROJECT_ID",
+    ):
+        monkeypatch.setenv(name, "test-project-not-real")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
 
 @pytest.fixture(autouse=True)
 def never_touch_real_cloud_storage(monkeypatch):

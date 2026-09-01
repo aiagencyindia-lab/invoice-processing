@@ -14,6 +14,7 @@ import json
 
 import pytest
 import yaml
+from golden import GOLDEN_CASES
 
 from invoice_processing import paths
 from invoice_processing.duplicates import (
@@ -234,9 +235,7 @@ class TestPipelineIntegration:
     def test_reprocessing_a_known_case_is_detected(self, tmp_path):
         """The real scenario: the same invoice submitted twice."""
         invoice = json.loads(
-            (
-                paths.AGENTIC_FLOW_OUT / "case_005" / "02_extraction.json"
-            ).read_text()
+            (GOLDEN_CASES / "case_005" / "02_extraction.json").read_text()
         )["invoice"]
 
         original = gia._config_store["CONFIG"]

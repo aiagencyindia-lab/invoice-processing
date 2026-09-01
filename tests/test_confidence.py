@@ -18,6 +18,7 @@ and free.
 import json
 
 import pytest
+from golden import GOLDEN_CASES
 
 from invoice_processing import paths
 from invoice_processing.confidence import (
@@ -35,9 +36,7 @@ CASES = ("case_001", "case_002", "case_005")
 
 
 def _invoice(case: str) -> dict:
-    data = json.loads(
-        (paths.AGENTIC_FLOW_OUT / case / "02_extraction.json").read_text()
-    )
+    data = json.loads((GOLDEN_CASES / case / "02_extraction.json").read_text())
     return data.get("invoice", {})
 
 
@@ -217,7 +216,7 @@ class TestPipelineIntegration:
     def test_evidence_is_written_into_the_extraction_artifact(self, case):
         """The pipeline must persist evidence for the reviewer UI."""
         data = json.loads(
-            (paths.AGENTIC_FLOW_OUT / case / "02_extraction.json").read_text()
+            (GOLDEN_CASES / case / "02_extraction.json").read_text()
         )
         invoice = data.get("invoice", {})
         assert "_evidence" in invoice, "run the pipeline to populate evidence"

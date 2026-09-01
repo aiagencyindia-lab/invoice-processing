@@ -20,8 +20,8 @@ import shutil
 
 import pytest
 from fastapi.testclient import TestClient
+from golden import GOLDEN_CASES
 
-from invoice_processing import paths
 from invoice_processing.adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
@@ -63,7 +63,7 @@ def client(tmp_path, monkeypatch):
     existed: a test passed alone and failed in the suite.
     """
     cases_root = tmp_path / "agent_output"
-    shutil.copytree(paths.AGENTIC_FLOW_OUT, cases_root)
+    shutil.copytree(GOLDEN_CASES, cases_root)
 
     monkeypatch.setattr(
         service, "_cases", FsCaseRepository(cases_root, tenant_id=TENANT)

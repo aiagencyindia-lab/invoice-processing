@@ -22,6 +22,7 @@ import shutil
 
 import pytest
 from fastapi.testclient import TestClient
+from golden import GOLDEN_CASES
 
 from invoice_processing import paths
 from invoice_processing.adapters import FsCaseRepository, JsonlAuditSink
@@ -62,7 +63,7 @@ class FakeVerifier:
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     root = tmp_path / "agent_output"
-    shutil.copytree(paths.AGENTIC_FLOW_OUT, root)
+    shutil.copytree(GOLDEN_CASES, root)
     monkeypatch.setattr(
         service, "_cases", FsCaseRepository(root, tenant_id=TENANT)
     )

@@ -23,8 +23,8 @@ from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
+from golden import GOLDEN_CASES
 
-from invoice_processing import paths
 from invoice_processing.adapters import FsCaseRepository, JsonDocumentRepository
 from invoice_processing.api import (
     admin_routes,
@@ -71,7 +71,7 @@ class FakeVerifier:
 def clients(tmp_path, monkeypatch):
     """Two authenticated clients. Only ACME's tenant has any case data."""
     cases_root = tmp_path / "agent_output"
-    shutil.copytree(paths.AGENTIC_FLOW_OUT, cases_root)
+    shutil.copytree(GOLDEN_CASES, cases_root)
 
     monkeypatch.setattr(
         service, "_cases", FsCaseRepository(cases_root, tenant_id=ACME)
@@ -345,7 +345,7 @@ class TestEveryRoleIsIsolated:
 
 class TestRepositoryBinding:
     def test_reads_for_a_foreign_tenant_are_empty(self, tmp_path):
-        shutil.copytree(paths.AGENTIC_FLOW_OUT, tmp_path / "out")
+        shutil.copytree(GOLDEN_CASES, tmp_path / "out")
         repository = FsCaseRepository(tmp_path / "out", tenant_id=ACME)
         foreign = RunContext(tenant_id=GLOBEX, case_id="case_005")
         assert repository.get_artifacts(foreign) == {}
