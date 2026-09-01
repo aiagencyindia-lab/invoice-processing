@@ -14,7 +14,16 @@ import {
  *  authentication disabled never reaches this screen, and no client-side
  *  guess about whether auth is on can disagree with the service.
  */
-export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
+export function SignIn({
+  onSignedIn,
+  denied,
+  onSignOut,
+}: {
+  onSignedIn: () => void;
+  /** Set when the API verified the token and refused the account anyway. */
+  denied?: string | null;
+  onSignOut?: () => void;
+}) {
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -61,7 +70,26 @@ export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
         <div className="eyebrow">Invoice processing</div>
         <h1 style={{ fontSize: 20 }}>Sign in</h1>
 
-        {configured ? (
+        {denied ? (
+          // Signing in worked. Saying "sign in" again here would send someone
+          // round the same loop indefinitely, so say what actually happened
+          // and what the administrator has to do about it.
+          <div className="stack" style={{ gap: 12 }}>
+            <div className="empty-state" style={{ textAlign: "left" }}>
+              <strong>You are signed in, but this account has no access.</strong>
+              <div style={{ marginTop: 8 }}>{denied}</div>
+              <div style={{ marginTop: 8 }}>
+                An administrator has to add this address to an organisation
+                before it can see anything.
+              </div>
+            </div>
+            {onSignOut ? (
+              <button type="button" className="btn-secondary" onClick={onSignOut}>
+                Sign out and try another account
+              </button>
+            ) : null}
+          </div>
+        ) : configured ? (
           <>
             <p className="muted" style={{ fontSize: 13, lineHeight: 1.6 }}>
               Use the Google account your administrator added to this

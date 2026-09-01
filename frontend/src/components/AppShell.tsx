@@ -64,18 +64,32 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // guessing "signed in" flashes the whole application at someone who is not.
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [user, setUser] = useState<SignedInUser | null>(null);
+  // Set when the API accepted the token and refused the account anyway.
+  const [denied, setDenied] = useState<string | null>(null);
 
   /** Ask the API who we are. The server is the authority on whether a token
    *  is required at all: a deployment with authentication disabled answers
    *  this happily and nobody is ever shown a sign-in screen. */
   const identify = useCallback(() => {
     api<Me>("/api/me")
-      .then(setMe)
+      .then((value) => {
+        setMe(value);
+        setDenied(null);
+      })
       .catch((caught) => {
-        if (caught instanceof ApiError && caught.status === 401) setMe(null);
-        // Anything else -- a 403, the API being down -- is not a sign-in
-        // problem, and bouncing to a login screen would misdescribe it.
-        else setMe((previous) => previous ?? null);
+        const status = caught instanceof ApiError ? caught.status : 0;
+        // 403 means the token was accepted and the account has no access --
+        // no tenant claim, or an unverified address. Rendering the plain
+        // sign-in screen for that told the user nothing: they had just
+        // signed in successfully and were sent back to the button they came
+        // from, which looks exactly like a button that does nothing.
+        setDenied(
+          status === 403
+            ? (caught as ApiError).message ||
+                "This account is not attached to an organisation."
+            : null,
+        );
+        setMe(null);
       });
   }, []);
 
@@ -112,7 +126,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   if (me === null) {
-    return <SignIn onSignedIn={identify} />;
+    return (
+      <SignIn
+        onSignedIn={identify}
+        denied={denied}
+        onSignOut={user ? () => signOut().then(identify) : undefined}
+      />
+    );
   }
 
   const paused = status ? pausedMessage(status) : null;

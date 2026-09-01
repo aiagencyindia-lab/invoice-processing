@@ -183,8 +183,11 @@ class TestSignIn:
         """Not a client-side guess: a deployment with authentication disabled
         must never show anyone a sign-in screen."""
         shell = self.shell()
-        assert "caught.status === 401" in shell
-        assert "/api/me" in shell
+        # The screen is a consequence of what /api/me answered, never of a
+        # client-side guess about whether authentication is switched on.
+        assert '"/api/me"' in shell
+        assert "me === null" in shell
+        assert "caught instanceof ApiError" in shell
 
     def test_a_blocked_popup_falls_back_to_a_redirect(self):
         """A popup is the nicest sign-in and the easiest one to block.
@@ -214,6 +217,29 @@ class TestSignIn:
             encoding="utf-8"
         )
         assert "redirectSignInError" in signin
+
+    def test_a_refused_account_is_not_shown_the_sign_in_button_again(self):
+        """403 means the token was accepted and the account has no access.
+
+        Rendering the ordinary sign-in screen for that sent the user back to
+        the button they had just used successfully, which is indistinguishable
+        from a button that does nothing -- and it loops forever, because
+        signing in again cannot add a claim the account does not have.
+        """
+        shell = self.shell()
+        assert "status === 403" in shell
+        signin = (FRONTEND / "components" / "SignIn.tsx").read_text(
+            encoding="utf-8"
+        )
+        assert "no access" in signin
+        assert "administrator" in signin
+
+    def test_a_refused_account_can_sign_out(self):
+        """Otherwise the only way to try another account is clearing cookies."""
+        signin = (FRONTEND / "components" / "SignIn.tsx").read_text(
+            encoding="utf-8"
+        )
+        assert "try another account" in signin
 
     def test_signing_out_is_possible(self):
         assert "signOut" in self.shell()
