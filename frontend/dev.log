@@ -55,3 +55,4 @@ module.exports = {
 }
 
 Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+ GET /dashboard 200 in 474ms (next.js: 357ms, application-code: 116ms)

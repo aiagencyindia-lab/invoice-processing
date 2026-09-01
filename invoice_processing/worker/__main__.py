@@ -14,11 +14,17 @@ import sys
 
 from .. import paths
 from ..api import service
+from ..gcp_credentials import materialise_credentials
 from .queue import LocalQueue, get_queue
 from .runner import ClaimStore, Worker
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Before anything can construct a Google client. A platform that lets a
+    # service set its own start command replaces the image's entrypoint with
+    # it, so a credential bridged only there is not there at all.
+    materialise_credentials()
+
     parser = argparse.ArgumentParser(prog="worker")
     parser.add_argument(
         "--once", action="store_true", help="One pass, then exit."

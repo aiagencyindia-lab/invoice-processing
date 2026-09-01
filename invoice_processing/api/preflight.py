@@ -47,6 +47,12 @@ def is_deployed(env: str | None = None) -> bool:
 
 def check_configuration(env: str | None = None) -> list[str]:
     """Return one message per setting that would fail silently. Empty is good."""
+    from ..gcp_credentials import materialise_credentials  # noqa: PLC0415
+
+    # Same reason as the worker: the bridge cannot live only in the
+    # image's entrypoint, because a start command replaces it.
+    materialise_credentials()
+
     problems = []
 
     if not os.getenv("GCS_BUCKET"):
