@@ -50,8 +50,6 @@ async function client() {
 /** Firebase error codes worth explaining rather than echoing raw. */
 function explain(code: string): string | null {
   switch (code) {
-    case "auth/operation-not-allowed":
-      return "Google sign-in is not switched on for this project yet — enable it under Authentication → Sign-in method.";
     case "auth/unauthorized-domain":
       return "This address is not in the project's authorised domains, so sign-in was blocked.";
     case "auth/popup-blocked":
@@ -61,6 +59,22 @@ function explain(code: string): string | null {
       return "Sign-in was cancelled.";
     case "auth/network-request-failed":
       return "Could not reach the sign-in service — check your connection and try again.";
+    case "auth/email-already-in-use":
+      return "That address already has an account. Sign in instead, or reset the password.";
+    case "auth/invalid-email":
+      return "That does not look like an email address.";
+    case "auth/weak-password":
+      return "Passwords need at least six characters.";
+    case "auth/invalid-credential":
+    case "auth/wrong-password":
+    case "auth/user-not-found":
+      // Deliberately one message for all three: saying which half was wrong
+      // tells an attacker whether an address has an account here.
+      return "That email and password do not match an account.";
+    case "auth/too-many-requests":
+      return "Too many attempts. Wait a few minutes, or reset the password.";
+    case "auth/operation-not-allowed":
+      return "Email and password sign-in is not switched on for this project yet — enable it under Authentication → Sign-in method.";
     default:
       return null;
   }
@@ -154,4 +168,79 @@ export async function watchUser(
   return mod.onIdTokenChanged(auth, (user) =>
     onChange(user ? { email: user.email, uid: user.uid } : null),
   );
+}
+
+/** Email and password.
+ *
+ *  Firebase mints the same kind of ID token for a password sign-in as for a
+ *  Google one, and the API verifies it the same way -- so this adds an
+ *  authentication method, not a second authentication system. Nothing on the
+ *  server changes.
+ */
+export async function signInWithPassword(
+  email: string,
+  password: string,
+): Promise<void> {
+  const { mod, auth } = await client();
+  try {
+    await mod.signInWithEmailAndPassword(auth, email, password);
+  } catch (caught) {
+    throw asSignInError(caught);
+  }
+}
+
+export async function signUpWithPassword(
+  email: string,
+  password: string,
+): Promise<void> {
+  const { mod, auth } = await client();
+  try {
+    const created = await mod.createUserWithEmailAndPassword(
+      auth,
+      email,
+      password,
+    );
+    // The API refuses a token whose email is unverified, so the message has
+    // to go out as part of signing up rather than being left for later.
+    await mod.sendEmailVerification(created.user);
+  } catch (caught) {
+    throw asSignInError(caught);
+  }
+}
+
+export async function sendPasswordReset(email: string): Promise<void> {
+  const { mod, auth } = await client();
+  try {
+    await mod.sendPasswordResetEmail(auth, email);
+  } catch (caught) {
+    throw asSignInError(caught);
+  }
+}
+
+/** Re-send verification to the account that is signed in. */
+export async function resendVerification(): Promise<void> {
+  const { mod, auth } = await client();
+  if (!auth.currentUser) throw new SignInError("Nobody is signed in.");
+  await mod.sendEmailVerification(auth.currentUser);
+}
+
+export async function isEmailVerified(): Promise<boolean> {
+  if (!firebaseConfigured()) return false;
+  const { auth } = await client();
+  if (!auth.currentUser) return false;
+  await auth.currentUser.reload();
+  return auth.currentUser.emailVerified;
+}
+
+/** Pull a fresh ID token, so claims written a moment ago are actually in it.
+ *
+ *  Custom claims are baked in when the token is minted. Without forcing a
+ *  refresh, an account that has just been granted a tenant keeps presenting
+ *  the token it signed up with -- which has no claims -- and is refused for up
+ *  to an hour by a system that has already granted it access.
+ */
+export async function refreshToken(): Promise<void> {
+  if (!firebaseConfigured()) return;
+  const { auth } = await client();
+  if (auth.currentUser) await auth.currentUser.getIdToken(true);
 }

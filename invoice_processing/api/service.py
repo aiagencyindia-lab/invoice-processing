@@ -794,12 +794,14 @@ def export_invoice(
 from .admin_routes import router as admin_router  # noqa: E402
 from .config_routes import router as config_router  # noqa: E402
 from .ingest import router as ingest_router  # noqa: E402
+from .signup import router as signup_router  # noqa: E402
 from .system import router as system_router  # noqa: E402
 
 app.include_router(ingest_router)
 app.include_router(system_router)
 app.include_router(config_router)
 app.include_router(admin_router)
+app.include_router(signup_router)
 
 
 @app.get("/", response_class=HTMLResponse)

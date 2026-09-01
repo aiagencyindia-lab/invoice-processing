@@ -261,6 +261,29 @@ class TestWritesDoNotCross:
         assert response.status_code == 404
 
 
+class TestSelfSignUp:
+    """The one endpoint that creates a tenant. It must not create a second."""
+
+    @pytest.mark.parametrize("role", ROLES)
+    def test_a_member_cannot_provision_another_organisation(
+        self, clients, role
+    ):
+        """Every caller here already belongs somewhere. A second organisation
+        would strand every invoice they have reviewed in the first, and give
+        one identity two tenants to be confused between."""
+        response = clients("acme", role).post(
+            "/api/signup", json={"organisation": "Sneaky Ltd"}
+        )
+        assert response.status_code in (403, 409)
+
+    def test_it_never_touches_the_caller_tenant(self, clients):
+        """Refused or not, acme's data is exactly as it was."""
+        before = clients("acme").get("/api/invoices").json()["counts"]["total"]
+        clients("globex").post("/api/signup", json={"organisation": "Acme"})
+        after = clients("acme").get("/api/invoices").json()["counts"]["total"]
+        assert before == after
+
+
 class TestIdentity:
     """`/api/me` reports the caller's own tenant and role, never another's."""
 
@@ -401,6 +424,7 @@ class TestCoverage:
         "/api/audit",
         "/api/system/status",
         "/api/me",
+        "/api/signup",
         "/api/settings",
         "/api/purchase-orders",
         "/api/admin/tenants",

@@ -1,0 +1,142 @@
+"""Self-service sign-up: an account creates its own organisation.
+
+This is deliberately gated. Everywhere else in this service, belonging to a
+tenant is something an administrator grants -- `ALLOW_TENANT_PROVISIONING` is
+off by default precisely so a customer's admin cannot mint organisations,
+inbound-mail addresses and storage prefixes inside the system. Self-service
+sign-up hands that same power to anyone with an email address, which is a
+product decision rather than a default, so it needs `ALLOW_SELF_SIGNUP` set
+explicitly and answers 403 with the reason when it is not.
+
+What it does not do is weaken any check downstream. The caller must present a
+token this service has verified against Google's keys; the tenant is created
+server-side from that token's identity; and the claims are written by the same
+Provisioner the CLI uses. A caller cannot name their own tenant id, choose
+their own role, or sign up as somebody else.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+import unicodedata
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from .auth import verified_claims
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+class SignUpRequest(BaseModel):
+    organisation: str
+
+
+def self_signup_enabled() -> bool:
+    """Whether this deployment lets an account create its own organisation."""
+    return os.getenv("ALLOW_SELF_SIGNUP", "").lower() in ("1", "true", "yes")
+
+
+def slug_for(organisation: str, taken: set[str]) -> str:
+    """A URL and email-safe slug, unique among existing tenants.
+
+    The slug becomes an inbound-email local part and an object-storage prefix,
+    so it is derived and sanitised here rather than accepted from the caller --
+    a chosen slug is a way to collide with, or impersonate, another tenant.
+    """
+    # Decompose first, so an accented letter becomes its base letter rather
+    # than a separator: "Café Ltd" is cafe-ltd, not caf-ltd.
+    folded = unicodedata.normalize("NFKD", organisation.strip().lower())
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    base = re.sub(r"[^a-z0-9]+", "-", folded).strip("-")
+    base = base[:40] or "org"
+    if not base[0].isalnum():
+        base = f"o{base}"
+    if base not in taken:
+        return base
+    # Numeric suffixes rather than random ones, so the second "Acme" is
+    # acme-2 and reads as what it is.
+    for n in range(2, 1000):
+        candidate = f"{base}-{n}"
+        if candidate not in taken:
+            return candidate
+    raise HTTPException(status_code=409, detail="Could not allocate a name.")
+
+
+@router.post("/api/signup")
+def sign_up(
+    request: SignUpRequest,
+    claims: Annotated[dict[str, Any], Depends(verified_claims)],
+) -> dict:
+    """Create an organisation for the signed-in account and make it the admin."""
+    if not self_signup_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Sign-up is not open on this deployment. An administrator "
+                "adds accounts to an organisation."
+            ),
+        )
+
+    # Already belongs somewhere: creating a second organisation silently would
+    # strand every invoice they have already reviewed.
+    if claims.get("tenant_id") or claims.get("tenantId"):
+        raise HTTPException(
+            status_code=409,
+            detail="This account already belongs to an organisation.",
+        )
+
+    name = request.organisation.strip()
+    if len(name) < 2:
+        raise HTTPException(
+            status_code=400, detail="An organisation name is required."
+        )
+
+    from ..admin.provision import (  # noqa: PLC0415
+        Provisioner,
+        ProvisioningError,
+    )
+    from . import service  # noqa: PLC0415
+
+    provisioner = Provisioner(claims=service.get_claims_writer())
+    existing = {t["slug"] for t in provisioner.list_tenants()}
+    slug = slug_for(name, existing)
+
+    email = str(claims["email"])
+    uid = str(claims.get("user_id") or claims.get("sub") or "")
+    if not uid:
+        raise HTTPException(
+            status_code=403, detail="Token carries no account id."
+        )
+
+    try:
+        tenant = provisioner.create_tenant(slug, name)
+        # admin: they are the only member, and nobody else can grant them
+        # anything afterwards.
+        record = provisioner.add_user(slug, email, "admin", uid)
+    except ProvisioningError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    service.get_audit().emit(
+        _context(tenant["id"], email),
+        "tenant_self_provisioned",
+        {"slug": slug, "email": email},
+    )
+    logger.info("Self sign-up created tenant %s for %s", slug, email)
+
+    return {
+        "tenant": tenant,
+        "role": record["role"],
+        "claims_written": record["claims_written"],
+    }
+
+
+def _context(tenant_id: str, actor: str):
+    from ..ports import RunContext  # noqa: PLC0415
+
+    return RunContext(tenant_id=tenant_id, actor=actor)

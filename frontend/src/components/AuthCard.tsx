@@ -103,3 +103,23 @@ export function AuthCard({
     </main>
   );
 }
+
+/** The "or" rule between federated and password sign-in. */
+export function OrDivider() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        margin: "20px 0",
+      }}
+    >
+      <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
+      <span style={{ font: "11px var(--font-ui)", color: "var(--text-faint)" }}>
+        or
+      </span>
+      <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
+    </div>
+  );
+}

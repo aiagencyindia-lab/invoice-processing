@@ -299,22 +299,38 @@ class TestLoginAndSignUp:
         )
         assert 'denied ? "/signup" : "/login"' in shell
 
-    def test_sign_up_creates_no_organisation(self):
-        """The page registers an account. It must not provision anything."""
+    def test_sign_up_provisions_through_the_gated_endpoint(self):
+        """Never through the admin routes, which belong to an existing
+        tenant's administrator and would be a way to act inside someone
+        else's organisation."""
         signup = self.page("signup")
-        for forbidden in (
-            "/api/admin/tenants",
-            "create-tenant",
-            "createTenant",
-        ):
-            assert forbidden not in signup, forbidden
+        assert '"/api/signup"' in signup
+        assert "/api/admin/tenants" not in signup
 
-    def test_sign_up_shows_what_an_admin_needs(self):
-        """An administrator needs the address and the account id to grant
-        access; making the user hunt for them in a console is a dead end."""
+    def test_sign_up_verifies_the_email_before_provisioning(self):
+        """Invoices are financial records, so an address has to be proven.
+        The API refuses an unverified token anyway, so signing straight
+        through would land on a 403 with nothing explaining it."""
         signup = self.page("signup")
-        assert "user.email" in signup
-        assert "user.uid" in signup
+        assert "isEmailVerified" in signup
+        assert "Check your email" in signup
+
+    def test_sign_up_refreshes_the_token_after_provisioning(self):
+        """Claims are baked in when a token is minted. Without a forced
+        refresh the account keeps presenting the one it signed up with -- no
+        claims -- and is refused by the system that just granted it access."""
+        assert "refreshToken" in self.page("signup")
+
+    def test_passwords_are_offered_as_well_as_google(self):
+        for route in ("login", "signup"):
+            assert "PasswordForm" in self.page(route), route
+
+    def test_a_failed_sign_in_does_not_say_which_half_was_wrong(self):
+        """Saying the address exists but the password is wrong tells an
+        attacker which addresses have accounts here."""
+        auth = (FRONTEND / "lib" / "auth.ts").read_text(encoding="utf-8")
+        assert "do not match an account" in auth
+        assert "auth/user-not-found" in auth
 
     def test_login_links_to_the_explanation(self):
         assert "/signup" in self.page("login")

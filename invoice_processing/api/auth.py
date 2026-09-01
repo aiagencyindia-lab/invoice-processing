@@ -240,6 +240,24 @@ def bearer_token(request: Request) -> str | None:
     return token.strip()
 
 
+def verified_claims(request: Request) -> dict[str, Any]:
+    """The token's claims, verified, with no tenant requirement.
+
+    `current_principal` refuses a token that carries no `tenant_id`, which is
+    correct everywhere except the one endpoint whose job is to give an account
+    its first tenant. That endpoint still needs the signature, issuer, audience
+    and expiry checked -- it is the identity that is trusted here, never the
+    caller's word about who they are.
+    """
+    token = bearer_token(request)
+    if not token:
+        raise AuthError("Authentication required.")
+    claims = get_verifier().verify(token)
+    if not claims.get("email"):
+        raise AuthError("Token carries no email claim.", status_code=403)
+    return claims
+
+
 def current_principal(request: Request) -> Principal:
     """FastAPI dependency: the authenticated caller.
 
