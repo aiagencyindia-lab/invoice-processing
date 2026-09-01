@@ -83,6 +83,7 @@ _cases = None
 _documents = None
 _audit = None
 _tenant_settings = None
+_claims_writer = None
 
 
 def _database_configured() -> bool:
@@ -208,6 +209,45 @@ def get_tenant_settings():
 
             _tenant_settings = JsonTenantSettings()
     return _tenant_settings
+
+
+def claims_are_live() -> bool:
+    """Whether Identity Platform claims are actually written.
+
+    Off by default, mirroring the provisioning CLI: claim writing grants real
+    access, so it is an explicit opt-in rather than something that happens
+    because a form was submitted.
+    """
+    return os.getenv("APPLY_IDENTITY_CLAIMS", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def get_claims_writer():
+    """The Identity Platform claims writer, or a dry-run recorder.
+
+    Falls back to dry run when the project is unconfigured rather than raising:
+    a misconfigured deployment should still let an admin create user records
+    and see clearly that access was not granted, instead of failing the request
+    with no explanation.
+    """
+    global _claims_writer
+    if _claims_writer is None:
+        from ..admin.provision import (  # noqa: PLC0415
+            DryRunClaims,
+            IdentityToolkitClaims,
+        )
+
+        if claims_are_live():
+            try:
+                _claims_writer = IdentityToolkitClaims()
+            except Exception:
+                _claims_writer = DryRunClaims()
+        else:
+            _claims_writer = DryRunClaims()
+    return _claims_writer
 
 
 def get_blobs(tenant_id: str):
@@ -720,6 +760,7 @@ def export_invoice(
     }
 
 
+from .admin_routes import router as admin_router  # noqa: E402
 from .config_routes import router as config_router  # noqa: E402
 from .ingest import router as ingest_router  # noqa: E402
 from .system import router as system_router  # noqa: E402
@@ -727,6 +768,7 @@ from .system import router as system_router  # noqa: E402
 app.include_router(ingest_router)
 app.include_router(system_router)
 app.include_router(config_router)
+app.include_router(admin_router)
 
 
 @app.get("/", response_class=HTMLResponse)

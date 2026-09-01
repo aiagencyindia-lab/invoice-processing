@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -230,8 +231,15 @@ def the_tenant_comes_only_from_the_token():
 def no_endpoint_accepts_a_tenant():
     from invoice_processing.api.service import app
 
+    # A tenant as a path *parameter*, not the substring: `/api/admin/tenants`
+    # is a resource name, and the danger is `/api/{tenant_id}/...` -- a value
+    # the caller supplies.
     offenders = [
-        r.path for r in app.routes if "tenant" in getattr(r, "path", "").lower()
+        r.path
+        for r in app.routes
+        if re.search(
+            r"\{[^}]*tenant[^}]*\}", getattr(r, "path", ""), re.IGNORECASE
+        )
     ]
     assert not offenders, offenders
     return f"{len(app.routes)} routes, none tenant-parameterised"

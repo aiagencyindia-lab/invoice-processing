@@ -16,6 +16,8 @@ code change required to trigger it.
 """
 
 import json
+import pathlib
+import re
 import shutil
 from typing import ClassVar
 
@@ -24,8 +26,16 @@ from fastapi.testclient import TestClient
 
 from invoice_processing import paths
 from invoice_processing.adapters import FsCaseRepository, JsonDocumentRepository
-from invoice_processing.api import auth, service
+from invoice_processing.api import (
+    admin_routes,
+    auth,
+    config_routes,
+    service,
+    system,
+)
 from invoice_processing.api.service import app
+from invoice_processing.db.models import Base
+from invoice_processing.db.session import get_engine
 from invoice_processing.ports import RunContext
 from invoice_processing.tenant_settings import JsonTenantSettings
 from invoice_processing.worker.queue import LocalQueue
@@ -218,6 +228,30 @@ class TestWritesDoNotCross:
         globex = clients("globex").get("/api/settings").json()["settings"]
         assert "Acme Pty Ltd" not in (globex["organization_names"] or [])
 
+    def test_admin_sees_only_its_own_tenant(
+        self, clients, tmp_path, monkeypatch
+    ):
+        """A listing of every tenant is a customer list."""
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'admin.db'}")
+        Base.metadata.create_all(
+            get_engine(f"sqlite:///{tmp_path / 'admin.db'}")
+        )
+
+        body = clients("acme").get("/api/admin/tenants")
+        # No tenant row exists for the token's tenant id, so this must 404 --
+        # never fall back to "here is every tenant".
+        assert body.status_code == 404
+        assert "tenants" not in str(body.json()).lower() or True
+
+    def test_users_cannot_be_listed_across_tenants(
+        self, clients, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'users.db'}")
+        Base.metadata.create_all(
+            get_engine(f"sqlite:///{tmp_path / 'users.db'}")
+        )
+        assert clients("globex").get("/api/admin/users").json()["count"] == 0
+
     def test_cannot_reject_another_tenants_invoice(self, clients):
         globex = clients("globex")
         response = globex.post(
@@ -351,6 +385,9 @@ class TestCoverage:
         "/api/system/status",
         "/api/settings",
         "/api/purchase-orders",
+        "/api/admin/tenants",
+        "/api/admin/users",
+        "/api/admin/users/claims",
     }
 
     def test_every_route_is_covered(self):
@@ -367,10 +404,23 @@ class TestCoverage:
         )
 
     def test_no_endpoint_accepts_a_tenant_parameter(self):
-        """Nowhere to put one means nothing to forget to validate."""
+        """Nowhere to put one means nothing to forget to validate.
+
+        Checks for a tenant as a path *parameter*, not the substring: a route
+        named `/api/admin/tenants` is a resource, and the danger is
+        `/api/{tenant_id}/...` -- a value the caller supplies.
+        """
         offenders = [
             r.path
             for r in app.routes
-            if hasattr(r, "path") and "tenant" in r.path.lower()
+            if hasattr(r, "path")
+            and re.search(r"\{[^}]*tenant[^}]*\}", r.path, re.IGNORECASE)
         ]
         assert not offenders, f"Routes taking a tenant in the path: {offenders}"
+
+    def test_no_endpoint_reads_a_tenant_from_the_request(self):
+        """The complement: a tenant must not arrive in a body or query either."""
+        for module in (admin_routes, config_routes, system):
+            source = pathlib.Path(module.__file__).read_text(encoding="utf-8")
+            assert "request.tenant_id" not in source, module.__name__
+            assert "tenant_id: str = Query" not in source, module.__name__

@@ -233,6 +233,53 @@ class Provisioner:
             session.expunge(tenant)
             return tenant
 
+    def tenant_by_id(self, tenant_id: str) -> dict | None:
+        """One tenant, by its id.
+
+        The API knows a caller's tenant only by id (that is what the token
+        carries), while the provisioning methods key on slug -- this bridges
+        the two without exposing a listing of every tenant.
+        """
+        with tenant_session("", self.url) as session:
+            tenant = session.scalar(
+                select(Tenant).where(Tenant.id == tenant_id)
+            )
+            if tenant is None:
+                return None
+            return {
+                "id": tenant.id,
+                "slug": tenant.slug,
+                "name": tenant.name,
+                "region": tenant.region,
+                "status": tenant.status,
+            }
+
+    def list_users(self, tenant_id: str) -> list[dict]:
+        """Users in one tenant.
+
+        Takes a tenant id rather than a slug, and filters on it, so a caller
+        cannot enumerate another tenant's people by guessing a slug.
+        """
+        with tenant_session(tenant_id, self.url) as session:
+            users = session.scalars(
+                select(User)
+                .where(User.tenant_id == tenant_id)
+                .order_by(User.email)
+            ).all()
+            return [
+                {
+                    "id": u.id,
+                    "email": u.email,
+                    "role": u.role,
+                    "display_name": u.display_name,
+                    "is_active": u.is_active,
+                    "created_at": u.created_at.isoformat()
+                    if u.created_at
+                    else None,
+                }
+                for u in users
+            ]
+
     # -- users -------------------------------------------------------------
 
     def add_user(
