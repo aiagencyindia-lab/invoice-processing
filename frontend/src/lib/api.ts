@@ -118,3 +118,15 @@ export type AuditEvent = {
   entity_type: string | null;
   entity_id: string | null;
 };
+
+export type SettingField = {
+  key: string;
+  type: string;
+  description: string;
+  value: unknown;
+};
+
+export type SettingsResponse = {
+  settings: Record<string, unknown>;
+  fields: SettingField[];
+};
