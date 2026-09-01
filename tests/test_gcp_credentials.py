@@ -15,7 +15,15 @@ import stat
 
 import pytest
 
-from invoice_processing.gcp_credentials import materialise_credentials
+from invoice_processing.gcp_credentials import (
+    CredentialError,
+    materialise_credentials,
+)
+
+# A shape that satisfies the checks, without being a credential.
+_KEY = json.dumps(
+    {"type": "service_account", "project_id": "p", "private_key": "not-a-key"}
+)
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +40,7 @@ class TestItBridges:
     def test_writes_the_variable_to_a_file_and_points_google_at_it(
         self, tmp_path, monkeypatch
     ):
-        payload = json.dumps({"type": "service_account", "project_id": "p"})
+        payload = _KEY
         monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", payload)
         target = tmp_path / "key.json"
         written = materialise_credentials(target)
@@ -43,7 +51,7 @@ class TestItBridges:
 
     def test_the_file_is_not_world_readable(self, tmp_path, monkeypatch):
         """It holds a private key."""
-        monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", "{}")
+        monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", _KEY)
         target = tmp_path / "key.json"
         materialise_credentials(target)
         mode = stat.S_IMODE(target.stat().st_mode)
@@ -51,7 +59,7 @@ class TestItBridges:
         assert not mode & stat.S_IROTH
 
     def test_creates_the_directory(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", "{}")
+        monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", _KEY)
         target = tmp_path / "nested" / "deeper" / "key.json"
         materialise_credentials(target)
         assert target.exists()
@@ -79,7 +87,7 @@ class TestItLeavesWellAlone:
         """A deployment that went to the trouble of mounting one means it."""
         mounted = tmp_path / "mounted.json"
         mounted.write_text("{}")
-        monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", '{"from": "variable"}')
+        monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", _KEY)
         monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(mounted))
 
         target = tmp_path / "key.json"
@@ -88,7 +96,7 @@ class TestItLeavesWellAlone:
 
     def test_a_stale_pointer_does_not_win(self, tmp_path, monkeypatch):
         """A path that no longer exists is a leftover, not a configuration."""
-        monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", '{"from": "variable"}')
+        monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", _KEY)
         monkeypatch.setenv(
             "GOOGLE_APPLICATION_CREDENTIALS", str(tmp_path / "gone.json")
         )
@@ -110,3 +118,37 @@ class TestEveryEntryPointBridges:
             encoding="utf-8"
         )
         assert "materialise_credentials()" in source
+
+
+class TestItRefusesRubbish:
+    """A credential that is present and unusable must say so itself.
+
+    Handed a placeholder, google-auth fails three frames deep with "is not a
+    valid json file" -- naming the file that was just written rather than the
+    variable that was wrong. That is exactly how a placeholder sat unnoticed
+    on a deployed worker.
+    """
+
+    def test_a_placeholder_is_refused_by_name(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", "<paste your key here>")
+        with pytest.raises(CredentialError) as caught:
+            materialise_credentials(tmp_path / "key.json")
+        message = str(caught.value)
+        assert "GOOGLE_CREDENTIALS_JSON" in message
+        assert "not valid JSON" in message
+        # The length and first character are what identify a truncated paste.
+        assert "21 characters" in message
+
+    def test_json_that_is_not_a_key_is_refused(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", '{"type": "whatever"}')
+        with pytest.raises(CredentialError) as caught:
+            materialise_credentials(tmp_path / "key.json")
+        assert "private_key" in str(caught.value)
+
+    def test_nothing_is_written_when_it_is_refused(self, tmp_path, monkeypatch):
+        """A half-written file would be found by the next start and trusted."""
+        monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", "nonsense")
+        target = tmp_path / "key.json"
+        with pytest.raises(CredentialError):
+            materialise_credentials(target)
+        assert not target.exists()

@@ -14,11 +14,21 @@ So it lives here, in Python, on the path every entry point already takes.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+class CredentialError(RuntimeError):
+    """The credential was present and unusable, which is worth saying loudly.
+
+    Refusing beats starting and failing on the first Google call: the second
+    buries the cause under whatever the caller happened to be doing.
+    """
+
 
 VARIABLE = "GOOGLE_CREDENTIALS_JSON"
 TARGET = "GOOGLE_APPLICATION_CREDENTIALS"
@@ -46,6 +56,25 @@ def materialise_credentials(path: str | Path | None = None) -> str | None:
         # that went to the trouble of mounting one means it.
         logger.info("Credentials: using the file already at %s.", TARGET)
         return existing
+
+    # Check it before writing it. Handed a placeholder -- a truncated paste,
+    # or a literal "<your key here>" -- google-auth fails three frames deep
+    # with "is not a valid json file", naming the file we just wrote rather
+    # than the variable that was wrong. Say which, and say it here.
+    try:
+        parsed = json.loads(raw)
+    except ValueError as exc:
+        raise CredentialError(
+            f"{VARIABLE} is set but is not valid JSON ({exc}). It should be "
+            f"the whole service-account key file, starting with a brace. Got "
+            f"{len(raw)} characters beginning {raw[:1]!r}."
+        ) from exc
+
+    if not isinstance(parsed, dict) or "private_key" not in parsed:
+        raise CredentialError(
+            f"{VARIABLE} parsed as JSON but is not a service-account key: no "
+            f"'private_key' field."
+        )
 
     target = Path(
         path
