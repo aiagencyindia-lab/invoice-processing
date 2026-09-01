@@ -32,3 +32,5 @@ invoice_processing/data/audit.jsonl
 
 # Worker stdout when run detached
 worker.log
+# Liveness state, rewritten every worker poll
+invoice_processing/data/worker_heartbeat.json
