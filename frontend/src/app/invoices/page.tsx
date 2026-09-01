@@ -6,6 +6,7 @@ import {
   api,
   ApiError,
   can,
+  objectUrl,
   type Correction,
   type Finding,
   type InvoiceDetail,
@@ -72,6 +73,44 @@ function InvoicesWorkbench() {
   const { data: detail, reload: reloadDetail } = usePoll<InvoiceDetail>(
     current ? `/api/invoices/${current}` : null,
   );
+
+  // The document is fetched rather than pointed at: an iframe src is a plain
+  // navigation and carries no bearer token, so against a service that wants
+  // one the pane showed a 401 body where the invoice should be.
+  const [documentUrl, setDocumentUrl] = useState<string | null>(null);
+  const [documentProblem, setDocumentProblem] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!current) return;
+    let revoked: string | null = null;
+    let cancelled = false;
+
+    objectUrl(`/api/invoices/${current}/document`)
+      .then((url) => {
+        if (cancelled) return URL.revokeObjectURL(url);
+        revoked = url;
+        setDocumentUrl(url);
+        setDocumentProblem(null);
+      })
+      .catch((caught) => {
+        if (cancelled) return;
+        setDocumentUrl(null);
+        setDocumentProblem(
+          caught instanceof ApiError && caught.status === 404
+            ? "No source document is stored for this invoice."
+            : caught instanceof ApiError
+              ? caught.friendly
+              : String(caught),
+        );
+      });
+
+    return () => {
+      cancelled = true;
+      // Without this every invoice a reviewer opens leaks its PDF for the
+      // life of the tab.
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [current]);
 
   const canEdit = can(me, "clerk");
   const canAct = can(me, "approver");
@@ -401,12 +440,16 @@ function InvoicesWorkbench() {
           </div>
 
           <div>
-            {current ? (
+            {documentUrl ? (
               <iframe
                 className="doc-frame"
                 title="Source document"
-                src={`/api/invoices/${current}/document`}
+                src={documentUrl}
               />
+            ) : documentProblem ? (
+              <div className="empty-state">{documentProblem}</div>
+            ) : current ? (
+              <div className="empty-state">Loading the document…</div>
             ) : null}
           </div>
         </div>

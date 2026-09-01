@@ -32,6 +32,7 @@ import tempfile
 import time
 import traceback
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -221,12 +222,46 @@ def heartbeat_path() -> Path:
     return paths.DATA_DIR / "worker_heartbeat.json"
 
 
+def _worker_id() -> str:
+    """Identifies this process across restarts of a deployment.
+
+    Host and pid: two workers on one machine differ by pid, and two containers
+    differ by host, so neither overwrites the other's row.
+    """
+    import socket  # noqa: PLC0415
+
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
+def _database_heartbeats() -> bool:
+    """Whether liveness belongs in the database rather than on local disk.
+
+    With a database configured there is more than one container, and a file is
+    private to whichever one wrote it -- which is precisely how the API came to
+    report that no worker had ever run while one was processing invoices.
+    """
+    from ..api import service  # noqa: PLC0415
+
+    return service._database_configured()
+
+
 def write_heartbeat(path: Path | None = None) -> None:
     """Record that a worker is alive. Best-effort: never breaks the loop.
 
     A heartbeat that could crash the worker would be worse than no heartbeat --
     the whole point is observing the worker, not adding a way for it to die.
     """
+    if path is None and _database_heartbeats():
+        try:
+            _write_heartbeat_row()
+            return
+        except Exception as exc:
+            # Fall through to the file: a heartbeat is an observation, and
+            # losing it must not stop the worker doing its actual job.
+            logger.warning(
+                "Could not record heartbeat in the database: %s", exc
+            )
+
     target = path or heartbeat_path()
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -237,12 +272,84 @@ def write_heartbeat(path: Path | None = None) -> None:
         pass
 
 
-def read_heartbeat(path: Path | None = None) -> dict | None:
-    """The last heartbeat, or None when no worker has ever run here."""
+def _write_heartbeat_row() -> None:
+    from sqlalchemy.dialects import postgresql  # noqa: PLC0415
+    from sqlalchemy.orm import Session  # noqa: PLC0415
+
+    from ..db.models import WorkerHeartbeat  # noqa: PLC0415
+    from ..db.session import get_engine  # noqa: PLC0415
+
+    engine = get_engine()
+    now = datetime.now(timezone.utc)
+    values = {
+        "worker_id": _worker_id(),
+        "last_seen_at": now,
+        "pid": os.getpid(),
+    }
+    with Session(engine) as session:
+        if engine.dialect.name == "postgresql":
+            statement = postgresql.insert(WorkerHeartbeat).values(**values)
+            statement = statement.on_conflict_do_update(
+                index_elements=["worker_id"],
+                set_={"last_seen_at": now, "pid": values["pid"]},
+            )
+            session.execute(statement)
+        else:
+            # SQLite in tests: merge is enough and needs no dialect support.
+            session.merge(WorkerHeartbeat(**values))
+        session.commit()
+
+
+def _read_heartbeat_row() -> dict | None:
+    from sqlalchemy import select  # noqa: PLC0415
+    from sqlalchemy.orm import Session  # noqa: PLC0415
+
+    from ..db.models import WorkerHeartbeat  # noqa: PLC0415
+    from ..db.session import get_engine  # noqa: PLC0415
+
+    with Session(get_engine()) as session:
+        # The newest beat from any worker: the question is whether anything is
+        # alive, not whether a particular process is.
+        row = session.scalars(
+            select(WorkerHeartbeat)
+            .order_by(WorkerHeartbeat.last_seen_at.desc())
+            .limit(1)
+        ).first()
+        if row is None:
+            return None
+        seen = row.last_seen_at
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=timezone.utc)
+        return {"at": seen.timestamp(), "pid": row.pid}
+
+
+def _read_heartbeat_file(path: Path | None = None) -> dict | None:
     target = path or heartbeat_path()
     try:
-        record = json.loads(target.read_text())
+        return json.loads(target.read_text())
     except (OSError, ValueError):
+        return None
+
+
+def read_heartbeat(path: Path | None = None) -> dict | None:
+    """The last heartbeat, or None when no worker has ever run here."""
+    record: dict | None = None
+    if path is None and _database_heartbeats():
+        try:
+            record = _read_heartbeat_row()
+        except Exception as exc:
+            logger.warning(
+                "Could not read heartbeat from the database: %s", exc
+            )
+            record = None
+        if record is None:
+            # No row yet, or unreadable: fall back rather than assert that
+            # nothing has ever run, which is a stronger claim than we can make.
+            record = _read_heartbeat_file(path)
+    else:
+        record = _read_heartbeat_file(path)
+
+    if record is None:
         return None
     at = record.get("at")
     if not isinstance(at, (int, float)):

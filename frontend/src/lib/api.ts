@@ -235,3 +235,30 @@ export type UserList = { users: User[]; count: number; roles: string[] };
 export type Integration = { configured: boolean; sets: string[] };
 
 export type Integrations = Record<string, Integration>;
+
+/** Fetch a binary response as an object URL, carrying the bearer token.
+ *
+ *  An `<iframe src="/api/...">` is a plain browser navigation: it sends no
+ *  Authorization header and cannot be made to. Against a service that requires
+ *  one, the document pane rendered the API's 401 body instead of the invoice --
+ *  which local development never showed, because authentication is disabled
+ *  there and the unauthenticated request succeeded.
+ *
+ *  The caller must revoke the URL when it is done with it, or every invoice a
+ *  reviewer opens leaks its PDF for the life of the tab.
+ */
+export async function objectUrl(path: string): Promise<string> {
+  const headers = new Headers();
+  const token = provider ? await provider() : null;
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const response = await fetch(path, { headers });
+  if (!response.ok) {
+    const detail = await response
+      .json()
+      .then((body) => body?.detail)
+      .catch(() => null);
+    throw new ApiError(response.status, detail || response.statusText);
+  }
+  return URL.createObjectURL(await response.blob());
+}

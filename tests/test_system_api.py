@@ -23,7 +23,10 @@ from invoice_processing.adapters import (
 )
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
+from invoice_processing.db.models import Base
+from invoice_processing.db.session import get_engine
 from invoice_processing.ports import RunContext
+from invoice_processing.worker import runner
 from invoice_processing.worker.queue import LocalQueue, PubSubQueue
 from invoice_processing.worker.runner import (
     ClaimStore,
@@ -438,3 +441,53 @@ class TestPubSubQueueAnswersTheStatusQuestions:
     def test_it_has_no_dead_letters_without_a_dead_letter_topic(self):
         queue = PubSubQueue(project_id="p", topic="t", subscription="s")
         assert queue.dead_letters() == []
+
+
+class TestHeartbeatCrossesContainers:
+    """Liveness has to be visible from a process that is not the worker.
+
+    It was a file under the data directory. That works with one process and
+    not at all with two: the worker wrote it to its own container's disk while
+    the API, in another, reported that no worker had ever run -- with invoices
+    being processed seconds earlier. The banner said the opposite of the truth.
+    """
+
+    def test_a_beat_written_by_one_process_is_read_by_another(
+        self, tmp_path, monkeypatch
+    ):
+        """Nothing shared but the database, which is the point."""
+        url = f"sqlite:///{tmp_path / 'beats.db'}"
+        monkeypatch.setenv("DATABASE_URL", url)
+        Base.metadata.create_all(get_engine(url))
+
+        # The writer's file lives somewhere the reader never looks, standing
+        # in for two containers with separate disks.
+        write_heartbeat()
+        monkeypatch.setattr(
+            runner, "heartbeat_path", lambda: tmp_path / "unreachable.json"
+        )
+
+        beat = read_heartbeat()
+        assert beat is not None, "the reader could not see the writer's beat"
+        assert beat["alive"] is True
+        assert beat["age_seconds"] < 5
+
+    def test_it_still_works_with_no_database(self, tmp_path, monkeypatch):
+        """Local development has one process and no Postgres."""
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
+        target = tmp_path / "beat.json"
+        write_heartbeat(target)
+        assert read_heartbeat(target)["alive"] is True
+
+    def test_a_database_failure_does_not_stop_the_worker(
+        self, tmp_path, monkeypatch
+    ):
+        """A heartbeat is an observation. Losing it must not stop the work."""
+        monkeypatch.setenv("DATABASE_URL", "postgresql://nowhere/invalid")
+
+        def explode():
+            raise RuntimeError("database is down")
+
+        monkeypatch.setattr(runner, "_write_heartbeat_row", explode)
+        write_heartbeat()  # must not raise

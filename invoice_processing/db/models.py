@@ -347,6 +347,30 @@ class AuditEvent(Base, TenantMixin):
 
 
 # Tables carrying tenant-owned data. The migration enables RLS on each.
+class WorkerHeartbeat(Base):
+    """Liveness, where every container can see it.
+
+    This was a file under the data directory, which works with one process and
+    not at all with two: the worker wrote it to its own disk and the API, in a
+    separate container, reported that no worker had ever run while invoices
+    were being processed a few seconds earlier.
+
+    Deliberately *not* a tenant table. A worker serves every tenant, so scoping
+    its liveness to one would make the banner wrong for all the others, and
+    row-level security would hide the row from the very query that needs it.
+    """
+
+    __tablename__ = "worker_heartbeats"
+
+    # One row per worker process, so two workers do not overwrite each other
+    # and the newest beat still answers "is anything alive".
+    worker_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+    pid: Mapped[int | None] = mapped_column(Integer)
+
+
 TENANT_TABLES = (
     "users",
     "documents",
