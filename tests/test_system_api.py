@@ -256,6 +256,39 @@ class TestDocumentStages:
         [doc] = env["client"]().get("/api/documents").json()["documents"]
         assert doc["stage"] == "done"
 
+    def test_a_document_in_flight_reports_the_step_it_is_on(self, env):
+        """ "Processing" alone reads as "stuck" once a run passes a minute."""
+        doc_id = add_document(env, sha="s1")
+        env["claims"].claim(TENANT, doc_id)
+        env["cases"].put_artifact(
+            RunContext(tenant_id=TENANT, case_id=doc_id),
+            "progress",
+            {
+                "step": 3,
+                "total": 9,
+                "key": "phase1",
+                "label": "Initial intake checks",
+            },
+        )
+
+        [doc] = env["client"]().get("/api/documents").json()["documents"]
+        assert doc["stage"] == "processing"
+        assert doc["progress"]["step"] == 3
+        assert doc["explanation"] == "Step 3 of 9: Initial intake checks."
+
+    def test_progress_alone_does_not_make_a_document_done(self, env):
+        """Progress is a step counter, not a stage artifact. Counting it as one
+        would mark a document processed the moment work started on it."""
+        doc_id = add_document(env, sha="s2")
+        env["cases"].put_artifact(
+            RunContext(tenant_id=TENANT, case_id=doc_id),
+            "progress",
+            {"step": 1, "total": 9, "key": "classification", "label": "x"},
+        )
+
+        [doc] = env["client"]().get("/api/documents").json()["documents"]
+        assert doc["stage"] != "done"
+
     def test_an_orphan_document_is_not_silently_done(self, env):
         """Received but never queued must not read as processed."""
         add_document(env, sha="o1")

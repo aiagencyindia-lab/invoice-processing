@@ -197,8 +197,8 @@ def _claim_state(tenant_id: str, document_id: str) -> str | None:
 
 def document_stage(
     document: dict, tenant_id: str, queued: set[str], dead: set[str], cases
-) -> tuple[str, str]:
-    """Derive a stage and a plain-English explanation for one document.
+) -> tuple[str, str, dict | None]:
+    """Derive a stage, a plain-English explanation and the pipeline progress.
 
     Order matters: a claim marked `running` beats "queued", because the message
     leaves the ready directory the moment a worker picks it up.
@@ -206,25 +206,52 @@ def document_stage(
     document_id = document.get("id", "")
     sha = document.get("sha256", "")
 
+    artifacts = (
+        _safe(
+            lambda: cases.get_artifacts(_ctx_for(tenant_id, document_id)),
+            default={},
+        )
+        or {}
+    )
+    # The worker's step counter, not a stage artifact. Popping it keeps a
+    # document that has only started from reading as fully processed.
+    progress = artifacts.pop("progress", None)
+    if not isinstance(progress, dict):
+        progress = None
+
     claim = _claim_state(tenant_id, document_id)
     if claim == "running":
-        return PROCESSING, "A worker is extracting this now."
+        return PROCESSING, _progress_sentence(progress), progress
     if sha in dead:
-        return FAILED, "Processing failed repeatedly. Retry to try again."
+        return (
+            FAILED,
+            "Processing failed repeatedly. Retry to try again.",
+            progress,
+        )
     if claim == "failed":
-        return FAILED, "Processing failed. Retry to try again."
+        return FAILED, "Processing failed. Retry to try again.", progress
     if sha in queued:
-        return QUEUED, "Received and waiting for a worker to pick it up."
+        return (
+            QUEUED,
+            "Received and waiting for a worker to pick it up.",
+            progress,
+        )
 
-    artifacts = _safe(
-        lambda: cases.get_artifacts(_ctx_for(tenant_id, document_id)),
-        default={},
-    )
     if artifacts:
-        return DONE, "Processed. Open it in Invoices to review."
+        return DONE, "Processed. Open it in Invoices to review.", progress
     if claim == "done":
-        return DONE, "Processed."
-    return UNKNOWN, "Received, but not queued. Retry to process it."
+        return DONE, "Processed.", progress
+    return UNKNOWN, "Received, but not queued. Retry to process it.", progress
+
+
+def _progress_sentence(progress: dict | None) -> str:
+    """What the worker is doing, when it has told us."""
+    if not progress:
+        return "A worker is extracting this now."
+    return (
+        f"Step {progress.get('step')} of {progress.get('total')}: "
+        f"{progress.get('label')}."
+    )
 
 
 def _ctx_for(tenant_id: str, case_id: str):
@@ -253,7 +280,7 @@ def list_documents(
     out: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
     for document in listing:
-        stage, explanation = document_stage(
+        stage, explanation, progress = document_stage(
             document, principal.tenant_id, queued, dead, cases
         )
         counts[stage] = counts.get(stage, 0) + 1
@@ -267,6 +294,7 @@ def list_documents(
                 "received_at": document.get("created_at"),
                 "stage": stage,
                 "explanation": explanation,
+                "progress": progress,
                 "case_id": document.get("id"),
             }
         )

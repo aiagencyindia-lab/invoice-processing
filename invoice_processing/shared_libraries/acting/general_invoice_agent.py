@@ -2156,21 +2156,70 @@ def _handle_phase_rejection(
     return {"decision": "REJECT", "phase": phase_num}
 
 
+# The nine agents in the order they run, with the wording shown while each one
+# is working. Progress is reported per step because "processing" on its own is
+# indistinguishable from "stuck": a Vertex call can take a minute, and someone
+# watching an unchanging spinner concludes the upload failed and re-uploads.
+PIPELINE_STEPS: list[tuple[str, str]] = [
+    ("classification", "Classifying the document"),
+    ("extraction", "Extracting invoice fields"),
+    ("phase1", "Initial intake checks"),
+    ("phase2", "Content validation"),
+    ("phase3", "External validation"),
+    ("phase4", "Calculation validation"),
+    ("transformer", "Transforming for export"),
+    ("decision", "Writing the decision"),
+    ("audit_log", "Recording the audit log"),
+]
+
+
+def _step_reporter(on_step):
+    """Announce the step about to run.
+
+    A reporter that raised would turn a cosmetic progress bar into a way for
+    the pipeline to die, so anything it throws is swallowed here.
+    """
+
+    def report(index: int) -> None:
+        if on_step is None:
+            return
+        key, label = PIPELINE_STEPS[index - 1]
+        try:
+            on_step(
+                {
+                    "step": index,
+                    "total": len(PIPELINE_STEPS),
+                    "key": key,
+                    "label": label,
+                }
+            )
+        except Exception as exc:
+            print(f"   (progress not reported: {exc})")
+
+    return report
+
+
 def _run_pipeline(
     source_folder: Path,
     output_folder: Path,
     start_time: float,
+    on_step=None,
 ) -> dict:
     """Run the main processing pipeline (agents 1-9). Returns result dict."""
+    report = _step_reporter(on_step)
+
     # Agent 1: Classification
+    report(1)
     classifier = ClassifierAgent()
     classification = classifier.run(source_folder, output_folder)
 
     # Agent 2: Extraction
+    report(2)
     extractor = ExtractorAgent()
     extraction = extractor.run(source_folder, output_folder, classification)
 
     # Agent 3: Phase 1 Validation
+    report(3)
     phase1 = Phase1ValidatorAgent()
     phase1_result = phase1.run(output_folder, extraction)
 
@@ -2185,6 +2234,7 @@ def _run_pipeline(
         )
 
     # Agent 4: Phase 2 Validation
+    report(4)
     phase2 = Phase2ValidatorAgent()
     phase2_result = phase2.run(output_folder, extraction, phase1_result)
 
@@ -2199,6 +2249,7 @@ def _run_pipeline(
         )
 
     # Agent 5: Phase 3 Validation
+    report(5)
     phase3 = Phase3ValidatorAgent()
     phase3_result = phase3.run(output_folder, extraction, phase2_result)
 
@@ -2213,16 +2264,19 @@ def _run_pipeline(
         )
 
     # Agent 6: Phase 4 Validation
+    report(6)
     phase4 = Phase4ValidatorAgent()
     phase4_result = phase4.run(output_folder, extraction, phase3_result)
 
     # Agent 7: Transformer
+    report(7)
     transformer = TransformerAgent()
     transformer_result = transformer.run(
         output_folder, extraction, phase4_result
     )
 
     # Agent 8: Output Generator
+    report(8)
     output_gen = OutputGeneratorAgent()
     output_gen.run(
         output_folder,
@@ -2235,6 +2289,7 @@ def _run_pipeline(
     )
 
     # Agent 9: Audit Logger
+    report(9)
     processing_time = time.time() - start_time
     audit = AuditLoggerAgent()
     audit.run(
@@ -2248,8 +2303,12 @@ def _run_pipeline(
     }
 
 
-def process_invoice(source_folder: Path) -> dict:
-    """Main pipeline orchestrator"""
+def process_invoice(source_folder: Path, on_step=None) -> dict:
+    """Main pipeline orchestrator.
+
+    `on_step` is called with a progress record before each agent runs, so a
+    caller -- the worker -- can publish where a document has got to.
+    """
     _ensure_gcp_initialized()
     start_time = time.time()
 
@@ -2269,7 +2328,7 @@ def process_invoice(source_folder: Path) -> dict:
     }
 
     try:
-        return _run_pipeline(source_folder, output_folder, start_time)
+        return _run_pipeline(source_folder, output_folder, start_time, on_step)
 
     except Exception as e:
         print(f"\n   Error: {e}")

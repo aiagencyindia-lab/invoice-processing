@@ -283,8 +283,14 @@ def pipeline(monkeypatch, tmp_path):
     (output / "08_decision.json").write_text('{"final_decision": "ACCEPT"}')
     (output / "broken.json").write_text("{not json")
 
-    def fake_process_invoice(source_folder):
+    def fake_process_invoice(source_folder, on_step=None):
         calls["source"] = source_folder
+        # The worker reports progress through this; a double that ignored it
+        # would let the reporting break without a test noticing.
+        if on_step is not None:
+            on_step(
+                {"step": 1, "total": 9, "key": "classification", "label": "x"}
+            )
         calls["pdf_exists"] = (source_folder / "invoice.pdf").exists()
         return {"decision": "ACCEPT"}
 
@@ -436,7 +442,10 @@ class TestPipelineFailuresReachTheQueue:
         )
         monkeypatch.setattr(
             "invoice_processing.shared_libraries.acting.general_invoice_agent.process_invoice",
-            lambda source_folder: {"decision": "ERROR", "error": "boom"},
+            lambda source_folder, on_step=None: {
+                "decision": "ERROR",
+                "error": "boom",
+            },
         )
         monkeypatch.setattr(
             "invoice_processing.shared_libraries.acting.general_invoice_agent.get_output_folder",

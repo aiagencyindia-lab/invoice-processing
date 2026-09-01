@@ -156,7 +156,15 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
 
         apply_to_pipeline(ctx.tenant_id)
 
-        result = process_invoice(source)
+        # Publish each step through the CaseRepository as the pipeline
+        # reaches it. It goes through the port rather than onto local disk
+        # because the API answering the browser is a different container from
+        # the worker doing the work -- a progress file would be invisible to
+        # exactly the process that has to report it.
+        def publish_step(record: dict) -> None:
+            cases.put_artifact(ctx, "progress", record)
+
+        result = process_invoice(source, on_step=publish_step)
 
         # `process_invoice` catches its own exceptions and returns
         # {"decision": "ERROR"} rather than raising, so a crashed pipeline

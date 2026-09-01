@@ -106,6 +106,14 @@ export type DocumentRow = {
   received_at: string | null;
   stage: "queued" | "processing" | "done" | "failed" | "unknown";
   explanation: string;
+  /** How far through the nine pipeline steps the worker is. Null until it
+   *  reports one -- an older document processed before this existed has none. */
+  progress: {
+    step: number;
+    total: number;
+    key: string;
+    label: string;
+  } | null;
   case_id: string;
 };
 

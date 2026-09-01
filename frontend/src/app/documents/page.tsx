@@ -5,7 +5,9 @@ import { useRef, useState } from "react";
 import { api, ApiError, can, type DocumentList, type Me } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 
-const POLL_MS = 5000;
+// Fast enough that the progress bar visibly moves through a run that takes
+// about a minute. The endpoint is a listing, not a computation.
+const POLL_MS = 2000;
 
 /** Stage colour is never the only signal -- the word is always there too. */
 const STAGE_CLASS: Record<string, string> = {
@@ -157,7 +159,23 @@ export default function DocumentsPage() {
                       {document.stage}
                     </span>
                   </td>
-                  <td className="muted">{document.explanation}</td>
+                  <td className="muted">
+                    {/* Native <progress> so the bar is announced to screen
+                        readers and needs no styling of its own. The sentence
+                        stays: a bar alone never says which step is running. */}
+                    {document.progress && document.stage !== "done" ? (
+                      <div className="stack" style={{ gap: 4 }}>
+                        <progress
+                          value={document.progress.step}
+                          max={document.progress.total}
+                          style={{ width: 160 }}
+                        />
+                        <span>{document.explanation}</span>
+                      </div>
+                    ) : (
+                      document.explanation
+                    )}
+                  </td>
                   <td>
                     {/* Retry costs a model call, so the server requires
                         approver. Hiding it below that rank keeps a clerk from
