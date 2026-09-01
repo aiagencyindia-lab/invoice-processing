@@ -192,11 +192,9 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr;
   min-height: 100vh;
-  max-width: 1440px;
-  margin: 0 auto;
+  /* Full width. The 1440px cap left grey gutters on a wide display while the
+     workbench -- three panes side by side -- was the thing being squeezed. */
   background: var(--surface-sunken);
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
 }
 
 .app-sidebar {
