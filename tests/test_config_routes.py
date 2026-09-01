@@ -21,6 +21,7 @@ from invoice_processing import paths, tenant_settings
 from invoice_processing.adapters import JsonlAuditSink
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
+from invoice_processing.shared_libraries.acting import general_invoice_agent
 from invoice_processing.tenant_settings import JsonTenantSettings, SettingsError
 
 TENANT = "tenant-acme"
@@ -189,10 +190,6 @@ class TestSettingsReachTheEngine:
     the UI reports success while nothing actually changed."""
 
     def test_apply_to_pipeline_uses_the_tenant_value(self, env):
-        from invoice_processing.shared_libraries.acting import (
-            general_invoice_agent,
-        )
-
         env["store"].put(TENANT, {"organization_names": ["Enew bharat"]})
         try:
             config = tenant_settings.apply_to_pipeline(TENANT, env["store"])
@@ -206,10 +203,6 @@ class TestSettingsReachTheEngine:
             )
 
     def test_an_unset_tenant_gets_master_data_defaults(self, env):
-        from invoice_processing.shared_libraries.acting import (
-            general_invoice_agent,
-        )
-
         effective = tenant_settings.effective(
             "tenant-nothing-set", env["store"]
         )
@@ -219,10 +212,6 @@ class TestSettingsReachTheEngine:
         )
 
     def test_the_tenants_po_file_is_threaded_into_config(self, env):
-        from invoice_processing.shared_libraries.acting import (
-            general_invoice_agent,
-        )
-
         try:
             config = tenant_settings.apply_to_pipeline(TENANT, env["store"])
             assert TENANT.replace("-", "-") in config["purchase_order_file"]
