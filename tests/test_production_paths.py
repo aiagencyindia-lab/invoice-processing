@@ -14,6 +14,7 @@ monkeypatched; what is under test is the adapter code around them.
 """
 
 import json
+import pathlib
 from types import SimpleNamespace
 
 import pytest
@@ -352,3 +353,92 @@ class TestProcessDocument:
             RecordingCases(),
         )
         assert result["case_id"] == "doc-42"
+
+
+class TestMissingAmountsDoNotCrash:
+    """The first real-world invoice crashed the output generator.
+
+    `invoice.get("tax_amount", 0)` returns the default only when the key is
+    ABSENT. The extraction schema emits every field, using None where the model
+    could not read one -- so the default never applied and `f"{None:,.2f}"`
+    raised TypeError. Three sample invoices all had tax lines, so nothing
+    caught it until a real supplier invoice with no tax arrived.
+    """
+
+    @pytest.mark.parametrize("value", [None, "", "n/a", [], {}])
+    def test_an_unreadable_amount_renders_empty_not_zero(self, value):
+        """ "0.00" would assert the tax is zero on a document we could not read.
+
+        This JSON feeds the ERP export, so a fabricated zero is worse than a
+        blank: one is a wrong number someone pays against, the other is a
+        visible gap.
+        """
+        from invoice_processing.shared_libraries.acting.general_invoice_agent import (
+            _money,
+        )
+
+        assert _money(value) == ""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (0, "0.00"),
+            (0.0, "0.00"),
+            (71664.0, "71,664.00"),
+            (1234.5, "1,234.50"),
+        ],
+    )
+    def test_real_amounts_still_format(self, value, expected):
+        """A genuine zero must still render as 0.00 -- it is a read value."""
+        from invoice_processing.shared_libraries.acting.general_invoice_agent import (
+            _money,
+        )
+
+        assert _money(value) == expected
+
+    def test_booleans_are_not_treated_as_numbers(self):
+        """bool is a subclass of int; True would otherwise render as 1.00."""
+        from invoice_processing.shared_libraries.acting.general_invoice_agent import (
+            _money,
+        )
+
+        assert _money(True) == ""
+
+
+class TestPipelineFailuresReachTheQueue:
+    """A crashed pipeline reported success, so the invoice was dropped.
+
+    `process_invoice` catches its own exceptions and returns
+    {"decision": "ERROR"} instead of raising, so a crash arrived at the worker
+    looking exactly like a completed run: the message was acked, the claim
+    marked done, and the document never retried -- with the queue reporting a
+    clean drain.
+    """
+
+    def test_an_error_decision_raises_so_the_message_is_retried(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "invoice_processing.shared_libraries.acting.general_invoice_agent.process_invoice",
+            lambda source_folder: {"decision": "ERROR", "error": "boom"},
+        )
+        monkeypatch.setattr(
+            "invoice_processing.shared_libraries.acting.general_invoice_agent.get_output_folder",
+            lambda case_id: pathlib.Path("/nonexistent"),
+        )
+        with pytest.raises(runner.ProcessingFailed, match="boom"):
+            runner.process_document(
+                RunContext(tenant_id="t-1", case_id="case_x"),
+                {"id": "d-1", "storage_key": "k"},
+                StubBlobs(),
+                RecordingCases(),
+            )
+
+    def test_a_successful_decision_does_not_raise(self, pipeline):
+        result = runner.process_document(
+            RunContext(tenant_id="t-1", case_id="case_x"),
+            {"id": "d-1", "storage_key": "k"},
+            StubBlobs(),
+            RecordingCases(),
+        )
+        assert result["decision"] == "ACCEPT"

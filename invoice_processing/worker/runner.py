@@ -146,6 +146,18 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
 
         result = process_invoice(source)
 
+        # `process_invoice` catches its own exceptions and returns
+        # {"decision": "ERROR"} rather than raising, so a crashed pipeline
+        # reaches us looking exactly like a completed one. Left alone, the
+        # worker acks the message, marks the claim done, and the document is
+        # never retried -- an invoice silently dropped, with the queue reporting
+        # a clean run. Surfacing it as a failure lets the normal retry and
+        # dead-letter path do its job.
+        if (result or {}).get("decision") == "ERROR":
+            raise ProcessingFailed(
+                f"Pipeline failed for {case_id}: {result.get('error', 'unknown error')}"
+            )
+
         # Copy the artifacts through the port so they land under this tenant.
         output = get_output_folder(case_id)
         stored = 0

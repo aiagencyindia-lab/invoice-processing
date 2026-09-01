@@ -1955,9 +1955,9 @@ class OutputGeneratorAgent(BaseAgent):
             "Invoice Details": {
                 "Vendor Invoice": invoice.get("invoice_number", ""),
                 "Invoice Date": invoice.get("invoice_date", ""),
-                "Invoice Total": f"{invoice.get('invoice_total_inc_tax', 0):,.2f}",
-                "Pretax Total": f"{invoice.get('invoice_total_ex_tax', 0):,.2f}",
-                "Tax Amount": f"{invoice.get('tax_amount', 0):,.2f}",
+                "Invoice Total": _money(invoice.get("invoice_total_inc_tax")),
+                "Pretax Total": _money(invoice.get("invoice_total_ex_tax")),
+                "Tax Amount": _money(invoice.get("tax_amount")),
                 "Currency": invoice.get("currency", "AUD"),
             },
             "Vendor Information": {
@@ -2052,6 +2052,24 @@ class AuditLoggerAgent(BaseAgent):
 # ============================================================================
 # ORCHESTRATOR
 # ============================================================================
+
+
+def _money(value: Any) -> str:
+    """Format a money value, or empty string when it is genuinely unknown.
+
+    `dict.get(key, 0)` returns the default only when the key is ABSENT. The
+    extraction schema emits every field, using None where the model could not
+    read one -- so the default never applied, and `f"{None:,.2f}"` crashed the
+    output generator on the first real invoice with no tax line.
+
+    Rendering an unknown amount as "0.00" would be worse than the crash: it
+    asserts the tax is zero on a document where we simply could not read it,
+    and this JSON is what feeds the ERP export. Empty is honest, and the eval
+    comparator already treats a missing amount as missing on both sides.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return ""
+    return f"{value:,.2f}"
 
 
 def _handle_phase_rejection(
