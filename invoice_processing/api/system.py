@@ -217,6 +217,15 @@ def document_stage(
     claim = _claim_state(tenant_id, document_id)
     if claim == "running":
         return PROCESSING, _progress_sentence(progress), progress
+    # A finished run outranks a dead-letter record. Artifacts are written only
+    # once a run completes, and the record of the attempt that failed before it
+    # is never cleared -- so a document that was retried successfully went on
+    # reading as "processing failed repeatedly" while its invoice sat in the
+    # workbench waiting to be approved.
+    if artifacts:
+        return DONE, "Processed. Open it in Invoices to review.", progress
+    if claim == "done":
+        return DONE, "Processed.", progress
     if sha in dead:
         return (
             FAILED,
@@ -232,8 +241,6 @@ def document_stage(
             progress,
         )
 
-    if artifacts:
-        return DONE, "Processed. Open it in Invoices to review.", progress
     if _in_flight(progress):
         # No claim, no artifacts, but the worker has reported a step: it is
         # working on this right now in another container. The claim store is
@@ -241,8 +248,6 @@ def document_stage(
         # -- which is how an invoice mid-extraction came to be reported as
         # "received, but not queued".
         return PROCESSING, _progress_sentence(progress), progress
-    if claim == "done":
-        return DONE, "Processed.", progress
     return UNKNOWN, "Received, but not queued. Retry to process it.", progress
 
 

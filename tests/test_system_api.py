@@ -246,6 +246,25 @@ class TestDocumentStages:
         assert doc["stage"] == "failed"
         assert "Retry" in doc["explanation"]
 
+    def test_a_retry_that_worked_stops_reading_as_failed(self, env):
+        """The dead-letter record of the attempt that failed is never cleared,
+        so without this a document that a retry processed successfully went on
+        offering Retry while its invoice sat in the workbench."""
+        doc_id = add_document(env, sha="r1")
+        env["queue"].publish(
+            {"tenant_id": TENANT, "document_id": doc_id, "sha256": "r1"}
+        )
+        [message] = env["queue"].pull()
+        env["queue"].dead_letter(message, "first attempt died")
+        env["cases"].put_artifact(
+            RunContext(tenant_id=TENANT, case_id=doc_id),
+            "extraction",
+            {"invoice": {"vendor_name": "Retried Pty Ltd"}},
+        )
+
+        [doc] = env["client"]().get("/api/documents").json()["documents"]
+        assert doc["stage"] == "done"
+
     def test_a_processed_document_reads_as_done(self, env):
         doc_id = add_document(env, sha="d1")
         env["cases"].put_artifact(
