@@ -99,8 +99,9 @@ def system_status(
     heartbeat = read_heartbeat()
     queue = service.get_queue()
 
-    depth = _safe(queue.depth, default=None)
-    dead = _safe(lambda: len(queue.dead_letters()), default=None)
+    depth = _probe(queue, "depth")
+    letters = _probe(queue, "dead_letters")
+    dead = len(letters) if letters is not None else None
 
     return {
         "worker": {
@@ -123,6 +124,20 @@ def system_status(
             "queue": "pubsub" if os.getenv("PUBSUB_TOPIC") else "local",
         },
     }
+
+
+def _probe(obj, name: str, default=None):
+    """Call `obj.name()`, surviving a missing attribute as well as a failure.
+
+    `_safe(queue.depth, ...)` looked the attribute up before `_safe` could
+    guard anything, so a queue implementation without it took the whole status
+    endpoint down with an AttributeError -- the one thing this endpoint exists
+    to survive. Passing the name keeps the lookup inside the guard.
+    """
+    try:
+        return getattr(obj, name)()
+    except Exception:
+        return default
 
 
 def _safe(fn, default=None):
@@ -161,7 +176,7 @@ def _queued_shas(queue) -> set[str]:
 
 
 def _dead_shas(queue) -> set[str]:
-    records = _safe(queue.dead_letters, default=[]) or []
+    records = _probe(queue, "dead_letters", default=[]) or []
     return {
         r.get("payload", {}).get("sha256")
         for r in records

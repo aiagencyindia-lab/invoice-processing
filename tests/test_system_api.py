@@ -24,7 +24,7 @@ from invoice_processing.adapters import (
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
 from invoice_processing.ports import RunContext
-from invoice_processing.worker.queue import LocalQueue
+from invoice_processing.worker.queue import LocalQueue, PubSubQueue
 from invoice_processing.worker.runner import (
     ClaimStore,
     read_heartbeat,
@@ -377,3 +377,64 @@ class TestAudit:
             "events": [],
             "count": 0,
         }
+
+
+class BareQueue:
+    """A queue with only the four methods the worker needs, and no more.
+
+    `PubSubQueue` was exactly this shape in production, which is how the
+    status endpoint learnt to 500.
+    """
+
+    def publish(self, payload, **attributes):
+        return "id"
+
+    def pull(self, max_messages=1):
+        return []
+
+    def ack(self, message):
+        pass
+
+    def nack(self, message):
+        pass
+
+
+def _bare_queue():
+    return BareQueue()
+
+
+class TestStatusSurvivesTheQueueItHas:
+    """The status endpoint is what a user checks when things look wrong.
+
+    It took the whole endpoint down in production: `PubSubQueue` implements
+    neither `depth` nor `dead_letters`, and `_safe(queue.depth, ...)` looked
+    the attribute up before the guard could do anything. A 500 from the one
+    endpoint that explains outages is the worst place to have one.
+    """
+
+    def test_a_queue_missing_depth_does_not_500(self, env, monkeypatch):
+        monkeypatch.setattr(service, "get_queue", _bare_queue)
+        response = env["client"]().get("/api/system/status")
+        assert response.status_code == 200
+        body = response.json()
+        # Unknown, and reported as unknown rather than as zero -- "nothing
+        # waiting" is a much more reassuring claim than "we cannot see".
+        assert body["queue"]["depth"] is None
+        assert body["queue"]["dead_letters"] is None
+
+    def test_documents_still_lists_with_such_a_queue(self, env, monkeypatch):
+        add_document(env, sha="bare1")
+        monkeypatch.setattr(service, "get_queue", _bare_queue)
+        response = env["client"]("clerk").get("/api/documents")
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+
+
+class TestPubSubQueueAnswersTheStatusQuestions:
+    def test_it_reports_depth_as_unknown_not_zero(self):
+        queue = PubSubQueue(project_id="p", topic="t", subscription="s")
+        assert queue.depth() is None
+
+    def test_it_has_no_dead_letters_without_a_dead_letter_topic(self):
+        queue = PubSubQueue(project_id="p", topic="t", subscription="s")
+        assert queue.dead_letters() == []

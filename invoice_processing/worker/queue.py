@@ -68,6 +68,10 @@ class Queue(Protocol):
 
     def nack(self, message: Message) -> None: ...
 
+    def depth(self) -> int | None: ...
+
+    def dead_letters(self) -> list[dict]: ...
+
 
 class LocalQueue:
     """A directory-backed queue with real at-least-once semantics.
@@ -247,6 +251,26 @@ class PubSubQueue:
 
             self._subscriber = pubsub_v1.SubscriberClient()
         return self._subscriber
+
+    def depth(self) -> int | None:
+        """Unknown, honestly.
+
+        Pub/Sub does not expose a backlog size on the data plane; the number
+        lives in Cloud Monitoring as `num_undelivered_messages`. Returning 0
+        would read as "nothing waiting", which is a different and much more
+        reassuring claim than "we cannot see". None renders as an em dash.
+        """
+        return None
+
+    def dead_letters(self) -> list[dict]:
+        """Empty unless a dead-letter topic is attached to the subscription.
+
+        Pub/Sub redelivers on its own until `max_delivery_attempts`, and only
+        then moves a message aside -- and only when a dead-letter topic exists.
+        This deployment has none, so there is nothing to list rather than
+        nothing wrong.
+        """
+        return []
 
     @property
     def topic_path(self) -> str:
