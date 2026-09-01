@@ -39,6 +39,46 @@ def invoice(total_ex: float, tax: float, currency: str = "AUD") -> dict:
     }
 
 
+class TestInvoicesStatingNoTax:
+    """An invoice with no tax amount must be decided, not crash the pipeline.
+
+    `.get("tax_amount", 0)` never fired its default: the extractor writes the
+    key with a null when it cannot find the figure. The addition then raised
+    TypeError, the worker retried three times and dead-lettered a perfectly
+    readable invoice with no decision and no explanation.
+    """
+
+    def test_a_missing_tax_amount_does_not_crash(self, tmp_path):
+        no_tax = invoice(52250.00, 0.00)
+        no_tax["tax_amount"] = None
+
+        result = run_phase4(tmp_path, no_tax)
+
+        assert step(result, "4.1")["passed"] is True
+
+    def test_the_assumption_is_recorded_not_hidden(self, tmp_path):
+        """A check that supplies a number it never read has to say so."""
+        no_tax = invoice(52250.00, 0.00)
+        no_tax["tax_amount"] = None
+
+        result = run_phase4(tmp_path, no_tax)
+
+        assert "no tax amount stated" in step(result, "4.1")["evidence"]
+
+    def test_a_stated_zero_reads_as_stated(self, tmp_path):
+        result = run_phase4(tmp_path, invoice(52250.00, 0.00))
+        assert "no tax amount stated" not in step(result, "4.1")["evidence"]
+
+    def test_missing_totals_do_not_crash_either(self, tmp_path):
+        blank = invoice(100.00, 10.00)
+        blank["invoice_total_inc_tax"] = None
+        blank["invoice_total_ex_tax"] = None
+
+        result = run_phase4(tmp_path, blank)
+
+        assert step(result, "4.1")["passed"] is not None
+
+
 class TestTaxRateVerification:
     def test_correct_gst_passes(self, tmp_path):
         result = run_phase4(tmp_path, invoice(505.00, 50.50))

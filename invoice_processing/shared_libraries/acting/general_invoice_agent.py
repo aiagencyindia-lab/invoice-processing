@@ -1140,7 +1140,7 @@ class Phase1ValidatorAgent(BaseAgent):
             work_type = self._determine_work_type(invoice)
             exempt_types = _get_config().get("waf_exempt_work_types", [])
             waf_required = work_type not in exempt_types
-            has_waf = extraction.get("waf_count", 0) > 0
+            has_waf = (extraction.get("waf_count") or 0) > 0
 
             if waf_required:
                 validations.append(
@@ -1485,9 +1485,16 @@ class Phase4ValidatorAgent(BaseAgent):
         validations = []
 
         # Step 4.1: Total Verification
-        total_inc = invoice.get("invoice_total_inc_tax", 0)
-        total_ex = invoice.get("invoice_total_ex_tax", 0)
-        tax = invoice.get("tax_amount", 0)
+        # `or 0`, not `.get(key, 0)`: a field the extractor looked for and did
+        # not find is present and *null*, so the default never applies and the
+        # arithmetic below dies on None. That crash dead-lettered a real
+        # invoice whose only sin was stating no tax -- three retries, no
+        # decision, no explanation. An invoice with no tax amount is ex + 0,
+        # which is exactly what the document says.
+        stated_tax = invoice.get("tax_amount")
+        total_inc = invoice.get("invoice_total_inc_tax") or 0
+        total_ex = invoice.get("invoice_total_ex_tax") or 0
+        tax = stated_tax or 0
 
         expected_total = total_ex + tax
         balance = abs(total_inc - expected_total)
@@ -1504,7 +1511,11 @@ class Phase4ValidatorAgent(BaseAgent):
                 "rule": "Total = Subtotal + Tax",
                 "passed": balance <= tolerance,
                 "informational": True,
-                "evidence": f"Total: {total_inc}, Expected: {expected_total}, Diff: {balance:.2f}",
+                # The reader is told when the tax was assumed rather than
+                # read: a check that quietly supplies a number it never saw
+                # is the kind of thing this system exists not to do.
+                "evidence": f"Total: {total_inc}, Expected: {expected_total}, Diff: {balance:.2f}"
+                + ("" if stated_tax is not None else " (no tax amount stated)"),
             }
         )
 
