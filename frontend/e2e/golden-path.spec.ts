@@ -219,3 +219,19 @@ test("accepting the replacement loads the orders", async ({ page }) => {
   await expect(page.getByText(/Loaded 1 purchase orders/)).toBeVisible();
   await expect(page.getByRole("cell", { name: "PO-9001" })).toBeVisible();
 });
+
+test("the sign-in page is a real route", async ({ page }) => {
+  await page.goto("/login");
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  // Reachable without a session -- the shell must not redirect away from the
+  // page that exists to end the lack of one.
+  await expect(page.getByText(/How access works/)).toBeVisible();
+});
+
+test("sign up explains that access is granted, not self-served", async ({
+  page,
+}) => {
+  await page.goto("/signup");
+  await expect(page.getByRole("heading", { name: "Request access" })).toBeVisible();
+  await expect(page.getByText(/administrator adds it to an organisation/)).toBeVisible();
+});

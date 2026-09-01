@@ -1,0 +1,401 @@
+/Users/vineet/Downloads/ADK/invoice-processing/.venv/lib/python3.12/site-packages/google/adk/features/_feature_decorator.py:72: UserWarning: [EXPERIMENTAL] feature FeatureName.PLUGGABLE_AUTH is enabled.
+  check_feature_enabled()
+  Loaded master data: Invoice Processing v1.2.1 (invoice_master_data.yaml)
+  Loaded master data: Invoice Processing v1.2.1 (invoice_master_data.yaml)
+Loaded rules book: reconstructed_rules_book.md
+  Loaded master data: Invoice Processing v1.2.1 (invoice_master_data.yaml)
+INFO:     Started server process [59650]
+INFO:     Waiting for application startup.
+Configuration: GCS_BUCKET is not set: documents will be written to local disk and lost when the container restarts.
+Configuration: Neither DATABASE_URL nor CLOUD_SQL_INSTANCE is set: the app will use in-memory SQLite, which has no row-level security, and the audit trail will be a local file.
+Configuration: AUTH_DISABLED is set: every request would run as an unauthenticated admin.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62193 - "GET /api/me HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62194 - "GET /api/me HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62195 - "GET /api/me HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62196 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62197 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62201 - "GET /api/me HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62216 - "GET /api/me HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62233 - "GET /api/me HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62235 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62234 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62234 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62233 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62238 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62237 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62237 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62236 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62236 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62241 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62236 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62241 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62236 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62236 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62242 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62236 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62242 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62236 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62242 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62240 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62236 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62245 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62246 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62247 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62246 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62246 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62246 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62250 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62250 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62250 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62250 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62245 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62250 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62250 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62254 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62254 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62247 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62256 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62256 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62256 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62256 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62259 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62256 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62256 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62245 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62263 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62262 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62262 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62261 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62261 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62277 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62261 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62277 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62261 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62277 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62261 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62277 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62261 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62277 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62261 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62277 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62261 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62277 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62261 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62277 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62272 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62261 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62261 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62285 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62288 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62261 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62261 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62285 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62296 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62295 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62295 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62294 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62294 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62296 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62295 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62295 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62294 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62295 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62294 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62295 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62294 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62295 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62294 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62295 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62294 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62295 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62294 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62295 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62294 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62295 - "GET /api/stats HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62294 - "GET /api/audit?limit=8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+AUTH_DISABLED is set: every request runs as a local dev principal. This must never be set outside local development.
+INFO:     127.0.0.1:62296 - "GET /api/system/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62295 - "GET /api/stats HTTP/1.1" 200 OK

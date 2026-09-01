@@ -1,0 +1,57 @@
+
+> invoice-frontend@0.1.0 dev
+> next dev --port 3002
+
+▲ Next.js 16.3.2 (Turbopack)
+- Local:         http://localhost:3002
+- Network:       http://192.168.1.12:3002
+✓ Ready in 395ms
+✓ Running next.config.ts took 125ms
+
+ GET /dashboard 200 in 218ms (next.js: 132ms, application-code: 85ms)
+ GET /dashboard 200 in 14ms (next.js: 1.6ms, application-code: 12ms)
+ GET /dashboard 200 in 34ms (next.js: 5ms, application-code: 29ms)
+⚠ Blocked cross-origin request to Next.js dev resource /_next/static/chunks/node_modules_firebase_1s_8hpe._.js from "127.0.0.1".
+Cross-origin access to Next.js dev resources is blocked by default for safety.
+
+To allow this host in development, add it to "allowedDevOrigins" in next.config.js and restart the dev server:
+
+// next.config.js
+module.exports = {
+  allowedDevOrigins: ['127.0.0.1'],
+}
+
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+⚠ Blocked cross-origin request to Next.js dev resource /_next/static/chunks/_1i7zjmd._.js from "127.0.0.1".
+Cross-origin access to Next.js dev resources is blocked by default for safety.
+
+To allow this host in development, add it to "allowedDevOrigins" in next.config.js and restart the dev server:
+
+// next.config.js
+module.exports = {
+  allowedDevOrigins: ['127.0.0.1'],
+}
+
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+⚠ Blocked cross-origin request to Next.js dev resource /_next/static/chunks/src_app_dashboard_page_tsx_11o8ilc._.js from "127.0.0.1".
+Cross-origin access to Next.js dev resources is blocked by default for safety.
+
+To allow this host in development, add it to "allowedDevOrigins" in next.config.js and restart the dev server:
+
+// next.config.js
+module.exports = {
+  allowedDevOrigins: ['127.0.0.1'],
+}
+
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+⚠ Blocked cross-origin request to Next.js dev resource /_next/hmr from "127.0.0.1".
+Cross-origin access to Next.js dev resources is blocked by default for safety.
+
+To allow this host in development, add it to "allowedDevOrigins" in next.config.js and restart the dev server:
+
+// next.config.js
+module.exports = {
+  allowedDevOrigins: ['127.0.0.1'],
+}
+
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins

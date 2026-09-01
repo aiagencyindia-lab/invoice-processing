@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
   ApiError,
@@ -17,7 +17,6 @@ import {
   watchUser,
   type SignedInUser,
 } from "@/lib/auth";
-import { SignIn } from "@/components/SignIn";
 import { usePoll } from "@/lib/hooks";
 
 // Every request asks Identity Platform for a token. Registered here, at import
@@ -56,8 +55,14 @@ function pausedMessage(status: SystemStatus): string | null {
   return `Processing is paused — the worker was last seen ${seconds}s ago. Uploads are safe on the queue and will resume when it comes back.`;
 }
 
+/** Routes that must render without the shell, or an unauthenticated visitor
+ *  would be redirected away from the very page that lets them sign in. */
+const PUBLIC_ROUTES = ["/login", "/signup"];
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const isPublic = PUBLIC_ROUTES.includes(pathname);
 
   // `undefined` while unknown, so a first paint never guesses. Guessing
   // "signed out" flashes a sign-in screen at someone who is signed in, and
@@ -117,6 +122,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     POLL_MS,
   );
 
+  if (isPublic) return <>{children}</>;
+
   if (me === undefined) {
     return (
       <main style={{ padding: "4rem 2rem" }}>
@@ -126,12 +133,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   if (me === null) {
+    // Signed in but refused goes to /signup, which explains what is missing
+    // and shows the values an administrator needs. Not signed in at all goes
+    // to /login. Sending both to the same screen was how someone who had
+    // already signed in ended up pressing the sign-in button again.
+    router.replace(denied ? "/signup" : "/login");
     return (
-      <SignIn
-        onSignedIn={identify}
-        denied={denied}
-        onSignOut={user ? () => signOut().then(identify) : undefined}
-      />
+      <main style={{ padding: "4rem 2rem" }}>
+        <p className="muted">Taking you to sign in…</p>
+      </main>
     );
   }
 

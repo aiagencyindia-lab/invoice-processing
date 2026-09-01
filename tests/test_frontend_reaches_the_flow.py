@@ -262,6 +262,64 @@ class TestSignIn:
                 assert "process.env.NEXT_PUBLIC_" in line, line
 
 
+class TestLoginAndSignUp:
+    """Access is granted per organisation, and the pages have to say so.
+
+    A sign-up that creates its own tenant would let anyone with a Google
+    address mint organisations, inbound-mail addresses and storage prefixes
+    inside the system -- which is what ALLOW_TENANT_PROVISIONING being off by
+    default exists to prevent. So sign-up registers an account and grants
+    nothing; an administrator does the rest.
+    """
+
+    def page(self, route: str) -> str:
+        return (FRONTEND / "app" / route / "page.tsx").read_text(
+            encoding="utf-8"
+        )
+
+    def test_both_routes_exist(self):
+        for route in ("login", "signup"):
+            assert (FRONTEND / "app" / route / "page.tsx").exists(), route
+
+    def test_they_render_without_the_shell_gate(self):
+        """Otherwise an unauthenticated visitor is redirected away from the
+        very page that would let them sign in."""
+        shell = (FRONTEND / "components" / "AppShell.tsx").read_text(
+            encoding="utf-8"
+        )
+        assert "PUBLIC_ROUTES" in shell
+        assert '"/login"' in shell and '"/signup"' in shell
+
+    def test_the_two_failures_go_to_different_places(self):
+        """Not signed in is a different problem from signed in with no
+        organisation, and sending both to the sign-in button was how someone
+        who had just signed in was asked to sign in again."""
+        shell = (FRONTEND / "components" / "AppShell.tsx").read_text(
+            encoding="utf-8"
+        )
+        assert 'denied ? "/signup" : "/login"' in shell
+
+    def test_sign_up_creates_no_organisation(self):
+        """The page registers an account. It must not provision anything."""
+        signup = self.page("signup")
+        for forbidden in (
+            "/api/admin/tenants",
+            "create-tenant",
+            "createTenant",
+        ):
+            assert forbidden not in signup, forbidden
+
+    def test_sign_up_shows_what_an_admin_needs(self):
+        """An administrator needs the address and the account id to grant
+        access; making the user hunt for them in a console is a dead end."""
+        signup = self.page("signup")
+        assert "user.email" in signup
+        assert "user.uid" in signup
+
+    def test_login_links_to_the_explanation(self):
+        assert "/signup" in self.page("login")
+
+
 class TestNoEndpointTakesATenant:
     """The API's central rule, restated where a client could break it.
 

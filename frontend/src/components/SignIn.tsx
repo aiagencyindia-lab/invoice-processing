@@ -18,11 +18,17 @@ export function SignIn({
   onSignedIn,
   denied,
   onSignOut,
+  heading = "Sign in",
+  blurb,
+  footer,
 }: {
   onSignedIn: () => void;
   /** Set when the API verified the token and refused the account anyway. */
   denied?: string | null;
   onSignOut?: () => void;
+  heading?: string;
+  blurb?: string;
+  footer?: React.ReactNode;
 }) {
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -68,7 +74,7 @@ export function SignIn({
     >
       <div className="panel stack" style={{ maxWidth: 420, gap: 14 }}>
         <div className="eyebrow">Invoice processing</div>
-        <h1 style={{ fontSize: 20 }}>Sign in</h1>
+        <h1 style={{ fontSize: 20 }}>{heading}</h1>
 
         {denied ? (
           // Signing in worked. Saying "sign in" again here would send someone
@@ -89,14 +95,18 @@ export function SignIn({
               </button>
             ) : null}
           </div>
-        ) : configured ? (
+        ) : (
           <>
+            {/* Outside the configured branch on purpose: the blurb explains
+                how access works, which is true whether or not this
+                deployment can obtain a token. Nested inside, an unconfigured
+                instance showed a heading with nothing under it. */}
             <p className="muted" style={{ fontSize: 13, lineHeight: 1.6 }}>
-              Use the Google account your administrator added to this
-              organisation. Access is granted per organisation, so an account
-              without an invitation will be refused even after signing in.
+              {blurb ??
+                "Use the Google account your administrator added to this organisation. Access is granted per organisation, so an account without an invitation will be refused even after signing in."}
             </p>
-            <button
+            {configured ? (
+              <button
               type="button"
               className="btn-primary"
               style={{ width: "100%" }}
@@ -104,9 +114,8 @@ export function SignIn({
               onClick={go}
             >
               {busy ? "Opening Google…" : "Continue with Google"}
-            </button>
-          </>
-        ) : (
+              </button>
+            ) : (
           // Never render a button that cannot work. Without the client config
           // there is no way to obtain a token, and a dead button would look
           // like a broken account rather than a missing setting.
@@ -116,8 +125,11 @@ export function SignIn({
             <code>NEXT_PUBLIC_FIREBASE_API_KEY</code>,{" "}
             <code>NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN</code> and{" "}
             <code>NEXT_PUBLIC_FIREBASE_PROJECT_ID</code> in{" "}
-            <code>frontend/.env.local</code> and rebuild.
-          </div>
+            <code>frontend/.env.local</code> (locally) or on the app service
+            (deployed), then rebuild -- they are baked in at build time.
+              </div>
+            )}
+          </>
         )}
 
         {problem ? (
@@ -126,6 +138,12 @@ export function SignIn({
             style={{ color: "var(--error)", fontSize: 13, lineHeight: 1.5 }}
           >
             {problem}
+          </div>
+        ) : null}
+
+        {footer ? (
+          <div className="muted" style={{ fontSize: 12.5 }}>
+            {footer}
           </div>
         ) : null}
       </div>
