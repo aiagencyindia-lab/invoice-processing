@@ -1,0 +1,14 @@
+# Uploaded to Railway's builder, so keep it to what the image needs.
+.venv
+node_modules
+frontend/node_modules
+frontend/.next
+frontend/e2e/.data
+.git
+tests
+eval
+worker.log
+invoice_processing/data/agent_output
+invoice_processing/data/blobs
+invoice_processing/data/queue
+invoice_processing/data/claims
