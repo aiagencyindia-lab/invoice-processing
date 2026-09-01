@@ -7,6 +7,7 @@ import {
   can,
   type Me,
   type SettingField,
+  type Check,
   type Integrations,
   type SettingsResponse,
 } from "@/lib/api";
@@ -50,9 +51,16 @@ function toPayload(field: SettingField, raw: string | boolean): unknown {
   return Number.isNaN(value) ? undefined : value;
 }
 
+const PHASES = [
+  { id: "phase1", label: "Phase 1 — Initial intake" },
+  { id: "phase2", label: "Phase 2 — Content" },
+  { id: "phase3", label: "Phase 3 — External" },
+  { id: "phase4", label: "Phase 4 — Calculation" },
+];
+
 export default function SettingsPage() {
   const { data, error, reload } = usePoll<
-    SettingsResponse & { integrations?: Integrations }
+    SettingsResponse & { integrations?: Integrations; checks?: Check[] }
   >("/api/settings");
   const { data: me } = usePoll<Me>("/api/me");
 
@@ -66,7 +74,31 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
 
   const editable = can(me, "admin");
-  const fields = data?.fields ?? [];
+  // `disabled_checks` has a control of its own above; left in the generated
+  // list it would render a second time as a textarea of step numbers.
+  const fields = (data?.fields ?? []).filter(
+    (field) => field.key !== "disabled_checks",
+  );
+
+  /** Checks are edited as a set of switched-off ids, which is what the API
+   *  stores. Holding the disabled ones rather than the enabled ones means a
+   *  step added to the rulebook later arrives switched on, which is the safe
+   *  direction for a validation to default. */
+  const disabled: string[] =
+    (edits["disabled_checks"] as unknown as string[] | undefined) ??
+    ((data?.settings?.disabled_checks as string[] | undefined) ?? []);
+
+  const shownCheck = (check: Check) => !disabled.includes(check.id);
+
+  const toggleCheck = (check: Check, on: boolean) => {
+    const next = on
+      ? disabled.filter((id) => id !== check.id)
+      : [...disabled, check.id];
+    setEdits({
+      ...edits,
+      disabled_checks: [...new Set(next)].sort() as unknown as string,
+    });
+  };
 
   const shown = (field: SettingField): string | boolean =>
     field.key in edits ? edits[field.key] : toInput(field);
@@ -76,6 +108,11 @@ export default function SettingsPage() {
       field.key in edits &&
       JSON.stringify(edits[field.key]) !== JSON.stringify(toInput(field)),
   );
+
+  const checksChanged =
+    "disabled_checks" in edits &&
+    JSON.stringify(disabled) !==
+      JSON.stringify(data?.settings?.disabled_checks ?? []);
 
   async function save() {
     setSaving(true);
@@ -89,6 +126,9 @@ export default function SettingsPage() {
       const value = toPayload(field, shown(field));
       if (value !== undefined) settings[field.key] = value;
     }
+    // Already a list of step ids; the generic list handling splits text on
+    // newlines and would turn it into one long string.
+    if (checksChanged) settings.disabled_checks = disabled;
 
     try {
       const result = await api<{ changed: string[] }>("/api/settings", {
@@ -185,6 +225,74 @@ export default function SettingsPage() {
         </div>
       ))}
 
+      <section className="panel stack" style={{ gap: 12 }}>
+        <div className="eyebrow">Validation checks</div>
+        <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+          Every step the pipeline runs, in order. A step you switch off is
+          recorded on the decision as <em>skipped</em>, never as passed — a
+          check nobody ran has no verdict, and an invoice should not be able to
+          claim one.
+        </div>
+
+        {PHASES.map((phase) => {
+          const steps = (data?.checks ?? []).filter((c) => c.phase === phase.id);
+          if (!steps.length) return null;
+          return (
+            <div key={phase.id} className="stack" style={{ gap: 6 }}>
+              <div
+                style={{
+                  font: "600 11px var(--font-mono)",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  color: "var(--text-faint)",
+                  marginTop: 6,
+                }}
+              >
+                {phase.label}
+              </div>
+              {steps.map((step) => {
+                const on = shownCheck(step);
+                return (
+                  <label
+                    key={step.id}
+                    className="row-between"
+                    style={{
+                      gap: 10,
+                      padding: "7px 0",
+                      borderTop: "1px solid var(--divider)",
+                      cursor: step.mandatory || !editable ? "default" : "pointer",
+                      opacity: step.mandatory ? 0.6 : 1,
+                    }}
+                  >
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ font: "600 13px var(--font-ui)" }}>
+                        {step.id} {step.name}
+                      </span>
+                      <span
+                        className="faint"
+                        style={{ display: "block", fontSize: 11.5 }}
+                      >
+                        {step.mandatory
+                          ? "Always on — without it there is nothing to check."
+                          : step.informational
+                            ? "Reports only; never rejects an invoice."
+                            : (step.rejection ?? "")}
+                      </span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      disabled={!editable || step.mandatory}
+                      onChange={(event) => toggleCheck(step, event.target.checked)}
+                    />
+                  </label>
+                );
+              })}
+            </div>
+          );
+        })}
+      </section>
+
       <section className="panel stack" style={{ gap: 10 }}>
         <div className="eyebrow">Export destinations</div>
         <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
@@ -216,14 +324,16 @@ export default function SettingsPage() {
       {editable ? (
         <div className="row-between">
           <span className="muted" style={{ fontSize: 13 }}>
-            {changed.length
-              ? `${changed.length} unsaved change${changed.length > 1 ? "s" : ""}`
+            {changed.length + (checksChanged ? 1 : 0)
+              ? `${changed.length + (checksChanged ? 1 : 0)} unsaved change${
+                  changed.length + (checksChanged ? 1 : 0) > 1 ? "s" : ""
+                }`
               : "No unsaved changes"}
           </span>
           <button
             type="button"
             className="btn-primary"
-            disabled={saving || changed.length === 0}
+            disabled={saving || (changed.length === 0 && !checksChanged)}
             onClick={save}
           >
             {saving ? "Saving…" : "Save settings"}

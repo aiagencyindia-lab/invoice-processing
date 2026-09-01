@@ -25,7 +25,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .. import po_matching, tenant_settings
+from .. import checks, po_matching, tenant_settings
 from .auth import Principal, current_principal, require_role
 
 router = APIRouter()
@@ -59,9 +59,17 @@ def read_settings(
     effective = tenant_settings.effective(
         principal.tenant_id, service.get_tenant_settings()
     )
+    disabled = set(effective.get("disabled_checks") or [])
     return {
         "settings": effective,
         "integrations": _integrations(),
+        # The catalogue comes with the settings so the UI never has to keep its
+        # own list of checks -- one that would drift from the rulebook and
+        # offer a switch for a step the engine no longer runs.
+        "checks": [
+            {**step, "enabled": step["id"] not in disabled}
+            for step in checks.catalogue()
+        ],
         "fields": [
             {
                 "key": key,

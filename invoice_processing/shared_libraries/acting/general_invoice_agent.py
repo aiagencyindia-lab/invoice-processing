@@ -1005,6 +1005,38 @@ Return ONLY valid JSON:
 # ============================================================================
 
 
+def _settle(validations: list[dict]) -> list[dict]:
+    """Mark the steps this tenant has switched off, and return the failures.
+
+    A skipped step is recorded as skipped, never as passed: a check nobody ran
+    has no verdict, and writing one down would make the decision claim
+    something that was never established -- which is the opposite of what an
+    auditable system is for.
+
+    This also collapses four copies of the failure expression that had already
+    drifted: only one of them excluded informational steps, so an
+    informational check could reject an invoice in three of the four phases.
+    """
+    from ...checks import disabled_from  # noqa: PLC0415
+
+    disabled = disabled_from(_get_config())
+    for entry in validations:
+        if entry.get("step") in disabled:
+            entry["skipped"] = True
+            entry["passed"] = None
+            entry["rejection_template"] = None
+            entry["evidence"] = (
+                "Skipped: switched off in settings. "
+                f"{entry.get('evidence') or ''}"
+            ).strip()
+
+    return [
+        v
+        for v in validations
+        if v.get("passed") is False and not v.get("informational")
+    ]
+
+
 class Phase1ValidatorAgent(BaseAgent):
     """Phase 1: Initial Intake Validation"""
 
@@ -1119,7 +1151,7 @@ class Phase1ValidatorAgent(BaseAgent):
         )
 
         # Determine decision
-        failed = [v for v in validations if not v.get("passed")]
+        failed = _settle(validations)
         decision = "REJECT" if failed else "CONTINUE"
 
         output = self.create_output(
@@ -1223,7 +1255,7 @@ class Phase2ValidatorAgent(BaseAgent):
             validations.append(entry)
 
         # Determine decision
-        failed = [v for v in validations if not v.get("passed")]
+        failed = _settle(validations)
         decision = "REJECT" if failed else "CONTINUE"
 
         output = self.create_output(
@@ -1395,7 +1427,7 @@ class Phase3ValidatorAgent(BaseAgent):
             )
 
         # Determine decision
-        failed = [v for v in validations if not v.get("passed")]
+        failed = _settle(validations)
         decision = "REJECT" if failed else "CONTINUE"
 
         output = self.create_output(
@@ -1556,11 +1588,7 @@ class Phase4ValidatorAgent(BaseAgent):
 
         # Determine decision. Informational steps record evidence but never
         # reject -- see Step 4.1.
-        failed = [
-            v
-            for v in validations
-            if not v.get("passed") and not v.get("informational")
-        ]
+        failed = _settle(validations)
         decision = "REJECT" if failed else "ACCEPT"
 
         output = self.create_output(

@@ -241,3 +241,39 @@ test("sign up asks for an account, not a request", async ({ page }) => {
     "/login",
   );
 });
+
+test("every validation check can be switched off from settings", async ({
+  page,
+}) => {
+  await goto(page, "/settings");
+  await expect(page.getByText("Validation checks")).toBeVisible();
+
+  // All fourteen, grouped by phase, read from the rulebook rather than a
+  // list kept in the UI.
+  await expect(page.getByText("Phase 1 — Initial intake")).toBeVisible();
+  await expect(page.getByText("3.1 Duplicate Detection")).toBeVisible();
+  await expect(page.getByText("4.4 Tax Rate Verification")).toBeVisible();
+
+  // Extraction cannot be switched off: with it gone the rest have nothing
+  // to read. Addressed by its own row, not by position -- the page has other
+  // checkboxes above these.
+  await expect(
+    page
+      .locator("label", { hasText: "1.1 Extraction Success" })
+      .getByRole("checkbox"),
+  ).toBeDisabled();
+
+  const duplicates = page
+    .locator("label", { hasText: "3.1 Duplicate Detection" })
+    .getByRole("checkbox");
+  await expect(duplicates).toBeChecked();
+  await duplicates.uncheck();
+
+  await page.getByRole("button", { name: "Save settings" }).click();
+  await expect(page.getByText(/Saved:/)).toBeVisible();
+
+  await page.reload();
+  await expect(
+    page.locator("label", { hasText: "3.1 Duplicate Detection" }).getByRole("checkbox"),
+  ).not.toBeChecked();
+});

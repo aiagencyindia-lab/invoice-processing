@@ -31,6 +31,7 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     "duplicate_check_enabled": bool,
     "require_purchase_order": bool,
     "require_work_authorization": bool,
+    "disabled_checks": list,
     "po_tolerance_pct": (int, float),
     "po_tolerance_abs": (int, float),
 }
@@ -45,6 +46,11 @@ DESCRIPTIONS: dict[str, str] = {
     "duplicate_check_enabled": (
         "Refuse an invoice that matches one already received. A duplicate "
         "invoice is a duplicate payment."
+    ),
+    "disabled_checks": (
+        "Validation steps to skip, by number. A skipped step is recorded as "
+        "skipped rather than passed, so a decision never claims a check that "
+        "nobody ran. Step 1.1 cannot be skipped."
     ),
     "require_work_authorization": (
         "Reject invoices for work that has no authorisation form. Turn on if "
@@ -92,7 +98,29 @@ def validate(payload: dict) -> dict:
             )
             raise SettingsError(f"{key} must be {name}.")
 
-        if key == "organization_names":
+        if key == "disabled_checks":
+            from .checks import MANDATORY, known_ids  # noqa: PLC0415
+
+            wanted = {str(i).strip() for i in value if str(i).strip()}
+            known = known_ids()
+            # Only refuse when the catalogue could be read: an unreadable
+            # rulebook must not silently discard a customer's settings.
+            unknown = sorted(wanted - known) if known else []
+            if unknown:
+                raise SettingsError(
+                    f"No such validation step: {', '.join(unknown)}. "
+                    f"Known steps: {', '.join(sorted(known))}."
+                )
+            blocked = sorted(wanted & set(MANDATORY))
+            if blocked:
+                raise SettingsError(
+                    f"Step {', '.join(blocked)} cannot be switched off: it "
+                    "reports whether the invoice could be read at all, so "
+                    "skipping it would leave the other checks nothing to "
+                    "examine."
+                )
+            cleaned[key] = sorted(wanted)
+        elif key == "organization_names":
             names = [str(n).strip() for n in value if str(n).strip()]
             if not names:
                 raise SettingsError(

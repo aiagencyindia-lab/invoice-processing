@@ -262,3 +262,13 @@ export async function objectUrl(path: string): Promise<string> {
   }
   return URL.createObjectURL(await response.blob());
 }
+
+export type Check = {
+  id: string;
+  name: string;
+  phase: string;
+  rejection: string | null;
+  informational: boolean;
+  mandatory: boolean;
+  enabled: boolean;
+};
