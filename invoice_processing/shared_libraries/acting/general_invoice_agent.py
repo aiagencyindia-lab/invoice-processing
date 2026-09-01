@@ -1005,6 +1005,23 @@ Return ONLY valid JSON:
 # ============================================================================
 
 
+def _fold_name(value) -> str:
+    """A company name reduced to what identifies it.
+
+    Suppliers write the same organisation as "Enew Bharat", "Enewbharat",
+    "ENEW  BHARAT" and "E-New Bharat", and step 1.2 is a substring test -- so
+    a single space between the invoice and the configured name rejected an
+    invoice that was correctly addressed. Comparing letters and digits only
+    means an administrator lists the company once instead of guessing every
+    spelling a supplier might use.
+
+    It does not make the match looser in any way that matters: it still has to
+    contain the whole configured name, so "Acme" does not match "Beacme Ltd"
+    any less than it did before.
+    """
+    return "".join(c for c in str(value or "").lower() if c.isalnum())
+
+
 def _settle(validations: list[dict]) -> list[dict]:
     """Mark the steps this tenant has switched off, and return the failures.
 
@@ -1073,9 +1090,11 @@ class Phase1ValidatorAgent(BaseAgent):
             )
 
         # Step 1.2: Customer Verification
-        customer_name = (invoice.get("customer_name") or "").lower()
+        customer_name = _fold_name(invoice.get("customer_name"))
         org_names = [
-            n.lower() for n in _get_config().get("organization_names", [])
+            _fold_name(n)
+            for n in _get_config().get("organization_names", [])
+            if _fold_name(n)
         ]
         customer_match = (
             any(org in customer_name for org in org_names)
