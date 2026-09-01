@@ -161,3 +161,61 @@ test("every sidebar view opens", async ({ page }) => {
     await expect(page.getByRole("heading", { name: label })).toBeVisible();
   }
 });
+
+test("Xero reports whether it is configured", async ({ page }) => {
+  await goto(page, "/settings");
+  await expect(page.getByText("Export destinations")).toBeVisible();
+  // Nothing sets XERO_ACCESS_TOKEN in this harness, so it must say so rather
+  // than leave someone guessing why Export to Xero does nothing.
+  await expect(page.getByText("not configured")).toBeVisible();
+  await expect(page.getByText(/needs XERO_ACCESS_TOKEN/)).toBeVisible();
+});
+
+test("replacing purchase orders asks first, and cancelling changes nothing", async ({
+  page,
+}) => {
+  await goto(page, "/purchase-orders");
+  await expect(page.getByText(/No purchase orders loaded/)).toBeVisible();
+
+  const orders = [
+    { po_number: "PO-9001", vendor_name: "Smoke Supplies", total_amount: 1000 },
+  ];
+
+  // Playwright dismisses dialogs by default, which is the cancel path.
+  let asked = "";
+  page.once("dialog", (dialog) => {
+    asked = dialog.message();
+    dialog.dismiss();
+  });
+  await page.locator("#po-upload").setInputFiles({
+    name: "orders.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(orders)),
+  });
+
+  await expect.poll(() => asked).toContain("purchase orders");
+  // Cancelled means nothing was sent: the empty state is still there.
+  await expect(page.getByText(/No purchase orders loaded/)).toBeVisible();
+});
+
+test("accepting the replacement loads the orders", async ({ page }) => {
+  await goto(page, "/purchase-orders");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#po-upload").setInputFiles({
+    name: "orders.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(
+      JSON.stringify([
+        {
+          po_number: "PO-9001",
+          vendor_name: "Smoke Supplies",
+          total_amount: 1000,
+        },
+      ]),
+    ),
+  });
+
+  await expect(page.getByText(/Loaded 1 purchase orders/)).toBeVisible();
+  await expect(page.getByRole("cell", { name: "PO-9001" })).toBeVisible();
+});

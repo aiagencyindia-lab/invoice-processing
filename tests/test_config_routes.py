@@ -375,3 +375,42 @@ class TestPurchaseOrderTenancy:
             "/api/purchase-orders", json={"purchase_orders": [po("PO-NEW")]}
         )
         assert json.loads(legacy.read_text())[0]["po_number"] == "PO-LEGACY"
+
+
+class TestConnectorStatus:
+    """ "Why is Export to Xero not working?" should not need a terminal."""
+
+    def test_reports_xero_as_unconfigured(self, env, monkeypatch):
+        monkeypatch.delenv("XERO_ACCESS_TOKEN", raising=False)
+        monkeypatch.delenv("XERO_TENANT_ID", raising=False)
+        body = env["client"]().get("/api/settings").json()
+        assert body["integrations"]["xero"]["configured"] is False
+
+    def test_reports_xero_as_configured(self, env, monkeypatch):
+        monkeypatch.setenv("XERO_ACCESS_TOKEN", "tok")
+        monkeypatch.setenv("XERO_TENANT_ID", "xt")
+        body = env["client"]().get("/api/settings").json()
+        assert body["integrations"]["xero"]["configured"] is True
+
+    def test_half_configured_is_not_configured(self, env, monkeypatch):
+        """One of the two is a setup someone abandoned halfway, and export
+        fails at the point of use rather than here."""
+        monkeypatch.setenv("XERO_ACCESS_TOKEN", "tok")
+        monkeypatch.delenv("XERO_TENANT_ID", raising=False)
+        body = env["client"]().get("/api/settings").json()
+        assert body["integrations"]["xero"]["configured"] is False
+
+    def test_the_token_never_leaves_the_server(self, env, monkeypatch):
+        """The indicator is a boolean. A UI has no use for the credential and
+        every reason not to hold it."""
+        monkeypatch.setenv("XERO_ACCESS_TOKEN", "super-secret-token")
+        monkeypatch.setenv("XERO_TENANT_ID", "xt")
+        assert (
+            "super-secret-token"
+            not in env["client"]().get("/api/settings").text
+        )
+
+    def test_csv_is_always_available(self, env):
+        """It needs no credential, so it is the answer when Xero is not set up."""
+        body = env["client"]().get("/api/settings").json()
+        assert body["integrations"]["csv"]["configured"] is True

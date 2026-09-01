@@ -7,6 +7,7 @@ import {
   can,
   type Me,
   type SettingField,
+  type Integrations,
   type SettingsResponse,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
@@ -50,7 +51,9 @@ function toPayload(field: SettingField, raw: string | boolean): unknown {
 }
 
 export default function SettingsPage() {
-  const { data, error, reload } = usePoll<SettingsResponse>("/api/settings");
+  const { data, error, reload } = usePoll<
+    SettingsResponse & { integrations?: Integrations }
+  >("/api/settings");
   const { data: me } = usePoll<Me>("/api/me");
 
   // Only the keys the admin has actually touched. Holding an overlay rather
@@ -181,6 +184,34 @@ export default function SettingsPage() {
           )}
         </div>
       ))}
+
+      <section className="panel stack" style={{ gap: 10 }}>
+        <div className="eyebrow">Export destinations</div>
+        <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+          Where an approved invoice can be sent. Configured per deployment, not
+          per organisation, so changing one is an operator task rather than
+          something this screen can do.
+        </div>
+        {Object.entries(data?.integrations ?? {}).map(([name, integration]) => (
+          <div key={name} className="row-between" style={{ gap: 10 }}>
+            <span style={{ font: "600 13px var(--font-ui)" }}>
+              {name === "csv" ? "CSV download" : label(name)}
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {integration.configured ? null : (
+                <span className="faint" style={{ fontSize: 11.5 }}>
+                  needs {integration.sets.join(" and ")}
+                </span>
+              )}
+              <span
+                className={`badge ${integration.configured ? "badge-ok" : "badge-neutral"}`}
+              >
+                {integration.configured ? "configured" : "not configured"}
+              </span>
+            </span>
+          </div>
+        ))}
+      </section>
 
       {editable ? (
         <div className="row-between">

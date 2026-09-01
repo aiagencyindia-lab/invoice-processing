@@ -50,6 +50,21 @@ export default function PurchaseOrdersPage() {
       return;
     }
 
+    // The only destructive control in the application: this discards every
+    // order currently loaded. A file picked by mistake would silently stop
+    // every PO matching, and the previous set is not recoverable from here.
+    const replacing = data?.count ?? 0;
+    const confirmed = window.confirm(
+      replacing
+        ? `Replace all ${replacing} purchase orders with the ${records.length} in ${file.name}?\n\n` +
+            "This replaces rather than merges, so any order not in the file stops matching."
+        : `Load ${records.length} purchase orders from ${file.name}?`,
+    );
+    if (!confirmed) {
+      if (fileInput.current) fileInput.current.value = "";
+      return;
+    }
+
     try {
       const result = await api<{ count: number }>("/api/purchase-orders", {
         method: "PUT",

@@ -231,3 +231,7 @@ export type User = {
 };
 
 export type UserList = { users: User[]; count: number; roles: string[] };
+
+export type Integration = { configured: boolean; sets: string[] };
+
+export type Integrations = Record<string, Integration>;

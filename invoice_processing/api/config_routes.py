@@ -19,6 +19,7 @@ internals.
 from __future__ import annotations
 
 import json
+import os
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -60,6 +61,7 @@ def read_settings(
     )
     return {
         "settings": effective,
+        "integrations": _integrations(),
         "fields": [
             {
                 "key": key,
@@ -73,6 +75,27 @@ def read_settings(
             }
             for key, expected in sorted(tenant_settings.SETTABLE.items())
         ],
+    }
+
+
+def _integrations() -> dict:
+    """Which outbound connectors this deployment can reach.
+
+    A boolean and nothing else. The point is to answer "why is Export to Xero
+    not working?" without anyone opening a terminal -- the token itself must
+    never leave the server, and a UI has no use for it.
+
+    Configuration is per deployment rather than per tenant today, which is a
+    limit worth stating plainly rather than implying otherwise in the UI.
+    """
+    return {
+        "xero": {
+            "configured": bool(
+                os.getenv("XERO_ACCESS_TOKEN") and os.getenv("XERO_TENANT_ID")
+            ),
+            "sets": ["XERO_ACCESS_TOKEN", "XERO_TENANT_ID"],
+        },
+        "csv": {"configured": True, "sets": []},
     }
 
 
