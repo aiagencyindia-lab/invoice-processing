@@ -56,3 +56,35 @@ module.exports = {
 
 Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
  GET /dashboard 200 in 474ms (next.js: 357ms, application-code: 116ms)
+ GET / 200 in 677ms (next.js: 508ms, application-code: 169ms)
+ GET /dashboard 200 in 119ms (next.js: 56ms, application-code: 63ms)
+ GET /dashboard 200 in 31ms (next.js: 7ms, application-code: 24ms)
+ GET /invoices 200 in 56ms (next.js: 36ms, application-code: 20ms)
+ GET /admin 200 in 148ms (next.js: 111ms, application-code: 37ms)
+ GET /settings 200 in 58ms (next.js: 44ms, application-code: 14ms)
+ GET /dashboard 200 in 45ms (next.js: 19ms, application-code: 26ms)
+ GET /invoices 200 in 41ms (next.js: 18ms, application-code: 22ms)
+Failed to proxy http://127.0.0.1:8000/api/system/status Error: read ECONNRESET
+    at ignore-listed frames {
+  errno: -54,
+  code: 'ECONNRESET',
+  syscall: 'read'
+}
+Error: read ECONNRESET
+    at ignore-listed frames {
+  errno: -54,
+  code: 'ECONNRESET',
+  syscall: 'read'
+}
+Failed to proxy http://127.0.0.1:8000/api/system/status Error: read ECONNRESET
+    at ignore-listed frames {
+  errno: -54,
+  code: 'ECONNRESET',
+  syscall: 'read'
+}
+Error: read ECONNRESET
+    at ignore-listed frames {
+  errno: -54,
+  code: 'ECONNRESET',
+  syscall: 'read'
+}

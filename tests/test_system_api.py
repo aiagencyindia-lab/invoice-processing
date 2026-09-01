@@ -21,7 +21,7 @@ from invoice_processing.adapters import (
     JsonDocumentRepository,
     JsonlAuditSink,
 )
-from invoice_processing.api import auth, service
+from invoice_processing.api import auth, service, system
 from invoice_processing.api.service import app
 from invoice_processing.db.models import Base
 from invoice_processing.db.session import get_engine
@@ -275,6 +275,49 @@ class TestDocumentStages:
         assert doc["stage"] == "processing"
         assert doc["progress"]["step"] == 3
         assert doc["explanation"] == "Step 3 of 9: Initial intake checks."
+
+    def test_a_reported_step_reads_as_processing_without_a_claim(self, env):
+        """The claim store is local disk, so a deployed API never sees the
+        claim its worker holds. Reported progress is the only evidence it has
+        that an extraction is under way -- without this a live invoice reads
+        as "received, but not queued. Retry to process it"."""
+        doc_id = add_document(env, sha="s3")
+        env["cases"].put_artifact(
+            RunContext(tenant_id=TENANT, case_id=doc_id),
+            "progress",
+            {
+                "step": 2,
+                "total": 9,
+                "key": "extraction",
+                "label": "Extracting invoice fields",
+                "at": time.time(),
+            },
+        )
+
+        [doc] = env["client"]().get("/api/documents").json()["documents"]
+        assert doc["stage"] == "processing"
+        assert doc["explanation"] == "Step 2 of 9: Extracting invoice fields."
+
+    def test_a_step_left_by_a_dead_worker_stops_reading_as_processing(
+        self, env
+    ):
+        """A document stuck on "processing" hides its own Retry button, so a
+        worker that died mid-invoice would strand it there forever."""
+        doc_id = add_document(env, sha="s4")
+        env["cases"].put_artifact(
+            RunContext(tenant_id=TENANT, case_id=doc_id),
+            "progress",
+            {
+                "step": 2,
+                "total": 9,
+                "key": "extraction",
+                "label": "Extracting invoice fields",
+                "at": time.time() - (system.IN_FLIGHT_SECONDS + 60),
+            },
+        )
+
+        [doc] = env["client"]().get("/api/documents").json()["documents"]
+        assert doc["stage"] != "processing"
 
     def test_progress_alone_does_not_make_a_document_done(self, env):
         """Progress is a step counter, not a stage artifact. Counting it as one

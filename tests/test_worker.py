@@ -14,6 +14,7 @@ The processing function is injected, so none of this runs a real extraction.
 """
 
 import json
+import time
 
 import pytest
 
@@ -23,6 +24,7 @@ from invoice_processing.ports import RunContext
 from invoice_processing.shared_libraries.acting import (
     general_invoice_agent as gia,
 )
+from invoice_processing.worker import runner
 from invoice_processing.worker.queue import LocalQueue, Queue
 from invoice_processing.worker.runner import (
     ClaimStore,
@@ -534,3 +536,38 @@ class TestArtifactsAreStoredUnderTheKeysReadersUse:
         assert "02_extraction" not in stored
         # An unmapped file is not dropped on the floor.
         assert "something_else" in stored
+
+
+class TestHeartbeatWhileBusy:
+    """A worker mid-extraction must not look like a worker that has gone.
+
+    The loop beat only between messages, and an extraction takes about a
+    minute -- three times the staleness threshold -- so the app told everyone
+    watching that processing was paused while it was in fact working.
+    """
+
+    def test_it_keeps_beating_between_loop_iterations(self):
+        beats = []
+        stop = runner.start_heartbeat(
+            interval=0.01, write=lambda: beats.append(1)
+        )
+        try:
+            deadline = time.time() + 2.0
+            while len(beats) < 3 and time.time() < deadline:
+                time.sleep(0.01)
+        finally:
+            stop.set()
+        assert len(beats) >= 3
+
+    def test_stopping_it_stops_the_beating(self):
+        beats = []
+        stop = runner.start_heartbeat(
+            interval=0.01, write=lambda: beats.append(1)
+        )
+        while not beats:
+            time.sleep(0.01)
+        stop.set()
+        time.sleep(0.05)
+        seen = len(beats)
+        time.sleep(0.05)
+        assert len(beats) == seen

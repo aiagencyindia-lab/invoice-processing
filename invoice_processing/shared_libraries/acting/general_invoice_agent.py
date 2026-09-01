@@ -2191,6 +2191,9 @@ def _step_reporter(on_step):
                     "total": len(PIPELINE_STEPS),
                     "key": key,
                     "label": label,
+                    # When, so a reader can tell work in flight from a step
+                    # left behind by a worker that died mid-invoice.
+                    "at": time.time(),
                 }
             )
         except Exception as exc:

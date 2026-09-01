@@ -29,6 +29,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import time
 import traceback
 from collections.abc import Callable
@@ -373,6 +374,34 @@ def read_heartbeat(path: Path | None = None) -> dict | None:
     }
 
 
+# The worker beats this often while it is busy. It has to be well inside
+# HEARTBEAT_STALE_SECONDS, or the gap between two beats is itself enough to
+# make the worker look dead.
+HEARTBEAT_INTERVAL_SECONDS = 10.0
+
+
+def start_heartbeat(
+    interval: float = HEARTBEAT_INTERVAL_SECONDS, write=None
+) -> threading.Event:
+    """Beat on a timer for as long as the returned event is unset.
+
+    The loop only wrote a heartbeat between messages, so an extraction that
+    took longer than HEARTBEAT_STALE_SECONDS -- which every extraction does,
+    at around a minute -- made the API tell everyone watching that processing
+    was paused and the worker had gone, while it was in fact mid-invoice.
+    """
+    beat = write or write_heartbeat
+    stop = threading.Event()
+
+    def loop() -> None:
+        while not stop.wait(interval):
+            beat()
+
+    # Daemon: a heartbeat must never be the reason the process will not exit.
+    threading.Thread(target=loop, daemon=True, name="heartbeat").start()
+    return stop
+
+
 class Worker:
     def __init__(
         self,
@@ -458,6 +487,7 @@ class Worker:
 
     def run_forever(self, poll_seconds: float = 5.0, sleep=time.sleep) -> None:
         logger.info("Worker started.")
+        start_heartbeat()
         while True:
             # Written every loop, before and after work, so the API can tell
             # "no worker running" from "worker busy with a slow extraction".

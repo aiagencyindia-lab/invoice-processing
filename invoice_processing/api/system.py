@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -239,9 +240,35 @@ def document_stage(
 
     if artifacts:
         return DONE, "Processed. Open it in Invoices to review.", progress
+    if _in_flight(progress):
+        # No claim, no artifacts, but the worker has reported a step: it is
+        # working on this right now in another container. The claim store is
+        # local disk, so the API never sees the claim a deployed worker holds
+        # -- which is how an invoice mid-extraction came to be reported as
+        # "received, but not queued".
+        return PROCESSING, _progress_sentence(progress), progress
     if claim == "done":
         return DONE, "Processed.", progress
     return UNKNOWN, "Received, but not queued. Retry to process it.", progress
+
+
+# How long a step may stand before it stops meaning "in progress". Long,
+# because Vertex occasionally hangs for twenty minutes and a document reported
+# as stalled offers a Retry that would duplicate work still under way. A worker
+# that dies mid-invoice leaves the document unknown-and-retryable after this.
+IN_FLIGHT_SECONDS = 30 * 60
+
+
+def _in_flight(progress: dict | None) -> bool:
+    """Whether a reported step is recent enough to still mean "working"."""
+    if not progress:
+        return False
+    at = progress.get("at")
+    if not isinstance(at, (int, float)):
+        # Written before steps were timestamped: trust it, the alternative is
+        # calling a live extraction stalled.
+        return True
+    return (time.time() - at) <= IN_FLIGHT_SECONDS
 
 
 def _progress_sentence(progress: dict | None) -> str:
