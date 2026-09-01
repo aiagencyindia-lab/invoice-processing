@@ -13,15 +13,24 @@ at-least-once actually produces in production:
 The processing function is injected, so none of this runs a real extraction.
 """
 
+import json
+
 import pytest
 
+from invoice_processing import tenant_settings
+from invoice_processing.core.config import ARTIFACT_MAP
 from invoice_processing.ports import RunContext
+from invoice_processing.shared_libraries.acting import (
+    general_invoice_agent as gia,
+)
 from invoice_processing.worker.queue import LocalQueue, Queue
 from invoice_processing.worker.runner import (
     ClaimStore,
     PermanentFailure,
     Worker,
+    _artifact_map,
     enqueue_document,
+    process_document,
 )
 
 
@@ -445,3 +454,83 @@ class TestEnqueue:
         enqueue_document(queue, RunContext(tenant_id="tenant-acme"), Result())
         [message] = queue.pull()
         assert message.attributes["tenant_id"] == "tenant-acme"
+
+
+def _folder(path):
+    def get_output_folder(case_id):
+        return path
+
+    return get_output_folder
+
+
+def _rejects(*args, **kwargs):
+    return {"decision": "REJECT"}
+
+
+def _no_settings(*args, **kwargs):
+    return {}
+
+
+class TestArtifactsAreStoredUnderTheKeysReadersUse:
+    """Both repositories must agree about what an artifact is called.
+
+    The write-back stored `path.stem` -- "02_extraction". The filesystem
+    repository survived that by accident, because it writes `<key>.json` and
+    its reader maps the filename back through ARTIFACT_MAP. The Postgres one
+    stores the key verbatim, so in production every artifact was filed under a
+    name no reader looks for and a fully processed invoice showed up in the
+    workbench with no vendor, no fields and no findings.
+    """
+
+    def test_the_logical_key_is_used_not_the_file_stem(self):
+        by_filename = {f: k for k, f in _artifact_map().items()}
+        assert by_filename["02_extraction.json"] == "extraction"
+        assert by_filename["08_decision.json"] == "decision"
+        # The map is the one the readers use, not a second copy of it.
+        assert _artifact_map() == dict(ARTIFACT_MAP)
+
+    def test_a_dict_backed_repository_sees_the_logical_keys(
+        self, tmp_path, monkeypatch
+    ):
+        """Stands in for PgCaseRepository, which stores keys verbatim."""
+        output = tmp_path / "case-1"
+        output.mkdir()
+        (output / "02_extraction.json").write_text(
+            json.dumps({"invoice": {"vendor_name": "Acme"}})
+        )
+        (output / "08_decision.json").write_text(
+            json.dumps({"final_decision": "REJECT"})
+        )
+        (output / "something_else.json").write_text(json.dumps({"x": 1}))
+
+        stored: dict[str, dict] = {}
+
+        class Verbatim:
+            def put_artifact(self, ctx, key, payload):
+                stored[key] = payload
+
+            def get_artifacts(self, ctx):
+                return stored
+
+        monkeypatch.setattr(gia, "get_output_folder", _folder(output))
+        monkeypatch.setattr(gia, "process_invoice", _rejects)
+        # Loading tenant settings would reach for a database this test has no
+        # business needing: it is about how artifacts are keyed.
+        monkeypatch.setattr(tenant_settings, "apply_to_pipeline", _no_settings)
+
+        class Blobs:
+            def get(self, key):
+                return b"%PDF-1.4"
+
+        process_document(
+            RunContext(tenant_id="t", case_id="case-1"),
+            {"document_id": "case-1", "storage_key": "k", "sha256": "s"},
+            cases=Verbatim(),
+            blobs=Blobs(),
+        )
+
+        assert "extraction" in stored, "readers look for 'extraction'"
+        assert "decision" in stored
+        assert "02_extraction" not in stored
+        # An unmapped file is not dropped on the floor.
+        assert "something_else" in stored

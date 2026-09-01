@@ -169,8 +169,21 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
                 f"Pipeline failed for {case_id}: {result.get('error', 'unknown error')}"
             )
 
-        # Copy the artifacts through the port so they land under this tenant.
+        # Copy the artifacts through the port so they land under this tenant,
+        # keyed the way every reader expects.
+        #
+        # This used to store `path.stem` -- "02_extraction". The filesystem
+        # repository survived it by accident: it writes `<key>.json`, and its
+        # reader maps `02_extraction.json` back to "extraction" through
+        # ARTIFACT_MAP. The Postgres one stores the key verbatim, so in a
+        # deployed system every artifact was filed under a name no reader
+        # looks for, and an invoice that had been fully processed appeared in
+        # the workbench with no vendor, no fields, no line items and no
+        # findings.
         output = get_output_folder(case_id)
+        by_filename = {
+            filename: key for key, filename in _artifact_map().items()
+        }
         stored = 0
         for path in sorted(output.glob("*.json")):
             import json  # noqa: PLC0415
@@ -179,7 +192,10 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            cases.put_artifact(ctx, path.stem, payload)
+            # An unmapped file keeps its stem, so nothing is dropped.
+            cases.put_artifact(
+                ctx, by_filename.get(path.name, path.stem), payload
+            )
             stored += 1
 
         return {
@@ -389,6 +405,13 @@ class Worker:
             event,
             {"document_id": document_id, **payload},
         )
+
+
+def _artifact_map() -> dict[str, str]:
+    """Logical key -> filename, as every reader of a case understands it."""
+    from ..core.config import ARTIFACT_MAP  # noqa: PLC0415
+
+    return dict(ARTIFACT_MAP)
 
 
 def enqueue_document(queue: Queue, ctx: RunContext, result: Any) -> str:
