@@ -2,23 +2,24 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import { api, hasToken, type SystemStatus } from "@/lib/api";
+import { can, hasToken, type Me, type SystemStatus } from "@/lib/api";
+import { usePoll } from "@/lib/hooks";
 
+/** `min` is the role the *server* requires for that view's main endpoint.
+ *  Hiding a link the caller cannot use is a courtesy; `require_role` on the
+ *  endpoint is the enforcement, and it does not consult this list. */
 const NAV = [
   { href: "/dashboard", label: "Dashboard", glyph: "▦" },
   { href: "/invoices", label: "Invoices", glyph: "▤" },
-  { href: "/documents", label: "Documents", glyph: "▣" },
+  { href: "/documents", label: "Documents", glyph: "▣", min: "clerk" },
   { href: "/activity", label: "Activity", glyph: "≡" },
-  { href: "/purchase-orders", label: "Purchase orders", glyph: "◈" },
-  { href: "/settings", label: "Settings", glyph: "⚙" },
-  { href: "/admin", label: "Admin", glyph: "✦" },
+  { href: "/purchase-orders", label: "Purchase orders", glyph: "◈", min: "clerk" },
+  { href: "/settings", label: "Settings", glyph: "⚙", min: "admin" },
+  { href: "/admin", label: "Admin", glyph: "✦", min: "admin" },
 ];
 
-/** How often the shell re-checks the pipeline. Five seconds is fast
- *  enough that an upload appears to move on its own, and slow enough
- *  that a parked tab costs nothing worth measuring. Polling, not
- *  websockets -- there is one user per tenant in the pilot. */
+/** Fast enough that an upload appears to move on its own, slow enough that a
+ *  parked tab costs nothing worth measuring. */
 const POLL_MS = 5000;
 
 function isActive(pathname: string, href: string): boolean {
@@ -37,26 +38,14 @@ function pausedMessage(status: SystemStatus): string | null {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const [status, setStatus] = useState<SystemStatus | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = () =>
-      api<SystemStatus>("/api/system/status")
-        .then((value) => !cancelled && setStatus(value))
-        // A failed status probe is itself a signal, but not one worth a
-        // red screen: the banner simply stays quiet.
-        .catch(() => !cancelled && setStatus(null));
-
-    load();
-    const timer = setInterval(load, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
+  const { data: status } = usePoll<SystemStatus>("/api/system/status", POLL_MS);
+  const { data: me } = usePoll<Me>("/api/me");
 
   const paused = status ? pausedMessage(status) : null;
+  // Until /api/me answers, show the unrestricted views only. Briefly hiding a
+  // link a user does have is harmless; briefly showing one they do not invites
+  // a click that ends in a 403.
+  const nav = NAV.filter((item) => !item.min || can(me, item.min));
 
   return (
     <div className="app-shell">
@@ -70,7 +59,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </Link>
 
         <nav className="app-sidebar-nav" aria-label="Primary">
-          {NAV.map((item) => (
+          {nav.map((item) => (
             <Link
               key={item.href}
               href={item.href}
@@ -115,9 +104,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </strong>
           </div>
 
-          <div style={{ marginLeft: "auto" }}>
+          <div
+            style={{
+              marginLeft: "auto",
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            {me ? (
+              <span className="faint" style={{ fontSize: 12 }}>
+                {me.email} · {me.role} · {me.tenant_id}
+              </span>
+            ) : null}
             {hasToken() ? null : (
-              <span className="badge badge-neutral" title="No bearer token is being sent; the API is running with authentication disabled.">
+              <span
+                className="badge badge-neutral"
+                title="No bearer token is being sent; the API is running with authentication disabled."
+              >
                 dev mode
               </span>
             )}

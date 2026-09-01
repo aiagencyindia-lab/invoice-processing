@@ -66,3 +66,55 @@ export type SystemStatus = {
   queue: { depth: number | null; dead_letters: number | null };
   storage: { documents: string; database: string; queue: string };
 };
+
+export type Me = { email: string; role: string; tenant_id: string };
+
+/** Ascending privilege, mirroring ROLE_RANK in api/auth.py. An unknown role
+ *  ranks below viewer, so a typo in a claim hides everything rather than
+ *  revealing it -- the same direction the server fails in. */
+export const ROLE_RANK: Record<string, number> = {
+  viewer: 0,
+  clerk: 1,
+  approver: 2,
+  admin: 3,
+};
+
+export function can(me: Me | null, required: string): boolean {
+  if (!me) return false;
+  return (ROLE_RANK[me.role] ?? -1) >= (ROLE_RANK[required] ?? 99);
+}
+
+export type Stats = {
+  total: number;
+  needs_review: number;
+  auto: number;
+  touchless_rate: number | null;
+  corrections: number;
+  corrected_fields: string[];
+};
+
+export type DocumentRow = {
+  document_id: string;
+  filename: string | null;
+  source: string | null;
+  byte_size: number | null;
+  sha256: string | null;
+  received_at: string | null;
+  stage: "queued" | "processing" | "done" | "failed" | "unknown";
+  explanation: string;
+  case_id: string;
+};
+
+export type DocumentList = {
+  documents: DocumentRow[];
+  counts: Record<string, number>;
+  total: number;
+};
+
+export type AuditEvent = {
+  at: string | null;
+  actor: string | null;
+  action: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+};

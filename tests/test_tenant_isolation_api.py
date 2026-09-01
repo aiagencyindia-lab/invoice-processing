@@ -261,6 +261,23 @@ class TestWritesDoNotCross:
         assert response.status_code == 404
 
 
+class TestIdentity:
+    """`/api/me` reports the caller's own tenant and role, never another's."""
+
+    @pytest.mark.parametrize("role", ROLES)
+    def test_me_reports_the_token_tenant(self, clients, role):
+        body = clients("globex", role).get("/api/me").json()
+        assert body["tenant_id"] == GLOBEX
+        assert body["role"] == role
+
+    def test_me_never_reports_the_other_tenant(self, clients):
+        """The one thing this endpoint could leak is whose data you will see."""
+        for role in ROLES:
+            assert clients("acme", role).get("/api/me").json()["tenant_id"] == (
+                ACME
+            )
+
+
 class TestEveryRoleIsIsolated:
     """Part D requires isolation across all roles, not just admin."""
 
@@ -383,6 +400,7 @@ class TestCoverage:
         "/api/documents/{document_id}/retry",
         "/api/audit",
         "/api/system/status",
+        "/api/me",
         "/api/settings",
         "/api/purchase-orders",
         "/api/admin/tenants",

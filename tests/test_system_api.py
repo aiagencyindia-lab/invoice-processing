@@ -94,6 +94,28 @@ def add_document(env, filename="invoice.pdf", sha="abc123"):
 
 
 # ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+
+
+class TestWhoAmI:
+    """The UI hides links a role cannot use; the server refuses them anyway."""
+
+    @pytest.mark.parametrize("role", ["viewer", "clerk", "approver", "admin"])
+    def test_reports_the_callers_role(self, env, role):
+        body = env["client"](role).get("/api/me").json()
+        assert body["role"] == role
+        assert body["tenant_id"] == TENANT
+        assert body["email"] == f"{role}@acme.test"
+
+    def test_refuses_an_unauthenticated_caller(self, env):
+        """A UI that renders a nav for an anonymous caller has already leaked
+        the shape of the product to someone who should see a sign-in page."""
+        response = TestClient(app).get("/api/me")
+        assert response.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
 # Worker liveness — the signal that explains everything else
 # ---------------------------------------------------------------------------
 
@@ -327,6 +349,19 @@ class TestAudit:
         body = env["client"]().get("/api/audit").json()
         assert body["count"] >= 1
         assert body["events"][0]["action"] == "document_retried"
+
+    def test_events_carry_the_time_and_subject_they_happened_to(self, env):
+        """Reader and writer must agree on the keys.
+
+        They did not: `JsonlAuditSink.emit` writes `timestamp` while the reader
+        looked for `at`, so every event on the local path rendered with a blank
+        time -- an audit trail that cannot say when is not an audit trail.
+        """
+        doc_id = add_document(env, sha="au2")
+        env["client"]("approver").post(f"/api/documents/{doc_id}/retry")
+        event = env["client"]().get("/api/audit").json()["events"][0]
+        assert event["at"], "audit event has no timestamp"
+        assert event["entity_id"] == doc_id
 
     def test_every_role_can_read_the_trail(self, env):
         """A viewer who cannot see why an invoice was rejected cannot answer

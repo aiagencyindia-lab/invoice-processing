@@ -1,11 +1,153 @@
-export default function Page() {
-  return (
-    <div className="stack">
-      <h1 style={{ textTransform: "capitalize" }}>dashboard</h1>
-      <div className="empty-state">
-        Not built yet. The shell, navigation and worker banner are live; this
-        view lands in its own step.
+"use client";
+
+import Link from "next/link";
+import type { AuditEvent, Stats, SystemStatus } from "@/lib/api";
+import { usePoll } from "@/lib/hooks";
+
+const POLL_MS = 5000;
+
+function Tile({
+  label,
+  value,
+  hint,
+  href,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  href?: string;
+}) {
+  const body = (
+    <div className="panel" style={{ padding: 18, height: "100%" }}>
+      <div className="eyebrow">{label}</div>
+      <div style={{ font: "600 26px var(--font-ui)", margin: "6px 0 2px" }}>
+        {value}
       </div>
+      {hint ? (
+        <div className="muted" style={{ fontSize: 12 }}>
+          {hint}
+        </div>
+      ) : null}
+    </div>
+  );
+  return href ? (
+    <Link href={href} style={{ textDecoration: "none", color: "inherit" }}>
+      {body}
+    </Link>
+  ) : (
+    body
+  );
+}
+
+function percent(rate: number | null | undefined): string {
+  // `null` means no invoices yet, which is not the same as 0% touchless --
+  // showing a hard zero would read as a failing system on day one.
+  if (rate === null || rate === undefined) return "—";
+  return `${Math.round(rate * 100)}%`;
+}
+
+function when(value: string | null): string {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+export default function DashboardPage() {
+  const { data: stats, error } = usePoll<Stats>("/api/stats", POLL_MS);
+  const { data: status } = usePoll<SystemStatus>("/api/system/status", POLL_MS);
+  const { data: audit } = usePoll<{ events: AuditEvent[] }>(
+    "/api/audit?limit=8",
+    POLL_MS,
+  );
+
+  const events = audit?.events ?? [];
+
+  return (
+    <div className="stack" style={{ gap: 24 }}>
+      <h1>Dashboard</h1>
+
+      {error ? <div className="empty-state">{error}</div> : null}
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gap: 16,
+        }}
+      >
+        <Tile
+          label="Needs review"
+          value={String(stats?.needs_review ?? "—")}
+          hint="Waiting on a human"
+          href="/invoices"
+        />
+        <Tile
+          label="Auto-routed"
+          value={String(stats?.auto ?? "—")}
+          hint="Cleared without review"
+        />
+        <Tile
+          label="Touchless rate"
+          value={percent(stats?.touchless_rate)}
+          hint={stats?.total ? `of ${stats.total} invoices` : "no invoices yet"}
+        />
+        <Tile
+          label="Corrections"
+          value={String(stats?.corrections ?? "—")}
+          hint="Reviewer edits recorded"
+        />
+        <Tile
+          label="Queue"
+          value={String(status?.queue.depth ?? "—")}
+          hint="Waiting for a worker"
+          href="/documents"
+        />
+        <Tile
+          label="Failed"
+          value={String(status?.queue.dead_letters ?? "—")}
+          hint="Dead-lettered — retry from Documents"
+          href="/documents"
+        />
+      </div>
+
+      <section className="stack" style={{ gap: 10 }}>
+        <div className="row-between">
+          <h2>Recent activity</h2>
+          <Link href="/activity" style={{ fontSize: 13 }}>
+            See all
+          </Link>
+        </div>
+
+        {events.length === 0 ? (
+          <div className="empty-state">
+            Nothing yet. Upload an invoice from{" "}
+            <Link href="/documents">Documents</Link> to get started.
+          </div>
+        ) : (
+          <div className="panel table-scroll" style={{ padding: 8 }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Who</th>
+                  <th>Did what</th>
+                  <th>To</th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.map((event, index) => (
+                  <tr key={`${event.at}-${index}`}>
+                    <td className="faint">{when(event.at)}</td>
+                    <td>{event.actor ?? "—"}</td>
+                    <td>{event.action ?? "—"}</td>
+                    <td className="muted">{event.entity_id ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

@@ -16,6 +16,8 @@ The endpoints below make that state legible:
 * `/api/documents` — every received file with the stage it has reached.
 * `/api/documents/{id}/retry` — put a failed document back on the queue.
 * `/api/audit` — who did what, tenant-scoped.
+* `/api/me` — the caller's own role, so the UI can hide what the server
+  would refuse anyway.
 
 Stages are derived, not stored. A single `status` column would need every
 component to update it in lockstep and would go stale the moment one of them
@@ -42,6 +44,32 @@ PROCESSING = "processing"
 DONE = "done"
 FAILED = "failed"
 UNKNOWN = "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/me")
+def whoami(
+    principal: Annotated[Principal, Depends(current_principal)],
+) -> dict:
+    """Who the caller is, so the UI can hide what the server would refuse.
+
+    Cosmetic only. Every endpoint enforces its own role independently, and this
+    one must never become the thing that decides access -- a client is free to
+    lie about what it received here, and gains nothing by it.
+
+    The tenant is echoed rather than accepted: it comes from the verified token
+    like everywhere else, and showing it lets a user notice immediately if they
+    are signed into the wrong organisation.
+    """
+    return {
+        "email": principal.email,
+        "role": principal.role,
+        "tenant_id": principal.tenant_id,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -343,13 +371,25 @@ def _read_jsonl_audit(tenant_id: str, limit: int) -> list[dict]:
             continue
         if record.get("tenant_id") not in (None, tenant_id):
             continue
+        payload = record.get("payload") or {}
+        # `timestamp` is the key JsonlAuditSink.emit writes. Reading "at" here
+        # silently produced a null on every local event, so the activity trail
+        # rendered without a single time on it.
+        entity_id = (
+            record.get("case_id")
+            or payload.get("case_id")
+            or payload.get("document_id")
+        )
         events.append(
             {
-                "at": record.get("at"),
+                "at": record.get("timestamp"),
                 "actor": record.get("actor"),
                 "action": record.get("event_type"),
-                "entity_type": "invoice" if record.get("case_id") else None,
-                "entity_id": record.get("case_id"),
+                # Ingestion events carry no case yet -- the document is the
+                # only thing that exists at that point in the pipeline.
+                "entity_type": ("invoice" if record.get("case_id") else None)
+                or ("document" if entity_id else None),
+                "entity_id": entity_id,
                 "payload": record.get("payload"),
             }
         )
