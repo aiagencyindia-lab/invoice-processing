@@ -34,3 +34,5 @@ invoice_processing/data/audit.jsonl
 worker.log
 # Liveness state, rewritten every worker poll
 invoice_processing/data/worker_heartbeat.json
+# Memoised item classifications, rebuilt on demand; holds text from real invoices
+invoice_processing/data/item_code_cache.json
