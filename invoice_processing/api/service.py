@@ -31,6 +31,7 @@ import csv
 import io
 import json
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
@@ -51,8 +52,8 @@ from .auth import Principal, current_principal, require_role
 app = FastAPI(title="Invoice Review Workbench", version="0.1.0")
 
 
-@app.on_event("startup")
-def _preflight() -> None:
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
     """Refuse to serve a deployed environment that is misconfigured.
 
     The alternative is a process that starts happily and loses documents.
@@ -60,6 +61,10 @@ def _preflight() -> None:
     from .preflight import enforce  # noqa: PLC0415
 
     enforce()
+    yield
+
+
+app.router.lifespan_context = _lifespan
 
 
 _corrections_path = paths.DATA_DIR / "corrections.jsonl"
@@ -700,8 +705,10 @@ def export_invoice(
 
 
 from .ingest import router as ingest_router  # noqa: E402
+from .system import router as system_router  # noqa: E402
 
 app.include_router(ingest_router)
+app.include_router(system_router)
 
 
 @app.get("/", response_class=HTMLResponse)

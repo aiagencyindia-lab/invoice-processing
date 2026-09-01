@@ -324,6 +324,17 @@ class JsonDocumentRepository:
         self._write(data)
         return document_id
 
+    def list_documents(self, tenant_id: str, limit: int = 200) -> list[dict]:
+        """Every ingested document for a tenant, newest first.
+
+        The Documents view reads this to show what has been received but not
+        yet processed -- the state that was previously invisible and made an
+        upload look like it had failed.
+        """
+        docs = list(self._read().get(tenant_id, {}).values())
+        docs.sort(key=lambda d: str(d.get("created_at") or ""), reverse=True)
+        return docs[:limit]
+
     def tenant_id_for_slug(self, slug: str) -> str | None:
         """Resolve an inbound-email local part to a tenant, or refuse.
 

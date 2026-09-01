@@ -15,6 +15,7 @@ authentication admitted a second, both would have read the same invoices with no
 code change required to trigger it.
 """
 
+import json
 import shutil
 from typing import ClassVar
 
@@ -22,10 +23,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from invoice_processing import paths
-from invoice_processing.adapters import FsCaseRepository
+from invoice_processing.adapters import FsCaseRepository, JsonDocumentRepository
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
 from invoice_processing.ports import RunContext
+from invoice_processing.worker.queue import LocalQueue
 
 ACME, GLOBEX = "tenant-acme", "tenant-globex"
 
@@ -71,6 +73,18 @@ def clients(tmp_path, monkeypatch):
     )
     monkeypatch.delenv("AUTH_DISABLED", raising=False)
     monkeypatch.setattr(auth, "_verifier", FakeVerifier())
+
+    # A per-tenant document registry and queue, so the Documents and retry
+    # endpoints have somewhere real to read from. Without these they resolve to
+    # the Postgres repository against a schema-less test database.
+    monkeypatch.setattr(
+        service,
+        "_documents",
+        JsonDocumentRepository(tmp_path / "documents.json"),
+    )
+    monkeypatch.setattr(
+        service, "get_queue", lambda: LocalQueue(tmp_path / "queue")
+    )
 
     def client_for(slug, role="admin"):
         return TestClient(
@@ -165,6 +179,29 @@ class TestWritesDoNotCross:
             "/api/invoices/case_002/export", json={"target": "csv"}
         )
         assert response.status_code == 404
+
+    def test_cannot_retry_another_tenants_document(self, clients):
+        """Retry re-runs extraction and can change a decision."""
+        globex = clients("globex")
+        response = globex.post("/api/documents/some-doc-id/retry")
+        assert response.status_code in (403, 404)
+
+    def test_documents_listing_does_not_cross_tenants(self, clients):
+        globex = clients("globex")
+        assert globex.get("/api/documents").json()["total"] == 0
+
+    def test_audit_does_not_cross_tenants(self, clients):
+        """The trail names actors and invoices -- it must stay tenant-scoped."""
+        acme, globex = clients("acme"), clients("globex")
+        acme.post("/api/invoices/case_002/actions", json={"action": "approve"})
+        assert globex.get("/api/audit").json()["count"] == 0
+
+    def test_system_status_leaks_no_tenant_data(self, clients):
+        """Status is infrastructure health, not tenant data -- but it must not
+        become a side channel for volume."""
+        body = clients("globex").get("/api/system/status").json()
+        assert set(body) == {"worker", "queue", "storage"}
+        assert "invoices" not in json.dumps(body)
 
     def test_cannot_reject_another_tenants_invoice(self, clients):
         globex = clients("globex")
@@ -293,6 +330,10 @@ class TestCoverage:
         "/api/invoices/{case_id}/actions",
         "/api/invoices/{case_id}/export",
         "/api/stats",
+        "/api/documents",
+        "/api/documents/{document_id}/retry",
+        "/api/audit",
+        "/api/system/status",
     }
 
     def test_every_route_is_covered(self):

@@ -152,4 +152,5 @@ class TestDevBypassAllowList:
 class TestStartupHook:
     def test_the_app_runs_preflight_on_startup(self):
         source = (paths.AGENT_PKG_DIR / "api" / "service.py").read_text()
-        assert "preflight" in source and "startup" in source
+        assert "preflight" in source
+        assert "lifespan_context" in source, "preflight is not wired to startup"

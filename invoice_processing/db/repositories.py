@@ -219,6 +219,31 @@ class PgDocumentRepository:
             session.flush()
             return document.id
 
+    def list_documents(self, tenant_id: str, limit: int = 200) -> list[dict]:
+        """Every ingested document for a tenant, newest first."""
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(Document)
+                .where(Document.tenant_id == tenant_id)
+                .order_by(Document.created_at.desc())
+                .limit(limit)
+            ).all()
+            return [
+                {
+                    "id": d.id,
+                    "storage_key": d.storage_key,
+                    "sha256": d.sha256,
+                    "filename": d.filename,
+                    "byte_size": d.byte_size,
+                    "source": d.source,
+                    "source_ref": d.source_ref,
+                    "created_at": d.created_at.isoformat()
+                    if d.created_at
+                    else None,
+                }
+                for d in rows
+            ]
+
     def tenant_id_for_slug(self, slug: str) -> str | None:
         """Resolve an inbound-email local part to a tenant.
 

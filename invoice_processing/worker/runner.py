@@ -24,7 +24,9 @@ dead-letter behaviour is tested without running a real extraction.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -185,6 +187,52 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
 # ---------------------------------------------------------------------------
 
 
+HEARTBEAT_STALE_SECONDS = 30
+
+
+def heartbeat_path() -> Path:
+    from .. import paths  # noqa: PLC0415
+
+    return paths.DATA_DIR / "worker_heartbeat.json"
+
+
+def write_heartbeat(path: Path | None = None) -> None:
+    """Record that a worker is alive. Best-effort: never breaks the loop.
+
+    A heartbeat that could crash the worker would be worse than no heartbeat --
+    the whole point is observing the worker, not adding a way for it to die.
+    """
+    target = path or heartbeat_path()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"at": time.time(), "pid": os.getpid()}))
+        os.replace(tmp, target)
+    except OSError:
+        pass
+
+
+def read_heartbeat(path: Path | None = None) -> dict | None:
+    """The last heartbeat, or None when no worker has ever run here."""
+    target = path or heartbeat_path()
+    try:
+        record = json.loads(target.read_text())
+    except (OSError, ValueError):
+        return None
+    at = record.get("at")
+    if not isinstance(at, (int, float)):
+        return None
+    age = max(0.0, time.time() - at)
+    return {
+        "at": at,
+        "pid": record.get("pid"),
+        "age_seconds": round(age, 1),
+        # Stale rather than dead: a worker mid-extraction on a slow model can
+        # exceed the poll interval, so this is a signal to show, not a verdict.
+        "alive": age <= HEARTBEAT_STALE_SECONDS,
+    }
+
+
 class Worker:
     def __init__(
         self,
@@ -271,11 +319,18 @@ class Worker:
     def run_forever(self, poll_seconds: float = 5.0, sleep=time.sleep) -> None:
         logger.info("Worker started.")
         while True:
+            # Written every loop, before and after work, so the API can tell
+            # "no worker running" from "worker busy with a slow extraction".
+            # Without it the UI cannot explain the single most confusing thing
+            # about this system: an upload that sits queued forever because
+            # nobody started a worker looks identical to a failed upload.
+            write_heartbeat()
             try:
                 outcomes = self.run_once()
             except Exception:
                 logger.exception("Pull failed; continuing.")
                 outcomes = []
+            write_heartbeat()
             if not outcomes:
                 sleep(poll_seconds)
 

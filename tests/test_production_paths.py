@@ -21,6 +21,9 @@ import pytest
 
 from invoice_processing.connectors.xero import HttpTransport, Transport
 from invoice_processing.ports import RunContext
+from invoice_processing.shared_libraries.acting.general_invoice_agent import (
+    _money,
+)
 from invoice_processing.worker import runner
 from invoice_processing.worker.queue import (
     LocalQueue,
@@ -373,9 +376,6 @@ class TestMissingAmountsDoNotCrash:
         blank: one is a wrong number someone pays against, the other is a
         visible gap.
         """
-        from invoice_processing.shared_libraries.acting.general_invoice_agent import (
-            _money,
-        )
 
         assert _money(value) == ""
 
@@ -390,17 +390,11 @@ class TestMissingAmountsDoNotCrash:
     )
     def test_real_amounts_still_format(self, value, expected):
         """A genuine zero must still render as 0.00 -- it is a read value."""
-        from invoice_processing.shared_libraries.acting.general_invoice_agent import (
-            _money,
-        )
 
         assert _money(value) == expected
 
     def test_booleans_are_not_treated_as_numbers(self):
         """bool is a subclass of int; True would otherwise render as 1.00."""
-        from invoice_processing.shared_libraries.acting.general_invoice_agent import (
-            _money,
-        )
 
         assert _money(True) == ""
 
