@@ -298,6 +298,22 @@ class ExportRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+# The worker's step counter is stored with the case's artifacts because that
+# store is the only thing the API container and the worker container both
+# reach. It is not a stage artifact, and every reader has to strip it: a case
+# that has done nothing but report a step is a document being worked on, not
+# an invoice, and listing it as one put a blank row in the workbench -- no
+# vendor, no fields, and "no validation records".
+PROGRESS_KEY = "progress"
+
+
+def read_case(cases, ctx) -> tuple[dict, dict | None]:
+    """A case's artifacts as readers understand them, plus its step counter."""
+    artifacts = dict(cases.get_artifacts(ctx) or {})
+    progress = artifacts.pop(PROGRESS_KEY, None)
+    return artifacts, progress if isinstance(progress, dict) else None
+
+
 def _summarize(case_id: str, artifacts: dict) -> dict:
     invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
     evidence = invoice.get("_evidence") or {}
@@ -361,7 +377,7 @@ def list_invoices(
     """
     items = []
     for case_id in get_cases().iter_case_ids(principal.tenant_id):
-        artifacts = get_cases().get_artifacts(principal.context(case_id))
+        artifacts, _ = read_case(get_cases(), principal.context(case_id))
         if artifacts:
             items.append(_summarize(case_id, artifacts))
 
@@ -386,7 +402,7 @@ def list_invoices(
 def get_invoice(
     case_id: str, principal: Annotated[Principal, Depends(current_principal)]
 ) -> dict:
-    artifacts = get_cases().get_artifacts(principal.context(case_id))
+    artifacts, _ = read_case(get_cases(), principal.context(case_id))
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
 

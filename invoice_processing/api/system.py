@@ -207,18 +207,12 @@ def document_stage(
     document_id = document.get("id", "")
     sha = document.get("sha256", "")
 
-    artifacts = (
-        _safe(
-            lambda: cases.get_artifacts(_ctx_for(tenant_id, document_id)),
-            default={},
-        )
-        or {}
+    from . import service  # noqa: PLC0415
+
+    artifacts, progress = _safe(
+        lambda: service.read_case(cases, _ctx_for(tenant_id, document_id)),
+        default=({}, None),
     )
-    # The worker's step counter, not a stage artifact. Popping it keeps a
-    # document that has only started from reading as fully processed.
-    progress = artifacts.pop("progress", None)
-    if not isinstance(progress, dict):
-        progress = None
 
     claim = _claim_state(tenant_id, document_id)
     if claim == "running":

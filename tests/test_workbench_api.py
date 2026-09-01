@@ -113,6 +113,23 @@ class TestQueue:
         routings = [i["routing"] for i in invoices]
         assert routings == sorted(routings, key=lambda r: r != "REVIEW")
 
+    def test_a_document_still_being_extracted_is_not_an_invoice(self, client):
+        """The worker records its step through the same store the artifacts
+        use. Counting that record as an artifact listed a case with no vendor,
+        no fields and no validation records -- a blank row in the workbench for
+        a document that was still being read."""
+        service.get_cases().put_artifact(
+            RunContext(tenant_id=TENANT, case_id="still-extracting"),
+            "progress",
+            {"step": 2, "total": 9, "key": "extraction", "label": "x"},
+        )
+
+        listed = {
+            i["case_id"] for i in client.get("/api/invoices").json()["invoices"]
+        }
+        assert "still-extracting" not in listed
+        assert client.get("/api/invoices/still-extracting").status_code == 404
+
     def test_counts_are_consistent(self, client):
         body = client.get("/api/invoices").json()
         counts = body["counts"]

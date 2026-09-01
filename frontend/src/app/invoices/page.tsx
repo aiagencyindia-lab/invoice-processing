@@ -8,6 +8,7 @@ import {
   can,
   objectUrl,
   type Correction,
+  type DocumentList,
   type Finding,
   type InvoiceDetail,
   type InvoiceField,
@@ -20,6 +21,10 @@ import { usePoll } from "@/lib/hooks";
  *  up, but slowly: this screen is where someone is typing, and a fast poll
  *  that re-renders under their hands is worse than a stale row. */
 const QUEUE_POLL_MS = 15000;
+
+/** In-flight documents refresh quickly: this is the bar someone watches after
+ *  uploading, and it is a listing, not the form they are typing into. */
+const INFLIGHT_POLL_MS = 2000;
 
 function money(value: number | null, currency: string | null): string {
   if (value === null || value === undefined) return "";
@@ -270,6 +275,17 @@ function InvoicesWorkbench() {
 
   const counts = list?.counts;
 
+  // What the worker is doing right now. An invoice does not exist until its
+  // extraction finishes, so without this the screen is silent for the minute
+  // that takes -- which reads as an upload that went nowhere.
+  const { data: docs } = usePoll<DocumentList>(
+    "/api/documents",
+    INFLIGHT_POLL_MS,
+  );
+  const inFlight = (docs?.documents ?? []).filter(
+    (d) => d.stage === "processing",
+  );
+
   return (
     <div className="stack" style={{ gap: 14 }}>
       <div className="row-between">
@@ -296,6 +312,24 @@ function InvoicesWorkbench() {
           </label>
         </div>
       </div>
+
+      {inFlight.length > 0 ? (
+        <div className="panel" style={{ padding: "12px 16px" }} role="status">
+          {inFlight.map((document) => (
+            <div key={document.document_id} className="stack" style={{ gap: 4 }}>
+              <strong>{document.filename ?? document.document_id}</strong>
+              {document.progress ? (
+                <progress
+                  value={document.progress.step}
+                  max={document.progress.total}
+                  style={{ width: 200 }}
+                />
+              ) : null}
+              <span className="muted">{document.explanation}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {queue.length === 0 ? (
         <div className="empty-state">
