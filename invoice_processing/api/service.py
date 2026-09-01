@@ -33,7 +33,6 @@ import json
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -804,7 +803,43 @@ app.include_router(admin_router)
 
 
 @app.get("/", response_class=HTMLResponse)
-def workbench() -> str:
-    return (Path(__file__).parent / "workbench.html").read_text(
-        encoding="utf-8"
-    )
+def index() -> str:
+    """Point a browser at the application.
+
+    This used to serve the single-file workbench. That page could reach four
+    endpoints out of twenty-five, so everything else the platform does --
+    processing status, dead letters, settings, purchase orders, provisioning --
+    was reachable only from a terminal. The Next.js app in `frontend/` replaces
+    it and is the UI now; this service is the API behind it.
+
+    A link rather than a redirect: the API is a legitimate destination in its
+    own right, and bouncing an operator who typed the API's own host to a
+    frontend that may not be running would be worse than telling them where it
+    is.
+    """
+    app_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Invoice processing API</title>
+<style>
+  body {{ font: 15px/1.6 system-ui, sans-serif; color: #1a1a1a;
+         background: #ececea; margin: 0;
+         display: flex; align-items: center; justify-content: center;
+         min-height: 100vh; }}
+  main {{ background: #fff; border: 1px solid #e2e2df; border-radius: 10px;
+          padding: 32px 36px; max-width: 460px; }}
+  h1 {{ font-size: 18px; margin: 0 0 10px; }}
+  p {{ color: #6b6b67; margin: 0 0 14px; }}
+  a.button {{ display: inline-block; background: #1a1a1a; color: #fff;
+              padding: 10px 18px; border-radius: 6px; text-decoration: none;
+              font-weight: 600; font-size: 14px; }}
+  code {{ background: #f7f7f5; padding: 2px 6px; border-radius: 4px;
+          font-size: 13px; }}
+</style></head>
+<body><main>
+  <h1>Invoice processing API</h1>
+  <p>This is the API. The application is served separately.</p>
+  <p><a class="button" href="{app_url}">Open the application</a></p>
+  <p>Not running? Start it with <code>cd frontend &amp;&amp; npm run dev</code>.
+     API reference at <a href="/docs">/docs</a>.</p>
+</main></body></html>"""

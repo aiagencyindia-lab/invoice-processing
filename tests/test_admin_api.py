@@ -329,3 +329,36 @@ class TestClaimsWriterResolution:
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
         monkeypatch.setattr(service, "_claims_writer", None)
         assert isinstance(service.get_claims_writer(), DryRunClaims)
+
+
+class TestNoDatabaseConfigured:
+    """The state a fresh local install is actually in.
+
+    With neither DATABASE_URL nor CLOUD_SQL_INSTANCE set the app falls back to
+    in-memory SQLite, which has no schema. These endpoints raised a bare 500,
+    so the admin screen said "Internal Server Error" and gave no hint that the
+    cause was configuration rather than a fault.
+    """
+
+    @pytest.fixture
+    def client(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
+        monkeypatch.delenv("AUTH_DISABLED", raising=False)
+        monkeypatch.setattr(auth, "_verifier", FakeVerifier())
+        monkeypatch.setattr(
+            service, "_audit", JsonlAuditSink(tmp_path / "audit.jsonl")
+        )
+        return TestClient(app, headers={"Authorization": "Bearer admin@t-1"})
+
+    def test_reading_the_tenant_explains_itself(self, client):
+        response = client.get("/api/admin/tenants")
+        assert response.status_code == 503
+        assert "No database is configured" in response.json()["detail"]
+
+    def test_listing_users_explains_itself(self, client):
+        response = client.get("/api/admin/users")
+        assert response.status_code == 503
+        assert "DATABASE_URL" in response.json()["detail"], (
+            "the message must name the setting that fixes it"
+        )

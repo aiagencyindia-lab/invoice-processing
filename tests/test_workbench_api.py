@@ -323,70 +323,18 @@ class TestStats:
             )
 
 
-class TestUI:
-    def test_workbench_is_served(self, client):
-        response = client.get("/")
-        assert response.status_code == 200
-        assert "Invoice Review" in response.text
+class TestRoot:
+    """`/` used to serve the single-file workbench. It points at the app now.
 
-    def test_ui_is_keyboard_driven(self, client):
-        """Throughput target is ~45s per exception; that needs keys, not clicks."""
-        html = client.get("/").text
-        for key in ("approve", "reject", "save"):
-            assert key in html
-        assert "keydown" in html
-
-
-class TestUIReachesTheWholeFlow:
-    """The end-to-end flow must be reachable by a reviewer, not just by curl.
-
-    Upload and export endpoints existed and were tested for a full phase while
-    the UI had no control for either, so the flow the product is sold on --
-    upload, review, correct, approve, export -- could not be completed by a
-    person. Endpoint tests cannot catch that; only asking what the page can
-    reach can.
+    The claims the old page made are still tested, against the source of the
+    app that replaced it -- see tests/test_frontend_reaches_the_flow.py.
     """
 
-    def _html(self, client):
-        return client.get("/").text
+    def test_points_at_the_application(self, client):
+        response = client.get("/")
+        assert response.status_code == 200
+        assert "Open the application" in response.text
 
-    def test_every_step_of_the_flow_has_a_control(self, client):
-        """A reachable endpoint is not a usable one.
-
-        Checking only that the URL appears in the page would pass with the
-        buttons deleted, since the fetch calls would still mention it. Each
-        step needs something a person can actually click or press.
-        """
-        html = self._html(client)
-        for step, control in (
-            ("upload", 'onchange="upload()"'),
-            ("correct", 'onclick="save()"'),
-            ("approve", "onclick=\"act('approve')\""),
-            ("reject", "onclick=\"act('reject')\""),
-            ("export", 'onclick="exportCsv()"'),
-        ):
-            assert control in html, f"no control for the {step} step"
-
-    def test_upload_accepts_only_pdfs(self, client):
-        """The server checks magic bytes; the picker should not offer the rest."""
-        assert 'accept="application/pdf"' in self._html(client)
-
-    def test_the_new_actions_have_keyboard_shortcuts(self, client):
-        """Throughput is the point; a mouse-only control is a slow control."""
-        html = self._html(client)
-        assert 'k === "e"' in html, "no shortcut for export"
-        assert 'k === "u"' in html, "no shortcut for upload"
-
-    def test_an_unapproved_export_is_explained_not_just_failed(self, client):
-        """A reviewer needs to know approving is the next step, not that it broke."""
-        html = self._html(client)
-        assert "Approve the invoice before exporting" in html
-        assert "409" in html
-
-    def test_upload_does_not_claim_the_invoice_is_processed(self, client):
-        """It is stored and queued; extraction happens later in the worker."""
-        html = self._html(client)
-        assert "queued for processing" in html
-        assert "duplicate" in html, (
-            "a re-sent document must be reported as such"
-        )
+    def test_says_how_to_start_the_app_when_it_is_not_running(self, client):
+        """A dead link is a dead end; the next step has to be on the page."""
+        assert "npm run dev" in client.get("/").text

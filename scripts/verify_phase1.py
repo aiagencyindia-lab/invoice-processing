@@ -385,12 +385,15 @@ def the_workbench_serves_a_review_ui():
     paths_ = {getattr(r, "path", "") for r in app.routes}
     for required in ("/", "/api/invoices", "/api/invoices/{case_id}/fields"):
         assert required in paths_, required
-    html = source("invoice_processing/api/workbench.html")
-    assert "keydown" in html, "the UI is not keyboard-driven"
-    missing = [w for w in ("upload", "export") if w not in html.lower()]
+    # The single-file workbench was replaced by the Next.js app in frontend/.
+    # The check follows it: what matters is that a reviewer can reach the whole
+    # flow, not which file the markup lives in.
+    workbench = source("frontend/src/app/invoices/page.tsx")
+    assert "keydown" in workbench, "the UI is not keyboard-driven"
+    missing = [w for w in ("upload", "export") if w not in workbench.lower()]
     if missing:
         return f"present, but no UI control for: {', '.join(missing)}"
-    return "queue, detail, corrections, actions"
+    return "queue, detail, corrections, actions (frontend/)"
 
 
 # -- 1.9 audit --------------------------------------------------------------

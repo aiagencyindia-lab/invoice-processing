@@ -186,3 +186,44 @@ export type InvoiceDetail = InvoiceSummary & {
   findings: Finding[];
   corrections: Correction[];
 };
+
+export type PurchaseOrder = {
+  po_number: string | null;
+  vendor_name: string | null;
+  total_amount: number | null;
+  amount_invoiced: number | null;
+  remaining: number;
+  currency: string | null;
+  status: string | null;
+  open: boolean;
+};
+
+export type PurchaseOrderList = {
+  purchase_orders: PurchaseOrder[];
+  count: number;
+  source: string;
+};
+
+export type Tenant = {
+  id: string;
+  slug: string;
+  name: string;
+  region?: string | null;
+  inbox: string | null;
+  purchase_order_file: string;
+};
+
+export type TenantResponse = {
+  tenant: Tenant;
+  can_create_tenants: boolean;
+};
+
+export type User = {
+  email: string;
+  role: string;
+  uid?: string | null;
+  display_name?: string | null;
+  claims_written?: boolean;
+};
+
+export type UserList = { users: User[]; count: number; roles: string[] };

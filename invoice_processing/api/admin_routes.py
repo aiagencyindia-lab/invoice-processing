@@ -22,6 +22,7 @@ customer's admin has no business reading it.
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -83,8 +84,33 @@ def _provisioning_error() -> type[Exception]:
     return ProvisioningError
 
 
+@contextmanager
+def _database_required():
+    """Turn "no such table" into an answer an administrator can act on.
+
+    Every endpoint here reads the tenants and users tables. With no database
+    configured the app falls back to in-memory SQLite, which has no schema, so
+    these raised a bare 500 -- the admin screen showed "Internal Server Error"
+    and gave no hint that the cause was configuration rather than a fault.
+    """
+    from sqlalchemy.exc import OperationalError  # noqa: PLC0415
+
+    try:
+        yield
+    except OperationalError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No database is configured on this deployment, so tenants and "
+                "users cannot be managed here. Set DATABASE_URL or "
+                "CLOUD_SQL_INSTANCE and run the Alembic migrations."
+            ),
+        ) from exc
+
+
 def _own_tenant(principal: Principal) -> dict:
-    tenant = _provisioner().tenant_by_id(principal.tenant_id)
+    with _database_required():
+        tenant = _provisioner().tenant_by_id(principal.tenant_id)
     if tenant is None:
         raise HTTPException(
             status_code=404,
@@ -165,7 +191,8 @@ def list_users(
     Filtered on the tenant id from the token, so there is no slug or id a
     caller could supply to enumerate someone else's people.
     """
-    users = _provisioner().list_users(principal.tenant_id)
+    with _database_required():
+        users = _provisioner().list_users(principal.tenant_id)
     return {
         "users": users,
         "count": len(users),
