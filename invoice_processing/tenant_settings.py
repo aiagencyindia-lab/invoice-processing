@@ -30,6 +30,7 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     "organization_names": list,
     "duplicate_check_enabled": bool,
     "require_purchase_order": bool,
+    "require_work_authorization": bool,
     "po_tolerance_pct": (int, float),
     "po_tolerance_abs": (int, float),
 }
@@ -44,6 +45,11 @@ DESCRIPTIONS: dict[str, str] = {
     "duplicate_check_enabled": (
         "Refuse an invoice that matches one already received. A duplicate "
         "invoice is a duplicate payment."
+    ),
+    "require_work_authorization": (
+        "Reject invoices for work that has no authorisation form. Turn on if "
+        "your suppliers bill labour against approved work orders; the check "
+        "skips work types that never need one."
     ),
     "require_purchase_order": (
         "Reject invoices that quote no purchase order. Leave off to check only "

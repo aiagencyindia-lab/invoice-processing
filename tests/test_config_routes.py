@@ -414,3 +414,47 @@ class TestConnectorStatus:
         """It needs no credential, so it is the answer when Xero is not set up."""
         body = env["client"]().get("/api/settings").json()
         assert body["integrations"]["csv"]["configured"] is True
+
+
+class TestWorkAuthorizationIsSettable:
+    """Whether work needs an authorisation form is a policy, not a constant.
+
+    It gates Step 1.4, so a customer whose suppliers bill labour against
+    approved work orders had no way to switch the check on without an
+    engineer editing config -- while the neighbouring require_purchase_order,
+    which is the same kind of decision, was settable all along.
+    """
+
+    def test_it_is_in_the_allow_list_with_a_description(self):
+        assert "require_work_authorization" in tenant_settings.SETTABLE
+        assert tenant_settings.SETTABLE["require_work_authorization"] is bool
+        # The UI renders the description beside the control, so a setting
+        # without one is a switch with no explanation of what it does.
+        assert tenant_settings.DESCRIPTIONS["require_work_authorization"]
+
+    def test_it_round_trips(self, env):
+        client = env["client"]("admin")
+        response = client.put(
+            "/api/settings",
+            json={"settings": {"require_work_authorization": True}},
+        )
+        assert response.status_code == 200
+        assert response.json()["settings"]["require_work_authorization"] is True
+        body = client.get("/api/settings").json()
+        assert body["settings"]["require_work_authorization"] is True
+
+    def test_it_reaches_the_engine(self, env):
+        """The setting is only worth anything if the pipeline reads it."""
+        env["client"]("admin").put(
+            "/api/settings",
+            json={"settings": {"require_work_authorization": True}},
+        )
+        config = tenant_settings.apply_to_pipeline(TENANT, env["store"])
+        assert config["require_work_authorization"] is True
+
+    def test_a_non_boolean_is_refused(self, env):
+        response = env["client"]("admin").put(
+            "/api/settings",
+            json={"settings": {"require_work_authorization": "yes please"}},
+        )
+        assert response.status_code == 400
