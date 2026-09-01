@@ -224,8 +224,12 @@ test("the sign-in page is a real route", async ({ page }) => {
   await page.goto("/login");
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   // Reachable without a session -- the shell must not redirect away from the
-  // page that exists to end the lack of one.
-  await expect(page.getByText(/How access works/)).toBeVisible();
+  // page that exists to end the lack of one. Asserted by the link's target
+  // rather than its wording, which is presentation and will change.
+  await expect(page.getByRole("link", { name: /request access/i })).toHaveAttribute(
+    "href",
+    "/signup",
+  );
 });
 
 test("sign up explains that access is granted, not self-served", async ({
@@ -233,5 +237,9 @@ test("sign up explains that access is granted, not self-served", async ({
 }) => {
   await page.goto("/signup");
   await expect(page.getByRole("heading", { name: "Request access" })).toBeVisible();
-  await expect(page.getByText(/administrator adds it to an organisation/)).toBeVisible();
+  await expect(page.getByText(/grants nothing on its own/)).toBeVisible();
+  await expect(page.getByRole("link", { name: /sign in/i })).toHaveAttribute(
+    "href",
+    "/login",
+  );
 });

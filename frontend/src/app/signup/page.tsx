@@ -1,25 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { signOut, watchUser, type SignedInUser } from "@/lib/auth";
+import { AuthCard } from "@/components/AuthCard";
 import { SignIn } from "@/components/SignIn";
+import { signOut, watchUser, type SignedInUser } from "@/lib/auth";
 
-/** What "sign up" means here.
+/** Sign-up creates nothing.
  *
- *  Access is granted per organisation by an administrator -- a Google account
- *  on its own sees nothing. So this page does not create anything. It explains
- *  that, gets the visitor an account if they lack one, and then shows the two
- *  values an administrator needs to grant them access.
- *
- *  The alternative, letting a signup create its own organisation, is a
- *  deliberate no: it would let anyone with a Google address mint tenants,
- *  inbound-mail addresses and storage prefixes inside the system, which is the
- *  reason ALLOW_TENANT_PROVISIONING is off by default.
+ *  Access is granted per organisation by an administrator, so a sign-up that
+ *  provisioned its own tenant would let anyone with a Google address mint
+ *  organisations, inbound-mail addresses and storage prefixes inside the
+ *  system -- which is what ALLOW_TENANT_PROVISIONING being off by default
+ *  exists to prevent. The page gets the visitor an account, then shows the two
+ *  values an administrator needs to grant it access.
  */
 export default function SignUpPage() {
   const [user, setUser] = useState<SignedInUser | null>(null);
   const [known, setKnown] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,72 +38,75 @@ export default function SignUpPage() {
 
   if (!known) {
     return (
-      <main style={{ padding: "4rem 2rem" }}>
-        <p className="muted">Loading…</p>
-      </main>
+      <AuthCard heading="Request access" blurb="Checking your account…">
+        <span className="muted" style={{ fontSize: 13 }}>
+          One moment.
+        </span>
+      </AuthCard>
     );
   }
 
-  // Nobody signed in yet: they need an account before an administrator has
-  // anything to grant access to.
   if (!user) {
     return (
-      <SignIn
-        onSignedIn={() => {}}
+      <AuthCard
         heading="Request access"
-        blurb="Sign in with the Google account you want to use. That creates your account but grants nothing on its own — an administrator adds it to an organisation."
-        footer={<Link href="/login">Back to sign in</Link>}
-      />
+        blurb="Sign in first — that creates your account but grants nothing on its own."
+        footer={{ text: "Already have access?", href: "/login", label: "Sign in" }}
+      >
+        <SignIn onSignedIn={() => {}} />
+      </AuthCard>
     );
   }
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
-      }}
+    <AuthCard
+      heading="Almost there"
+      blurb="Your account exists but is not attached to an organisation yet."
+      footer={{ text: "Been added since?", href: "/login", label: "Sign in" }}
     >
-      <div className="panel stack" style={{ maxWidth: 520, gap: 14 }}>
-        <div className="eyebrow">Invoice processing</div>
-        <h1 style={{ fontSize: 20 }}>Your account is registered</h1>
-        <p className="muted" style={{ fontSize: 13, lineHeight: 1.6 }}>
-          It is not attached to an organisation yet, so there is nothing to show
-          you. Send an administrator the two values below and ask them to add
-          you — they can do it from Admin → People.
-        </p>
+      <div className="stack" style={{ gap: 14, textAlign: "left" }}>
+        <div className="muted" style={{ fontSize: 13, lineHeight: 1.55 }}>
+          Send these to an administrator. They add you from Admin → People.
+        </div>
 
         <dl
           style={{
             display: "grid",
             gridTemplateColumns: "auto 1fr",
-            gap: "8px 14px",
-            fontSize: 13,
+            gap: "6px 12px",
+            fontSize: 12.5,
             alignItems: "baseline",
+            margin: 0,
           }}
         >
           <dt className="muted">Email</dt>
-          <dd style={{ font: "12.5px var(--font-mono)" }}>
+          <dd style={{ font: "12px var(--font-mono)", margin: 0 }}>
             {user.email ?? "—"}
           </dd>
           <dt className="muted">Account id</dt>
-          <dd style={{ font: "12.5px var(--font-mono)", wordBreak: "break-all" }}>
+          <dd
+            style={{
+              font: "12px var(--font-mono)",
+              margin: 0,
+              wordBreak: "break-all",
+            }}
+          >
             {user.uid}
           </dd>
         </dl>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button
             type="button"
             className="btn-secondary"
-            onClick={() =>
-              navigator.clipboard?.writeText(`${user.email} ${user.uid}`)
-            }
+            onClick={() => {
+              navigator.clipboard
+                ?.writeText(`${user.email} ${user.uid}`)
+                .then(() => setCopied(true))
+                .catch(() => setCopied(false));
+            }}
           >
-            Copy both
+            {copied ? "Copied" : "Copy both"}
           </button>
           <button
             type="button"
@@ -114,11 +115,8 @@ export default function SignUpPage() {
           >
             Sign out
           </button>
-          <Link href="/login" className="btn-chip" style={{ alignSelf: "center" }}>
-            Try signing in
-          </Link>
         </div>
       </div>
-    </main>
+    </AuthCard>
   );
 }
