@@ -151,14 +151,9 @@ jobs:
         run: npx playwright install --with-deps chromium
         working-directory: frontend
 
-      - name: Build the app
-        run: npm run build
-        working-directory: frontend
-        env:
-          # Rewrites are baked at build time, so this must match the port the
-          # Playwright config starts the API on.
-          API_ORIGIN: http://127.0.0.1:8100
-
+      # No separate build step: `npm run test:e2e` has a pretest that builds
+      # with the API origin the Playwright config starts the API on. Building
+      # here as well would only create a way for the two to disagree.
       - name: End-to-end smoke
         run: npm run test:e2e
         working-directory: frontend

@@ -68,19 +68,59 @@ function explain(code: string): string | null {
 
 export class SignInError extends Error {}
 
+function codeOf(caught: unknown): string {
+  return typeof caught === "object" && caught !== null && "code" in caught
+    ? String((caught as { code: unknown }).code)
+    : "";
+}
+
+function asSignInError(caught: unknown): SignInError {
+  return new SignInError(
+    explain(codeOf(caught)) ??
+      (caught instanceof Error ? caught.message : String(caught)),
+  );
+}
+
+/** Codes that mean "the popup never opened", as opposed to "the user changed
+ *  their mind". Only these are worth retrying by another route. */
+const POPUP_UNAVAILABLE = new Set([
+  "auth/popup-blocked",
+  "auth/cancelled-popup-request",
+  "auth/operation-not-supported-in-this-environment",
+  "auth/web-storage-unsupported",
+]);
+
 export async function signInWithGoogle(): Promise<void> {
   const { mod, auth } = await client();
+  const provider = new mod.GoogleAuthProvider();
   try {
-    await mod.signInWithPopup(auth, new mod.GoogleAuthProvider());
+    await mod.signInWithPopup(auth, provider);
   } catch (caught) {
-    const code =
-      typeof caught === "object" && caught !== null && "code" in caught
-        ? String((caught as { code: unknown }).code)
-        : "";
-    throw new SignInError(
-      explain(code) ??
-        (caught instanceof Error ? caught.message : String(caught)),
-    );
+    if (!POPUP_UNAVAILABLE.has(codeOf(caught))) throw asSignInError(caught);
+    // The popup could not open -- an extension, a mobile browser, a corporate
+    // policy. Redirecting navigates in this same tab, which nothing blocks.
+    // It is the fallback rather than the default because it round-trips
+    // through the Firebase auth domain, and a browser partitioning
+    // third-party storage can drop the result on the way back.
+    await mod.signInWithRedirect(auth, provider);
+  }
+}
+
+/** Report a redirect sign-in that came back and failed.
+ *
+ *  A redirect result arrives on page load, not from the click, so an error
+ *  raised during it has nobody waiting to catch it. Without this the user
+ *  returns to an unchanged sign-in screen with no explanation of what
+ *  happened -- which looks exactly like a button that does nothing.
+ */
+export async function redirectSignInError(): Promise<string | null> {
+  if (!firebaseConfigured()) return null;
+  try {
+    const { mod, auth } = await client();
+    await mod.getRedirectResult(auth);
+    return null;
+  } catch (caught) {
+    return asSignInError(caught).message;
   }
 }
 

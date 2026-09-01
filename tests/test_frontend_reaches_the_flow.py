@@ -186,6 +186,35 @@ class TestSignIn:
         assert "caught.status === 401" in shell
         assert "/api/me" in shell
 
+    def test_a_blocked_popup_falls_back_to_a_redirect(self):
+        """A popup is the nicest sign-in and the easiest one to block.
+
+        Extensions, mobile browsers and corporate policy all stop it, and the
+        user is left pressing a button that appears to do nothing.
+        """
+        auth = (FRONTEND / "lib" / "auth.ts").read_text(encoding="utf-8")
+        assert "signInWithRedirect" in auth
+        assert "auth/popup-blocked" in auth
+
+    def test_a_cancelled_popup_does_not_redirect(self):
+        """Closing the window is a decision, not a failure. Retrying by
+        another route would drag the user through a sign-in they declined."""
+        auth = (FRONTEND / "lib" / "auth.ts").read_text(encoding="utf-8")
+        assert (
+            "auth/popup-closed-by-user"
+            not in auth.split("POPUP_UNAVAILABLE")[1].split(")")[0]
+        )
+
+    def test_a_failed_redirect_reports_itself(self):
+        """The result arrives as a page load, so nobody is waiting to catch
+        the error; uncollected it looks like a button that does nothing."""
+        auth = (FRONTEND / "lib" / "auth.ts").read_text(encoding="utf-8")
+        assert "getRedirectResult" in auth
+        signin = (FRONTEND / "components" / "SignIn.tsx").read_text(
+            encoding="utf-8"
+        )
+        assert "redirectSignInError" in signin
+
     def test_signing_out_is_possible(self):
         assert "signOut" in self.shell()
 

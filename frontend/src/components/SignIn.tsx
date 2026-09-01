@@ -1,7 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import { firebaseConfigured, signInWithGoogle } from "@/lib/auth";
+import { useEffect, useState } from "react";
+import {
+  firebaseConfigured,
+  redirectSignInError,
+  signInWithGoogle,
+} from "@/lib/auth";
 
 /** The screen shown when the API refuses an unauthenticated request.
  *
@@ -16,10 +20,24 @@ export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
 
   const configured = firebaseConfigured();
 
+  // A redirect that failed comes back as a fresh page load, so the error has
+  // to be collected here rather than at the click that started it.
+  useEffect(() => {
+    let cancelled = false;
+    redirectSignInError().then((message) => {
+      if (!cancelled && message) setProblem(message);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function go() {
     setBusy(true);
     setProblem(null);
     try {
+      // Returns after a popup sign-in; navigates away when it fell back to a
+      // redirect, in which case nothing below this line runs.
       await signInWithGoogle();
       onSignedIn();
     } catch (caught) {
