@@ -172,13 +172,33 @@ def extract_page_text(pdf_path: Path) -> list[str]:
         return []
 
 
+# A page printed from a browser carries a header and footer -- a timestamp, the
+# source URL, "1/1" -- even when the page itself is a single image. That is
+# text, so "does this PDF have any text?" answers yes and every field is then
+# reported as *not found in the document*, which reads as an accusation that
+# the extractor invented them. The truth is that nothing could be checked.
+#
+# A real invoice's text layer is never this thin: vendor, number, date, a line
+# or two, and three totals already run past thirty words. Below that the
+# document is treated as an image, which caps every field at review rather
+# than claiming a verdict the page cannot support.
+MIN_TEXT_LAYER_WORDS = 30
+
+
+def has_readable_text(pages: list[str]) -> bool:
+    """Whether there is enough text on the page to check a value against."""
+    return (
+        sum(len(page.split()) for page in pages or []) >= MIN_TEXT_LAYER_WORDS
+    )
+
+
 def locate(value: Any, pages: list[str]) -> tuple[bool | None, int | None]:
     """Find a value in the document text.
 
     Returns (grounded, page_number). `grounded` is None when there is no text
     layer to search -- a scanned image is not evidence that the value is wrong.
     """
-    if not pages or not any(p.strip() for p in pages):
+    if not has_readable_text(pages):
         return None, None
 
     options = [_normalize_page(c) for c in _candidates(value)]
@@ -315,7 +335,7 @@ def build_evidence(invoice: dict, pdf_path: Path | None) -> dict[str, dict]:
         ).to_dict()
 
     evidence["_summary"] = {
-        "has_text_layer": bool(pages and any(p.strip() for p in pages)),
+        "has_text_layer": has_readable_text(pages),
         "arithmetic": checks,
         "min_confidence": min(
             (

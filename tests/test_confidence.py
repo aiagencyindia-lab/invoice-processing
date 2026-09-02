@@ -16,6 +16,7 @@ and free.
 """
 
 import json
+from typing import ClassVar
 
 import pytest
 from golden import GOLDEN_CASES
@@ -102,7 +103,22 @@ class TestDetectsBadExtraction:
         ]
 
 
-PAGES = ["Invoice Total: $1,069.32 dated 11/02/2026 ABN 51 824 753 556"]
+# A page, not a fragment: grounding only runs where there is enough text to
+# check a value against, so a one-line fixture would be testing the wrong path.
+PAGES = [
+    "QuickFix HVAC Repairs Pty Ltd\n"
+    "12 Boundary Road, Richmond VIC 3121\n"
+    "ABN 51 824 753 556\n"
+    "TAX INVOICE\n"
+    "Invoice Number: INV-00005\n"
+    "Invoice Total: $1,069.32 dated 11/02/2026\n"
+    "Description Qty Unit Price Amount\n"
+    "Technician labour 3.00 110.00 330.00\n"
+    "Air filter replacement 2.00 45.00 90.00\n"
+    "Subtotal 972.11 GST 97.21 Total 1,069.32\n"
+    "Account Name: QuickFix HVAC\n"
+    "BSB 062-000 Account 12345678"
+]
 
 
 class TestNormalization:
@@ -247,7 +263,7 @@ class TestTheFraudRelevantFieldsAreChecked:
             assert field in confidence.GROUNDED_FIELDS, field
 
     def test_an_account_number_absent_from_the_page_is_flagged(self):
-        page = ["Vendor Pty Ltd\nBSB 062-000\nAccount 12345678"]
+        page = PAGES
         grounded, _ = confidence.locate("87654321", page)
         assert grounded is False
         grounded, _ = confidence.locate("12345678", page)
@@ -298,3 +314,46 @@ class TestTaxBreakdownIsReconciled:
             )
         )
         assert "tax_breakdown_sums_to_tax" not in checks
+
+
+class TestAPageThatIsReallyAnImage:
+    """Found in production: an invoice saved from a browser as a PDF.
+
+    The page was one image. Its only text was what the browser printed around
+    it -- a timestamp, the source URL, "1/1" -- so "does this PDF have text?"
+    answered yes, and all ten extracted fields were reported as *not found in
+    the document*. That reads as an accusation that the extractor invented
+    them, when in fact nothing could be checked at all.
+    """
+
+    BROWSER_PRINT: ClassVar[list[str]] = [
+        "02/09/2026, 15:05 1000_Invoice_Generator_Template_b16c74bbb6.webp "
+        "(1000x1418)\n"
+        "https://assets.refrens.com/1000_Invoice_Generator_Template.webp 1/1"
+    ]
+
+    def test_a_print_header_is_not_a_text_layer(self):
+        assert confidence.has_readable_text(self.BROWSER_PRINT) is False
+
+    def test_a_real_page_is(self):
+        assert confidence.has_readable_text(PAGES) is True
+
+    def test_fields_read_as_unknown_not_as_missing(self):
+        """`None` means "could not check"; `False` means "checked, not there".
+        Only one of those is true here, and they lead a reviewer to different
+        conclusions."""
+        grounded, page = confidence.locate("Foobar Labs", self.BROWSER_PRINT)
+
+        assert grounded is None
+        assert page is None
+
+    def test_the_summary_says_there_is_no_text_layer(self, tmp_path):
+        evidence = confidence.build_evidence(
+            {"invoice_number": "003", "vendor_name": "Foobar Labs"}, None
+        )
+        assert evidence["_summary"]["has_text_layer"] is False
+
+    def test_such_a_document_still_routes_to_review(self):
+        """Unknown is not permission to auto-approve."""
+        assert confidence.score(None, True) < confidence.HIGH
+        assert confidence.score(None, None) < confidence.HIGH
