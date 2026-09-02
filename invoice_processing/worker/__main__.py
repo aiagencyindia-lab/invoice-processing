@@ -45,6 +45,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(queue.dead_letters(), indent=2))
         return 0
 
+    # The worker can be the first process up after a deploy, and it writes to
+    # every table the API reads. The advisory lock inside means whichever of
+    # them gets there first migrates and the rest wait.
+    if service._database_configured():
+        from ..db.migrate import upgrade_to_head  # noqa: PLC0415
+
+        upgrade_to_head()
+
     worker = Worker(
         queue=queue,
         claims=ClaimStore(paths.DATA_DIR / "claims"),

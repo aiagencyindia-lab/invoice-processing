@@ -84,13 +84,22 @@ async def _identify_request(request, call_next):
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    """Refuse to serve a deployed environment that is misconfigured.
+    """Refuse to serve a deployed environment that is misconfigured, and bring
+    the schema up to date before serving.
 
-    The alternative is a process that starts happily and loses documents.
+    The alternative to the first is a process that starts happily and loses
+    documents. The alternative to the second was somebody remembering to run
+    Alembic by hand -- which is how production came to be one migration ahead
+    of nothing at all, with no check that the tables it queries exist.
     """
     from .preflight import enforce  # noqa: PLC0415
 
     enforce()
+
+    if _database_configured():
+        from ..db.migrate import upgrade_to_head  # noqa: PLC0415
+
+        upgrade_to_head()
     yield
 
 

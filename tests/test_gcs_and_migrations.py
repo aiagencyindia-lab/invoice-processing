@@ -21,7 +21,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from sqlalchemy import inspect
 
+from invoice_processing.db import migrate, session
+from invoice_processing.db.models import TENANT_TABLES
 from invoice_processing.gcs import GcsBlobStore, for_tenant
 from invoice_processing.ports import BlobStore
 
@@ -279,3 +282,56 @@ class TestMigration:
         ini = (REPO / "alembic.ini").read_text()
         assert "sqlalchemy.url =" not in ini
         assert "password" not in ini.lower()
+
+
+class TestMigrationsRunAtStartup:
+    """Nothing applied them. The image starts uvicorn, the entrypoint only
+    writes a credential file, and neither process ran Alembic -- so the
+    production schema exists because somebody ran it by hand once, and the
+    next migration would not have applied itself.
+    """
+
+    def test_an_empty_database_is_brought_to_head(self, tmp_path, monkeypatch):
+        url = f"sqlite:///{tmp_path / 'fresh.db'}"
+        monkeypatch.setenv("DATABASE_URL", url)
+        monkeypatch.setattr(session, "_engine", None)
+
+        assert migrate.current_revision() is None
+
+        revision = migrate.upgrade_to_head()
+
+        assert revision is not None
+        assert migrate.current_revision() == revision
+
+    def test_running_it_twice_changes_nothing(self, tmp_path, monkeypatch):
+        """Every replica runs this on deploy."""
+        url = f"sqlite:///{tmp_path / 'twice.db'}"
+        monkeypatch.setenv("DATABASE_URL", url)
+        monkeypatch.setattr(session, "_engine", None)
+
+        first = migrate.upgrade_to_head()
+        second = migrate.upgrade_to_head()
+
+        assert first == second
+
+    def test_it_can_be_turned_off(self, tmp_path, monkeypatch):
+        """For a deployment that applies migrations in a release step."""
+        url = f"sqlite:///{tmp_path / 'off.db'}"
+        monkeypatch.setenv("DATABASE_URL", url)
+        monkeypatch.setenv("RUN_MIGRATIONS", "0")
+        monkeypatch.setattr(session, "_engine", None)
+
+        assert migrate.upgrade_to_head() is None
+        assert migrate.current_revision() is None
+
+    def test_the_tables_the_app_queries_exist_afterwards(
+        self, tmp_path, monkeypatch
+    ):
+        url = f"sqlite:///{tmp_path / 'tables.db'}"
+        monkeypatch.setenv("DATABASE_URL", url)
+        monkeypatch.setattr(session, "_engine", None)
+
+        migrate.upgrade_to_head()
+
+        present = set(inspect(session.get_engine()).get_table_names())
+        assert set(TENANT_TABLES) <= present

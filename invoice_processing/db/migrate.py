@@ -1,0 +1,104 @@
+"""Bring the database up to date at startup.
+
+Nothing did. The image starts uvicorn directly, the entrypoint only
+materialises a credential, and neither the API nor the worker ran Alembic --
+so production is on `b1f3c7a90e42` because somebody ran it by hand once. The
+next migration would not have applied itself, and a fresh environment starts
+happily and fails on the first query.
+
+Two properties make running it automatically safe enough to prefer over
+remembering:
+
+* **It is a no-op when there is nothing to do.** Alembic compares the version
+  table and returns immediately.
+* **Only one process migrates at a time.** Every replica of the API and the
+  worker starts at once on a deploy; a Postgres advisory lock means the others
+  wait and then find the work already done, rather than racing each other
+  through the same DDL.
+
+Set `RUN_MIGRATIONS=0` to turn it off -- for a deployment where migrations are
+applied by a separate release step, which is the better arrangement once there
+is a release process to hang it on.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+
+from sqlalchemy import text
+
+from .session import get_engine, is_postgres
+
+logger = logging.getLogger(__name__)
+
+# One arbitrary, stable number. Any process taking this lock is trying to
+# migrate this database, which is exactly who should wait for whom.
+_MIGRATION_LOCK_ID = 8_274_411_903
+
+
+def enabled() -> bool:
+    return os.getenv("RUN_MIGRATIONS", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+
+
+def upgrade_to_head() -> str | None:
+    """Apply outstanding migrations. Returns the revision now in place.
+
+    Raises on failure: a process serving traffic against a schema it could not
+    migrate is the failure this exists to prevent, and starting anyway would
+    turn a clear startup error into a stream of 500s.
+    """
+    if not enabled():
+        logger.info("RUN_MIGRATIONS is off; leaving the schema alone.")
+        return None
+
+    from alembic import command  # noqa: PLC0415
+    from alembic.config import Config  # noqa: PLC0415
+
+    from .. import paths  # noqa: PLC0415
+
+    engine = get_engine()
+    # Built without the ini file on purpose. `env.py` calls `fileConfig()`
+    # whenever Alembic was given one, which reconfigures the root logger and
+    # silences every logger the host process had already set up -- including
+    # the startup checks that run beside this. The only setting we need from
+    # the ini is the script location, and that is passed directly.
+    config = Config()
+    config.set_main_option(
+        "script_location",
+        str(paths.AGENT_ROOT / "invoice_processing" / "db" / "migrations"),
+    )
+
+    if not is_postgres(engine):
+        # SQLite has no advisory locks, and nothing shares it anyway.
+        command.upgrade(config, "head")
+        return current_revision()
+
+    with engine.connect() as connection:
+        connection.execute(
+            text("select pg_advisory_lock(:key)"), {"key": _MIGRATION_LOCK_ID}
+        )
+        connection.commit()
+        try:
+            command.upgrade(config, "head")
+        finally:
+            connection.execute(
+                text("select pg_advisory_unlock(:key)"),
+                {"key": _MIGRATION_LOCK_ID},
+            )
+            connection.commit()
+
+    revision = current_revision()
+    logger.info("Database schema is at %s", revision)
+    return revision
+
+
+def current_revision() -> str | None:
+    from alembic.migration import MigrationContext  # noqa: PLC0415
+
+    with get_engine().connect() as connection:
+        return MigrationContext.configure(connection).get_current_revision()
