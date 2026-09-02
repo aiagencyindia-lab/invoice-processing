@@ -15,11 +15,20 @@ import hashlib
 import json
 import uuid
 from collections.abc import Iterator
+from datetime import datetime, timezone
+from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.orm import aliased
 
 from ..ports import RuleBaseConflict, RunContext
+from ..sheet_columns import (
+    BY_KEY,
+    FLAG_STEPS,
+    WORKFLOW_PATHS,
+    is_sortable,
+)
 from .models import (
     AuditEvent,
     Correction,
@@ -30,6 +39,7 @@ from .models import (
     InvoiceLine,
     PipelineRun,
     Rule,
+    SheetView,
     Tenant,
     User,
 )
@@ -599,3 +609,473 @@ def record_pipeline_run(ctx: RunContext, **fields) -> None:
     """Persist reproducibility metadata for one run."""
     with tenant_session(ctx.tenant_id) as session:
         session.add(PipelineRun(tenant_id=ctx.tenant_id, **fields))
+
+
+# ---------------------------------------------------------------------------
+# Approved-invoice sheet
+# ---------------------------------------------------------------------------
+
+
+def _workflow_value(key: str):
+    """A workflow key as a SQL expression.
+
+    Approval is written by the existing flow into the case's workflow artifact,
+    which lives inside `invoices.fields`. Reading it through SQLAlchemy's JSON
+    path keeps one query portable: it compiles to `->>` on Postgres, where an
+    expression index covers it, and to `json_extract` on SQLite, where the test
+    suite runs. Nothing needed to be written differently for this to work.
+    """
+    return Invoice.fields["workflow"][key].as_string()
+
+
+class SheetRepository:
+    """Queries over approved invoices: filter, sort, paginate, aggregate.
+
+    The only reader of invoices by anything other than case id. Everything it
+    returns was produced by the pipeline or by a person approving an invoice;
+    this class writes nothing.
+    """
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    # -- filters ----------------------------------------------------------
+
+    def _base(self, tenant_id: str, filters: dict):
+
+        conditions = [Invoice.tenant_id == tenant_id]
+
+        status = (filters.get("status") or "approved").lower()
+        decision = _workflow_value("decision")
+        if status == "approved":
+            conditions.append(decision == "approve")
+        elif status == "rejected":
+            conditions.append(decision == "reject")
+        elif status == "pending":
+            # Processed by the pipeline, awaiting a person.
+            conditions.append(decision.is_(None))
+        # "all" adds nothing.
+
+        if value := filters.get("q"):
+            like = f"%{value.lower()}%"
+            conditions.append(
+                or_(
+                    func.lower(Invoice.vendor_name).like(like),
+                    func.lower(Invoice.invoice_number).like(like),
+                    func.lower(Invoice.po_number).like(like),
+                    func.lower(Invoice.vendor_tax_id).like(like),
+                    func.lower(_workflow_value("external_id")).like(like),
+                )
+            )
+        if value := filters.get("vendor"):
+            conditions.append(Invoice.vendor_name == value)
+        if value := filters.get("currency"):
+            conditions.append(Invoice.currency == value)
+        # `invoice_date` is a String(32) holding ISO dates, so a lexical
+        # comparison is a chronological one. Named as a ceiling, not assumed.
+        if value := filters.get("date_from"):
+            conditions.append(Invoice.invoice_date >= value)
+        if value := filters.get("date_to"):
+            conditions.append(Invoice.invoice_date <= value)
+        if value := filters.get("approved_from"):
+            conditions.append(_workflow_value("decided_at") >= value)
+        if value := filters.get("approved_to"):
+            conditions.append(_workflow_value("decided_at") <= value)
+        if (value := filters.get("min_total")) is not None:
+            conditions.append(Invoice.total_inc_tax >= value)
+        if (value := filters.get("max_total")) is not None:
+            conditions.append(Invoice.total_inc_tax <= value)
+
+        for field, column in (
+            ("po", Invoice.po_number),
+            ("tax", Invoice.tax_amount),
+        ):
+            value = filters.get(field)
+            if value == "missing":
+                conditions.append(column.is_(None))
+            elif value == "present":
+                conditions.append(column.is_not(None))
+            elif value:
+                conditions.append(column == value)
+
+        for flag in filters.get("quality") or []:
+            condition = self._flag_condition(flag, tenant_id, filters)
+            if condition is not None:
+                conditions.append(condition)
+
+        return select(Invoice).where(and_(*conditions))
+
+    def _flag_condition(self, flag: str, tenant_id: str, filters: dict):
+        """The predicate behind one quality flag, or None if unknown."""
+
+        if flag in FLAG_STEPS:
+            return exists(
+                select(Finding.id).where(
+                    Finding.tenant_id == tenant_id,
+                    Finding.invoice_id == Invoice.id,
+                    Finding.step == FLAG_STEPS[flag],
+                    Finding.passed.is_(False),
+                )
+            )
+        if flag == "duplicate_number":
+            other = aliased(Invoice)
+            return exists(
+                select(other.id).where(
+                    other.tenant_id == tenant_id,
+                    other.id != Invoice.id,
+                    other.invoice_number == Invoice.invoice_number,
+                    other.vendor_tax_id == Invoice.vendor_tax_id,
+                    Invoice.invoice_number.is_not(None),
+                )
+            )
+        if flag == "edited":
+            return exists(
+                select(Correction.id).where(
+                    Correction.tenant_id == tenant_id,
+                    Correction.invoice_id == Invoice.id,
+                )
+            )
+        if flag == "high_value":
+            threshold = filters.get("high_value_threshold") or 0
+            if not threshold:
+                # No threshold configured: the flag matches nothing rather
+                # than everything, which is the safe way to be wrong.
+                return Invoice.id.is_(None)
+            return Invoice.total_inc_tax >= threshold
+        if flag == "low_confidence":
+            return and_(
+                Invoice.min_confidence.is_not(None), Invoice.min_confidence < 1
+            )
+        if flag == "no_text_layer":
+            return (
+                Invoice.fields["extraction"]["invoice"]["_evidence"][
+                    "_summary"
+                ]["has_text_layer"].as_string()
+                == "false"
+            )
+        missing = {
+            "missing_po": Invoice.po_number,
+            "missing_tax": Invoice.tax_amount,
+            "missing_tax_id": Invoice.vendor_tax_id,
+            "missing_due_date": Invoice.due_date,
+        }
+        if flag in missing:
+            return missing[flag].is_(None)
+        return None
+
+    # -- reads ------------------------------------------------------------
+
+    def page(
+        self, tenant_id: str, filters: dict, sort: str, order: str, limit: int
+    ) -> tuple[list[dict], int]:
+        """One page of rows, plus the total the filters match.
+
+        Offset paging rather than keyset: the grid needs a row count and page
+        numbers, the corpus is thousands rather than millions, and a cursor
+        that cannot jump to page nine would be a worse grid for a saving no
+        one can measure yet.
+        """
+
+        statement = self._base(tenant_id, filters)
+        offset = max(0, int(filters.get("offset") or 0))
+
+        if not is_sortable(sort):
+            sort = "approved_at"
+        column = BY_KEY[sort]
+        if column.source == "workflow":
+            expression = _workflow_value(WORKFLOW_PATHS[sort])
+        else:
+            expression = getattr(Invoice, sort)
+        direction = expression.desc() if order == "desc" else expression.asc()
+
+        with tenant_session(tenant_id, self.url) as session:
+            total = session.scalar(
+                select(func.count()).select_from(statement.subquery())
+            )
+            rows = session.scalars(
+                statement.order_by(direction, Invoice.id)
+                .limit(limit)
+                .offset(offset)
+            ).all()
+            return [
+                self._row(session, tenant_id, row, filters) for row in rows
+            ], (total or 0)
+
+    def _row(self, session, tenant_id: str, invoice, filters: dict) -> dict:
+
+        workflow = (invoice.fields or {}).get("workflow") or {}
+        row: dict = {}
+        for key, column in BY_KEY.items():
+            if column.source == "column":
+                value = getattr(invoice, key, None)
+                row[key] = float(value) if isinstance(value, Decimal) else value
+            elif column.source == "workflow":
+                row[key] = workflow.get(WORKFLOW_PATHS[key])
+
+        row["corrected_fields"] = (
+            session.scalar(
+                select(func.count(Correction.id)).where(
+                    Correction.tenant_id == tenant_id,
+                    Correction.invoice_id == invoice.id,
+                )
+            )
+            or 0
+        )
+        row["quality_flags"] = self._flags_for(
+            session, tenant_id, invoice, row, filters
+        )
+        return row
+
+    def _flags_for(
+        self, session, tenant_id: str, invoice, row: dict, filters: dict
+    ) -> list[str]:
+        """Which quality flags this row carries.
+
+        Computed per row from data already loaded plus one findings read, so a
+        page costs a fixed number of queries rather than one per flag.
+        """
+
+        failed = set(
+            session.scalars(
+                select(Finding.step).where(
+                    Finding.tenant_id == tenant_id,
+                    Finding.invoice_id == invoice.id,
+                    Finding.passed.is_(False),
+                )
+            ).all()
+        )
+        flags = [flag for flag, step in FLAG_STEPS.items() if step in failed]
+
+        if invoice.po_number is None:
+            flags.append("missing_po")
+        if invoice.tax_amount is None:
+            flags.append("missing_tax")
+        if invoice.vendor_tax_id is None:
+            flags.append("missing_tax_id")
+        if invoice.due_date is None:
+            flags.append("missing_due_date")
+        if (
+            invoice.min_confidence is not None
+            and float(invoice.min_confidence) < 1
+        ):
+            flags.append("low_confidence")
+
+        summary = (
+            ((invoice.fields or {}).get("extraction") or {}).get("invoice")
+            or {}
+        ).get("_evidence") or {}
+        if (summary.get("_summary") or {}).get("has_text_layer") is False:
+            flags.append("no_text_layer")
+
+        threshold = filters.get("high_value_threshold") or 0
+        if threshold and invoice.total_inc_tax is not None:
+            if float(invoice.total_inc_tax) >= float(threshold):
+                flags.append("high_value")
+
+        if row.get("corrected_fields"):
+            flags.append("edited")
+
+        if invoice.invoice_number and self._has_duplicate(
+            session, tenant_id, invoice
+        ):
+            flags.append("duplicate_number")
+
+        return sorted(flags)
+
+    @staticmethod
+    def _has_duplicate(session, tenant_id: str, invoice) -> bool:
+
+        return bool(
+            session.scalar(
+                select(Invoice.id)
+                .where(
+                    Invoice.tenant_id == tenant_id,
+                    Invoice.id != invoice.id,
+                    Invoice.invoice_number == invoice.invoice_number,
+                    Invoice.vendor_tax_id == invoice.vendor_tax_id,
+                )
+                .limit(1)
+            )
+        )
+
+    def ids(self, tenant_id: str, filters: dict) -> list[str]:
+        """Every case id the filters match, for an export."""
+        with tenant_session(tenant_id, self.url) as session:
+            return [
+                row.case_id
+                for row in session.scalars(
+                    self._base(tenant_id, filters).order_by(Invoice.id)
+                ).all()
+            ]
+
+    def rows_for(
+        self, tenant_id: str, filters: dict, limit: int, offset: int
+    ) -> list[dict]:
+        """A slice for the export writer to stream."""
+        page_filters = dict(filters, offset=offset)
+        rows, _ = self.page(
+            tenant_id, page_filters, "approved_at", "desc", limit
+        )
+        return rows
+
+    def summary(self, tenant_id: str, filters: dict) -> dict:
+        """The tiles above the sheet, from the same filters as the grid."""
+
+        statement = self._base(tenant_id, filters).subquery()
+        today = datetime.now(timezone.utc).date().isoformat()
+        month = today[:7]
+        decided_at = statement.c.fields["workflow"]["decided_at"].as_string()
+
+        with tenant_session(tenant_id, self.url) as session:
+            total = session.scalar(select(func.count()).select_from(statement))
+            by_currency = [
+                {
+                    "currency": currency or "—",
+                    "count": count,
+                    "total": float(amount or 0),
+                    "tax": float(tax or 0),
+                }
+                for currency, count, amount, tax in session.execute(
+                    select(
+                        statement.c.currency,
+                        func.count(),
+                        func.sum(statement.c.total_inc_tax),
+                        func.sum(statement.c.tax_amount),
+                    ).group_by(statement.c.currency)
+                )
+            ]
+            vendors = session.scalar(
+                select(func.count(func.distinct(statement.c.vendor_name)))
+            )
+            approved_today = session.scalar(
+                select(func.count())
+                .select_from(statement)
+                .where(decided_at.like(f"{today}%"))
+            )
+            approved_month = session.scalar(
+                select(func.count())
+                .select_from(statement)
+                .where(decided_at.like(f"{month}%"))
+            )
+
+        return {
+            "total": total or 0,
+            "by_currency": sorted(by_currency, key=lambda c: c["currency"]),
+            "vendors": vendors or 0,
+            "approved_today": approved_today or 0,
+            "approved_this_month": approved_month or 0,
+        }
+
+    def facets(self, tenant_id: str, filters: dict) -> dict:
+        """Distinct vendors and currencies, for the filter dropdowns."""
+
+        statement = self._base(
+            tenant_id, dict(filters, vendor=None, currency=None)
+        )
+        subquery = statement.subquery()
+        with tenant_session(tenant_id, self.url) as session:
+            vendors = session.scalars(
+                select(func.distinct(subquery.c.vendor_name))
+                .where(subquery.c.vendor_name.is_not(None))
+                .order_by(subquery.c.vendor_name)
+                .limit(500)
+            ).all()
+            currencies = session.scalars(
+                select(func.distinct(subquery.c.currency))
+                .where(subquery.c.currency.is_not(None))
+                .order_by(subquery.c.currency)
+                .limit(50)
+            ).all()
+        return {"vendors": list(vendors), "currencies": list(currencies)}
+
+
+class PgSheetViews:
+    """Saved filter/column sets for the sheet, per user.
+
+    Private by default: two reviewers want different lenses on the same queue,
+    and a view everyone sees is one person's preference imposed on the tenant.
+    `shared` is the deliberate opt-in.
+    """
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    @staticmethod
+    def _to_dict(view: SheetView) -> dict:
+        return {
+            "id": view.id,
+            "name": view.name,
+            "owner": view.owner,
+            "shared": bool(view.shared),
+            "definition": dict(view.definition or {}),
+            "created_at": view.created_at.isoformat()
+            if view.created_at
+            else None,
+            "updated_at": view.updated_at.isoformat()
+            if view.updated_at
+            else None,
+        }
+
+    def list(self, tenant_id: str, owner: str) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(SheetView)
+                .where(
+                    SheetView.tenant_id == tenant_id,
+                    or_(SheetView.owner == owner, SheetView.shared.is_(True)),
+                )
+                .order_by(SheetView.name)
+            ).all()
+            return [self._to_dict(row) for row in rows]
+
+    def get(self, tenant_id: str, view_id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            view = session.scalar(
+                select(SheetView).where(
+                    SheetView.tenant_id == tenant_id, SheetView.id == view_id
+                )
+            )
+            return self._to_dict(view) if view else None
+
+    def create(
+        self,
+        tenant_id: str,
+        *,
+        name: str,
+        owner: str,
+        shared: bool,
+        definition: dict,
+    ) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            view = SheetView(
+                tenant_id=tenant_id,
+                name=name,
+                owner=owner,
+                shared=shared,
+                definition=definition,
+            )
+            session.add(view)
+            session.flush()
+            return self._to_dict(view)
+
+    def update(self, tenant_id: str, view_id: str, **changes) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            view = session.scalar(
+                select(SheetView).where(
+                    SheetView.tenant_id == tenant_id, SheetView.id == view_id
+                )
+            )
+            for field, value in changes.items():
+                setattr(view, field, value)
+            session.flush()
+            return self._to_dict(view)
+
+    def delete(self, tenant_id: str, view_id: str) -> None:
+        with tenant_session(tenant_id, self.url) as session:
+            view = session.scalar(
+                select(SheetView).where(
+                    SheetView.tenant_id == tenant_id, SheetView.id == view_id
+                )
+            )
+            if view is not None:
+                session.delete(view)

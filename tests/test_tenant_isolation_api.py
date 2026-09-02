@@ -38,8 +38,12 @@ from invoice_processing.api import (
     system,
 )
 from invoice_processing.api.service import app
-from invoice_processing.db.models import Base
-from invoice_processing.db.session import get_engine
+from invoice_processing.db.models import Base, Invoice, Tenant
+from invoice_processing.db.session import (
+    create_all,
+    get_engine,
+)
+from invoice_processing.db.session import tenant_session as db_session
 from invoice_processing.ports import RunContext
 from invoice_processing.tenant_settings import JsonTenantSettings
 from invoice_processing.worker.queue import LocalQueue
@@ -404,6 +408,135 @@ class TestRepositoryBinding:
 # ---------------------------------------------------------------------------
 
 
+class TestSheetIsolation:
+    """The sheet is the one surface that queries invoices by content.
+
+    Every other endpoint reads one case by id, where a wrong tenant means a
+    404. This one answers "show me everything matching", so a missing filter
+    returns another customer's ledger rather than nothing -- which is why
+    these probes use a real database instead of the filesystem fixture the
+    rest of the file shares.
+    """
+
+    @pytest.fixture
+    def sheet_clients(self, tmp_path, monkeypatch):
+        url = f"sqlite:///{tmp_path / 'sheet.db'}"
+        monkeypatch.setenv("DATABASE_URL", url)
+        monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
+        engine = get_engine(url)
+        Base.metadata.drop_all(engine)
+        create_all(url)
+
+        approved = {
+            "workflow": {
+                "decision": "approve",
+                "decided_by": "someone@example.test",
+                "decided_at": "2026-08-01T10:00:00+00:00",
+            }
+        }
+        for tenant_id, slug, vendor in (
+            (ACME, "acme", "Acme Supplier"),
+            (GLOBEX, "globex", "Globex Supplier"),
+        ):
+            with db_session(tenant_id, url) as session:
+                session.add(Tenant(id=tenant_id, slug=slug, name=slug))
+                session.add(
+                    Invoice(
+                        tenant_id=tenant_id,
+                        case_id=f"{slug}-case",
+                        vendor_name=vendor,
+                        invoice_number=f"{slug}-1",
+                        currency="AUD",
+                        total_inc_tax=100,
+                        fields=approved,
+                    )
+                )
+
+        monkeypatch.delenv("AUTH_DISABLED", raising=False)
+        monkeypatch.setattr(auth, "_verifier", FakeVerifier())
+
+        def client_for(slug, role="admin"):
+            return TestClient(
+                app, headers={"Authorization": f"Bearer {slug}-{role}"}
+            )
+
+        return client_for
+
+    def test_the_sheet_shows_only_this_tenants_invoices(self, sheet_clients):
+        acme = sheet_clients("acme").get("/api/sheet/invoices").json()
+        globex = sheet_clients("globex").get("/api/sheet/invoices").json()
+
+        assert [row["vendor_name"] for row in acme["rows"]] == ["Acme Supplier"]
+        assert [row["vendor_name"] for row in globex["rows"]] == [
+            "Globex Supplier"
+        ]
+
+    def test_a_search_cannot_reach_another_tenant(self, sheet_clients):
+        """The dangerous shape: a filter that matches their data, not ours."""
+        body = (
+            sheet_clients("globex")
+            .get("/api/sheet/invoices", params={"q": "Acme"})
+            .json()
+        )
+        assert body["rows"] == []
+        assert body["total"] == 0
+
+    def test_the_summary_counts_only_this_tenant(self, sheet_clients):
+        body = sheet_clients("globex").get("/api/sheet/summary").json()
+        assert body["total"] == 1
+        assert body["vendors"] == 1
+
+    def test_facets_do_not_name_another_tenants_vendors(self, sheet_clients):
+        body = sheet_clients("globex").get("/api/sheet/facets").json()
+        assert body["vendors"] == ["Globex Supplier"]
+
+    def test_a_saved_view_is_invisible_to_another_tenant(self, sheet_clients):
+        created = sheet_clients("acme").post(
+            "/api/sheet/views",
+            json={"name": "Acme view", "definition": {}},
+        )
+        assert created.status_code == 200, created.text
+
+        assert (
+            sheet_clients("globex").get("/api/sheet/views").json()["views"]
+            == []
+        )
+
+    def test_another_tenant_cannot_read_a_view_by_id(self, sheet_clients):
+        view = (
+            sheet_clients("acme")
+            .post(
+                "/api/sheet/views", json={"name": "Acme view", "definition": {}}
+            )
+            .json()
+        )
+
+        response = sheet_clients("globex").patch(
+            f"/api/sheet/views/{view['id']}", json={"name": "stolen"}
+        )
+        assert response.status_code == 404
+
+    def test_another_tenant_cannot_delete_a_view(self, sheet_clients):
+        view = (
+            sheet_clients("acme")
+            .post(
+                "/api/sheet/views", json={"name": "Acme view", "definition": {}}
+            )
+            .json()
+        )
+
+        assert (
+            sheet_clients("globex")
+            .delete(f"/api/sheet/views/{view['id']}")
+            .status_code
+            == 404
+        )
+        assert (
+            len(sheet_clients("acme").get("/api/sheet/views").json()["views"])
+            == 1
+        )
+
+
 class TestCoverage:
     # Routes that legitimately serve no tenant data, with the reason each is
     # exempt. Anything not listed must be probed above.
@@ -436,6 +569,11 @@ class TestCoverage:
         "/api/admin/tenants",
         "/api/admin/users",
         "/api/admin/users/claims",
+        "/api/sheet/invoices",
+        "/api/sheet/summary",
+        "/api/sheet/facets",
+        "/api/sheet/views",
+        "/api/sheet/views/{view_id}",
     }
 
     def test_every_route_is_covered(self):

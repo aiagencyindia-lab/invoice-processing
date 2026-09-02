@@ -401,6 +401,65 @@ class WorkerHeartbeat(Base):
     pid: Mapped[int | None] = mapped_column(Integer)
 
 
+class SheetView(Base, TenantMixin, TimestampMixin):
+    """A saved set of filters, sort and columns for the approved-invoice sheet.
+
+    Per user, not per tenant: two people reviewing the same queue want
+    different lenses on it, and a shared-by-default view is one person's
+    preference imposed on everyone. `shared` opts a view into being visible to
+    the whole tenant, which is a deliberate act and needs approver rank.
+
+    The definition is a JSON blob rather than columns because it is UI state --
+    which filters, which columns, how wide. Giving it a schema here would mean
+    a migration every time the grid gains a control.
+    """
+
+    __tablename__ = "sheet_views"
+    __table_args__ = (
+        Index("ix_sheet_views_tenant_owner", "tenant_id", "owner"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # The email of whoever created it, matching how the audit trail and the
+    # corrections store name an actor.
+    owner: Mapped[str] = mapped_column(String(320), nullable=False)
+    shared: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    definition: Mapped[dict] = mapped_column(JSONType, default=dict)
+
+
+class ExportJob(Base, TenantMixin, TimestampMixin):
+    """One request to write approved invoices out as a file.
+
+    A row rather than a background task alone, because the user has to be able
+    to come back to it: an export of ten thousand invoices outlives the request
+    that asked for it, and "where did my download go" must have an answer.
+    """
+
+    __tablename__ = "export_jobs"
+    __table_args__ = (
+        Index("ix_export_jobs_tenant_time", "tenant_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    requested_by: Mapped[str | None] = mapped_column(String(320))
+    fmt: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )  # csv|xlsx|json
+    # The filters, columns and row selection the export was asked for, kept so
+    # a finished file can say what it contains.
+    spec: Mapped[dict] = mapped_column(JSONType, default=dict)
+    status: Mapped[str] = mapped_column(
+        String(16), default="queued", nullable=False
+    )  # queued|running|done|failed
+    row_count: Mapped[int | None] = mapped_column(Integer)
+    storage_key: Mapped[str | None] = mapped_column(String(1024))
+    error: Mapped[str | None] = mapped_column(Text)
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+
 TENANT_TABLES = (
     "users",
     "document_claims",
@@ -412,4 +471,6 @@ TENANT_TABLES = (
     "rules",
     "corrections",
     "audit_events",
+    "sheet_views",
+    "export_jobs",
 )
