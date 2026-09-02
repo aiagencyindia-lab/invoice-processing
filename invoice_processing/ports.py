@@ -117,6 +117,15 @@ class CaseRepository(Protocol):
     ) -> dict[str, dict[str, dict]]:
         """Batch read for impact assessment -- one query, not N."""
 
+    def project_case(self, ctx: RunContext, artifacts: dict) -> None:
+        """Mirror a finished case into whatever queryable form the store has.
+
+        The artifacts are the record; this is the view of them that answers
+        questions like "which invoices await review" without loading every
+        case. A store whose artifacts are already queryable implements it as
+        a no-op.
+        """
+
 
 @runtime_checkable
 class RuleRepository(Protocol):

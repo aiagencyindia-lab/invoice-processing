@@ -195,6 +195,7 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
             filename: key for key, filename in _artifact_map().items()
         }
         stored = 0
+        artifacts: dict[str, dict] = {}
         for path in sorted(output.glob("*.json")):
             import json  # noqa: PLC0415
 
@@ -203,10 +204,23 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
             except (OSError, json.JSONDecodeError):
                 continue
             # An unmapped file keeps its stem, so nothing is dropped.
-            cases.put_artifact(
-                ctx, by_filename.get(path.name, path.stem), payload
-            )
+            key = by_filename.get(path.name, path.stem)
+            cases.put_artifact(ctx, key, payload)
+            artifacts[key] = payload
             stored += 1
+
+        # Then the queryable view of them. Deliberately after: the artifacts
+        # are the record, and a projection that failed must not cost a run
+        # that succeeded -- it can be rebuilt from what is already stored.
+        try:
+            cases.project_case(ctx, artifacts)
+        except Exception as exc:
+            logger.warning(
+                "Case %s stored but not projected into the relational "
+                "tables: %s",
+                case_id,
+                exc,
+            )
 
         return {
             "case_id": case_id,

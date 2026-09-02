@@ -1,0 +1,205 @@
+"""Reads a finished case's artifacts into the shapes the database stores.
+
+The pipeline's output is ten JSON artifacts. The relational model exists so a
+decision can be *queried* -- "which invoices from this vendor are awaiting
+review", "which step rejected this one", "what did that run cost" -- and none
+of those questions can be asked of a JSON blob without loading every case.
+
+This module is the one place that knows how to read an artifact set. Both the
+API and the repository go through it, so a change to the pipeline's output
+shape breaks one file rather than drifting silently between two readers.
+
+Nothing here touches a database or raises on a malformed case: a projection is
+a convenience over the artifacts, and the artifacts remain the record.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
+
+# Money and confidence are Numeric columns. Floats are converted through their
+# string form -- Decimal(0.1) is 0.1000000000000000055511151231257827, and a
+# total that arrives a fraction of a cent off reconciles against nothing.
+def _decimal(value: Any) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _text(value: Any, limit: int) -> str | None:
+    """Trim to the column width rather than letting the insert fail.
+
+    A vendor address longer than the column is a reason to store a shortened
+    address, not a reason to lose the whole projection of the case.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:limit]
+
+
+def extraction(artifacts: dict) -> dict:
+    return (artifacts.get("extraction") or {}).get("invoice") or {}
+
+
+def invoice_columns(artifacts: dict) -> dict:
+    """The typed columns of one invoice row.
+
+    Every one of these was NULL in production: the artifacts were written to
+    the `fields` JSON and nothing else, so `ix_invoices_dupe` indexed nothing
+    but nulls and the review queue had to be sorted in Python after loading
+    every case in the tenant.
+    """
+    invoice = extraction(artifacts)
+    evidence = (invoice.get("_evidence") or {}).get("_summary") or {}
+    decision = artifacts.get("decision") or {}
+    postprocessing = (artifacts.get("postprocessing") or {}).get(
+        "Invoice Processing"
+    ) or {}
+
+    verdict = decision.get("final_decision") or postprocessing.get(
+        "Invoice Status"
+    )
+
+    return {
+        "invoice_number": _text(invoice.get("invoice_number"), 128),
+        "invoice_date": _text(invoice.get("invoice_date"), 32),
+        "due_date": _text(invoice.get("due_date"), 32),
+        "po_number": _text(invoice.get("po_number"), 128),
+        "payment_terms": _text(invoice.get("payment_terms"), 255),
+        "currency": _text(invoice.get("currency"), 8),
+        "vendor_name": _text(invoice.get("vendor_name"), 512),
+        "vendor_tax_id": _text(invoice.get("vendor_tax_id"), 64),
+        "vendor_address": _text(invoice.get("vendor_address"), 4000),
+        "total_ex_tax": _decimal(invoice.get("invoice_total_ex_tax")),
+        "tax_amount": _decimal(invoice.get("tax_amount")),
+        "total_inc_tax": _decimal(invoice.get("invoice_total_inc_tax")),
+        "bank_account_name": _text(invoice.get("bank_account_name"), 255),
+        "bank_account_number": _text(invoice.get("bank_account_number"), 64),
+        "bank_code": _text(invoice.get("bank_code"), 64),
+        "decision": _text(verdict, 32),
+        "decision_reason": _text(
+            decision.get("rejection_template")
+            or decision.get("rejection_reason"),
+            4000,
+        ),
+        "routing": _text(invoice.get("_routing"), 16),
+        "min_confidence": _decimal(evidence.get("min_confidence")),
+        # "processed" means the pipeline reached a decision, not that anyone
+        # approved it -- approval lives in the workflow artifact and the audit
+        # trail. Without this every row stayed "received" forever.
+        "status": "processed" if verdict else "received",
+    }
+
+
+def lines(artifacts: dict) -> list[dict]:
+    """Line items, preferring the transformer's mapping.
+
+    The transformer adds the line number and item code the extractor does not
+    produce; its amounts are strings, so everything goes through `_decimal`.
+    Falling back to the raw extraction means a case that was rejected before
+    the transformer ran still has its lines.
+    """
+    mapped = (artifacts.get("transformer") or {}).get("line_items_mapped")
+    if mapped:
+        return [
+            {
+                "line_number": item.get("line_number") or index,
+                "description": _text(item.get("description"), 8000),
+                "item_code": _text(item.get("item_code"), 64),
+                "quantity": _decimal(item.get("quantity")),
+                "unit_price": _decimal(item.get("unit_cost")),
+                "amount_ex_tax": _decimal(item.get("line_cost")),
+                "tax_amount": _decimal(item.get("tax")),
+                "tax_code": _text(item.get("tax_code"), 32),
+                "gl_account": _text(item.get("gl_account"), 64),
+            }
+            for index, item in enumerate(mapped, start=1)
+        ]
+
+    return [
+        {
+            "line_number": index,
+            "description": _text(item.get("description"), 8000),
+            "item_code": _text(item.get("item_code"), 64),
+            "quantity": _decimal(item.get("quantity")),
+            "unit_price": _decimal(item.get("unit_price")),
+            "amount_ex_tax": _decimal(item.get("amount_ex_tax")),
+            "tax_amount": _decimal(item.get("tax_amount")),
+            "tax_code": _text(item.get("tax_code"), 32),
+            "gl_account": None,
+        }
+        for index, item in enumerate(
+            extraction(artifacts).get("line_items") or [], start=1
+        )
+    ]
+
+
+def findings(artifacts: dict) -> list[dict]:
+    """Every validation step, in the order the phases ran.
+
+    This is the explainability record: the reason a decision can be defended
+    rather than asserted. Passes are included -- "which checks ran and passed"
+    is half of what an auditor asks.
+    """
+    out: list[dict] = []
+    for phase in ("phase1", "phase2", "phase3", "phase4"):
+        for validation in (artifacts.get(phase) or {}).get("validations") or []:
+            out.append(
+                {
+                    "phase": phase,
+                    "step": validation.get("step"),
+                    "rule": validation.get("rule"),
+                    "passed": validation.get("passed"),
+                    "informational": validation.get("informational", False),
+                    "implemented": validation.get("implemented", True),
+                    "evidence": validation.get("evidence"),
+                    "rejection_template": validation.get("rejection_template"),
+                }
+            )
+    return out
+
+
+def severity_of(finding: dict) -> str:
+    """How much a failed step matters.
+
+    A step that can reject carries a rejection template; one marked
+    informational never rejects however it lands. Recording that distinction
+    is what stops a reviewer treating step 4.1 like a blocking failure.
+    """
+    if finding.get("informational"):
+        return "info"
+    if finding.get("passed") is None:
+        return "skipped"
+    if finding.get("passed"):
+        return "pass"
+    return "blocking" if finding.get("rejection_template") else "advisory"
+
+
+def run(artifacts: dict) -> dict | None:
+    """What the run cost and how it was configured.
+
+    The audit-log artifact already records this; nothing was reading it. It is
+    also the only per-case measurement of LLM calls that exists, which is the
+    number the critic's cost target is supposed to be judged against.
+    """
+    audit = artifacts.get("audit_log") or {}
+    summary = audit.get("processing_summary") or {}
+    if not summary:
+        return None
+    duration = summary.get("processing_time_seconds")
+    return {
+        "pipeline_version": _text(audit.get("version"), 32),
+        "model_ids": summary.get("models") or {},
+        "llm_calls": int(summary.get("total_llm_calls") or 0),
+        "cost_usd": _decimal(summary.get("total_cost_usd")),
+        "duration_ms": int(duration * 1000) if duration else None,
+        "critic_verdict": _text(summary.get("critic_verdict"), 32),
+    }

@@ -18,7 +18,16 @@ from collections.abc import Iterator
 from sqlalchemy import select
 
 from ..ports import RuleBaseConflict, RunContext
-from .models import AuditEvent, Document, Invoice, PipelineRun, Rule, Tenant
+from .models import (
+    AuditEvent,
+    Document,
+    Finding,
+    Invoice,
+    InvoiceLine,
+    PipelineRun,
+    Rule,
+    Tenant,
+)
 from .session import tenant_session
 
 
@@ -59,6 +68,95 @@ class PgCaseRepository:
             # Reassign rather than mutate: SQLAlchemy does not track in-place
             # edits to a JSON column, so a mutation would silently not persist.
             invoice.fields = {**(invoice.fields or {}), key: payload}
+
+    def project_case(self, ctx: RunContext, artifacts: dict) -> None:
+        """Mirror a finished case into the columns and tables that answer
+        questions.
+
+        The artifacts stay the record; this is the queryable view of them.
+        Without it every typed column on `invoices` was NULL in production --
+        both documented indexes indexed nothing, the review queue had to be
+        sorted in Python after loading every case, and `invoice_lines`,
+        `findings` and `pipeline_runs` held no rows at all despite being
+        designed, migrated and deployed.
+
+        Idempotent: lines and findings are replaced, not appended, so a retry
+        of the same case does not double them. A projection failure must never
+        cost the artifacts, so the caller runs this after they are stored.
+        """
+        from .. import case_projection  # noqa: PLC0415
+
+        columns = case_projection.invoice_columns(artifacts)
+        with tenant_session(ctx.tenant_id, self.url) as session:
+            invoice = session.scalar(
+                select(Invoice).where(
+                    Invoice.tenant_id == ctx.tenant_id,
+                    Invoice.case_id == ctx.case_id,
+                )
+            )
+            if invoice is None:
+                invoice = Invoice(
+                    tenant_id=ctx.tenant_id, case_id=ctx.case_id, fields={}
+                )
+                session.add(invoice)
+                session.flush()
+
+            for column, value in columns.items():
+                setattr(invoice, column, value)
+
+            # The case id *is* the document id everywhere in this system, so
+            # the link needs no extra bookkeeping -- but it is only set when
+            # that document really exists, because a dangling foreign key
+            # fails the whole write.
+            if invoice.document_id is None:
+                document = session.scalar(
+                    select(Document).where(
+                        Document.tenant_id == ctx.tenant_id,
+                        Document.id == ctx.case_id,
+                    )
+                )
+                if document is not None:
+                    invoice.document_id = document.id
+
+            session.query(InvoiceLine).filter(
+                InvoiceLine.tenant_id == ctx.tenant_id,
+                InvoiceLine.invoice_id == invoice.id,
+            ).delete(synchronize_session=False)
+            for line in case_projection.lines(artifacts):
+                session.add(
+                    InvoiceLine(
+                        tenant_id=ctx.tenant_id, invoice_id=invoice.id, **line
+                    )
+                )
+
+            session.query(Finding).filter(
+                Finding.tenant_id == ctx.tenant_id,
+                Finding.invoice_id == invoice.id,
+            ).delete(synchronize_session=False)
+            for finding in case_projection.findings(artifacts):
+                session.add(
+                    Finding(
+                        tenant_id=ctx.tenant_id,
+                        invoice_id=invoice.id,
+                        phase=finding["phase"],
+                        step=finding["step"],
+                        rule_ref=finding["rule"],
+                        severity=case_projection.severity_of(finding),
+                        passed=finding["passed"],
+                        evidence=finding["evidence"],
+                    )
+                )
+
+            run = case_projection.run(artifacts)
+            if run is not None:
+                session.add(
+                    PipelineRun(
+                        tenant_id=ctx.tenant_id,
+                        invoice_id=invoice.id,
+                        master_data_version=None,
+                        **run,
+                    )
+                )
 
     def iter_case_ids(self, tenant_id: str) -> Iterator[str]:
         """Deterministic order -- impact assessment depends on it."""

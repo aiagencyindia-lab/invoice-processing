@@ -251,14 +251,21 @@ class TestHttpTransport:
 
 
 class RecordingCases:
-    def __init__(self):
+    def __init__(self, project_raises=False):
         self.written = {}
+        self.projected = None
+        self.project_raises = project_raises
 
     def put_artifact(self, ctx, key, payload):
         self.written[key] = payload
 
     def get_artifacts(self, ctx):
         return dict(self.written)
+
+    def project_case(self, ctx, artifacts):
+        if self.project_raises:
+            raise RuntimeError("projection failed")
+        self.projected = artifacts
 
 
 class StubBlobs:
@@ -422,6 +429,40 @@ class TestMissingAmountsDoNotCrash:
         """bool is a subclass of int; True would otherwise render as 1.00."""
 
         assert _money(True) == ""
+
+
+class TestTheCaseIsProjected:
+    """The artifacts answer "what happened"; the projection answers "which
+    invoices are waiting", which no reader can ask of a JSON blob."""
+
+    def test_the_finished_case_is_projected_once(self, pipeline, tmp_path):
+        cases = RecordingCases()
+        runner.process_document(
+            RunContext(tenant_id="t-1", case_id="case_x"),
+            {"id": "d-1", "storage_key": "k"},
+            StubBlobs(),
+            cases,
+        )
+        assert cases.projected is not None, "the case was never projected"
+        # Under the keys readers use, not the filenames.
+        assert "extraction" in cases.projected
+        assert "decision" in cases.projected
+        # The step counter is written through the same store but is not an
+        # artifact, and a projection that treated it as one would file a
+        # progress record as pipeline output.
+        assert "progress" in cases.written
+        assert "progress" not in cases.projected
+
+    def test_a_projection_failure_does_not_lose_the_run(self, pipeline):
+        """The artifacts are the record. A view over them that could fail the
+        run would be worse than no view."""
+        result = runner.process_document(
+            RunContext(tenant_id="t-1", case_id="case_x"),
+            {"id": "d-1", "storage_key": "k"},
+            StubBlobs(),
+            RecordingCases(project_raises=True),
+        )
+        assert result["decision"] == "ACCEPT"
 
 
 class TestPipelineFailuresReachTheQueue:

@@ -165,6 +165,14 @@ class FsCaseRepository:
             )
         )
 
+    def project_case(self, ctx: RunContext, artifacts: dict) -> None:
+        """Nothing to do: on a filesystem the artifacts are the query surface.
+
+        Declared rather than omitted so the port has one shape -- a caller
+        that has to ask whether the method exists is a caller that will
+        forget to.
+        """
+
     def get_many_artifacts(
         self, tenant_id: str, case_ids: list[str]
     ) -> dict[str, dict[str, dict]]:

@@ -19,7 +19,11 @@ from invoice_processing.db import session as session_module
 from invoice_processing.db.models import (
     TENANT_TABLES,
     Base,
+    Document,
+    Finding,
     Invoice,
+    InvoiceLine,
+    PipelineRun,
     Tenant,
 )
 from invoice_processing.db.repositories import (
@@ -294,3 +298,210 @@ class TestAnEmptyUrlIsNotAUrl:
     def test_a_configured_url_still_wins(self, monkeypatch):
         monkeypatch.setenv("DATABASE_URL", "sqlite:///configured.db")
         assert session_module.database_url() == "sqlite:///configured.db"
+
+
+# ---------------------------------------------------------------------------
+# Projection
+# ---------------------------------------------------------------------------
+
+
+ARTIFACTS = {
+    "extraction": {
+        "invoice": {
+            "invoice_number": "INV-00042",
+            "invoice_date": "2026-02-11",
+            "due_date": "2026-03-11",
+            "po_number": "PO-9",
+            "currency": "AUD",
+            "vendor_name": "QuickFix HVAC Repairs",
+            "vendor_tax_id": "51824753556",
+            "invoice_total_ex_tax": 1000.0,
+            "tax_amount": 100.0,
+            "invoice_total_inc_tax": 1100.0,
+            "bank_account_number": "12345678",
+            "_routing": "REVIEW",
+            "_evidence": {"_summary": {"min_confidence": 0.3}},
+            "line_items": [
+                {"description": "Labour", "amount_ex_tax": 700.0},
+                {"description": "Parts", "amount_ex_tax": 300.0},
+            ],
+        }
+    },
+    "transformer": {
+        "line_items_mapped": [
+            {
+                "line_number": 1,
+                "item_code": "LABOUR",
+                "description": "Labour",
+                "quantity": "7.00",
+                "unit_cost": "100.00",
+                "line_cost": "700.00",
+                "tax": "70.00",
+                "tax_code": "TAX",
+            },
+            {
+                "line_number": 2,
+                "item_code": "PARTS",
+                "description": "Parts",
+                "quantity": "1.00",
+                "unit_cost": "300.00",
+                "line_cost": "300.00",
+                "tax": "30.00",
+                "tax_code": "TAX",
+            },
+        ]
+    },
+    "phase1": {
+        "validations": [
+            {"step": "1.1", "rule": "Extraction succeeded", "passed": True},
+            {
+                "step": "1.3",
+                "rule": "Tax invoice",
+                "passed": False,
+                "rejection_template": "Not a tax invoice",
+            },
+        ]
+    },
+    "phase4": {
+        "validations": [
+            {
+                "step": "4.1",
+                "rule": "Total = Subtotal + Tax",
+                "passed": False,
+                "informational": True,
+            }
+        ]
+    },
+    "decision": {
+        "final_decision": "REJECT",
+        "rejection_template": "Not a tax invoice",
+    },
+    "audit_log": {
+        "version": "1.0",
+        "processing_summary": {
+            "processing_time_seconds": 56.61,
+            "total_llm_calls": 5,
+            "total_cost_usd": 0.010035,
+        },
+    },
+}
+
+
+class TestProjection:
+    """A decision nobody can query is a decision nobody can defend.
+
+    Everything the pipeline produced used to land in one JSON column: both
+    documented indexes indexed nothing but nulls, the review queue was sorted
+    in Python after loading every case, and three tables that were designed,
+    migrated and deployed held no rows at all.
+    """
+
+    def _project(self, db, case_id="case-1", artifacts=None):
+        cases = PgCaseRepository(db)
+        ctx = RunContext(tenant_id=ACME, case_id=case_id)
+        cases.project_case(
+            ctx, artifacts if artifacts is not None else ARTIFACTS
+        )
+        return cases, ctx
+
+    def test_the_typed_columns_are_written(self, db):
+        self._project(db)
+        with tenant_session(ACME, db) as session:
+            invoice = session.query(Invoice).filter_by(case_id="case-1").one()
+            assert invoice.vendor_name == "QuickFix HVAC Repairs"
+            assert invoice.invoice_number == "INV-00042"
+            assert invoice.vendor_tax_id == "51824753556"
+            assert float(invoice.total_inc_tax) == 1100.0
+            assert invoice.decision == "REJECT"
+            assert invoice.decision_reason == "Not a tax invoice"
+            assert invoice.routing == "REVIEW"
+            assert float(invoice.min_confidence) == 0.3
+
+    def test_status_moves_off_received_once_a_decision_exists(self, db):
+        self._project(db)
+        with tenant_session(ACME, db) as session:
+            invoice = session.query(Invoice).filter_by(case_id="case-1").one()
+            assert invoice.status == "processed"
+
+    def test_a_case_without_a_decision_stays_received(self, db):
+        self._project(
+            db,
+            case_id="case-2",
+            artifacts={"extraction": ARTIFACTS["extraction"]},
+        )
+        with tenant_session(ACME, db) as session:
+            invoice = session.query(Invoice).filter_by(case_id="case-2").one()
+            assert invoice.status == "received"
+
+    def test_line_items_become_rows(self, db):
+        self._project(db)
+        with tenant_session(ACME, db) as session:
+            lines = (
+                session.query(InvoiceLine)
+                .order_by(InvoiceLine.line_number)
+                .all()
+            )
+            assert [line.item_code for line in lines] == ["LABOUR", "PARTS"]
+            assert float(lines[0].amount_ex_tax) == 700.0
+            assert float(lines[0].quantity) == 7.0
+
+    def test_findings_become_rows_with_severity(self, db):
+        self._project(db)
+        with tenant_session(ACME, db) as session:
+            findings = {f.step: f for f in session.query(Finding).all()}
+            assert findings["1.1"].severity == "pass"
+            assert findings["1.3"].severity == "blocking"
+            assert findings["1.3"].passed is False
+            # 4.1 fails but is informational -- recording it as blocking is
+            # how a reviewer comes to treat a note as a rejection.
+            assert findings["4.1"].severity == "info"
+
+    def test_the_run_is_recorded_with_its_cost(self, db):
+        self._project(db)
+        with tenant_session(ACME, db) as session:
+            run = session.query(PipelineRun).one()
+            assert run.llm_calls == 5
+            assert float(run.cost_usd) == 0.010035
+            assert run.duration_ms == 56610
+
+    def test_reprojecting_does_not_duplicate_lines_or_findings(self, db):
+        """A retry re-runs the pipeline over the same case."""
+        self._project(db)
+        self._project(db)
+        with tenant_session(ACME, db) as session:
+            assert session.query(InvoiceLine).count() == 2
+            assert session.query(Finding).count() == 3
+
+    def test_the_document_is_linked_when_it_exists(self, db):
+        with tenant_session(ACME, db) as session:
+            session.add(
+                Document(
+                    id="case-1",
+                    tenant_id=ACME,
+                    storage_key="documents/x.pdf",
+                    sha256="x",
+                )
+            )
+        self._project(db)
+        with tenant_session(ACME, db) as session:
+            invoice = session.query(Invoice).filter_by(case_id="case-1").one()
+            assert invoice.document_id == "case-1"
+
+    def test_a_case_with_no_document_row_still_projects(self, db):
+        """A dangling foreign key would fail the whole write."""
+        self._project(db, case_id="orphan")
+        with tenant_session(ACME, db) as session:
+            invoice = session.query(Invoice).filter_by(case_id="orphan").one()
+            assert invoice.document_id is None
+            assert invoice.vendor_name == "QuickFix HVAC Repairs"
+
+    def test_the_projection_stays_inside_the_tenant(self, db):
+        self._project(db)
+        with tenant_session(GLOBEX, db) as session:
+            assert (
+                session.query(Invoice).filter_by(tenant_id=GLOBEX).count() == 0
+            )
+            assert (
+                session.query(InvoiceLine).filter_by(tenant_id=GLOBEX).count()
+                == 0
+            )
