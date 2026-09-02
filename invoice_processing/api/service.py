@@ -30,6 +30,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -49,6 +50,8 @@ from ..adapters import (
 )
 from . import auth
 from .auth import Principal, current_principal, require_role
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Invoice Review Workbench", version="0.1.0")
 
@@ -235,6 +238,30 @@ def get_exporter(tenant_id: str):
     if not token or not xero_tenant:
         return None
 
+    # The credentials are process-wide, so they belong to exactly one customer
+    # -- and this function took a tenant id and ignored it. On a deployment
+    # with two tenants, both would have posted their bills into whichever Xero
+    # organisation those variables point at: one customer's invoices appearing
+    # in another's ledger, from a function whose signature promised otherwise.
+    #
+    # `XERO_OWNER_TENANT` names the tenant those credentials belong to. Until
+    # there is a per-tenant credential store with an OAuth flow behind it, an
+    # unnamed owner means the connector serves whichever tenant is the only
+    # one -- and refuses as soon as that stops being true.
+    owner = os.getenv("XERO_OWNER_TENANT", "")
+    if owner:
+        if tenant_id != owner:
+            return None
+    elif not _is_only_tenant(tenant_id):
+        logger.warning(
+            "Xero credentials are process-wide and no XERO_OWNER_TENANT is "
+            "set, but this deployment has more than one tenant. Refusing to "
+            "export tenant %s into an organisation that may belong to "
+            "another.",
+            tenant_id,
+        )
+        return None
+
     from ..connectors.xero import (  # noqa: PLC0415
         HttpTransport,
         XeroClient,
@@ -250,6 +277,27 @@ def get_exporter(tenant_id: str):
         ),
         account_code_map=account_codes,
     )
+
+
+def _is_only_tenant(tenant_id: str) -> bool:
+    """Whether this deployment serves this tenant and nobody else.
+
+    Fails closed: if the question cannot be answered, the answer is no.
+    """
+    if not _database_configured():
+        return True
+    try:
+        from sqlalchemy import func, select  # noqa: PLC0415
+        from sqlalchemy.orm import Session  # noqa: PLC0415
+
+        from ..db.models import Tenant  # noqa: PLC0415
+        from ..db.session import get_engine  # noqa: PLC0415
+
+        with Session(get_engine()) as session:
+            return session.scalar(select(func.count(Tenant.id))) <= 1
+    except Exception as exc:
+        logger.warning("Could not count tenants: %s", exc)
+        return False
 
 
 def get_tenant_settings():

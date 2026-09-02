@@ -322,3 +322,44 @@ class TestTransport:
             encoding="utf-8"
         )
         assert "client_secret" not in source
+
+
+class TestXeroCredentialsBelongToOneTenant:
+    """`get_exporter(tenant_id)` took a tenant and ignored it.
+
+    The credentials are two process-wide environment variables, so they name
+    exactly one Xero organisation. On a deployment with two tenants, both
+    would have posted their approved bills into that same organisation: one
+    customer's invoices in another customer's ledger.
+    """
+
+    def _configured(self, monkeypatch):
+        monkeypatch.setenv("XERO_ACCESS_TOKEN", "token")
+        monkeypatch.setenv("XERO_TENANT_ID", "xero-org-1")
+
+    def test_the_named_owner_gets_the_exporter(self, monkeypatch):
+        self._configured(monkeypatch)
+        monkeypatch.setenv("XERO_OWNER_TENANT", "tenant-acme")
+
+        assert service.get_exporter("tenant-acme") is not None
+
+    def test_another_tenant_does_not(self, monkeypatch):
+        self._configured(monkeypatch)
+        monkeypatch.setenv("XERO_OWNER_TENANT", "tenant-acme")
+
+        assert service.get_exporter("tenant-globex") is None
+
+    def test_a_single_tenant_deployment_still_works_unnamed(self, monkeypatch):
+        """The common case: one customer, no owner configured."""
+        self._configured(monkeypatch)
+        monkeypatch.delenv("XERO_OWNER_TENANT", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
+
+        assert service.get_exporter("tenant-acme") is not None
+
+    def test_unconfigured_is_still_none(self, monkeypatch):
+        monkeypatch.delenv("XERO_ACCESS_TOKEN", raising=False)
+        monkeypatch.delenv("XERO_TENANT_ID", raising=False)
+
+        assert service.get_exporter("tenant-acme") is None
