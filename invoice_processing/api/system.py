@@ -216,10 +216,12 @@ def document_stage(
 
     # The caller listing a whole page reads every case in one query and hands
     # the result in; a lone caller reads its own.
-    artifacts, progress = already_read or _safe(
+    artifacts, internal = already_read or _safe(
         lambda: service.read_case(cases, _ctx_for(tenant_id, document_id)),
-        default=({}, None),
+        default=({}, {}),
     )
+    progress = internal.get("progress")
+    attempts = internal.get("attempts") or {}
 
     claim = _claim_state(tenant_id, document_id)
     if claim == "running":
@@ -233,7 +235,10 @@ def document_stage(
         return DONE, "Processed. Open it in Invoices to review.", progress
     if claim == "done":
         return DONE, "Processed.", progress
-    if sha in dead:
+    if sha in dead or attempts.get("exhausted"):
+        # `dead` is empty on Pub/Sub -- it has no dead-letter topic here, so a
+        # document the worker gave up on would otherwise read as "received but
+        # never queued" and offer no explanation at all.
         return (
             FAILED,
             "Processing failed repeatedly. Retry to try again.",

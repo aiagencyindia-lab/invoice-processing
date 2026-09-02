@@ -27,6 +27,7 @@ from invoice_processing.shared_libraries.acting import (
 from invoice_processing.worker import runner
 from invoice_processing.worker.queue import LocalQueue, Queue
 from invoice_processing.worker.runner import (
+    AttemptLog,
     ClaimStore,
     PermanentFailure,
     Worker,
@@ -571,3 +572,129 @@ class TestHeartbeatWhileBusy:
         seen = len(beats)
         time.sleep(0.05)
         assert len(beats) == seen
+
+
+class _CountingCases:
+    """A case store that remembers what the worker wrote."""
+
+    def __init__(self):
+        self.artifacts: dict[str, dict] = {}
+
+    def put_artifact(self, ctx, key, payload):
+        self.artifacts.setdefault(ctx.case_id, {})[key] = payload
+
+    def get_artifacts(self, ctx):
+        return dict(self.artifacts.get(ctx.case_id, {}))
+
+
+class TestPoisonMessagesStopBeingRetried:
+    """Pub/Sub reports every redelivery as attempt 1 unless the subscription
+    has a dead-letter policy. Production has none, so the three-attempt cap
+    never fired: a document that could never succeed was re-extracted every
+    ack deadline, forever, at the cost of a model call each time. The local
+    queue counts for itself, which is why every existing test passed.
+    """
+
+    def _worker(self, tmp_path, cases, deliveries_always_one=True):
+        queue = LocalQueue(tmp_path / "q")
+        if deliveries_always_one:
+            # Exactly what Pub/Sub does without a dead-letter policy.
+            queue.pull = _always_first_delivery(queue.pull)
+
+        def explode(_message):
+            raise RuntimeError("unreadable pdf")
+
+        return queue, Worker(
+            queue=queue,
+            claims=ClaimStore(tmp_path / "claims"),
+            handler=explode,
+            attempts=AttemptLog(cases),
+        )
+
+    def test_it_gives_up_even_when_the_queue_always_says_attempt_one(
+        self, tmp_path
+    ):
+        cases = _CountingCases()
+        queue, worker = self._worker(tmp_path, cases)
+
+        outcomes = []
+        for _ in range(3):
+            queue.publish({"tenant_id": "t-1", "document_id": "d-1"})
+            [message] = queue.pull()
+            outcomes.append(worker.handle(message))
+
+        assert outcomes[-1] == "dead-lettered:exhausted", outcomes
+
+    def test_the_failure_is_visible_to_the_api(self, tmp_path):
+        """`dead_letters()` is empty on Pub/Sub, so without a durable record
+        a document the worker gave up on reads as "received, but not queued"."""
+        cases = _CountingCases()
+        queue, worker = self._worker(tmp_path, cases)
+
+        for _ in range(3):
+            queue.publish({"tenant_id": "t-1", "document_id": "d-1"})
+            [message] = queue.pull()
+            worker.handle(message)
+
+        record = cases.artifacts["d-1"]["attempts"]
+        assert record["count"] == 3
+        assert record["exhausted"] is True
+        assert "unreadable pdf" in record["last_error"]
+
+    def test_a_retry_that_works_clears_the_failure(self, tmp_path):
+        cases = _CountingCases()
+        queue = LocalQueue(tmp_path / "q")
+        worker = Worker(
+            queue=queue,
+            claims=ClaimStore(tmp_path / "claims"),
+            handler=lambda message: {"decision": "ACCEPT"},
+            attempts=AttemptLog(cases),
+        )
+        cases.put_artifact(
+            RunContext(tenant_id="t-1", case_id="d-1"),
+            "attempts",
+            {"count": 2, "exhausted": False},
+        )
+
+        queue.publish({"tenant_id": "t-1", "document_id": "d-1"})
+        [message] = queue.pull()
+        assert worker.handle(message) == "done"
+
+        assert cases.artifacts["d-1"]["attempts"]["count"] == 0
+
+    def test_a_broken_counter_never_costs_an_invoice(self, tmp_path):
+        """The count is bookkeeping. It must not turn a retriable failure into
+        a lost document."""
+
+        class BrokenCases:
+            def put_artifact(self, ctx, key, payload):
+                raise RuntimeError("store is down")
+
+            def get_artifacts(self, ctx):
+                raise RuntimeError("store is down")
+
+        queue = LocalQueue(tmp_path / "q")
+
+        def explode(_message):
+            raise RuntimeError("unreadable pdf")
+
+        worker = Worker(
+            queue=queue,
+            claims=ClaimStore(tmp_path / "claims"),
+            handler=explode,
+            attempts=AttemptLog(BrokenCases()),
+        )
+        queue.publish({"tenant_id": "t-1", "document_id": "d-1"})
+        [message] = queue.pull()
+
+        assert worker.handle(message) == "retry"
+
+
+def _always_first_delivery(pull):
+    def pulled(*args, **kwargs):
+        messages = pull(*args, **kwargs)
+        for message in messages:
+            message.delivery_attempt = 1
+        return messages
+
+    return pulled

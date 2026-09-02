@@ -16,7 +16,7 @@ from .. import paths
 from ..api import service
 from ..gcp_credentials import materialise_credentials
 from .queue import LocalQueue, get_queue
-from .runner import ClaimStore, Worker
+from .runner import AttemptLog, ClaimStore, Worker
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -52,6 +52,10 @@ def main(argv: list[str] | None = None) -> int:
         # trail to container-local disk loses it on every restart, which is
         # exactly the events an auditor would ask about.
         audit=service.get_audit(),
+        # Counted through the case store rather than trusted from the queue:
+        # Pub/Sub reports every redelivery as attempt 1 unless the
+        # subscription has a dead-letter policy, and this one does not.
+        attempts=AttemptLog(service.get_cases()),
     )
     if args.once:
         for outcome in worker.run_once():

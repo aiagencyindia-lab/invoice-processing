@@ -454,6 +454,71 @@ def start_heartbeat(
     return stop
 
 
+class AttemptLog:
+    """How many times a document has been tried, where everyone can see it.
+
+    Pub/Sub only populates `delivery_attempt` when the subscription has a
+    dead-letter policy. This one has none, so every redelivery arrives looking
+    like attempt 1: the three-attempt cap never fires and a document that can
+    never succeed is re-extracted every ack deadline, forever, at the price of
+    a model call each time. Locally the same document parks after three tries,
+    because the local queue counts for itself -- which is why no test saw it.
+
+    The count lives beside the case artifacts because that store is the one
+    thing the API container and the worker container share. Readers strip it:
+    it is bookkeeping, not pipeline output.
+    """
+
+    KEY = "attempts"
+
+    def __init__(self, cases):
+        self.cases = cases
+
+    def _ctx(self, tenant_id: str, document_id: str) -> RunContext:
+        return RunContext(tenant_id=tenant_id, case_id=document_id)
+
+    def count(self, tenant_id: str, document_id: str) -> int:
+        record = self._read(tenant_id, document_id)
+        value = record.get("count")
+        return value if isinstance(value, int) else 0
+
+    def _read(self, tenant_id: str, document_id: str) -> dict:
+        artifacts = (
+            self.cases.get_artifacts(self._ctx(tenant_id, document_id)) or {}
+        )
+        record = artifacts.get(self.KEY)
+        return record if isinstance(record, dict) else {}
+
+    def record_failure(
+        self, tenant_id: str, document_id: str, error: str, exhausted: bool
+    ) -> int:
+        count = self.count(tenant_id, document_id) + 1
+        self.cases.put_artifact(
+            self._ctx(tenant_id, document_id),
+            self.KEY,
+            {
+                "count": count,
+                "last_error": error[:2000],
+                "at": time.time(),
+                # What the API reports as "failed". Without it a document the
+                # worker gave up on reads as "received, but not queued" --
+                # advice to retry, with no hint that anything went wrong.
+                "exhausted": exhausted,
+            },
+        )
+        return count
+
+    def clear(self, tenant_id: str, document_id: str) -> None:
+        """A retry that worked leaves no failure behind."""
+        if self.count(tenant_id, document_id) == 0:
+            return
+        self.cases.put_artifact(
+            self._ctx(tenant_id, document_id),
+            self.KEY,
+            {"count": 0, "exhausted": False, "at": time.time()},
+        )
+
+
 class Worker:
     def __init__(
         self,
@@ -462,12 +527,16 @@ class Worker:
         handler: Callable[[Message], dict] | None = None,
         audit=None,
         max_attempts: int = MAX_ATTEMPTS,
+        attempts: AttemptLog | None = None,
     ):
         self.queue = queue
         self.claims = claims
         self.handler = handler or self._default_handler
         self.audit = audit
         self.max_attempts = max_attempts
+        # Without one, attempt counting falls back to whatever the queue
+        # reports -- correct locally, and permanently 1 on Pub/Sub.
+        self.attempts = attempts
 
     # -- one message -------------------------------------------------------
 
@@ -507,23 +576,24 @@ class Worker:
             return "dead-lettered:permanent"
         except Exception as exc:
             self.claims.release(tenant_id, document_id)
+            attempt = self._count_failure(tenant_id, document_id, message, exc)
             logger.warning(
                 "Attempt %s/%s failed for %s: %s",
-                message.delivery_attempt,
+                attempt,
                 self.max_attempts,
                 document_id,
                 exc,
             )
-            if message.delivery_attempt >= self.max_attempts:
+            if attempt >= self.max_attempts:
                 self._dead_letter(
                     message,
-                    f"Failed {message.delivery_attempt} times: {exc}\n"
-                    f"{traceback.format_exc()}",
+                    f"Failed {attempt} times: {exc}\n{traceback.format_exc()}",
                 )
                 return "dead-lettered:exhausted"
             self.queue.nack(message)
             return "retry"
 
+        self._clear_failures(tenant_id, document_id)
         self.claims.complete(tenant_id, document_id, "done")
         # Ack last: until this point a crash means redelivery, which is correct.
         self.queue.ack(message)
@@ -578,6 +648,52 @@ class Worker:
         return process_document(
             ctx, document, service.get_blobs(tenant_id), service.get_cases()
         )
+
+    def _count_failure(
+        self, tenant_id: str, document_id: str, message: Message, exc: Exception
+    ) -> int:
+        """This attempt's number, from the most trustworthy source available.
+
+        The queue's own count is kept as a floor: on the local queue it is
+        accurate, and taking the higher of the two means neither source can
+        undercount a document into retrying forever.
+        """
+        reported = message.delivery_attempt or 1
+        if self.attempts is None:
+            return reported
+        try:
+            counted = self.attempts.record_failure(
+                tenant_id,
+                document_id,
+                str(exc),
+                exhausted=max(
+                    reported,
+                    self.attempts.count(tenant_id, document_id) + 1,
+                )
+                >= self.max_attempts,
+            )
+        except Exception as store_error:
+            # A counter that could fail the handler would turn a retriable
+            # error into a lost invoice.
+            logger.warning(
+                "Could not record the failed attempt for %s: %s",
+                document_id,
+                store_error,
+            )
+            return reported
+        return max(reported, counted)
+
+    def _clear_failures(self, tenant_id: str, document_id: str) -> None:
+        if self.attempts is None:
+            return
+        try:
+            self.attempts.clear(tenant_id, document_id)
+        except Exception as store_error:
+            logger.warning(
+                "Could not clear the failure record for %s: %s",
+                document_id,
+                store_error,
+            )
 
     def _dead_letter(self, message: Message, reason: str) -> None:
         dead_letter = getattr(self.queue, "dead_letter", None)

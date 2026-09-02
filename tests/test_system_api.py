@@ -302,6 +302,47 @@ class TestDocumentStages:
         assert doc["stage"] == "failed"
         assert "Retry" in doc["explanation"]
 
+    def test_a_document_the_worker_gave_up_on_reads_as_failed(self, env):
+        """On Pub/Sub the queue's dead-letter list is always empty -- there is
+        no dead-letter topic -- so the worker's own record is the only thing
+        that can explain a document it stopped retrying. Without it the row
+        reads "received, but not queued", which invites a retry of something
+        that has already failed three times."""
+        doc_id = add_document(env, sha="x1")
+        env["cases"].put_artifact(
+            RunContext(tenant_id=TENANT, case_id=doc_id),
+            "attempts",
+            {"count": 3, "exhausted": True, "last_error": "unreadable pdf"},
+        )
+
+        [doc] = env["client"]().get("/api/documents").json()["documents"]
+        assert doc["stage"] == "failed"
+        assert "Retry" in doc["explanation"]
+
+    def test_a_document_still_being_retried_does_not_read_as_failed(self, env):
+        doc_id = add_document(env, sha="x2")
+        env["cases"].put_artifact(
+            RunContext(tenant_id=TENANT, case_id=doc_id),
+            "attempts",
+            {"count": 1, "exhausted": False},
+        )
+
+        [doc] = env["client"]().get("/api/documents").json()["documents"]
+        assert doc["stage"] != "failed"
+
+    def test_an_attempt_record_alone_is_not_a_processed_invoice(self, env):
+        """Same trap as the step counter: bookkeeping stored beside the
+        artifacts must never read as pipeline output."""
+        doc_id = add_document(env, sha="x3")
+        env["cases"].put_artifact(
+            RunContext(tenant_id=TENANT, case_id=doc_id),
+            "attempts",
+            {"count": 1, "exhausted": False},
+        )
+
+        [doc] = env["client"]().get("/api/documents").json()["documents"]
+        assert doc["stage"] != "done"
+
     def test_a_retry_that_worked_stops_reading_as_failed(self, env):
         """The dead-letter record of the attempt that failed is never cleared,
         so without this a document that a retry processed successfully went on

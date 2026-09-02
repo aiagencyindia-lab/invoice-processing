@@ -323,17 +323,31 @@ class ExportRequest(BaseModel):
 # an invoice, and listing it as one put a blank row in the workbench -- no
 # vendor, no fields, and "no validation records".
 PROGRESS_KEY = "progress"
+ATTEMPTS_KEY = "attempts"
+
+# The worker's own bookkeeping, stored beside the artifacts because that store
+# is the only thing every container reaches. None of it is pipeline output, and
+# a reader that counts it as such reports a document nobody has processed yet
+# as a finished invoice -- which is exactly how an in-flight upload came to sit
+# in the workbench with no vendor and no validation records.
+INTERNAL_KEYS = (PROGRESS_KEY, ATTEMPTS_KEY)
 
 
-def read_case(cases, ctx) -> tuple[dict, dict | None]:
-    """A case's artifacts as readers understand them, plus its step counter."""
-    return split_progress(cases.get_artifacts(ctx))
+def read_case(cases, ctx) -> tuple[dict, dict]:
+    """A case's artifacts as readers understand them, and the bookkeeping."""
+    return split_internal(cases.get_artifacts(ctx))
 
 
-def split_progress(artifacts: dict | None) -> tuple[dict, dict | None]:
+def split_internal(artifacts: dict | None) -> tuple[dict, dict]:
     artifacts = dict(artifacts or {})
-    progress = artifacts.pop(PROGRESS_KEY, None)
-    return artifacts, progress if isinstance(progress, dict) else None
+    internal = {
+        key: artifacts.pop(key)
+        for key in INTERNAL_KEYS
+        if isinstance(artifacts.get(key), dict)
+    }
+    for key in INTERNAL_KEYS:
+        artifacts.pop(key, None)
+    return artifacts, internal
 
 
 def read_cases(cases, tenant_id: str, case_ids: list[str]) -> dict[str, tuple]:
@@ -346,7 +360,7 @@ def read_cases(cases, tenant_id: str, case_ids: list[str]) -> dict[str, tuple]:
     """
     fetched = cases.get_many_artifacts(tenant_id, case_ids) or {}
     return {
-        case_id: split_progress(fetched.get(case_id)) for case_id in case_ids
+        case_id: split_internal(fetched.get(case_id)) for case_id in case_ids
     }
 
 
