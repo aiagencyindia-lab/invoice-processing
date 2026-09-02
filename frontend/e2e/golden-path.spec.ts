@@ -147,6 +147,7 @@ test("every sidebar view opens", async ({ page }) => {
   await goto(page, "/dashboard");
   for (const label of [
     "Invoices",
+    "Approved invoices",
     "Documents",
     "Activity",
     "Purchase orders",
@@ -276,4 +277,18 @@ test("every validation check can be switched off from settings", async ({
   await expect(
     page.locator("label", { hasText: "3.1 Duplicate Detection" }).getByRole("checkbox"),
   ).not.toBeChecked();
+});
+
+test("the approved sheet explains itself without a database", async ({ page }) => {
+  // The e2e stack runs on the filesystem store, where invoices cannot be
+  // queried. The page has to say so rather than render an empty grid that
+  // reads as "you have approved nothing".
+  await goto(page, "/sheet");
+  await expect(
+    page.getByRole("heading", { name: "Approved invoices" }),
+  ).toBeVisible();
+  // The e2e stack has no database, so the sheet says why rather than showing
+  // an empty grid that reads as "you have approved nothing".
+  await expect(page.locator(".empty-state").first()).toContainText(/database/i);
+  await expect(page.locator(".sheet-toolbar")).toBeVisible();
 });

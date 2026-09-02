@@ -280,3 +280,119 @@ export type Check = {
   mandatory: boolean;
   enabled: boolean;
 };
+
+/* -------------------------------------------------------------------------
+ * Approved-invoice sheet
+ *
+ * The server sends the column catalogue with every page, so the grid renders
+ * what the query actually supports rather than a list kept in step by hand.
+ * ---------------------------------------------------------------------- */
+
+export type SheetColumn = {
+  key: string;
+  label: string;
+  type: "text" | "number" | "money" | "date" | "timestamp" | "list" | "boolean";
+  source: "column" | "workflow" | "derived";
+  sortable: boolean;
+  filterable: boolean;
+  default: boolean;
+};
+
+export type SheetRow = Record<string, unknown> & {
+  case_id: string;
+  vendor_name: string | null;
+  invoice_number: string | null;
+  total_inc_tax: number | null;
+  currency: string | null;
+  approved_at: string | null;
+  approved_by: string | null;
+  quality_flags: string[];
+  corrected_fields: number;
+};
+
+export type SheetPage = {
+  rows: SheetRow[];
+  total: number;
+  offset: number;
+  limit: number;
+  columns: SheetColumn[];
+  quality_flags: Record<string, string>;
+};
+
+export type SheetSummary = {
+  total: number;
+  by_currency: {
+    currency: string;
+    count: number;
+    total: number;
+    tax: number;
+  }[];
+  vendors: number;
+  approved_today: number;
+  approved_this_month: number;
+};
+
+export type SheetFacets = { vendors: string[]; currencies: string[] };
+
+export type SheetFilters = {
+  status?: string;
+  q?: string;
+  vendor?: string;
+  currency?: string;
+  date_from?: string;
+  date_to?: string;
+  approved_from?: string;
+  approved_to?: string;
+  min_total?: string;
+  max_total?: string;
+  po?: string;
+  tax?: string;
+  quality?: string[];
+};
+
+export type SheetViewDefinition = {
+  filters?: SheetFilters;
+  sort?: { key: string; order: "asc" | "desc" };
+  columns?: { key: string; width?: number; frozen?: boolean }[];
+};
+
+export type SheetView = {
+  id: string;
+  name: string;
+  owner: string;
+  shared: boolean;
+  definition: SheetViewDefinition;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type ExportJob = {
+  id: string;
+  requested_by: string | null;
+  format: "csv" | "xlsx" | "json";
+  status: "queued" | "running" | "done" | "failed";
+  row_count: number | null;
+  storage_key: string | null;
+  error: string | null;
+  created_at: string | null;
+  finished_at: string | null;
+};
+
+/** Filters as a query string, omitting anything unset.
+ *
+ *  One place builds it, so the grid, the summary and an export always describe
+ *  the same rows -- a total that counts something the sheet is not showing is
+ *  a number someone will try to reconcile and lose an afternoon to.
+ */
+export function sheetQuery(filters: SheetFilters, extra: Record<string, string | number | undefined> = {}): string {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    if (Array.isArray(value)) value.forEach((v) => params.append(key, v));
+    else params.set(key, String(value));
+  });
+  Object.entries(extra).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  });
+  return params.toString();
+}
