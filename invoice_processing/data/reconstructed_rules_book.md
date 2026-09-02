@@ -160,14 +160,12 @@ The general agent is designed to be domain-independent. All validation parameter
 |-----------|---------|-------------|
 | `require_work_authorization` | `false` | Whether WAF is required |
 | `waf_exempt_work_types` | `["PREVENTATIVE", "CLEANING"]` | Work types that skip WAF requirement |
-| `waf_exempt_vendors` | `[]` | Vendors exempt from WAF (configured but not actively checked in code) |
 
 ### 0.4 Purchase Order Settings
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `require_purchase_order` | `false` | Whether PO number is required |
-| `valid_po_prefixes` | `["PO", "WO", "PR"]` | Valid PO number prefixes (placeholder — validation not yet implemented) |
 
 ### 0.5 Duplicate Detection Settings
 

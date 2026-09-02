@@ -206,7 +206,6 @@ _FALLBACK_CONFIG = {
     # Validation settings
     "require_work_authorization": False,
     "waf_exempt_work_types": ["PREVENTATIVE", "CLEANING"],
-    "waf_exempt_vendors": [],
     # PO validation
     "require_purchase_order": False,
     # 2% or $50, whichever is larger. A pure percentage is unhelpful on small
@@ -214,7 +213,6 @@ _FALLBACK_CONFIG = {
     # noise on large ones.
     "po_tolerance_pct": 0.02,
     "po_tolerance_abs": 50.0,
-    "valid_po_prefixes": ["PO", "WO", "PR"],
     # Duplicate detection
     # On by default. It was shipped off, which meant a pilot ran without any
     # duplicate check at all -- and a duplicate invoice is a duplicate payment,

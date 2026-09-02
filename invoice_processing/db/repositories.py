@@ -231,6 +231,9 @@ class PgRuleRepository:
         )
 
     def save(self, tenant_id: str, doc: dict, *, expected_version: int) -> int:
+        from ..context import validate_rule_base  # noqa: PLC0415
+
+        validate_rule_base(doc)
         incoming = doc.get("rules", [])
         with tenant_session(tenant_id, self.url) as session:
             existing = session.scalars(

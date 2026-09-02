@@ -442,3 +442,28 @@ def validate_field_path(path: str, operator: str | None = None) -> None:
         f"Unknown field path {path!r}. A condition on an unknown field always "
         f"evaluates to False, so the rule would never fire.{hint}"
     )
+
+
+def validate_rule_base(doc: dict) -> None:
+    """Refuse a rule base containing a condition that can never fire.
+
+    An unresolvable field path returns None and the condition evaluates False,
+    so the rule is silently inert -- approved, listed, and doing nothing. The
+    rule writer has always checked this; a repository save had not, so a rule
+    written through the API or a migration bypassed the check entirely.
+
+    Disabled rules are checked too: a rule is disabled to be re-enabled later,
+    and storing one that cannot work is storing a surprise for whoever does.
+    """
+    for rule in doc.get("rules") or []:
+        rule_id = rule.get("id") or rule.get("rule_id") or "<unnamed>"
+        for index, condition in enumerate(rule.get("conditions") or []):
+            field = condition.get("field")
+            if field is None:
+                continue
+            try:
+                validate_field_path(field, condition.get("operator"))
+            except UnknownFieldPath as exc:
+                raise UnknownFieldPath(
+                    f"Rule {rule_id}, condition {index}: {exc}"
+                ) from exc

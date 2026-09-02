@@ -12,9 +12,12 @@ to the rule-writing LLM is generated rather than hand-written, and that a rule
 referencing a nonexistent field is rejected instead of silently never firing.
 """
 
+import json
+
 import pytest
 
-from invoice_processing import context
+from invoice_processing import context, paths
+from invoice_processing.adapters import JsonRuleRepository
 from invoice_processing.context import (
     FIELDS,
     UnknownFieldPath,
@@ -204,3 +207,65 @@ def test_no_second_context_builder_remains():
     assert context.promote_convenience_fields.__module__ == (
         "invoice_processing.context"
     )
+
+
+class TestRepositoriesRefuseUnfireableRules:
+    """The rule writer checked field paths; the stores did not.
+
+    A rule written straight through a repository -- by the API, a migration or
+    a script -- could carry a condition on a field that does not exist. It
+    resolves to None, evaluates False, and the rule sits in the base looking
+    approved while doing nothing at all.
+    """
+
+    def _rule(self, field):
+        return {
+            "rules": [
+                {
+                    "id": "ALF-900",
+                    "conditions": [{"field": field, "operator": "equals"}],
+                    "actions": [{"type": "reject"}],
+                }
+            ]
+        }
+
+    def test_the_json_store_refuses_one(self, tmp_path):
+        store = JsonRuleRepository(tmp_path / "rules.json")
+        _, version = store.load("default")
+
+        with pytest.raises(UnknownFieldPath, match="ALF-900"):
+            store.save(
+                "default",
+                self._rule("decision_phase_4"),
+                expected_version=version,
+            )
+
+    def test_the_json_store_accepts_a_real_field(self, tmp_path):
+        store = JsonRuleRepository(tmp_path / "rules.json")
+        _, version = store.load("default")
+
+        store.save(
+            "default", self._rule("decision_phase4"), expected_version=version
+        )
+        loaded, _ = store.load("default")
+        assert loaded["rules"][0]["id"] == "ALF-900"
+
+    def test_a_disabled_rule_is_checked_too(self, tmp_path):
+        """It is disabled to be re-enabled later. Storing one that cannot work
+        stores a surprise for whoever does that."""
+        store = JsonRuleRepository(tmp_path / "rules.json")
+        _, version = store.load("default")
+        doc = self._rule("decision_phase_4")
+        doc["rules"][0]["enabled"] = False
+
+        with pytest.raises(UnknownFieldPath):
+            store.save("default", doc, expected_version=version)
+
+    def test_the_shipped_rule_base_still_saves(self, tmp_path):
+        """The guard must not reject what is already in production."""
+
+        shipped = json.loads(paths.RULE_BASE_PATH.read_text(encoding="utf-8"))
+        store = JsonRuleRepository(tmp_path / "rules.json")
+        _, version = store.load("default")
+
+        store.save("default", shipped, expected_version=version)

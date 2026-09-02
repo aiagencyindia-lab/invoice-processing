@@ -216,6 +216,9 @@ class JsonRuleRepository:
         return json.loads(raw), self._version_of(raw)
 
     def save(self, tenant_id: str, doc: dict, *, expected_version: int) -> int:
+        from .context import validate_rule_base  # noqa: PLC0415
+
+        validate_rule_base(doc)
         _, current = self.load(tenant_id)
         if current != expected_version:
             raise RuleBaseConflict(
