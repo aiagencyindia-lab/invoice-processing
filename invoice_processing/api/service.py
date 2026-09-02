@@ -309,9 +309,27 @@ PROGRESS_KEY = "progress"
 
 def read_case(cases, ctx) -> tuple[dict, dict | None]:
     """A case's artifacts as readers understand them, plus its step counter."""
-    artifacts = dict(cases.get_artifacts(ctx) or {})
+    return split_progress(cases.get_artifacts(ctx))
+
+
+def split_progress(artifacts: dict | None) -> tuple[dict, dict | None]:
+    artifacts = dict(artifacts or {})
     progress = artifacts.pop(PROGRESS_KEY, None)
     return artifacts, progress if isinstance(progress, dict) else None
+
+
+def read_cases(cases, tenant_id: str, case_ids: list[str]) -> dict[str, tuple]:
+    """The same, for many cases in one round trip.
+
+    A query per case is fine against a local file and ruinous against a
+    database three hundred milliseconds away: the queue and the document list
+    each ran one, so both pages took five and a half seconds to answer and got
+    slower with every invoice added.
+    """
+    fetched = cases.get_many_artifacts(tenant_id, case_ids) or {}
+    return {
+        case_id: split_progress(fetched.get(case_id)) for case_id in case_ids
+    }
 
 
 def _summarize(case_id: str, artifacts: dict) -> dict:
@@ -375,9 +393,12 @@ def list_invoices(
     Ordering by confidence rather than arrival puts the invoices that actually
     need a human at the top; a chronological queue buries them.
     """
+    cases = get_cases()
+    case_ids = list(cases.iter_case_ids(principal.tenant_id))
+    read = read_cases(cases, principal.tenant_id, case_ids)
     items = []
-    for case_id in get_cases().iter_case_ids(principal.tenant_id):
-        artifacts, _ = read_case(get_cases(), principal.context(case_id))
+    for case_id in case_ids:
+        artifacts, _ = read[case_id]
         if artifacts:
             items.append(_summarize(case_id, artifacts))
 

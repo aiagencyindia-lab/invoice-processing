@@ -205,6 +205,62 @@ class TestHeartbeat:
 # ---------------------------------------------------------------------------
 
 
+class TestListingCost:
+    """Both listings read every case in one round trip.
+
+    A read per case is free against a local file and costs about 300ms each
+    against Cloud SQL, so the documents list and the review queue each took
+    five and a half seconds in production and got slower with every invoice
+    added. Counting the reads is the only way that stays fixed.
+    """
+
+    def _count_reads(self, env, monkeypatch, path: str) -> int:
+        """Reads counted at the port, where a database round trip happens.
+
+        Wrapping the repository rather than patching its methods: the local
+        adapter answers a batch read by looping over its own single read, and
+        counting that loop would measure file opens instead of round trips.
+        """
+        reads = []
+
+        class Counting:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+            def get_artifacts(self, ctx):
+                reads.append("one")
+                return self._inner.get_artifacts(ctx)
+
+            def get_many_artifacts(self, tenant_id, case_ids):
+                reads.append("many")
+                return self._inner.get_many_artifacts(tenant_id, case_ids)
+
+        monkeypatch.setattr(
+            service, "get_cases", lambda: Counting(env["cases"])
+        )
+        assert env["client"]().get(path).status_code == 200
+        return len(reads)
+
+    def test_the_document_list_reads_once_for_the_page(self, env, monkeypatch):
+        for n in range(4):
+            add_document(env, filename=f"{n}.pdf", sha=f"cost-{n}")
+
+        assert self._count_reads(env, monkeypatch, "/api/documents") == 1
+
+    def test_the_review_queue_reads_once_for_the_page(self, env, monkeypatch):
+        for n in range(4):
+            env["cases"].put_artifact(
+                RunContext(tenant_id=TENANT, case_id=f"cost-case-{n}"),
+                "extraction",
+                {"invoice": {"vendor_name": f"Vendor {n}"}},
+            )
+
+        assert self._count_reads(env, monkeypatch, "/api/invoices") == 1
+
+
 class TestDocumentStages:
     def test_a_queued_document_reads_as_queued(self, env):
         add_document(env, sha="q1")

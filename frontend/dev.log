@@ -88,3 +88,4 @@ Error: read ECONNRESET
   code: 'ECONNRESET',
   syscall: 'read'
 }
+[?25h

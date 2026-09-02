@@ -197,7 +197,12 @@ def _claim_state(tenant_id: str, document_id: str) -> str | None:
 
 
 def document_stage(
-    document: dict, tenant_id: str, queued: set[str], dead: set[str], cases
+    document: dict,
+    tenant_id: str,
+    queued: set[str],
+    dead: set[str],
+    cases,
+    already_read: tuple[dict, dict | None] | None = None,
 ) -> tuple[str, str, dict | None]:
     """Derive a stage, a plain-English explanation and the pipeline progress.
 
@@ -209,7 +214,9 @@ def document_stage(
 
     from . import service  # noqa: PLC0415
 
-    artifacts, progress = _safe(
+    # The caller listing a whole page reads every case in one query and hands
+    # the result in; a lone caller reads its own.
+    artifacts, progress = already_read or _safe(
         lambda: service.read_case(cases, _ctx_for(tenant_id, document_id)),
         default=({}, None),
     )
@@ -303,11 +310,30 @@ def list_documents(
     queued, dead = _queued_shas(queue), _dead_shas(queue)
     cases = service.get_cases()
 
+    # One read for the whole page. A read per document is invisible against a
+    # local file and costs a round trip each against Cloud SQL, which is what
+    # made this list take five seconds and grow slower with every upload.
+    from . import service  # noqa: PLC0415
+
+    read = _safe(
+        lambda: service.read_cases(
+            cases,
+            principal.tenant_id,
+            [str(d.get("id") or "") for d in listing],
+        ),
+        default={},
+    )
+
     out: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
     for document in listing:
         stage, explanation, progress = document_stage(
-            document, principal.tenant_id, queued, dead, cases
+            document,
+            principal.tenant_id,
+            queued,
+            dead,
+            cases,
+            read.get(str(document.get("id") or "")),
         )
         counts[stage] = counts.get(stage, 0) + 1
         out.append(
