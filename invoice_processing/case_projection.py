@@ -25,8 +25,17 @@ from typing import Any
 def _decimal(value: Any) -> Decimal | None:
     if value is None or value == "":
         return None
+    text = str(value).strip()
+    # The transformer formats amounts for a person: "1,000.00". Passing that
+    # to Decimal raises, and the column ended up NULL -- so on a live invoice
+    # every line under a thousand stored correctly and the one line over it
+    # did not, which is the kind of gap nobody notices until a total is wrong.
+    for junk in (",", " ", "\u00a0", "$", "\u20ac", "\u00a3", "\u20b9"):
+        text = text.replace(junk, "")
+    if text.startswith("(") and text.endswith(")"):
+        text = "-" + text[1:-1]  # accounting negatives
     try:
-        return Decimal(str(value))
+        return Decimal(text)
     except (InvalidOperation, ValueError, TypeError):
         return None
 

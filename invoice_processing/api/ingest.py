@@ -159,7 +159,7 @@ def ingest_document(
     existing = documents.find_by_sha(ctx.tenant_id, sha256)
     if existing is not None:
         audit.emit(
-            ctx,
+            ctx.child(case_id=existing["id"]),
             "document_duplicate_ignored",
             {"sha256": sha256, "document_id": existing["id"], "source": source},
         )
@@ -186,8 +186,11 @@ def ingest_document(
         source=source,
         source_ref=source_ref,
     )
+    # The document did not exist when the context was built, so the id is
+    # attached now -- otherwise the row that records an upload cannot say
+    # which upload.
     audit.emit(
-        ctx,
+        ctx.child(case_id=document_id),
         "document_ingested",
         {
             "document_id": document_id,

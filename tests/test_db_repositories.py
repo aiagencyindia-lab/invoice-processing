@@ -15,6 +15,7 @@ test_rls_policies.py.
 
 import pytest
 
+from invoice_processing.case_projection import _decimal
 from invoice_processing.db import session as session_module
 from invoice_processing.db.models import (
     TENANT_TABLES,
@@ -810,3 +811,45 @@ class TestClaimsHoldAcrossContainers:
             assert store.state(ACME, "doc-x") == "done"
             store.release(ACME, "doc-x")
             assert store.state(ACME, "doc-x") is None
+
+
+class TestFormattedMoneySurvivesProjection:
+    """Found on a live invoice, not in a fixture.
+
+    The transformer formats amounts for a person -- "1,000.00" -- and
+    `Decimal()` raises on the comma. Every line under a thousand stored
+    correctly and the one line over it stored NULL, so the sum of the stored
+    lines silently disagreed with the invoice.
+    """
+
+    def test_a_thousands_separator_is_not_a_null(self, db):
+        artifacts = {
+            "extraction": {"invoice": {"vendor_name": "Northwind"}},
+            "transformer": {
+                "line_items_mapped": [
+                    {
+                        "line_number": 1,
+                        "description": "Switchboard upgrade labour",
+                        "quantity": "8.00",
+                        "unit_cost": "125.00",
+                        "line_cost": "1,000.00",
+                        "tax": "100.00",
+                    }
+                ]
+            },
+        }
+        PgCaseRepository(db).project_case(
+            RunContext(tenant_id=ACME, case_id="money"), artifacts
+        )
+
+        with tenant_session(ACME, db) as session:
+            line = session.query(InvoiceLine).one()
+            assert line.amount_ex_tax is not None, "the amount was dropped"
+            assert float(line.amount_ex_tax) == 1000.0
+
+    def test_currency_symbols_and_spaces_too(self):
+        assert float(_decimal("$1,234.56")) == 1234.56
+        assert float(_decimal("1 234.56")) == 1234.56
+        assert float(_decimal("(250.00)")) == -250.0
+        assert _decimal("not a number") is None
+        assert _decimal(None) is None

@@ -714,7 +714,13 @@ class Worker:
         if self.audit is None or not tenant_id:
             return
         self.audit.emit(
-            RunContext(tenant_id=tenant_id, actor="worker"),
+            # The id goes in the context, not only the payload: `entity_id` is
+            # the column a reader filters on, and it was null on every event
+            # the worker wrote -- so "what happened to this document" could
+            # not be asked of the trail at all.
+            RunContext(
+                tenant_id=tenant_id, case_id=document_id, actor="worker"
+            ),
             event,
             {"document_id": document_id, **payload},
         )

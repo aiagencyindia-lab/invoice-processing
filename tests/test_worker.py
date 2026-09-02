@@ -698,3 +698,34 @@ def _always_first_delivery(pull):
         return messages
 
     return pulled
+
+
+class TestAuditEventsNameTheirDocument:
+    """`entity_id` was null on every event the worker wrote.
+
+    The document id went into the payload only, so the column a reader filters
+    on was empty and "what happened to this document" could not be asked of
+    the trail.
+    """
+
+    def test_the_document_id_reaches_the_context(self, tmp_path):
+        emitted = []
+
+        class RecordingAudit:
+            def emit(self, ctx, event, payload, before=None):
+                emitted.append((ctx, event))
+
+        queue = LocalQueue(tmp_path / "q")
+        worker = Worker(
+            queue=queue,
+            claims=ClaimStore(tmp_path / "claims"),
+            handler=lambda message: {"decision": "ACCEPT"},
+            audit=RecordingAudit(),
+        )
+        queue.publish({"tenant_id": "t-1", "document_id": "d-1"})
+        [message] = queue.pull()
+        worker.handle(message)
+
+        [(ctx, event)] = emitted
+        assert event == "document_processed"
+        assert ctx.case_id == "d-1"
