@@ -13,10 +13,14 @@ Nothing here touches GCS or Postgres: the blob store and document registry are
 in-memory fakes satisfying the same contracts.
 """
 
+import base64
 import email.message
 import hashlib
+import json
+from email.message import EmailMessage
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from invoice_processing.api import auth, ingest, service
@@ -546,3 +550,190 @@ class TestEnqueueOnIngest:
         monkeypatch.setattr(service, "get_queue", SpyQueue)
         ingest_document(ctx(), PDF)
         assert seen == {"stored": True, "registered": True}
+
+
+class TestProviderPayloads:
+    """The endpoint named Postmark and SendGrid and could parse neither.
+
+    It read the body as raw RFC-822. Postmark posts JSON and SendGrid posts
+    multipart/form-data, so a real delivery parsed to no attachments at all
+    and the endpoint answered 200 with an empty document list -- accepting the
+    mail and ingesting nothing.
+    """
+
+    def _pdf(self):
+        return b"%PDF-1.4 invoice bytes"
+
+    def test_postmark_json_with_base64_attachments(self):
+        body = json.dumps(
+            {
+                "OriginalRecipient": "acme@invoices.example.com",
+                "MessageID": "pm-1",
+                "Attachments": [
+                    {
+                        "Name": "invoice.pdf",
+                        "Content": base64.b64encode(self._pdf()).decode(),
+                        "ContentType": "application/pdf",
+                    },
+                    {
+                        "Name": "logo.png",
+                        "Content": base64.b64encode(b"\x89PNG").decode(),
+                        "ContentType": "image/png",
+                    },
+                ],
+            }
+        ).encode()
+
+        parsed = ingest.parse_inbound(body, "application/json")
+
+        assert parsed.recipient == "acme@invoices.example.com"
+        assert parsed.message_id == "pm-1"
+        assert [name for name, _ in parsed.attachments] == ["invoice.pdf"]
+        assert parsed.attachments[0][1] == self._pdf()
+
+    def test_postmark_raw_email_is_preferred_when_present(self):
+        raw = _email_with_pdf("acme@invoices.example.com", self._pdf())
+        body = json.dumps(
+            {
+                "OriginalRecipient": "acme@invoices.example.com",
+                "RawEmail": raw.decode("utf-8", "replace"),
+            }
+        ).encode()
+
+        parsed = ingest.parse_inbound(body, "application/json")
+
+        assert parsed.recipient == "acme@invoices.example.com"
+        assert len(parsed.attachments) == 1
+        # The stored evidence is the message, not the provider's description.
+        assert parsed.raw.startswith(b"From:") or b"MIME" in parsed.raw
+
+    def test_sendgrid_multipart_with_files(self):
+        boundary = "xYzBoundary"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="to"\r\n\r\n'
+                "acme@invoices.example.com\r\n"
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="attachment1"; '
+                'filename="invoice.pdf"\r\n'
+                "Content-Type: application/pdf\r\n\r\n"
+            ).encode()
+            + self._pdf()
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+
+        parsed = ingest.parse_inbound(
+            body, f"multipart/form-data; boundary={boundary}"
+        )
+
+        assert parsed.recipient == "acme@invoices.example.com"
+        assert [name for name, _ in parsed.attachments] == ["invoice.pdf"]
+
+    def test_sendgrid_multipart_with_full_mime(self):
+        boundary = "xYzBoundary"
+        raw = _email_with_pdf("acme@invoices.example.com", self._pdf())
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="email"\r\n\r\n'
+            ).encode()
+            + raw
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+
+        parsed = ingest.parse_inbound(
+            body, f"multipart/form-data; boundary={boundary}"
+        )
+
+        assert len(parsed.attachments) == 1
+
+    def test_a_raw_mime_post_still_works(self):
+        """What curl and every existing test send."""
+        raw = _email_with_pdf("acme@invoices.example.com", self._pdf())
+
+        parsed = ingest.parse_inbound(raw, "message/rfc822")
+
+        assert parsed.recipient.endswith("acme@invoices.example.com")
+        assert len(parsed.attachments) == 1
+
+    def test_several_recipients_route_on_the_first(self):
+        body = json.dumps(
+            {"To": "acme@invoices.example.com, someone@else.test"}
+        ).encode()
+
+        parsed = ingest.parse_inbound(body, "application/json")
+
+        assert parsed.recipient == "acme@invoices.example.com"
+
+    def test_malformed_json_is_not_a_crash(self):
+        parsed = ingest.parse_inbound(b"{not json", "application/json")
+
+        assert parsed.attachments == []
+        assert parsed.recipient == ""
+
+
+class TestWebhookAuthenticationAProviderCanActuallyUse:
+    """Neither provider can add a request header. Both can put credentials in
+    the URL they post to, which arrive as HTTP Basic auth."""
+
+    def test_basic_auth_password_is_accepted(self, monkeypatch):
+        monkeypatch.setenv("INBOUND_WEBHOOK_SECRET", "s3cret")
+        token = base64.b64encode(b"postmark:s3cret").decode()
+
+        request = _request({"authorization": f"Basic {token}"})
+        ingest.verify_webhook_secret(request)  # must not raise
+
+    def test_the_header_still_works(self, monkeypatch):
+        monkeypatch.setenv("INBOUND_WEBHOOK_SECRET", "s3cret")
+
+        ingest.verify_webhook_secret(_request({"x-webhook-token": "s3cret"}))
+
+    def test_a_wrong_password_is_refused(self, monkeypatch):
+        monkeypatch.setenv("INBOUND_WEBHOOK_SECRET", "s3cret")
+        token = base64.b64encode(b"postmark:wrong").decode()
+
+        with pytest.raises(HTTPException) as exc:
+            ingest.verify_webhook_secret(
+                _request({"authorization": f"Basic {token}"})
+            )
+        assert exc.value.status_code == 401
+
+    def test_garbage_credentials_are_refused(self, monkeypatch):
+        monkeypatch.setenv("INBOUND_WEBHOOK_SECRET", "s3cret")
+
+        with pytest.raises(HTTPException):
+            ingest.verify_webhook_secret(
+                _request({"authorization": "Basic not-base64!"})
+            )
+
+    def test_still_fails_closed_when_unconfigured(self, monkeypatch):
+        monkeypatch.delenv("INBOUND_WEBHOOK_SECRET", raising=False)
+        token = base64.b64encode(b"postmark:anything").decode()
+
+        with pytest.raises(HTTPException) as exc:
+            ingest.verify_webhook_secret(
+                _request({"authorization": f"Basic {token}"})
+            )
+        assert exc.value.status_code == 503
+
+
+def _request(headers: dict):
+    class _Request:
+        def __init__(self, headers):
+            self.headers = headers
+
+    return _Request(headers)
+
+
+def _email_with_pdf(recipient: str, pdf: bytes) -> bytes:
+    message = EmailMessage()
+    message["From"] = "supplier@vendor.test"
+    message["To"] = recipient
+    message["Subject"] = "Invoice"
+    message["Message-ID"] = "<mime-1@vendor.test>"
+    message.set_content("Please find attached.")
+    message.add_attachment(
+        pdf, maintype="application", subtype="pdf", filename="invoice.pdf"
+    )
+    return message.as_bytes()

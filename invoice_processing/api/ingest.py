@@ -30,9 +30,11 @@ they land in, which is the part that would actually be a breach.
 
 from __future__ import annotations
 
+import base64
 import email
 import hashlib
 import hmac
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -272,13 +274,44 @@ def verify_webhook_secret(request: Request) -> None:
         raise HTTPException(
             status_code=503, detail="Inbound email is not configured."
         )
-    supplied = request.headers.get("x-webhook-token", "")
-    # Constant-time: a plain `==` leaks the secret one byte at a time to anyone
-    # who can measure response latency.
-    if not hmac.compare_digest(supplied, expected):
+    # Two ways to present it, because a provider cannot use the first.
+    # Postmark and SendGrid Inbound Parse both take a URL and post to it; they
+    # do not let you add arbitrary request headers. Both do let you put
+    # credentials in that URL, which arrive as HTTP Basic auth -- so requiring
+    # `x-webhook-token` meant the endpoint could only ever be called by curl.
+    candidates = [
+        request.headers.get("x-webhook-token", ""),
+        _basic_auth_password(request.headers.get("authorization", "")),
+    ]
+    # Constant-time, and every candidate is checked: returning early on the
+    # first match leaks the secret one byte at a time to anyone who can
+    # measure response latency.
+    if not any(
+        hmac.compare_digest(supplied, expected)
+        for supplied in candidates
+        if supplied
+    ):
         raise HTTPException(
             status_code=401, detail="Invalid webhook signature."
         )
+
+
+def _basic_auth_password(header: str) -> str:
+    """The password from `Authorization: Basic ...`, or empty.
+
+    The username is ignored: the shared secret is the credential, and a
+    provider's UI usually makes you supply both.
+    """
+    scheme, _, encoded = header.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return ""
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode(
+            "utf-8", "replace"
+        )
+    except (ValueError, TypeError):
+        return ""
+    return decoded.partition(":")[2]
 
 
 def tenant_for_recipient(recipient: str) -> str:
@@ -324,6 +357,185 @@ def extract_pdf_attachments(raw_email: bytes) -> list[tuple[str, bytes]]:
     return out
 
 
+@dataclass
+class InboundMessage:
+    """One delivery, however the provider chose to describe it.
+
+    Three shapes reach this endpoint and none of them is the raw RFC-822 the
+    handler used to assume:
+
+    * **Postmark** posts JSON -- `RawEmail` when "include raw email content"
+      is on, otherwise `Attachments` as base64 with `OriginalRecipient`.
+    * **SendGrid Inbound Parse** posts multipart/form-data: an `email` field
+      with the MIME when "POST the raw, full MIME" is on, otherwise `to`,
+      `attachments` and files named `attachment1`, `attachment2`...
+    * **A raw MIME POST**, which is what the tests and any curl use.
+
+    Reading only the last of the three meant a real provider's delivery parsed
+    to nothing, and the endpoint answered 200 with an empty document list --
+    silently ingesting no invoices at all.
+    """
+
+    recipient: str
+    message_id: str
+    raw: bytes
+    attachments: list[tuple[str, bytes]]
+
+
+def parse_inbound(
+    raw: bytes, content_type: str, headers: dict[str, str] | None = None
+) -> InboundMessage:
+    headers = headers or {}
+    kind = (content_type or "").split(";", 1)[0].strip().lower()
+
+    if kind == "application/json":
+        return _parse_postmark(raw, headers)
+    if kind in ("multipart/form-data", "application/x-www-form-urlencoded"):
+        return _parse_sendgrid(raw, content_type, headers)
+    return _parse_mime(raw, headers)
+
+
+def _parse_mime(raw: bytes, headers: dict[str, str]) -> InboundMessage:
+    recipient = headers.get("x-original-to") or ""
+    message_id = ""
+    try:
+        message = email.message_from_bytes(raw, policy=policy.default)
+        recipient = recipient or str(
+            message.get("Delivered-To") or message.get("To") or ""
+        )
+        message_id = str(message.get("Message-ID") or "")
+    except Exception:
+        pass
+    return InboundMessage(
+        recipient=recipient,
+        message_id=message_id,
+        raw=raw,
+        attachments=extract_pdf_attachments(raw),
+    )
+
+
+def _parse_postmark(raw: bytes, headers: dict[str, str]) -> InboundMessage:
+    try:
+        body = json.loads(raw.decode("utf-8", "replace"))
+    except (ValueError, AttributeError):
+        return InboundMessage("", "", raw, [])
+    if not isinstance(body, dict):
+        return InboundMessage("", "", raw, [])
+
+    # With raw content enabled the MIME is authoritative: it carries the parts
+    # the JSON summarises, and keeping it is what makes the stored evidence a
+    # real message rather than a provider's description of one.
+    raw_email = body.get("RawEmail")
+    if isinstance(raw_email, str) and raw_email.strip():
+        parsed = _parse_mime(raw_email.encode("utf-8", "replace"), headers)
+        parsed.recipient = (
+            headers.get("x-original-to")
+            or _first_address(body.get("OriginalRecipient"))
+            or _first_address(body.get("To"))
+            or parsed.recipient
+        )
+        return parsed
+
+    return InboundMessage(
+        recipient=headers.get("x-original-to")
+        or _first_address(body.get("OriginalRecipient"))
+        or _first_address(body.get("To")),
+        message_id=str(body.get("MessageID") or ""),
+        raw=raw,
+        attachments=_decode_attachments(
+            body.get("Attachments"), name_key="Name", data_key="Content"
+        ),
+    )
+
+
+def _parse_sendgrid(
+    raw: bytes, content_type: str, headers: dict[str, str]
+) -> InboundMessage:
+    fields, files = _parse_multipart(raw, content_type)
+
+    mime = fields.get("email", "")
+    if mime.strip():
+        parsed = _parse_mime(mime.encode("utf-8", "replace"), headers)
+        parsed.recipient = (
+            headers.get("x-original-to")
+            or _first_address(fields.get("to"))
+            or parsed.recipient
+        )
+        return parsed
+
+    attachments = [
+        (name, data) for name, data in files if data.startswith(PDF_MAGIC)
+    ]
+    return InboundMessage(
+        recipient=headers.get("x-original-to")
+        or _first_address(fields.get("to")),
+        message_id=str(fields.get("message-id") or ""),
+        raw=raw,
+        attachments=attachments,
+    )
+
+
+def _parse_multipart(
+    raw: bytes, content_type: str
+) -> tuple[dict[str, str], list[tuple[str, bytes]]]:
+    """Fields and files, using the stdlib's own MIME parser.
+
+    A multipart body is MIME with a different header, so it is parsed by the
+    module that already understands MIME rather than by hand.
+    """
+    message = email.message_from_bytes(
+        b"Content-Type: "
+        + content_type.encode("utf-8", "replace")
+        + b"\r\nMIME-Version: 1.0\r\n\r\n"
+        + raw,
+        policy=policy.default,
+    )
+    fields: dict[str, str] = {}
+    files: list[tuple[str, bytes]] = []
+    for part in message.walk():
+        if part.get_content_maintype() == "multipart":
+            continue
+        name = part.get_param("name", header="content-disposition", failobj="")
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+        if filename:
+            files.append((filename, payload))
+        elif name:
+            fields[str(name).lower()] = payload.decode("utf-8", "replace")
+    return fields, files
+
+
+def _decode_attachments(
+    items, *, name_key: str, data_key: str
+) -> list[tuple[str, bytes]]:
+    out: list[tuple[str, bytes]] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            data = base64.b64decode(item.get(data_key) or "", validate=False)
+        except (ValueError, TypeError):
+            continue
+        if data.startswith(PDF_MAGIC):
+            out.append((str(item.get(name_key) or "attachment.pdf"), data))
+    return out
+
+
+def _first_address(value) -> str:
+    """The first address out of whatever shape the provider used.
+
+    Postmark's `To` is a string; its `ToFull` is a list of objects; SendGrid's
+    `to` is a header line. All of them can carry several recipients, and only
+    the first is ours to route on.
+    """
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    if isinstance(value, dict):
+        value = value.get("Email") or value.get("email") or ""
+    text = str(value or "").split(",")[0].strip()
+    return text
+
+
 @router.post("/webhooks/email")
 async def inbound_email(request: Request) -> dict:
     """Inbound mail from Postmark/SendGrid.
@@ -338,19 +550,14 @@ async def inbound_email(request: Request) -> dict:
     if len(raw) > MAX_EMAIL_BYTES:
         raise HTTPException(status_code=413, detail="Message too large.")
 
-    recipient = request.headers.get("x-original-to") or ""
-    if not recipient:
-        # Providers post JSON with the envelope; fall back to parsing the MIME.
-        try:
-            message = email.message_from_bytes(raw, policy=policy.default)
-            recipient = str(
-                message.get("Delivered-To") or message.get("To") or ""
-            )
-        except Exception:
-            recipient = ""
+    inbound = parse_inbound(
+        raw,
+        request.headers.get("content-type", ""),
+        {k.lower(): v for k, v in request.headers.items()},
+    )
 
     try:
-        tenant_slug = tenant_for_recipient(recipient)
+        tenant_slug = tenant_for_recipient(inbound.recipient)
     except IngestionRefused as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -361,25 +568,16 @@ async def inbound_email(request: Request) -> dict:
         raise HTTPException(status_code=404, detail="Unknown recipient.")
 
     ctx = RunContext(tenant_id=tenant_id, actor="inbound-email")
-    message_id = ""
-    try:
-        message_id = str(
-            email.message_from_bytes(raw, policy=policy.default).get(
-                "Message-ID"
-            )
-            or ""
-        )
-    except Exception:
-        pass
+    message_id = inbound.message_id
 
     # The raw message is evidence: it is what we can show when a vendor disputes
     # what they sent, and it is the only record of the parts we discarded.
     blobs = service.get_blobs(tenant_id)
-    eml_key = f"email/{hashlib.sha256(raw).hexdigest()}.eml"
-    blobs.put(eml_key, raw, content_type="message/rfc822")
+    eml_key = f"email/{hashlib.sha256(inbound.raw).hexdigest()}.eml"
+    blobs.put(eml_key, inbound.raw, content_type="message/rfc822")
 
     results, refused = [], []
-    for filename, data in extract_pdf_attachments(raw):
+    for filename, data in inbound.attachments:
         try:
             results.append(
                 ingest_document(
@@ -400,7 +598,7 @@ async def inbound_email(request: Request) -> dict:
         {
             "eml_key": eml_key,
             "message_id": message_id,
-            "recipient": recipient,
+            "recipient": inbound.recipient,
             "ingested": len(results),
             "refused": len(refused),
         },
