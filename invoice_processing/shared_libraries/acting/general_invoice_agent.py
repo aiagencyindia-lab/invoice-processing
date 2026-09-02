@@ -39,6 +39,7 @@ import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -129,6 +130,25 @@ def _generation_config(**overrides) -> "GenerationConfig":
     params: dict[str, Any] = {"temperature": 0, "seed": _GENERATION_SEED}
     params.update(overrides)
     return GenerationConfig(**params)
+
+
+@lru_cache(maxsize=32)
+def _model_for(model_name: str, temperature: float) -> "GenerativeModel":
+    """One model object per (name, temperature).
+
+    The object is stateless and the configuration is not, so the pair is the
+    key. Three call sites built a fresh one per LLM call and two other modules
+    kept their own class-level singleton apiece; caching here is the same
+    saving without a mutable global to reason about, and it is the one place
+    that decides how a model is constructed.
+
+    `lru_cache` rather than a dict: the eviction is the point, so a process
+    that sees many model names cannot grow a cache forever.
+    """
+    return GenerativeModel(
+        model_name,
+        generation_config=_generation_config(temperature=temperature),
+    )
 
 
 @dataclass
@@ -421,10 +441,7 @@ def extract_pdf_to_markdown(pdf_path: Path) -> str:
 
 def extract_pdf_with_gemini(pdf_path: Path) -> str:
     """Extract text from PDF using Gemini multimodal"""
-    model = GenerativeModel(
-        _gcp_config.GEMINI_FLASH_MODEL,
-        generation_config=_generation_config(),
-    )
+    model = _model_for(_gcp_config.GEMINI_FLASH_MODEL, 0)
 
     with open(pdf_path, "rb") as f:
         pdf_data = f.read()
@@ -542,10 +559,7 @@ def call_gemini(
     """Call Gemini API with optional structured output"""
     metrics = _get_metrics()
     model_name = model_name or _gcp_config.GEMINI_FLASH_MODEL
-    model = GenerativeModel(
-        model_name,
-        generation_config=_generation_config(),
-    )
+    model = _model_for(model_name, 0)
 
     start_time = time.time()
     response = model.generate_content(prompt)
@@ -583,10 +597,7 @@ def call_gemini_with_pdf(
     """Call Gemini with PDF as input"""
     metrics = _get_metrics()
     model_name = model_name or _gcp_config.GEMINI_PRO_MODEL
-    model = GenerativeModel(
-        model_name,
-        generation_config=_generation_config(),
-    )
+    model = _model_for(model_name, 0)
 
     with open(pdf_path, "rb") as f:
         pdf_data = f.read()

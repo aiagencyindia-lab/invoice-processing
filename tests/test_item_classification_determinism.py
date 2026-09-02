@@ -158,3 +158,38 @@ def test_matches_ground_truth_for_every_sample_line_item(tmp_path, monkeypatch):
             actual.append(agent._classify_items([item["description"]])[0])
 
     assert actual == expected
+
+
+class TestTheModelFactoryIsShared:
+    """Three call sites constructed a model per LLM call, and two other
+    modules each kept a class-level singleton. One cache keyed by what
+    actually varies replaces all of it."""
+
+    def test_the_same_model_and_temperature_is_reused(self, monkeypatch):
+        built = []
+
+        class _Model:
+            def __init__(self, name, generation_config=None):
+                built.append((name, generation_config))
+
+        monkeypatch.setattr(gia, "GenerativeModel", _Model)
+        gia._model_for.cache_clear()
+
+        first = gia._model_for("gemini-2.5-flash", 0)
+        second = gia._model_for("gemini-2.5-flash", 0)
+
+        assert first is second
+        assert len(built) == 1
+
+    def test_a_different_temperature_is_a_different_model(self, monkeypatch):
+        """The object is stateless; the configuration is not."""
+        monkeypatch.setattr(
+            gia,
+            "GenerativeModel",
+            lambda name, generation_config=None: object(),
+        )
+        gia._model_for.cache_clear()
+
+        assert gia._model_for("gemini-2.5-flash", 0) is not gia._model_for(
+            "gemini-2.5-flash", 0.7
+        )
