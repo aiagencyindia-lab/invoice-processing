@@ -20,7 +20,7 @@ import json
 import pytest
 from golden import GOLDEN_CASES
 
-from invoice_processing import paths
+from invoice_processing import confidence, paths
 from invoice_processing.confidence import (
     HIGH,
     LOW,
@@ -227,3 +227,74 @@ class TestPipelineIntegration:
         source = (paths.AGENT_PKG_DIR / "confidence.py").read_text()
         assert "generate_content" not in source
         assert "GenerativeModel" not in source
+
+
+class TestTheFraudRelevantFieldsAreChecked:
+    """Payment redirection changes an account number. An account number that
+    is not in the document it was read from is the cheapest strong signal
+    there is -- and these were the only extracted fields the grounder skipped,
+    so they reached the workbench marked "not corroborated"."""
+
+    def test_bank_details_are_grounded(self):
+        """The list itself: without the field here the value is never looked
+        for, and the workbench renders it as unchecked."""
+        for field in (
+            "bank_account_name",
+            "bank_account_number",
+            "bank_code",
+            "bank_iban",
+        ):
+            assert field in confidence.GROUNDED_FIELDS, field
+
+    def test_an_account_number_absent_from_the_page_is_flagged(self):
+        page = ["Vendor Pty Ltd\nBSB 062-000\nAccount 12345678"]
+        grounded, _ = confidence.locate("87654321", page)
+        assert grounded is False
+        grounded, _ = confidence.locate("12345678", page)
+        assert grounded is True
+
+    def test_payment_terms_are_left_alone_deliberately(self):
+        """The extractor paraphrases them, so grounding flags correct values."""
+        assert "payment_terms" not in confidence.GROUNDED_FIELDS
+
+
+class TestTaxBreakdownIsReconciled:
+    """Extracted, stored, and until now never checked against anything."""
+
+    def _invoice(self, breakdown, tax):
+        return {
+            "invoice_total_ex_tax": 1000.0,
+            "tax_amount": tax,
+            "invoice_total_inc_tax": 1000.0 + tax,
+            "tax_breakdown": breakdown,
+        }
+
+    def test_rates_that_add_up_pass(self):
+        checks = confidence.arithmetic_checks(
+            self._invoice(
+                [{"tax_amount": 60.0}, {"tax_amount": 40.0}], tax=100.0
+            )
+        )
+        assert checks["tax_breakdown_sums_to_tax"] is True
+
+    def test_rates_that_do_not_add_up_fail(self):
+        checks = confidence.arithmetic_checks(
+            self._invoice(
+                [{"tax_amount": 60.0}, {"tax_amount": 25.0}], tax=100.0
+            )
+        )
+        assert checks["tax_breakdown_sums_to_tax"] is False
+
+    def test_no_breakdown_is_not_a_failure(self):
+        """Most invoices state one rate and no breakdown. Absence is not an
+        error, and reporting it as one would flag every ordinary invoice."""
+        checks = confidence.arithmetic_checks(self._invoice([], tax=100.0))
+        assert "tax_breakdown_sums_to_tax" not in checks
+
+    def test_a_partial_breakdown_is_not_judged(self):
+        checks = confidence.arithmetic_checks(
+            self._invoice(
+                [{"tax_amount": 60.0}, {"tax_amount": None}], tax=100.0
+            )
+        )
+        assert "tax_breakdown_sums_to_tax" not in checks

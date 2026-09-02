@@ -44,6 +44,14 @@ from typing import Any
 HIGH, MEDIUM, LOW = 1.0, 0.6, 0.3
 
 # Fields worth grounding. Line items are handled separately.
+#
+# The bank details are here for the reason the whole module exists. Payment
+# redirection works by changing an account number, and an account number that
+# does not appear verbatim in the document it was supposedly read from is the
+# strongest cheap signal there is. They were the only fields the extractor
+# populated and the grounder ignored -- so the highest-risk values on the
+# invoice arrived in the workbench marked "not corroborated", which reads as
+# "we did not look" and was exactly right.
 GROUNDED_FIELDS = (
     "invoice_number",
     "invoice_date",
@@ -54,7 +62,18 @@ GROUNDED_FIELDS = (
     "tax_amount",
     "po_number",
     "due_date",
+    "bank_account_name",
+    "bank_account_number",
+    "bank_code",
+    "bank_iban",
+    "vendor_address",
 )
+
+# Deliberately not grounded: `payment_terms` is paraphrased by the extractor --
+# "payment due within 30 days" on the page becomes "Net 30" in the field -- so
+# a verbatim search flags a correct value. A signal that fires on every clean
+# invoice teaches reviewers to ignore it, which costs more than not having it.
+# `tax_breakdown` is a list and is checked arithmetically instead.
 
 _AMOUNT_TOLERANCE = 0.02
 
@@ -219,6 +238,18 @@ def arithmetic_checks(invoice: dict) -> dict[str, bool]:
             if None not in (qty, price, amount):
                 consistent &= abs(qty * price - amount) <= _AMOUNT_TOLERANCE
         checks["line_maths_consistent"] = consistent
+
+    # The per-rate breakdown was extracted and then never used. It is the one
+    # place a wrong rate shows up as an internal contradiction rather than a
+    # plausible number: rates that sum to something other than the stated tax
+    # mean one of the two is wrong, and neither is obviously the wrong one.
+    breakdown = invoice.get("tax_breakdown") or []
+    if breakdown and tax is not None:
+        parts = [_as_number(line.get("tax_amount")) for line in breakdown]
+        if all(part is not None for part in parts):
+            checks["tax_breakdown_sums_to_tax"] = (
+                abs(sum(parts) - tax) <= _AMOUNT_TOLERANCE
+            )
 
     return checks
 
