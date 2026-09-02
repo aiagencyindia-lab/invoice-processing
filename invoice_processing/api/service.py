@@ -67,7 +67,6 @@ async def _lifespan(_app: FastAPI):
 app.router.lifespan_context = _lifespan
 
 
-
 # All three storage adapters resolve the same way: lazily, from configuration,
 # memoized. Lazily because a module import must never open a connection and
 # because a test's environment has to be able to take effect; from configuration

@@ -1389,8 +1389,18 @@ def _load_seen_invoices(exclude_case_id: str = "") -> list:
 class Phase3ValidatorAgent(BaseAgent):
     """Phase 3: External Validation (duplicates, vendor matching)"""
 
-    def __init__(self):
+    def __init__(self, seen_invoices=None):
+        """`seen_invoices` supplies the corpus to compare against.
+
+        It is injected because the default -- scanning the output directory --
+        is neither tenant-scoped nor durable: on a deployed worker that
+        directory is local, ephemeral disk shared by every tenant the worker
+        serves, so one tenant's invoice could be reported as a duplicate of
+        another tenant's case, by case id. The worker passes a reader bound to
+        one tenant's repository instead.
+        """
         super().__init__("phase3_validator")
+        self._seen_invoices = seen_invoices or _load_seen_invoices
 
     def run(self, output_folder: Path, extraction: dict, phase2: dict) -> dict:
         print(" [5/9] Phase 3 Validator: Starting...")
@@ -1405,7 +1415,7 @@ class Phase3ValidatorAgent(BaseAgent):
             )
             candidate = duplicates.InvoiceKey.from_invoice(case_id, invoice)
             matches = duplicates.find_duplicates(
-                candidate, _load_seen_invoices(exclude_case_id=case_id)
+                candidate, self._seen_invoices(exclude_case_id=case_id)
             )
             entry = duplicates.to_validation(matches)
             if matches:
@@ -2218,6 +2228,7 @@ def _run_pipeline(
     output_folder: Path,
     start_time: float,
     on_step=None,
+    seen_invoices=None,
 ) -> dict:
     """Run the main processing pipeline (agents 1-9). Returns result dict."""
     report = _step_reporter(on_step)
@@ -2264,7 +2275,7 @@ def _run_pipeline(
 
     # Agent 5: Phase 3 Validation
     report(5)
-    phase3 = Phase3ValidatorAgent()
+    phase3 = Phase3ValidatorAgent(seen_invoices=seen_invoices)
     phase3_result = phase3.run(output_folder, extraction, phase2_result)
 
     if phase3_result["decision"] == "REJECT":
@@ -2317,7 +2328,9 @@ def _run_pipeline(
     }
 
 
-def process_invoice(source_folder: Path, on_step=None) -> dict:
+def process_invoice(
+    source_folder: Path, on_step=None, seen_invoices=None
+) -> dict:
     """Main pipeline orchestrator.
 
     `on_step` is called with a progress record before each agent runs, so a
@@ -2342,7 +2355,9 @@ def process_invoice(source_folder: Path, on_step=None) -> dict:
     }
 
     try:
-        return _run_pipeline(source_folder, output_folder, start_time, on_step)
+        return _run_pipeline(
+            source_folder, output_folder, start_time, on_step, seen_invoices
+        )
 
     except Exception as e:
         print(f"\n   Error: {e}")

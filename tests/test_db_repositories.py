@@ -44,6 +44,7 @@ from invoice_processing.ports import (
     RuleRepository,
     RunContext,
 )
+from invoice_processing.worker.runner import seen_invoices_for
 
 ACME = "tenant-acme"
 GLOBEX = "tenant-globex"
@@ -622,3 +623,55 @@ class TestCorrections:
             "currency"
         ]
         assert len(store.list(ACME)) == 2
+
+
+class TestDuplicateCorpusIsTenantScoped:
+    """Duplicate detection compares against other invoices. Which other
+    invoices is a tenancy question, and it was answered by a directory scan
+    with no tenant in it -- so a worker serving two tenants could report one
+    tenant's invoice as a duplicate of another tenant's case, naming that case
+    id in the validation record a reviewer reads.
+    """
+
+    def _store(self, db, tenant_id, case_id, invoice):
+        PgCaseRepository(db).put_artifact(
+            RunContext(tenant_id=tenant_id, case_id=case_id),
+            "extraction",
+            {"invoice": invoice},
+        )
+
+    def test_the_corpus_holds_only_this_tenants_cases(self, db):
+        self._store(
+            db, ACME, "acme-case", {"vendor_name": "A", "invoice_number": "1"}
+        )
+        self._store(
+            db,
+            GLOBEX,
+            "globex-case",
+            {"vendor_name": "G", "invoice_number": "2"},
+        )
+        cases = PgCaseRepository(db)
+
+        acme_corpus = seen_invoices_for(
+            RunContext(tenant_id=ACME, case_id="new"), cases
+        )()
+        globex_corpus = seen_invoices_for(
+            RunContext(tenant_id=GLOBEX, case_id="new"), cases
+        )()
+
+        assert [key.case_id for key in acme_corpus] == ["acme-case"]
+        assert [key.case_id for key in globex_corpus] == ["globex-case"]
+
+    def test_it_survives_a_restart(self, db):
+        """The old corpus was container-local disk: a redeploy emptied it and
+        a duplicate submitted afterwards went undetected. A second repository
+        instance stands in for the process that comes back."""
+        self._store(
+            db, ACME, "earlier", {"vendor_name": "A", "invoice_number": "1"}
+        )
+
+        corpus = seen_invoices_for(
+            RunContext(tenant_id=ACME, case_id="new"), PgCaseRepository(db)
+        )()
+
+        assert [key.case_id for key in corpus] == ["earlier"]

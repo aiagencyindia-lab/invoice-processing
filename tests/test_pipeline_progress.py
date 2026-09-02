@@ -15,6 +15,9 @@ from invoice_processing.shared_libraries.acting import general_invoice_agent
 class _StubAgent:
     """Stands in for every agent: each one is handed on, none is asserted on."""
 
+    def __init__(self, *args, **kwargs):
+        pass
+
     def run(self, *args, **kwargs):
         return {"decision": "ACCEPT"}
 

@@ -17,6 +17,7 @@ import yaml
 from golden import GOLDEN_CASES
 
 from invoice_processing import paths
+from invoice_processing.adapters import FsCaseRepository
 from invoice_processing.duplicates import (
     EXACT,
     FUZZY,
@@ -28,12 +29,14 @@ from invoice_processing.duplicates import (
     same_vendor,
     to_validation,
 )
+from invoice_processing.ports import RunContext
 from invoice_processing.shared_libraries.acting import (
     general_invoice_agent as agent,
 )
 from invoice_processing.shared_libraries.acting import (
     general_invoice_agent as gia,
 )
+from invoice_processing.worker.runner import seen_invoices_for
 
 ORIGINAL = InvoiceKey(
     case_id="case_100",
@@ -406,3 +409,71 @@ def _find_key(node, key):
             if found is not None:
                 return found
     return None
+
+
+class TestTheCorpusIsScopedToOneTenant:
+    """Where duplicate detection looks, not how it matches.
+
+    The matching logic was always real; the corpus was a scan of a local
+    directory with no tenant in it. On a worker serving two tenants that meant
+    one tenant's invoice could be reported as a duplicate of another tenant's
+    case -- naming that case id in the validation record. It also lived on
+    container disk, so a redeploy silently emptied it.
+    """
+
+    def _cases(self, tmp_path, tenant_id):
+        return FsCaseRepository(tmp_path / "cases", tenant_id=tenant_id)
+
+    def _store(self, cases, tenant_id, case_id, invoice):
+        cases.put_artifact(
+            RunContext(tenant_id=tenant_id, case_id=case_id),
+            "extraction",
+            {"invoice": invoice},
+        )
+
+    def test_it_reads_the_tenants_own_cases(self, tmp_path):
+        cases = self._cases(tmp_path, "acme")
+        self._store(
+            cases,
+            "acme",
+            "case-earlier",
+            {"vendor_name": "QuickFix", "invoice_number": "INV-1"},
+        )
+        ctx = RunContext(tenant_id="acme", case_id="case-now")
+
+        corpus = seen_invoices_for(ctx, cases)()
+
+        assert [key.case_id for key in corpus] == ["case-earlier"]
+        assert corpus[0].invoice_number == "INV-1"
+
+    def test_the_case_being_processed_is_excluded(self, tmp_path):
+        """Otherwise every invoice is a duplicate of itself."""
+        cases = self._cases(tmp_path, "acme")
+        self._store(cases, "acme", "case-now", {"invoice_number": "INV-1"})
+        ctx = RunContext(tenant_id="acme", case_id="case-now")
+
+        assert seen_invoices_for(ctx, cases)(exclude_case_id="case-now") == []
+
+    def test_the_pipeline_uses_the_corpus_it_is_given(self, tmp_path):
+        """The injection point itself: without it the phase falls back to
+        scanning local disk however it was called."""
+        earlier = InvoiceKey(
+            case_id="supplied-case",
+            vendor_name="QuickFix",
+            invoice_number="INV-1",
+        )
+        agent = gia.Phase3ValidatorAgent(seen_invoices=lambda **_: [earlier])
+
+        result = agent.run(
+            tmp_path,
+            {
+                "invoice": {
+                    "vendor_name": "QuickFix",
+                    "invoice_number": "INV-1",
+                }
+            },
+            {"decision": "CONTINUE"},
+        )
+
+        step_31 = next(v for v in result["validations"] if v["step"] == "3.1")
+        assert "supplied-case" in str(step_31)

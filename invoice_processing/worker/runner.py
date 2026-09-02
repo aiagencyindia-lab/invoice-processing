@@ -126,6 +126,40 @@ class ClaimStore:
 # ---------------------------------------------------------------------------
 
 
+def seen_invoices_for(ctx: RunContext, cases):
+    """The corpus duplicate detection compares against, for one tenant.
+
+    The pipeline's own default scans a local output directory. On a deployed
+    worker that directory is ephemeral -- so a duplicate submitted after a
+    restart goes undetected -- and it is shared by every tenant the worker
+    serves, so a match could name another tenant's case id in this tenant's
+    validation record. Reading through the repository fixes both: the corpus
+    is durable, and `tenant_id` scopes it.
+    """
+
+    def load(exclude_case_id: str = ""):
+        from ..duplicates import InvoiceKey  # noqa: PLC0415
+
+        case_ids = [
+            case_id
+            for case_id in cases.iter_case_ids(ctx.tenant_id)
+            if case_id != exclude_case_id
+        ]
+        if not case_ids:
+            return []
+        # One query for the page, not one per case: this runs inside every
+        # invoice's validation.
+        fetched = cases.get_many_artifacts(ctx.tenant_id, case_ids) or {}
+        corpus = []
+        for case_id, artifacts in fetched.items():
+            invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+            if invoice:
+                corpus.append(InvoiceKey.from_invoice(case_id, invoice))
+        return corpus
+
+    return load
+
+
 def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
     """Run the acting pipeline over one stored document.
 
@@ -165,7 +199,11 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
         def publish_step(record: dict) -> None:
             cases.put_artifact(ctx, "progress", record)
 
-        result = process_invoice(source, on_step=publish_step)
+        result = process_invoice(
+            source,
+            on_step=publish_step,
+            seen_invoices=seen_invoices_for(ctx, cases),
+        )
 
         # `process_invoice` catches its own exceptions and returns
         # {"decision": "ERROR"} rather than raising, so a crashed pipeline

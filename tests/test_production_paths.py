@@ -290,7 +290,7 @@ def pipeline(monkeypatch, tmp_path):
     (output / "08_decision.json").write_text('{"final_decision": "ACCEPT"}')
     (output / "broken.json").write_text("{not json")
 
-    def fake_process_invoice(source_folder, on_step=None):
+    def fake_process_invoice(source_folder, on_step=None, seen_invoices=None):
         calls["source"] = source_folder
         # The worker reports progress through this; a double that ignored it
         # would let the reporting break without a test noticing.
@@ -453,6 +453,53 @@ class TestTheCaseIsProjected:
         assert "progress" in cases.written
         assert "progress" not in cases.projected
 
+    def test_the_pipeline_is_given_this_tenants_corpus(self, monkeypatch):
+        """The wiring, not the pieces: the worker must hand the pipeline a
+        reader bound to this tenant. Left to its default the pipeline scans a
+        local directory shared by every tenant the worker serves."""
+        seen = {}
+
+        def fake_process_invoice(
+            source_folder, on_step=None, seen_invoices=None
+        ):
+            seen["provider"] = seen_invoices
+            return {"decision": "ACCEPT"}
+
+        monkeypatch.setattr(
+            "invoice_processing.shared_libraries.acting.general_invoice_agent.process_invoice",
+            fake_process_invoice,
+        )
+        monkeypatch.setattr(
+            "invoice_processing.shared_libraries.acting.general_invoice_agent.get_output_folder",
+            lambda case_id: pathlib.Path("/nonexistent"),
+        )
+        monkeypatch.setattr(
+            service,
+            "_tenant_settings",
+            JsonTenantSettings(pathlib.Path("/tmp/s.json")),
+        )
+
+        cases = RecordingCases()
+        cases.iter_case_ids = lambda tenant_id: iter(["other-case"])
+        cases.get_many_artifacts = lambda tenant_id, ids: {
+            "other-case": {
+                "extraction": {"invoice": {"invoice_number": "INV-1"}}
+            }
+        }
+
+        runner.process_document(
+            RunContext(tenant_id="t-1", case_id="case_x"),
+            {"id": "d-1", "storage_key": "k"},
+            StubBlobs(),
+            cases,
+        )
+
+        assert seen["provider"] is not None, (
+            "the pipeline was left to scan local disk"
+        )
+        corpus = seen["provider"]()
+        assert [key.case_id for key in corpus] == ["other-case"]
+
     def test_a_projection_failure_does_not_lose_the_run(self, pipeline):
         """The artifacts are the record. A view over them that could fail the
         run would be worse than no view."""
@@ -483,7 +530,7 @@ class TestPipelineFailuresReachTheQueue:
         )
         monkeypatch.setattr(
             "invoice_processing.shared_libraries.acting.general_invoice_agent.process_invoice",
-            lambda source_folder, on_step=None: {
+            lambda source_folder, on_step=None, seen_invoices=None: {
                 "decision": "ERROR",
                 "error": "boom",
             },
