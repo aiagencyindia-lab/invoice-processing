@@ -309,7 +309,13 @@ class JsonlAuditSink:
     def __init__(self, path: Path | None = None):
         self.path = Path(path or paths.SESSIONS_DIR / "audit.jsonl")
 
-    def emit(self, ctx: RunContext, event_type: str, payload: dict) -> None:
+    def emit(
+        self,
+        ctx: RunContext,
+        event_type: str,
+        payload: dict,
+        before: dict | None = None,
+    ) -> None:
         from datetime import datetime, timezone  # noqa: PLC0415
 
         record = {
@@ -319,6 +325,7 @@ class JsonlAuditSink:
             "run_id": ctx.run_id,
             "actor": ctx.actor,
             "event_type": event_type,
+            "before": before,
             "payload": payload,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)

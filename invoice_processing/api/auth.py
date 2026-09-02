@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Annotated, Any, Protocol, runtime_checkable
 
@@ -80,9 +81,22 @@ class Principal:
         return RunContext(
             tenant_id=self.tenant_id,
             case_id=case_id,
-            run_id=run_id,
+            # Falls back to the request id so every event from one request
+            # shares a correlation key. It was always empty before, which is
+            # why `request_id` was null on every row in production.
+            run_id=run_id or current_request_id.get(""),
             actor=self.email,
+            settings={"ip": current_client_ip.get("")}
+            if current_client_ip.get("")
+            else {},
         )
+
+
+# Set once per request by the middleware in `service`, read here so a
+# RunContext carries them without every endpoint having to pass the Request
+# around. Both were columns the audit trail declared and never populated.
+current_request_id: ContextVar[str] = ContextVar("request_id", default="")
+current_client_ip: ContextVar[str] = ContextVar("client_ip", default="")
 
 
 class AuthError(HTTPException):

@@ -363,13 +363,38 @@ class PgDocumentRepository:
             return tenant.id if tenant else None
 
 
+# What an event is about, from what it is called. `entity_type` was set to
+# "invoice" whenever a case id happened to be present and left null otherwise,
+# so 33 of 44 rows in production said nothing about what they described.
+_ENTITY_TYPES = {
+    "document": "document",
+    "invoice": "invoice",
+    "fields": "invoice",
+    "email": "document",
+    "tenant": "tenant",
+    "settings": "settings",
+    "purchase": "purchase_order",
+}
+
+
+def entity_type_for(event_type: str, case_id: str = "") -> str | None:
+    prefix = event_type.split("_", 1)[0]
+    return _ENTITY_TYPES.get(prefix) or ("invoice" if case_id else None)
+
+
 class PgAuditSink:
     """Append-only audit trail. Durable on call."""
 
     def __init__(self, url: str | None = None):
         self.url = url
 
-    def emit(self, ctx: RunContext, event_type: str, payload: dict) -> None:
+    def emit(
+        self,
+        ctx: RunContext,
+        event_type: str,
+        payload: dict,
+        before: dict | None = None,
+    ) -> None:
         with tenant_session(ctx.tenant_id, self.url) as session:
             session.add(
                 AuditEvent(
@@ -377,10 +402,12 @@ class PgAuditSink:
                     actor=ctx.actor,
                     actor_type="user" if ctx.actor else "system",
                     action=event_type,
-                    entity_type="invoice" if ctx.case_id else None,
+                    entity_type=entity_type_for(event_type, ctx.case_id),
                     entity_id=ctx.case_id or None,
+                    before=before,
                     after=payload,
                     request_id=ctx.run_id or None,
+                    ip=(ctx.settings or {}).get("ip") or None,
                 )
             )
 

@@ -47,9 +47,39 @@ from ..adapters import (
     JsonlCorrectionStore,
     LocalBlobStore,
 )
+from . import auth
 from .auth import Principal, current_principal, require_role
 
 app = FastAPI(title="Invoice Review Workbench", version="0.1.0")
+
+
+@app.middleware("http")
+async def _identify_request(request, call_next):
+    """Give one request one id, and remember where it came from.
+
+    Both are audit columns the trail declared and never filled: every event in
+    production had a null `request_id` and a null `ip`, so two events from the
+    same action could not be tied together and no action could be placed.
+    """
+    from uuid import uuid4  # noqa: PLC0415
+
+    request_id = request.headers.get("x-request-id") or uuid4().hex
+    # Railway terminates TLS in front of the app, so `request.client` is the
+    # proxy. The first entry of the forwarded chain is the actual caller.
+    forwarded = request.headers.get("x-forwarded-for", "")
+    client = forwarded.split(",")[0].strip() or (
+        request.client.host if request.client else ""
+    )
+
+    id_token = auth.current_request_id.set(request_id)
+    ip_token = auth.current_client_ip.set(client)
+    try:
+        response = await call_next(request)
+    finally:
+        auth.current_request_id.reset(id_token)
+        auth.current_client_ip.reset(ip_token)
+    response.headers["x-request-id"] = request_id
+    return response
 
 
 @asynccontextmanager
@@ -592,6 +622,13 @@ def edit_fields(
             {
                 "count": len(recorded),
                 "fields": [r["field_path"] for r in recorded],
+                "values": {r["field_path"]: r["new_value"] for r in recorded},
+            },
+            # The trail said which fields changed and by whom, never what they
+            # were. That answer lived only in the corrections store, so an
+            # auditor reading the trail alone could not reconstruct the edit.
+            before={
+                "values": {r["field_path"]: r["old_value"] for r in recorded}
             },
         )
 
@@ -620,6 +657,8 @@ def act(
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
 
+    # From the artifacts already in hand rather than a second read.
+    previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
     _record_workflow(
         ctx,
         decision=request.action,
@@ -627,10 +666,16 @@ def act(
         decided_at=datetime.now(timezone.utc).isoformat(),
         reason=request.reason,
     )
+    # Spelled out rather than built from the action: `f"invoice_{action}d"`
+    # produced "invoice_rejectd", and an audit trail is immutable, so the typo
+    # is now permanent in every row already written.
     get_audit().emit(
         ctx,
-        f"invoice_{request.action}d",
+        "invoice_approved"
+        if request.action == "approve"
+        else "invoice_rejected",
         {"reason": request.reason},
+        before={"decision": previous.get("decision")} if previous else None,
     )
     return {
         "case_id": case_id,

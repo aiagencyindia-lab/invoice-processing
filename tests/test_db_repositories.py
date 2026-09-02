@@ -33,6 +33,7 @@ from invoice_processing.db.repositories import (
     PgCaseRepository,
     PgCorrectionStore,
     PgRuleRepository,
+    entity_type_for,
 )
 from invoice_processing.db.rls import enable_rls_statements
 from invoice_processing.db.session import create_all, get_engine, tenant_session
@@ -675,3 +676,64 @@ class TestDuplicateCorpusIsTenantScoped:
         )()
 
         assert [key.case_id for key in corpus] == ["earlier"]
+
+
+class TestTheTrailCanAnswerWhatChanged:
+    """An after-state with nothing to compare it to is not an audit trail.
+
+    In production `before`, `ip` and `request_id` were null on every one of 44
+    rows, and `entity_type` was null on 33 -- so the trail could say that
+    fields were corrected and by whom, but not what they had been, from where,
+    or which events belonged to the same action.
+    """
+
+    def test_before_is_recorded_when_it_is_given(self, db):
+        sink = PgAuditSink(db)
+        ctx = RunContext(tenant_id=ACME, case_id="case-1", actor="a@acme.test")
+
+        sink.emit(
+            ctx,
+            "fields_corrected",
+            {"values": {"vendor_name": "Acme Corp"}},
+            before={"values": {"vendor_name": "Acme Crp"}},
+        )
+
+        [event] = sink.query(ACME)
+        assert event.before == {"values": {"vendor_name": "Acme Crp"}}
+        assert event.after == {"values": {"vendor_name": "Acme Corp"}}
+
+    def test_the_request_id_and_address_are_recorded(self, db):
+        sink = PgAuditSink(db)
+        ctx = RunContext(
+            tenant_id=ACME,
+            case_id="case-1",
+            run_id="req-123",
+            actor="a@acme.test",
+            settings={"ip": "203.0.113.7"},
+        )
+
+        sink.emit(ctx, "invoice_approved", {})
+
+        [event] = sink.query(ACME)
+        assert event.request_id == "req-123"
+        assert event.ip == "203.0.113.7"
+
+    def test_an_event_says_what_it_is_about(self, db):
+        assert entity_type_for("document_ingested") == "document"
+        assert entity_type_for("email_received") == "document"
+        assert entity_type_for("fields_corrected") == "invoice"
+        assert entity_type_for("invoice_approved") == "invoice"
+        assert entity_type_for("settings_changed") == "settings"
+        assert entity_type_for("tenant_self_provisioned") == "tenant"
+
+    def test_a_document_event_is_not_labelled_an_invoice(self, db):
+        """It was, whenever a case id happened to be present."""
+        sink = PgAuditSink(db)
+        sink.emit(
+            RunContext(tenant_id=ACME, case_id="doc-1", actor="a@acme.test"),
+            "document_ingested",
+            {},
+        )
+
+        [event] = sink.query(ACME)
+        assert event.entity_type == "document"

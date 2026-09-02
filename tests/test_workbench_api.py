@@ -358,3 +358,51 @@ class TestRoot:
     def test_says_how_to_start_the_app_when_it_is_not_running(self, client):
         """A dead link is a dead end; the next step has to be on the page."""
         assert "npm run dev" in client.get("/").text
+
+
+def _audit_events(tmp_path):
+    return [
+        json.loads(line)
+        for line in (tmp_path / "audit.jsonl").read_text().strip().splitlines()
+    ]
+
+
+class TestTheAuditTrailIsSpelledCorrectly:
+    def test_a_rejection_is_recorded_as_rejected(self, client, tmp_path):
+        """`f"invoice_{action}d"` produced "invoice_rejectd". The trail is
+        append-only, so the typo is permanent in every row already written --
+        and a query for "invoice_rejected" returned nothing at all."""
+        client.post(
+            "/api/invoices/case_002/actions",
+            json={"action": "reject", "reason": "wrong company"},
+        )
+
+        actions = [event["event_type"] for event in _audit_events(tmp_path)]
+        assert "invoice_rejected" in actions
+        assert "invoice_rejectd" not in actions
+
+    def test_an_approval_is_still_recorded_as_approved(self, client, tmp_path):
+        client.post(
+            "/api/invoices/case_002/actions", json={"action": "approve"}
+        )
+
+        actions = [event["event_type"] for event in _audit_events(tmp_path)]
+        assert "invoice_approved" in actions
+
+
+class TestAnEditRecordsWhatTheValueWas:
+    def test_the_previous_value_is_in_the_trail(self, client, tmp_path):
+        """The trail said which fields changed and by whom, never what they
+        had been -- so it could not answer the question it exists for without
+        a second store."""
+        before_value = _field(client, "case_002", "currency")
+
+        client.patch(
+            "/api/invoices/case_002/fields",
+            json={"edits": [{"field": "currency", "value": "NZD"}]},
+        )
+
+        event = _audit_events(tmp_path)[-1]
+        assert event["event_type"] == "fields_corrected"
+        assert event["before"]["values"]["currency"] == before_value
+        assert event["payload"]["values"]["currency"] == "NZD"

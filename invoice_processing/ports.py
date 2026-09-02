@@ -167,7 +167,19 @@ class AuditSink(Protocol):
     explicit save(), so a crash loses the whole SME session.
     """
 
-    def emit(self, ctx: RunContext, event_type: str, payload: dict) -> None: ...
+    def emit(
+        self,
+        ctx: RunContext,
+        event_type: str,
+        payload: dict,
+        before: dict | None = None,
+    ) -> None:
+        """`before` is the state the action replaced.
+
+        Without it the trail records an after-state with nothing to compare it
+        to, and "what changed" -- the question an auditor actually asks -- can
+        only be answered by reading the values out of some other store.
+        """
 
 
 @runtime_checkable
