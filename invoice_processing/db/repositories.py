@@ -34,6 +34,7 @@ from .models import (
     Correction,
     Document,
     DocumentClaim,
+    ExportJob,
     Finding,
     Invoice,
     InvoiceLine,
@@ -1133,3 +1134,79 @@ class PgSheetViews:
             )
             if view is not None:
                 session.delete(view)
+
+
+class PgExportJobs:
+    """Export jobs: what was asked for, how it went, where the file is."""
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    @staticmethod
+    def _to_dict(job: ExportJob) -> dict:
+        return {
+            "id": job.id,
+            "requested_by": job.requested_by,
+            # `format` in the API, `fmt` on the row -- `format` is a builtin
+            # and a SQLAlchemy attribute name worth not shadowing.
+            "format": job.fmt,
+            "spec": dict(job.spec or {}),
+            "status": job.status,
+            "row_count": job.row_count,
+            "storage_key": job.storage_key,
+            "error": job.error,
+            "created_at": job.created_at.isoformat()
+            if job.created_at
+            else None,
+            "finished_at": (
+                job.finished_at.isoformat() if job.finished_at else None
+            ),
+        }
+
+    def create(
+        self, tenant_id: str, *, requested_by: str, fmt: str, spec: dict
+    ) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            job = ExportJob(
+                tenant_id=tenant_id,
+                requested_by=requested_by,
+                fmt=fmt,
+                spec=spec,
+                status="queued",
+            )
+            session.add(job)
+            session.flush()
+            return self._to_dict(job)
+
+    def get(self, tenant_id: str, job_id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            job = session.scalar(
+                select(ExportJob).where(
+                    ExportJob.tenant_id == tenant_id, ExportJob.id == job_id
+                )
+            )
+            return self._to_dict(job) if job else None
+
+    def list(self, tenant_id: str, limit: int = 25) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(ExportJob)
+                .where(ExportJob.tenant_id == tenant_id)
+                .order_by(ExportJob.created_at.desc())
+                .limit(limit)
+            ).all()
+            return [self._to_dict(row) for row in rows]
+
+    def update(self, tenant_id: str, job_id: str, **changes) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            job = session.scalar(
+                select(ExportJob).where(
+                    ExportJob.tenant_id == tenant_id, ExportJob.id == job_id
+                )
+            )
+            if job is None:
+                return {}
+            for field, value in changes.items():
+                setattr(job, field, value)
+            session.flush()
+            return self._to_dict(job)

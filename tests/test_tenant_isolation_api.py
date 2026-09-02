@@ -455,6 +455,22 @@ class TestSheetIsolation:
         monkeypatch.delenv("AUTH_DISABLED", raising=False)
         monkeypatch.setattr(auth, "_verifier", FakeVerifier())
 
+        # Per-tenant blob stores, so an export writes somewhere real and one
+        # tenant's file cannot be fetched from another's store.
+        stores: dict[str, dict] = {}
+
+        class MemoryBlobs:
+            def __init__(self, tenant_id):
+                self.store = stores.setdefault(tenant_id, {})
+
+            def put(self, key, data, content_type=None):
+                self.store[key] = data
+
+            def get(self, key):
+                return self.store[key]
+
+        monkeypatch.setattr(service, "get_blobs", MemoryBlobs)
+
         def client_for(slug, role="admin"):
             return TestClient(
                 app, headers={"Authorization": f"Bearer {slug}-{role}"}
@@ -489,6 +505,44 @@ class TestSheetIsolation:
     def test_facets_do_not_name_another_tenants_vendors(self, sheet_clients):
         body = sheet_clients("globex").get("/api/sheet/facets").json()
         assert body["vendors"] == ["Globex Supplier"]
+
+    def test_an_export_is_invisible_to_another_tenant(self, sheet_clients):
+        """A finished export is a file of one tenant's ledger."""
+        created = sheet_clients("acme").post(
+            "/api/sheet/exports", json={"format": "csv"}
+        )
+        assert created.status_code == 200, created.text
+
+        assert (
+            sheet_clients("globex").get("/api/sheet/exports").json()["exports"]
+            == []
+        )
+
+    def test_another_tenant_cannot_download_an_export(self, sheet_clients):
+        job = (
+            sheet_clients("acme")
+            .post("/api/sheet/exports", json={"format": "csv"})
+            .json()
+        )
+
+        response = sheet_clients("globex").get(
+            f"/api/sheet/exports/{job['id']}/download"
+        )
+        assert response.status_code == 404
+
+    def test_an_export_contains_only_this_tenants_rows(self, sheet_clients):
+        """The file is the dangerous artefact: it leaves the system."""
+        job = (
+            sheet_clients("globex")
+            .post("/api/sheet/exports", json={"format": "csv"})
+            .json()
+        )
+        body = sheet_clients("globex").get(
+            f"/api/sheet/exports/{job['id']}/download"
+        )
+
+        assert b"Globex Supplier" in body.content
+        assert b"Acme Supplier" not in body.content
 
     def test_a_saved_view_is_invisible_to_another_tenant(self, sheet_clients):
         created = sheet_clients("acme").post(
@@ -574,6 +628,9 @@ class TestCoverage:
         "/api/sheet/facets",
         "/api/sheet/views",
         "/api/sheet/views/{view_id}",
+        "/api/sheet/exports",
+        "/api/sheet/exports/{job_id}",
+        "/api/sheet/exports/{job_id}/download",
     }
 
     def test_every_route_is_covered(self):

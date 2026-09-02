@@ -32,6 +32,10 @@ dependencies = [
     # needs no database password and the instance needs no public IP.
     "cloud-sql-python-connector[pg8000]>=1.7.0",
     "requests>=2.31.0",
+    # Writing a correct .xlsx is not "a few lines": shared strings, escaping,
+    # and the difference between a number and text that looks like one. It
+    # also reads the file back, so an export can be tested rather than eyeballed.
+    "openpyxl>=3.1.0",
 ]
 
 [project.urls]

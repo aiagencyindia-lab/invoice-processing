@@ -17,7 +17,14 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    Response,
+)
 
 from .. import sheet_columns
 from .auth import Principal, current_principal, require_role
@@ -374,3 +381,150 @@ def delete_view(
         before={"name": existing["name"], "shared": existing["shared"]},
     )
     return {"deleted": view_id}
+
+
+# ---------------------------------------------------------------------------
+# Export centre
+# ---------------------------------------------------------------------------
+
+
+def _jobs():
+    from ..db.repositories import PgExportJobs  # noqa: PLC0415
+
+    _repository()  # same database requirement, same 503
+    return PgExportJobs()
+
+
+@router.post("/api/sheet/exports")
+def create_export(
+    body: dict,
+    background: BackgroundTasks,
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+) -> dict:
+    """Ask for a file of the rows currently on screen.
+
+    A small export is written before the response returns, because waiting two
+    seconds beats polling for them. A large one continues in the background and
+    the job says when it is ready -- the browser will not hold a connection
+    open for ten thousand invoices, and neither should the user.
+    """
+    from .. import exports  # noqa: PLC0415
+    from . import service  # noqa: PLC0415
+
+    fmt = str(body.get("format") or "csv").lower()
+    if fmt not in exports.FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown format {fmt}. Available: {', '.join(exports.FORMATS)}.",
+        )
+
+    filters = _filters(
+        principal.tenant_id,
+        str(body.get("status") or "approved"),
+        *(
+            (body.get("filters") or {}).get(key)
+            for key in (
+                "q",
+                "vendor",
+                "currency",
+                "date_from",
+                "date_to",
+                "approved_from",
+                "approved_to",
+                "min_total",
+                "max_total",
+                "po",
+                "tax",
+            )
+        ),
+        (body.get("filters") or {}).get("quality"),
+    )
+    spec = {
+        "filters": filters,
+        "columns": body.get("columns") or [],
+        "case_ids": body.get("case_ids") or [],
+        "sort": body.get("sort") or "approved_at",
+        "order": body.get("order") or "desc",
+    }
+
+    job = _jobs().create(
+        principal.tenant_id,
+        requested_by=principal.email,
+        fmt=fmt,
+        spec=spec,
+    )
+    service.get_audit().emit(
+        principal.context(),
+        "export_requested",
+        {"export": job["id"], "format": fmt, "columns": len(spec["columns"])},
+    )
+
+    # How many rows this will be decides whether the user waits.
+    _, total = _repository().page(
+        principal.tenant_id, filters, "approved_at", "desc", 1
+    )
+    if spec["case_ids"]:
+        total = len(spec["case_ids"])
+
+    if total <= exports.INLINE_ROW_LIMIT:
+        return exports.run(job["id"], principal.tenant_id)
+
+    background.add_task(exports.run, job["id"], principal.tenant_id)
+    return job
+
+
+@router.get("/api/sheet/exports")
+def list_exports(
+    principal: Annotated[Principal, Depends(current_principal)],
+) -> dict:
+    return {"exports": _jobs().list(principal.tenant_id)}
+
+
+@router.get("/api/sheet/exports/{job_id}")
+def get_export(
+    job_id: str,
+    principal: Annotated[Principal, Depends(current_principal)],
+) -> dict:
+    job = _jobs().get(principal.tenant_id, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown export.")
+    return job
+
+
+@router.get("/api/sheet/exports/{job_id}/download")
+def download_export(
+    job_id: str,
+    principal: Annotated[Principal, Depends(current_principal)],
+) -> Response:
+    """The finished file.
+
+    Proxied rather than handed out as a signed URL, the same way an invoice PDF
+    is: the browser fetches this with a bearer token, and a plain link carries
+    none.
+    """
+    from .. import exports  # noqa: PLC0415
+    from . import service  # noqa: PLC0415
+
+    job = _jobs().get(principal.tenant_id, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown export.")
+    if job["status"] != "done" or not job["storage_key"]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"That export is {job['status']}, not ready to download.",
+        )
+
+    try:
+        payload = service.get_blobs(principal.tenant_id).get(job["storage_key"])
+    except Exception as exc:
+        raise HTTPException(
+            status_code=404, detail="The export file is no longer stored."
+        ) from exc
+
+    stamp = (job["created_at"] or "")[:10]
+    filename = f"approved-invoices-{stamp}.{job['format']}"
+    return Response(
+        content=payload,
+        media_type=exports.CONTENT_TYPES[job["format"]],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
