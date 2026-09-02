@@ -12,11 +12,10 @@ import json
 import logging
 import sys
 
-from .. import paths
 from ..api import service
 from ..gcp_credentials import materialise_credentials
 from .queue import LocalQueue, get_queue
-from .runner import AttemptLog, ClaimStore, Worker
+from .runner import AttemptLog, Worker, _worker_id
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -55,7 +54,10 @@ def main(argv: list[str] | None = None) -> int:
 
     worker = Worker(
         queue=queue,
-        claims=ClaimStore(paths.DATA_DIR / "claims"),
+        # Resolved, not hardcoded: a claim on container-local disk excludes
+        # only the processes sharing that disk, which across two containers
+        # is none of the ones that matter.
+        claims=service.get_claim_store(worker_id=_worker_id()),
         # The resolved sink, not a hardcoded file: a worker writing its audit
         # trail to container-local disk loses it on every restart, which is
         # exactly the events an auditor would ask about.

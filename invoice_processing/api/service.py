@@ -123,6 +123,7 @@ _cases = None
 _documents = None
 _audit = None
 _corrections = None
+_claim_store = None
 _tenant_settings = None
 _claims_writer = None
 
@@ -214,6 +215,27 @@ def get_corrections():
         else:
             _corrections = JsonlCorrectionStore()
     return _corrections
+
+
+def get_claim_store(worker_id: str = ""):
+    """Who is processing what: Postgres when configured, else local files.
+
+    The file store excludes only the processes on one machine. With the API
+    and the worker in separate containers it excluded nothing that mattered --
+    two workers could hold the same claim, and the API could not see either.
+    """
+    global _claim_store
+    if _claim_store is None:
+        if _database_configured():
+            from ..db.repositories import PgClaimStore  # noqa: PLC0415
+
+            _claim_store = PgClaimStore(worker_id=worker_id)
+        else:
+            from .. import paths  # noqa: PLC0415
+            from ..worker.runner import ClaimStore  # noqa: PLC0415
+
+            _claim_store = ClaimStore(paths.DATA_DIR / "claims")
+    return _claim_store
 
 
 def get_queue():

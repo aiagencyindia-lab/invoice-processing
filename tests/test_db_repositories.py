@@ -31,6 +31,7 @@ from invoice_processing.db.models import (
 from invoice_processing.db.repositories import (
     PgAuditSink,
     PgCaseRepository,
+    PgClaimStore,
     PgCorrectionStore,
     PgRuleRepository,
     entity_type_for,
@@ -45,7 +46,7 @@ from invoice_processing.ports import (
     RuleRepository,
     RunContext,
 )
-from invoice_processing.worker.runner import seen_invoices_for
+from invoice_processing.worker.runner import ClaimStore, seen_invoices_for
 
 ACME = "tenant-acme"
 GLOBEX = "tenant-globex"
@@ -737,3 +738,75 @@ class TestTheTrailCanAnswerWhatChanged:
 
         [event] = sink.query(ACME)
         assert event.entity_type == "document"
+
+
+class TestClaimsHoldAcrossContainers:
+    """`O_EXCL` on a local file excludes the processes sharing that disk.
+
+    With the API and the worker in separate containers that is none of the
+    ones that matter: two workers could each create their own claim file for
+    the same document and run the same extraction side by side, and the API
+    could see neither -- which is why a document being extracted right now
+    reported itself as "received, but not queued".
+    """
+
+    def test_only_one_caller_wins(self, db):
+        first = PgClaimStore(db, worker_id="worker-a")
+        second = PgClaimStore(db, worker_id="worker-b")
+
+        assert first.claim(ACME, "doc-1") is True
+        assert second.claim(ACME, "doc-1") is False
+
+    def test_the_other_container_can_read_the_claim(self, db):
+        PgClaimStore(db, worker_id="worker-a").claim(ACME, "doc-1")
+
+        # A different process entirely -- this is what the API is.
+        assert PgClaimStore(db).state(ACME, "doc-1") == "running"
+
+    def test_completing_marks_it_done(self, db):
+        store = PgClaimStore(db)
+        store.claim(ACME, "doc-1")
+        store.complete(ACME, "doc-1", "done")
+
+        assert store.state(ACME, "doc-1") == "done"
+
+    def test_releasing_lets_a_retry_claim_it_again(self, db):
+        store = PgClaimStore(db)
+        store.claim(ACME, "doc-1")
+        store.release(ACME, "doc-1")
+
+        assert store.state(ACME, "doc-1") is None
+        assert store.claim(ACME, "doc-1") is True
+
+    def test_a_completion_without_a_claim_still_records(self, db):
+        """The worker completes after a claim it may not have taken itself."""
+        store = PgClaimStore(db)
+        store.complete(ACME, "doc-9", "failed")
+
+        assert store.state(ACME, "doc-9") == "failed"
+
+    def test_two_tenants_may_hold_the_same_document_id(self, db):
+        """Ids are unique per tenant, and one tenant's claim must never
+        satisfy another's."""
+        store = PgClaimStore(db)
+
+        assert store.claim(ACME, "doc-1") is True
+        assert store.claim(GLOBEX, "doc-1") is True
+        assert store.state(ACME, "doc-1") == "running"
+
+    def test_a_claim_does_not_leak_across_tenants(self, db):
+        PgClaimStore(db).claim(ACME, "doc-1")
+
+        assert PgClaimStore(db).state(GLOBEX, "doc-1") is None
+
+    def test_it_matches_the_filesystem_store(self, db, tmp_path):
+        """Interchangeable by construction: same four methods, same answers."""
+        for store in (PgClaimStore(db), ClaimStore(tmp_path / "claims")):
+            assert store.state(ACME, "doc-x") is None
+            assert store.claim(ACME, "doc-x") is True
+            assert store.claim(ACME, "doc-x") is False
+            assert store.state(ACME, "doc-x") == "running"
+            store.complete(ACME, "doc-x", "done")
+            assert store.state(ACME, "doc-x") == "done"
+            store.release(ACME, "doc-x")
+            assert store.state(ACME, "doc-x") is None

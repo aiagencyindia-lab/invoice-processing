@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from invoice_processing.api import service
+
 # Ensure the agent package is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -35,6 +37,28 @@ def a_project_id_that_is_not_real(monkeypatch):
     ):
         monkeypatch.setenv(name, "test-project-not-real")
     monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+
+@pytest.fixture(autouse=True)
+def resolve_adapters_afresh(monkeypatch):
+    """Clear the memoized adapters between tests.
+
+    They are cached after first use, which is right in a process serving
+    traffic and wrong in a suite: a store resolved under one test's
+    environment -- its temp data directory, its database URL -- would
+    otherwise be handed to the next test, which configured something else and
+    is entitled to get it.
+    """
+    for name in (
+        "_cases",
+        "_documents",
+        "_audit",
+        "_corrections",
+        "_claim_store",
+        "_tenant_settings",
+        "_claims_writer",
+    ):
+        monkeypatch.setattr(service, name, None, raising=False)
 
 
 @pytest.fixture(autouse=True)

@@ -186,13 +186,10 @@ def _dead_shas(queue) -> set[str]:
 
 
 def _claim_state(tenant_id: str, document_id: str) -> str | None:
-    from .. import paths  # noqa: PLC0415
-    from ..worker.runner import ClaimStore  # noqa: PLC0415
+    from . import service  # noqa: PLC0415
 
     return _safe(
-        lambda: ClaimStore(paths.DATA_DIR / "claims").state(
-            tenant_id, document_id
-        )
+        lambda: service.get_claim_store().state(tenant_id, document_id)
     )
 
 
@@ -372,8 +369,7 @@ def retry_document(
     idempotency guard immediately skip the message we just published -- the
     guard doing its job, but with the user watching nothing happen.
     """
-    from .. import paths  # noqa: PLC0415
-    from ..worker.runner import ClaimStore, enqueue_document  # noqa: PLC0415
+    from ..worker.runner import enqueue_document  # noqa: PLC0415
     from . import service  # noqa: PLC0415
 
     documents = service.get_documents()
@@ -382,9 +378,7 @@ def retry_document(
     if document is None:
         raise HTTPException(status_code=404, detail="Unknown document")
 
-    ClaimStore(paths.DATA_DIR / "claims").release(
-        principal.tenant_id, document_id
-    )
+    service.get_claim_store().release(principal.tenant_id, document_id)
 
     class _Result:
         pass

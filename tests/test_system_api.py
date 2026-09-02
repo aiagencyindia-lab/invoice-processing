@@ -71,13 +71,18 @@ def env(tmp_path, monkeypatch):
 
     # Point the claim store and heartbeat at the temp tree.
     monkeypatch.setattr(service.paths, "DATA_DIR", tmp_path)
+    # Injected like every other adapter: `.env` carries CLOUD_SQL_INSTANCE, so
+    # an un-injected store resolves to Postgres and the test would be talking
+    # to a different claim store than the API is.
+    claims = ClaimStore(tmp_path / "claims")
+    monkeypatch.setattr(service, "_claim_store", claims)
     monkeypatch.setattr(service.paths, "SESSIONS_DIR", tmp_path)
 
     return {
         "documents": documents,
         "queue": queue,
         "cases": cases,
-        "claims": ClaimStore(tmp_path / "claims"),
+        "claims": claims,
         "tmp": tmp_path,
         "client": lambda role="admin": TestClient(
             app, headers={"Authorization": f"Bearer {role}"}

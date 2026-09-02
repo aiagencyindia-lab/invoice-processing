@@ -347,6 +347,36 @@ class AuditEvent(Base, TenantMixin):
 
 
 # Tables carrying tenant-owned data. The migration enables RLS on each.
+class DocumentClaim(Base, TenantMixin, TimestampMixin):
+    """Who is processing a document, where every worker can see it.
+
+    The claim was a file created with `O_EXCL` under the data directory. That
+    is a correct mutual exclusion on one machine and none at all across two:
+    each container has its own disk, so two workers could both win the same
+    claim and run the same extraction side by side -- which is exactly the
+    duplicate the whole idempotency design exists to prevent.
+
+    The unique constraint is the lock. `INSERT ... ON CONFLICT DO NOTHING`
+    either inserts a row or does not, atomically, for every process at once.
+    """
+
+    __tablename__ = "document_claims"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "document_id", name="uq_document_claims_document"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    document_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    # running | done | failed. The worker reads this to tell a redelivery of
+    # finished work from work someone else is doing.
+    state: Mapped[str] = mapped_column(
+        String(16), default="running", nullable=False
+    )
+    worker_id: Mapped[str | None] = mapped_column(String(128))
+
+
 class WorkerHeartbeat(Base):
     """Liveness, where every container can see it.
 
@@ -373,6 +403,7 @@ class WorkerHeartbeat(Base):
 
 TENANT_TABLES = (
     "users",
+    "document_claims",
     "documents",
     "invoices",
     "invoice_lines",

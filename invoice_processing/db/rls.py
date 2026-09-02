@@ -30,10 +30,17 @@ from .models import TENANT_TABLES
 TENANT_SETTING = "app.tenant_id"
 
 
-def enable_rls_statements() -> list[str]:
-    """DDL enabling RLS and installing per-tenant policies."""
+def enable_rls_statements(tables: list[str] | None = None) -> list[str]:
+    """DDL enabling RLS and installing per-tenant policies.
+
+    A migration passes its own list. `TENANT_TABLES` is the *current* set of
+    tenant tables, and a migration is history: deriving one from the other
+    means adding a table today changes what a migration written last month
+    does, and the first fresh database to run the chain fails on a table that
+    does not exist yet at that point.
+    """
     statements: list[str] = []
-    for table in TENANT_TABLES:
+    for table in tables if tables is not None else TENANT_TABLES:
         statements.append(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")
         # FORCE applies the policy to the table owner too. Without it, the
         # migration role -- often the same role the app connects as -- silently
@@ -61,9 +68,9 @@ def enable_rls_statements() -> list[str]:
     return statements
 
 
-def disable_rls_statements() -> list[str]:
+def disable_rls_statements(tables: list[str] | None = None) -> list[str]:
     statements: list[str] = []
-    for table in TENANT_TABLES:
+    for table in tables if tables is not None else TENANT_TABLES:
         if table == "audit_events":
             statements.append(
                 f"DROP POLICY IF EXISTS {table}_select ON {table};"

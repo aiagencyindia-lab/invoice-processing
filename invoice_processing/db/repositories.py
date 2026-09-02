@@ -13,15 +13,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from collections.abc import Iterator
 
 from sqlalchemy import select
+from sqlalchemy.dialects import postgresql, sqlite
 
 from ..ports import RuleBaseConflict, RunContext
 from .models import (
     AuditEvent,
     Correction,
     Document,
+    DocumentClaim,
     Finding,
     Invoice,
     InvoiceLine,
@@ -421,6 +424,86 @@ class PgAuditSink:
                     .limit(limit)
                 ).all()
             )
+
+
+class PgClaimStore:
+    """Which documents are being processed, visible to every container.
+
+    Interchangeable with the filesystem `ClaimStore`: same four methods, same
+    meanings. The difference is where the exclusion happens. `O_EXCL` on a
+    local file excludes the other processes on that machine and nobody else,
+    so two workers on two containers could both win the same claim and run the
+    same extraction side by side -- the duplicate the idempotency design
+    exists to prevent. It also meant the API could not see any claim at all,
+    which is why a document being extracted right now reported itself as
+    "received, but not queued".
+
+    `INSERT ... ON CONFLICT DO NOTHING` is the same idea done where both can
+    see it: one row is inserted or none is, atomically, however many processes
+    ask at once.
+    """
+
+    def __init__(self, url: str | None = None, worker_id: str = ""):
+        self.url = url
+        self.worker_id = worker_id
+
+    def claim(self, tenant_id: str, document_id: str) -> bool:
+        with tenant_session(tenant_id, self.url) as session:
+            values = {
+                "id": str(uuid.uuid4()),
+                "tenant_id": tenant_id,
+                "document_id": document_id,
+                "state": "running",
+                "worker_id": self.worker_id or None,
+            }
+            if session.get_bind().dialect.name == "postgresql":
+                statement = postgresql.insert(DocumentClaim).values(**values)
+            else:
+                statement = sqlite.insert(DocumentClaim).values(**values)
+            result = session.execute(
+                statement.on_conflict_do_nothing(
+                    index_elements=["tenant_id", "document_id"]
+                )
+            )
+            return bool(result.rowcount)
+
+    def complete(
+        self, tenant_id: str, document_id: str, result: str = "done"
+    ) -> None:
+        with tenant_session(tenant_id, self.url) as session:
+            claim = self._row(session, tenant_id, document_id)
+            if claim is None:
+                session.add(
+                    DocumentClaim(
+                        tenant_id=tenant_id,
+                        document_id=document_id,
+                        state=result,
+                        worker_id=self.worker_id or None,
+                    )
+                )
+            else:
+                claim.state = result
+
+    def release(self, tenant_id: str, document_id: str) -> None:
+        """Drop the claim so a retry can pick the work up again."""
+        with tenant_session(tenant_id, self.url) as session:
+            claim = self._row(session, tenant_id, document_id)
+            if claim is not None:
+                session.delete(claim)
+
+    def state(self, tenant_id: str, document_id: str) -> str | None:
+        with tenant_session(tenant_id, self.url) as session:
+            claim = self._row(session, tenant_id, document_id)
+            return claim.state if claim else None
+
+    @staticmethod
+    def _row(session, tenant_id: str, document_id: str):
+        return session.scalar(
+            select(DocumentClaim).where(
+                DocumentClaim.tenant_id == tenant_id,
+                DocumentClaim.document_id == document_id,
+            )
+        )
 
 
 class PgCorrectionStore:
