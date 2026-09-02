@@ -16,7 +16,7 @@ import json
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.dialects import postgresql, sqlite
@@ -629,6 +629,20 @@ def _workflow_value(key: str):
     return Invoice.fields["workflow"][key].as_string()
 
 
+def _as_number(value) -> Decimal | None:
+    """An amount from a filter, as a number the database can compare.
+
+    Returns None for anything unparseable so a typo in a saved view narrows
+    nothing rather than failing the whole page.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value).replace(",", "").strip())
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
 class SheetRepository:
     """Queries over approved invoices: filter, sort, paginate, aggregate.
 
@@ -682,9 +696,13 @@ class SheetRepository:
             conditions.append(_workflow_value("decided_at") >= value)
         if value := filters.get("approved_to"):
             conditions.append(_workflow_value("decided_at") <= value)
-        if (value := filters.get("min_total")) is not None:
+        # Coerced, because an amount arrives from a query string as text and
+        # Postgres refuses `numeric >= character varying` outright. SQLite
+        # casts it quietly, so this only ever failed against the real
+        # database -- a filter no test could catch on the test dialect.
+        if (value := _as_number(filters.get("min_total"))) is not None:
             conditions.append(Invoice.total_inc_tax >= value)
-        if (value := filters.get("max_total")) is not None:
+        if (value := _as_number(filters.get("max_total"))) is not None:
             conditions.append(Invoice.total_inc_tax <= value)
 
         for field, column in (

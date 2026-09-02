@@ -8,6 +8,8 @@ become "all of them".
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event
@@ -21,7 +23,7 @@ from invoice_processing.db.models import (
     Invoice,
     Tenant,
 )
-from invoice_processing.db.repositories import SheetRepository
+from invoice_processing.db.repositories import SheetRepository, _as_number
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 
 TENANT = "tenant-acme"
@@ -693,3 +695,45 @@ class TestThePageCostsAFixedNumberOfQueries:
             ),
         )
         assert count <= 2
+
+
+class TestAmountFiltersArriveAsText:
+    """Found against production, not in a fixture.
+
+    An amount reaches the API from a query string, so it is a string. Postgres
+    refuses `numeric >= character varying` outright; SQLite casts it quietly.
+    The whole page 500'd on the real database while every test passed on the
+    test one -- so this asserts the coercion directly rather than relying on a
+    dialect that cannot tell the difference.
+    """
+
+    def test_a_string_amount_becomes_a_number(self):
+        assert _as_number("50000") == Decimal("50000")
+        assert _as_number("1,234.56") == Decimal("1234.56")
+        assert _as_number(" 42 ") == Decimal("42")
+        assert _as_number(99.5) == Decimal("99.5")
+
+    def test_nothing_unparseable_reaches_the_query(self):
+        """A typo in a saved view narrows nothing rather than failing the page."""
+        assert _as_number("") is None
+        assert _as_number(None) is None
+        assert _as_number("about fifty") is None
+
+    def test_the_filter_still_selects_the_right_rows(self, db, client):
+        with tenant_session(TENANT, db) as session:
+            invoice(
+                session,
+                case_id="big",
+                invoice_number="INV-BIG",
+                total_inc_tax=5000,
+            )
+            invoice(
+                session,
+                case_id="small",
+                invoice_number="INV-SMALL",
+                total_inc_tax=100,
+            )
+
+        found = rows(client, min_total="1000")["rows"]
+
+        assert [r["invoice_number"] for r in found] == ["INV-BIG"]
