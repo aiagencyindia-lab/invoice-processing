@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 from invoice_processing.api import auth
 from invoice_processing.api.service import app
@@ -20,6 +21,7 @@ from invoice_processing.db.models import (
     Invoice,
     Tenant,
 )
+from invoice_processing.db.repositories import SheetRepository
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 
 TENANT = "tenant-acme"
@@ -601,3 +603,93 @@ class TestWithoutADatabase:
 
         assert response.status_code == 503
         assert "database" in response.text.lower()
+
+
+class TestThePageCostsAFixedNumberOfQueries:
+    """A query per row is invisible here and ruinous in production.
+
+    SQLite answers in microseconds, so nothing in this suite would ever notice
+    thirty extra statements. Against Cloud SQL each one is a round trip of
+    about three hundred milliseconds -- which is how the document list and the
+    review queue each came to take five and a half seconds before being
+    batched. Counting the statements is the only thing that stays true.
+    """
+
+    def _count_selects(self, db, run):
+        engine = get_engine(db)
+        seen = []
+
+        def record(conn, cursor, statement, params, context, executemany):
+            if statement.strip().lower().startswith("select"):
+                seen.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            run()
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+        return len(seen)
+
+    def _corpus(self, db, count):
+        with tenant_session(TENANT, db) as session:
+            for n in range(count):
+                row = invoice(
+                    session,
+                    case_id=f"case-{n}",
+                    invoice_number=f"INV-{n}",
+                    vendor_name=f"Vendor {n}",
+                )
+                session.add(
+                    Finding(
+                        tenant_id=TENANT,
+                        invoice_id=row.id,
+                        step="4.2",
+                        passed=False,
+                        severity="blocking",
+                    )
+                )
+                session.add(
+                    Correction(
+                        tenant_id=TENANT,
+                        invoice_id=row.id,
+                        field_path="vendor_name",
+                        old_value="a",
+                        new_value="b",
+                    )
+                )
+
+    def test_the_cost_does_not_grow_with_the_page(self, db, client):
+        sheet = SheetRepository(db)
+        filters = {"status": "approved", "high_value_threshold": 0}
+
+        self._corpus(db, 3)
+        small = self._count_selects(
+            db, lambda: sheet.page(TENANT, filters, "approved_at", "desc", 100)
+        )
+
+        self._corpus(db, 20)
+        large = self._count_selects(
+            db, lambda: sheet.page(TENANT, filters, "approved_at", "desc", 100)
+        )
+
+        assert small == large, (
+            f"{small} queries for 3 rows, {large} for 23 -- the page is "
+            "querying per row again"
+        )
+        # count + rows + findings + corrections + duplicates.
+        assert large <= 6, f"a page of rows should not cost {large} queries"
+
+    def test_an_empty_page_asks_nothing_extra(self, db, client):
+        """No rows means no batch reads to do."""
+        sheet = SheetRepository(db)
+        count = self._count_selects(
+            db,
+            lambda: sheet.page(
+                TENANT,
+                {"status": "approved", "high_value_threshold": 0},
+                "approved_at",
+                "desc",
+                100,
+            ),
+        )
+        assert count <= 2

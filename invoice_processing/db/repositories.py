@@ -772,10 +772,16 @@ class SheetRepository:
 
         Offset paging rather than keyset: the grid needs a row count and page
         numbers, the corpus is thousands rather than millions, and a cursor
-        that cannot jump to page nine would be a worse grid for a saving no
-        one can measure yet.
-        """
+        that cannot jump to page nine would be a worse grid for a saving
+        nobody can measure yet.
 
+        The page costs a fixed number of queries -- not one per row. Findings,
+        edit counts and duplicate checks are each fetched for the whole page in
+        one statement, because a query per row is invisible against SQLite and
+        costs a round trip each against a database three hundred milliseconds
+        away. That is the same mistake the document list and the review queue
+        both had to have taken out of them.
+        """
         statement = self._base(tenant_id, filters)
         offset = max(0, int(filters.get("offset") or 0))
 
@@ -792,17 +798,103 @@ class SheetRepository:
             total = session.scalar(
                 select(func.count()).select_from(statement.subquery())
             )
-            rows = session.scalars(
+            invoices = session.scalars(
                 statement.order_by(direction, Invoice.id)
                 .limit(limit)
                 .offset(offset)
             ).all()
+            if not invoices:
+                return [], total or 0
+
+            ids = [row.id for row in invoices]
+            failed = self._failed_steps(session, tenant_id, ids)
+            edits = self._edit_counts(session, tenant_id, ids)
+            duplicates = self._duplicate_ids(session, tenant_id, invoices)
+
             return [
-                self._row(session, tenant_id, row, filters) for row in rows
+                self._row(
+                    invoice,
+                    filters,
+                    failed_steps=failed.get(invoice.id, set()),
+                    edits=edits.get(invoice.id, 0),
+                    duplicate=invoice.id in duplicates,
+                )
+                for invoice in invoices
             ], (total or 0)
 
-    def _row(self, session, tenant_id: str, invoice, filters: dict) -> dict:
+    @staticmethod
+    def _failed_steps(
+        session, tenant_id: str, ids: list[str]
+    ) -> dict[str, set]:
+        """Which validation steps failed, for every invoice on the page."""
+        found: dict[str, set] = {}
+        for invoice_id, step in session.execute(
+            select(Finding.invoice_id, Finding.step).where(
+                Finding.tenant_id == tenant_id,
+                Finding.invoice_id.in_(ids),
+                Finding.passed.is_(False),
+            )
+        ):
+            found.setdefault(invoice_id, set()).add(step)
+        return found
 
+    @staticmethod
+    def _edit_counts(session, tenant_id: str, ids: list[str]) -> dict[str, int]:
+        return dict(
+            session.execute(
+                select(Correction.invoice_id, func.count(Correction.id))
+                .where(
+                    Correction.tenant_id == tenant_id,
+                    Correction.invoice_id.in_(ids),
+                )
+                .group_by(Correction.invoice_id)
+            ).all()
+        )
+
+    @staticmethod
+    def _duplicate_ids(session, tenant_id: str, invoices) -> set[str]:
+        """Which of these invoices share a number with another one.
+
+        Compared against the whole tenant, not just the page: an invoice is a
+        duplicate of one filtered off the screen just as much as of one beside
+        it.
+        """
+        keys = {
+            (row.invoice_number, row.vendor_tax_id)
+            for row in invoices
+            if row.invoice_number
+        }
+        if not keys:
+            return set()
+
+        numbers = {number for number, _ in keys}
+        seen: dict[tuple, list[str]] = {}
+        for invoice_id, number, tax_id in session.execute(
+            select(
+                Invoice.id, Invoice.invoice_number, Invoice.vendor_tax_id
+            ).where(
+                Invoice.tenant_id == tenant_id,
+                Invoice.invoice_number.in_(numbers),
+            )
+        ):
+            seen.setdefault((number, tax_id), []).append(invoice_id)
+
+        duplicated = set()
+        for row in invoices:
+            others = seen.get((row.invoice_number, row.vendor_tax_id), [])
+            if len(others) > 1:
+                duplicated.add(row.id)
+        return duplicated
+
+    def _row(
+        self,
+        invoice,
+        filters: dict,
+        *,
+        failed_steps: set,
+        edits: int,
+        duplicate: bool,
+    ) -> dict:
         workflow = (invoice.fields or {}).get("workflow") or {}
         row: dict = {}
         for key, column in BY_KEY.items():
@@ -812,39 +904,20 @@ class SheetRepository:
             elif column.source == "workflow":
                 row[key] = workflow.get(WORKFLOW_PATHS[key])
 
-        row["corrected_fields"] = (
-            session.scalar(
-                select(func.count(Correction.id)).where(
-                    Correction.tenant_id == tenant_id,
-                    Correction.invoice_id == invoice.id,
-                )
-            )
-            or 0
-        )
+        row["corrected_fields"] = edits
         row["quality_flags"] = self._flags_for(
-            session, tenant_id, invoice, row, filters
+            invoice, row, filters, failed_steps, duplicate
         )
         return row
 
+    @staticmethod
     def _flags_for(
-        self, session, tenant_id: str, invoice, row: dict, filters: dict
+        invoice, row: dict, filters: dict, failed_steps: set, duplicate: bool
     ) -> list[str]:
-        """Which quality flags this row carries.
-
-        Computed per row from data already loaded plus one findings read, so a
-        page costs a fixed number of queries rather than one per flag.
-        """
-
-        failed = set(
-            session.scalars(
-                select(Finding.step).where(
-                    Finding.tenant_id == tenant_id,
-                    Finding.invoice_id == invoice.id,
-                    Finding.passed.is_(False),
-                )
-            ).all()
-        )
-        flags = [flag for flag, step in FLAG_STEPS.items() if step in failed]
+        """Which quality flags this row carries, from data already in hand."""
+        flags = [
+            flag for flag, step in FLAG_STEPS.items() if step in failed_steps
+        ]
 
         if invoice.po_number is None:
             flags.append("missing_po")
@@ -860,11 +933,11 @@ class SheetRepository:
         ):
             flags.append("low_confidence")
 
-        summary = (
+        evidence = (
             ((invoice.fields or {}).get("extraction") or {}).get("invoice")
             or {}
         ).get("_evidence") or {}
-        if (summary.get("_summary") or {}).get("has_text_layer") is False:
+        if (evidence.get("_summary") or {}).get("has_text_layer") is False:
             flags.append("no_text_layer")
 
         threshold = filters.get("high_value_threshold") or 0
@@ -874,29 +947,10 @@ class SheetRepository:
 
         if row.get("corrected_fields"):
             flags.append("edited")
-
-        if invoice.invoice_number and self._has_duplicate(
-            session, tenant_id, invoice
-        ):
+        if duplicate:
             flags.append("duplicate_number")
 
         return sorted(flags)
-
-    @staticmethod
-    def _has_duplicate(session, tenant_id: str, invoice) -> bool:
-
-        return bool(
-            session.scalar(
-                select(Invoice.id)
-                .where(
-                    Invoice.tenant_id == tenant_id,
-                    Invoice.id != invoice.id,
-                    Invoice.invoice_number == invoice.invoice_number,
-                    Invoice.vendor_tax_id == invoice.vendor_tax_id,
-                )
-                .limit(1)
-            )
-        )
 
     def ids(self, tenant_id: str, filters: dict) -> list[str]:
         """Every case id the filters match, for an export."""
