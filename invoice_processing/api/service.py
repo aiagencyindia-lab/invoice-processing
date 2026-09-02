@@ -44,6 +44,7 @@ from ..adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
     JsonlAuditSink,
+    JsonlCorrectionStore,
     LocalBlobStore,
 )
 from .auth import Principal, current_principal, require_role
@@ -66,7 +67,6 @@ async def _lifespan(_app: FastAPI):
 app.router.lifespan_context = _lifespan
 
 
-_corrections_path = paths.DATA_DIR / "corrections.jsonl"
 
 # All three storage adapters resolve the same way: lazily, from configuration,
 # memoized. Lazily because a module import must never open a connection and
@@ -81,6 +81,7 @@ _corrections_path = paths.DATA_DIR / "corrections.jsonl"
 _cases = None
 _documents = None
 _audit = None
+_corrections = None
 _tenant_settings = None
 _claims_writer = None
 
@@ -154,6 +155,24 @@ def get_audit():
         else:
             _audit = JsonlAuditSink()
     return _audit
+
+
+def get_corrections():
+    """The correction store: Postgres when configured, else a local file.
+
+    Same reasoning as the audit sink. A correction is the accuracy record and
+    the raw material for a future rule; on a container filesystem it does not
+    survive the next deploy, and two API replicas each keep half of it.
+    """
+    global _corrections
+    if _corrections is None:
+        if _database_configured():
+            from ..db.repositories import PgCorrectionStore  # noqa: PLC0415
+
+            _corrections = PgCorrectionStore()
+        else:
+            _corrections = JsonlCorrectionStore()
+    return _corrections
 
 
 def get_queue():
@@ -455,7 +474,7 @@ def get_invoice(
         "fields": fields,
         "line_items": invoice.get("line_items") or [],
         "findings": _findings(artifacts),
-        "corrections": _read_corrections(case_id, principal.tenant_id),
+        "corrections": get_corrections().list(principal.tenant_id, case_id),
         "evidence_summary": evidence.get("_summary") or {},
     }
 
@@ -549,7 +568,7 @@ def edit_fields(
             "at": datetime.now(timezone.utc).isoformat(),
         }
         recorded.append(record)
-        _append_correction(record)
+        get_corrections().record(ctx, record)
 
     if recorded:
         extraction["invoice"] = invoice
@@ -612,7 +631,7 @@ def stats(principal: Annotated[Principal, Depends(current_principal)]) -> dict:
     """The numbers a pilot is judged on."""
     listing = list_invoices(principal)
     items = listing["invoices"]
-    corrections = _read_corrections(tenant_id=principal.tenant_id)
+    corrections = get_corrections().list(principal.tenant_id)
     return {
         **listing["counts"],
         "touchless_rate": (
@@ -651,38 +670,6 @@ def _record_workflow(ctx, **changes) -> dict:
 # ---------------------------------------------------------------------------
 # Corrections store
 # ---------------------------------------------------------------------------
-
-
-def _append_correction(record: dict) -> None:
-    _corrections_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(_corrections_path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, default=str) + "\n")
-
-
-def _read_corrections(
-    case_id: str | None = None, tenant_id: str | None = None
-) -> list[dict]:
-    if not _corrections_path.exists():
-        return []
-    out = []
-    for line in _corrections_path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if case_id is not None and record.get("case_id") != case_id:
-            continue
-        # Older records predate tenant stamping; a record with no tenant is
-        # only ever visible to the tenant that is asking for everything.
-        if tenant_id is not None and record.get("tenant_id") not in (
-            None,
-            tenant_id,
-        ):
-            continue
-        out.append(record)
-    return out
 
 
 # ---------------------------------------------------------------------------

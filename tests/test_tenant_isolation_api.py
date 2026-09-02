@@ -25,7 +25,11 @@ import pytest
 from fastapi.testclient import TestClient
 from golden import GOLDEN_CASES
 
-from invoice_processing.adapters import FsCaseRepository, JsonDocumentRepository
+from invoice_processing.adapters import (
+    FsCaseRepository,
+    JsonDocumentRepository,
+    JsonlCorrectionStore,
+)
 from invoice_processing.api import (
     admin_routes,
     auth,
@@ -77,7 +81,9 @@ def clients(tmp_path, monkeypatch):
         service, "_cases", FsCaseRepository(cases_root, tenant_id=ACME)
     )
     monkeypatch.setattr(
-        service, "_corrections_path", tmp_path / "corrections.jsonl"
+        service,
+        "_corrections",
+        JsonlCorrectionStore(tmp_path / "corrections.jsonl"),
     )
     monkeypatch.setattr(
         service, "_audit", service.JsonlAuditSink(tmp_path / "audit.jsonl")

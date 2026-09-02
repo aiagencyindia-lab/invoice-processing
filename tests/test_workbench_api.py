@@ -25,6 +25,7 @@ from golden import GOLDEN_CASES
 from invoice_processing.adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
+    JsonlCorrectionStore,
     LocalBlobStore,
 )
 from invoice_processing.api import auth, service
@@ -69,7 +70,9 @@ def client(tmp_path, monkeypatch):
         service, "_cases", FsCaseRepository(cases_root, tenant_id=TENANT)
     )
     monkeypatch.setattr(
-        service, "_corrections_path", tmp_path / "corrections.jsonl"
+        service,
+        "_corrections",
+        JsonlCorrectionStore(tmp_path / "corrections.jsonl"),
     )
     monkeypatch.setattr(
         service, "_audit", service.JsonlAuditSink(tmp_path / "audit.jsonl")

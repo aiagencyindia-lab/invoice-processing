@@ -25,7 +25,11 @@ from fastapi.testclient import TestClient
 from golden import GOLDEN_CASES
 
 from invoice_processing import paths
-from invoice_processing.adapters import FsCaseRepository, JsonlAuditSink
+from invoice_processing.adapters import (
+    FsCaseRepository,
+    JsonlAuditSink,
+    JsonlCorrectionStore,
+)
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
 from invoice_processing.connectors.xero import (
@@ -68,7 +72,9 @@ def client(tmp_path, monkeypatch):
         service, "_cases", FsCaseRepository(root, tenant_id=TENANT)
     )
     monkeypatch.setattr(
-        service, "_corrections_path", tmp_path / "corrections.jsonl"
+        service,
+        "_corrections",
+        JsonlCorrectionStore(tmp_path / "corrections.jsonl"),
     )
     monkeypatch.setattr(
         service, "_audit", JsonlAuditSink(tmp_path / "audit.jsonl")

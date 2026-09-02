@@ -263,6 +263,43 @@ class JsonRuleRepository:
 # ---------------------------------------------------------------------------
 
 
+class JsonlCorrectionStore:
+    """Corrections as JSONL. Durable on a machine that keeps its disk.
+
+    That caveat is the whole reason the Postgres store exists: on a container
+    filesystem this file is gone on the next deploy, taking with it the only
+    copy of what a reviewer actually changed.
+    """
+
+    def __init__(self, path: Path | None = None):
+        self.path = Path(path or paths.DATA_DIR / "corrections.jsonl")
+
+    def record(self, ctx: RunContext, correction: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(correction, default=str) + "\n")
+
+    def list(self, tenant_id: str, case_id: str | None = None) -> list[dict]:
+        if not self.path.exists():
+            return []
+        out = []
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if case_id is not None and record.get("case_id") != case_id:
+                continue
+            # Older records predate tenant stamping; one with no tenant is
+            # only ever visible to the tenant asking for everything.
+            if record.get("tenant_id") not in (None, tenant_id):
+                continue
+            out.append(record)
+        return out
+
+
 class JsonlAuditSink:
     """Append-only JSONL. Durable on every call, unlike the session logger."""
 

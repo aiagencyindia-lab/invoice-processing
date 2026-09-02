@@ -14,9 +14,15 @@ import json
 
 import pytest
 
-from invoice_processing.adapters import JsonlAuditSink
+from invoice_processing.adapters import (
+    JsonlAuditSink,
+    JsonlCorrectionStore,
+)
 from invoice_processing.api import service
-from invoice_processing.db.repositories import PgAuditSink
+from invoice_processing.db.repositories import (
+    PgAuditSink,
+    PgCorrectionStore,
+)
 from invoice_processing.ports import AuditSink, RunContext
 
 
@@ -24,6 +30,7 @@ from invoice_processing.ports import AuditSink, RunContext
 def reset_sink(monkeypatch):
     """The sink is cached after first use; each test resolves it afresh."""
     monkeypatch.setattr(service, "_audit", None)
+    monkeypatch.setattr(service, "_corrections", None)
 
 
 class TestResolution:
@@ -84,3 +91,34 @@ class TestSinkContract:
         record = json.loads((tmp_path / "audit.jsonl").read_text().strip())
         assert record["actor"] == "a@b.c"
         assert record["event_type"] == "fields_corrected"
+
+
+class TestCorrectionStoreResolution:
+    """Same rule as the audit sink, for the same reason.
+
+    A correction file on a container disk is erased by the next deploy, and
+    what it holds -- the old and new values of every reviewer edit -- is the
+    one record the audit trail does not duplicate.
+    """
+
+    def test_a_file_store_when_no_database_is_configured(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
+        assert isinstance(service.get_corrections(), JsonlCorrectionStore)
+
+    def test_postgres_when_a_database_url_is_set(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://example/db")
+        assert isinstance(service.get_corrections(), PgCorrectionStore)
+
+    def test_postgres_when_a_cloud_sql_instance_is_set(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setenv("CLOUD_SQL_INSTANCE", "p:r:i")
+        assert isinstance(service.get_corrections(), PgCorrectionStore)
+
+    def test_the_store_is_cached(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
+        assert service.get_corrections() is service.get_corrections()
+
+    def test_import_opens_no_connection(self):
+        assert service._corrections is None

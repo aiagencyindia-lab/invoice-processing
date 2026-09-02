@@ -171,6 +171,23 @@ class AuditSink(Protocol):
 
 
 @runtime_checkable
+class CorrectionStore(Protocol):
+    """Reviewer edits: the accuracy record, and the source of future rules.
+
+    Separate from the audit sink because the two answer different questions.
+    The audit trail says an edit happened and who made it; a correction is the
+    old value, the new value and the field -- the training signal. Recording
+    only the first leaves nothing to learn from.
+    """
+
+    def record(self, ctx: RunContext, correction: dict) -> None: ...
+
+    def list(
+        self, tenant_id: str, case_id: str | None = None
+    ) -> list[dict]: ...
+
+
+@runtime_checkable
 class LlmClient(Protocol):
     """Model calls, with the cost and latency controls in one place."""
 

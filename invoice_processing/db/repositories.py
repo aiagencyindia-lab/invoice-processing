@@ -20,6 +20,7 @@ from sqlalchemy import select
 from ..ports import RuleBaseConflict, RunContext
 from .models import (
     AuditEvent,
+    Correction,
     Document,
     Finding,
     Invoice,
@@ -27,6 +28,7 @@ from .models import (
     PipelineRun,
     Rule,
     Tenant,
+    User,
 )
 from .session import tenant_session
 
@@ -389,6 +391,95 @@ class PgAuditSink:
                     .limit(limit)
                 ).all()
             )
+
+
+class PgCorrectionStore:
+    """Corrections in Postgres, where they survive a deploy.
+
+    They were appended to a file on the API container's local disk, so the
+    "asset that compounds" was erased by every redeploy and split in half by a
+    second replica. The audit trail recorded that fields were corrected and by
+    whom; the values themselves -- the part a model could learn from -- were
+    only ever in that file.
+    """
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    def record(self, ctx: RunContext, correction: dict) -> None:
+        with tenant_session(ctx.tenant_id, self.url) as session:
+            invoice = session.scalar(
+                select(Invoice).where(
+                    Invoice.tenant_id == ctx.tenant_id,
+                    Invoice.case_id == ctx.case_id,
+                )
+            )
+            if invoice is None:
+                invoice = Invoice(
+                    tenant_id=ctx.tenant_id, case_id=ctx.case_id, fields={}
+                )
+                session.add(invoice)
+                session.flush()
+
+            # The row references a user, and the actor arrives as an email --
+            # so it is resolved here rather than stored twice. An actor with
+            # no user row keeps the correction and loses only the attribution,
+            # which the audit trail still holds.
+            user_id = session.scalar(
+                select(User.id).where(
+                    User.tenant_id == ctx.tenant_id,
+                    User.email == correction.get("actor"),
+                )
+            )
+            session.add(
+                Correction(
+                    tenant_id=ctx.tenant_id,
+                    invoice_id=invoice.id,
+                    field_path=str(correction.get("field_path"))[:255],
+                    old_value=_as_text(correction.get("old_value")),
+                    new_value=_as_text(correction.get("new_value")),
+                    user_id=user_id,
+                    source=correction.get("source", "review"),
+                )
+            )
+
+    def list(self, tenant_id: str, case_id: str | None = None) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            query = (
+                select(Correction, Invoice.case_id, User.email)
+                .join(Invoice, Correction.invoice_id == Invoice.id)
+                .outerjoin(User, Correction.user_id == User.id)
+                .where(Correction.tenant_id == tenant_id)
+                .order_by(Correction.created_at.desc())
+            )
+            if case_id is not None:
+                query = query.where(Invoice.case_id == case_id)
+            return [
+                {
+                    "case_id": row_case_id,
+                    "field_path": correction.field_path,
+                    "old_value": correction.old_value,
+                    "new_value": correction.new_value,
+                    "actor": email,
+                    "tenant_id": tenant_id,
+                    "at": correction.created_at.isoformat()
+                    if correction.created_at
+                    else None,
+                }
+                for correction, row_case_id, email in session.execute(query)
+            ]
+
+
+def _as_text(value) -> str | None:
+    """Corrections are compared and read by people, so they are stored as text.
+
+    A field's type is whatever the model extracted -- a number, a date string,
+    None. Storing the rendering keeps "what it was" answerable without knowing
+    which of those it happened to be.
+    """
+    if value is None:
+        return None
+    return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
 def record_pipeline_run(ctx: RunContext, **fields) -> None:

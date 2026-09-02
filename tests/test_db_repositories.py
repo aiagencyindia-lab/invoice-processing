@@ -19,16 +19,19 @@ from invoice_processing.db import session as session_module
 from invoice_processing.db.models import (
     TENANT_TABLES,
     Base,
+    Correction,
     Document,
     Finding,
     Invoice,
     InvoiceLine,
     PipelineRun,
     Tenant,
+    User,
 )
 from invoice_processing.db.repositories import (
     PgAuditSink,
     PgCaseRepository,
+    PgCorrectionStore,
     PgRuleRepository,
 )
 from invoice_processing.db.rls import enable_rls_statements
@@ -36,6 +39,7 @@ from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import (
     AuditSink,
     CaseRepository,
+    CorrectionStore,
     RuleBaseConflict,
     RuleRepository,
     RunContext,
@@ -505,3 +509,116 @@ class TestProjection:
                 session.query(InvoiceLine).filter_by(tenant_id=GLOBEX).count()
                 == 0
             )
+
+
+class TestCorrections:
+    """The asset that compounds -- kept where a deploy cannot erase it.
+
+    Corrections were appended to a file on the API container's disk. The audit
+    trail recorded that fields had been corrected and by whom; the old and new
+    values, which are the whole training signal, lived only in that file and
+    went with the container.
+    """
+
+    def _store(self, db):
+        return PgCorrectionStore(db), RunContext(
+            tenant_id=ACME, case_id="case-1"
+        )
+
+    def _correction(self, **overrides):
+        record = {
+            "case_id": "case-1",
+            "field_path": "vendor_name",
+            "old_value": "Acme Crp",
+            "new_value": "Acme Corp",
+            "actor": "clerk@acme.test",
+            "tenant_id": ACME,
+        }
+        record.update(overrides)
+        return record
+
+    def test_it_satisfies_the_port(self, db):
+        assert isinstance(PgCorrectionStore(db), CorrectionStore)
+
+    def test_a_correction_survives_as_a_row(self, db):
+        store, ctx = self._store(db)
+        store.record(ctx, self._correction())
+
+        with tenant_session(ACME, db) as session:
+            saved = session.query(Correction).one()
+            assert saved.field_path == "vendor_name"
+            assert saved.old_value == "Acme Crp"
+            assert saved.new_value == "Acme Corp"
+
+    def test_it_reads_back_in_the_shape_the_workbench_expects(self, db):
+        store, ctx = self._store(db)
+        store.record(ctx, self._correction())
+
+        [read] = store.list(ACME, "case-1")
+        assert read["case_id"] == "case-1"
+        assert read["field_path"] == "vendor_name"
+        assert read["old_value"] == "Acme Crp"
+        assert read["new_value"] == "Acme Corp"
+        assert read["at"] is not None
+
+    def test_the_actor_is_resolved_to_the_user_who_made_it(self, db):
+        with tenant_session(ACME, db) as session:
+            session.add(
+                User(
+                    id="u-1",
+                    tenant_id=ACME,
+                    email="clerk@acme.test",
+                    role="clerk",
+                )
+            )
+        store, ctx = self._store(db)
+        store.record(ctx, self._correction())
+
+        [read] = store.list(ACME, "case-1")
+        assert read["actor"] == "clerk@acme.test"
+
+    def test_an_unknown_actor_still_keeps_the_correction(self, db):
+        """Attribution is in the audit trail either way. Losing the values
+        because the email did not match a row would be the worse trade."""
+        store, ctx = self._store(db)
+        store.record(ctx, self._correction(actor="ghost@nowhere.test"))
+
+        [read] = store.list(ACME, "case-1")
+        assert read["new_value"] == "Acme Corp"
+        assert read["actor"] is None
+
+    def test_a_non_string_value_is_kept_readable(self, db):
+        store, ctx = self._store(db)
+        store.record(
+            ctx,
+            self._correction(
+                field_path="invoice_total_inc_tax",
+                old_value=1100.5,
+                new_value=None,
+            ),
+        )
+
+        [read] = store.list(ACME, "case-1")
+        assert read["old_value"] == "1100.5"
+        assert read["new_value"] is None
+
+    def test_corrections_do_not_cross_tenants(self, db):
+        store, ctx = self._store(db)
+        store.record(ctx, self._correction())
+
+        assert store.list(GLOBEX) == []
+
+    def test_listing_filters_by_case(self, db):
+        store, _ = self._store(db)
+        store.record(
+            RunContext(tenant_id=ACME, case_id="case-1"), self._correction()
+        )
+        store.record(
+            RunContext(tenant_id=ACME, case_id="case-2"),
+            self._correction(case_id="case-2", field_path="currency"),
+        )
+
+        assert [c["field_path"] for c in store.list(ACME, "case-2")] == [
+            "currency"
+        ]
+        assert len(store.list(ACME)) == 2
