@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 
+import { BrandLockup } from "@/components/Brand";
+
 /** The shell both auth pages sit in: one centred card, a wordmark, a heading
  *  and a single line of explanation. Matches on-brand-genmedia's login card,
  *  minus its email/password form -- this service authenticates by Identity
@@ -31,15 +33,8 @@ export function AuthCard({
       }}
     >
       <div style={{ width: 400, maxWidth: "100%" }}>
-        <div
-          style={{
-            textAlign: "center",
-            font: "600 14px var(--font-ui)",
-            letterSpacing: "0.16em",
-            marginBottom: 20,
-          }}
-        >
-          INVOICES
+        <div style={{ marginBottom: 22 }}>
+          <BrandLockup size={34} align="center" />
         </div>
 
         <h1

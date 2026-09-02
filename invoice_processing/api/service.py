@@ -985,7 +985,7 @@ def index() -> str:
     app_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>Invoice processing API</title>
+<title>Ledgerly API</title>
 <style>
   body {{ font: 15px/1.6 system-ui, sans-serif; color: #1a1a1a;
          background: #ececea; margin: 0;
@@ -1000,9 +1000,25 @@ def index() -> str:
               font-weight: 600; font-size: 14px; }}
   code {{ background: #f7f7f5; padding: 2px 6px; border-radius: 4px;
           font-size: 13px; }}
+  .brand {{ display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }}
+  .brand .name {{ font: 600 22px/1 system-ui, sans-serif; letter-spacing: -.02em;
+                  color: #101828; }}
+  .brand .by {{ font: 500 10px/1.6 system-ui, sans-serif; letter-spacing: .08em;
+                text-transform: uppercase; color: #98a2b3; }}
 </style></head>
 <body><main>
-  <h1>Invoice processing API</h1>
+  <div class="brand">
+    <svg width="40" height="40" viewBox="0 0 120 120" fill="none" role="img"
+         aria-label="Ledgerly">
+      <path d="M24 16 V70 a14 14 0 0 0 14 14 H100" stroke="#2563EB"
+            stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="50" y="16" width="52" height="14" rx="7" fill="#101828"/>
+      <rect x="50" y="41" width="52" height="14" rx="7" fill="#101828"/>
+      <rect x="50" y="66" width="58" height="14" rx="7" fill="#2563EB"/>
+    </svg>
+    <span><span class="name">Ledgerly</span><br><span class="by">by AIxAI</span></span>
+  </div>
+  <h1>Ledgerly API</h1>
   <p>This is the API. The application is served separately.</p>
   <p><a class="button" href="{app_url}">Open the application</a></p>
   <p>Not running? Start it with <code>cd frontend &amp;&amp; npm run dev</code>.

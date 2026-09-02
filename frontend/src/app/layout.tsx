@@ -3,9 +3,12 @@ import { AppShell } from "@/components/AppShell";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Invoice processing",
+  // The tab is where someone finds this window among twenty others, so it
+  // carries the product name rather than a description of the category.
+  title: "Ledgerly",
   description:
-    "Auditable accounts-payable review: every decision traceable to a written rule.",
+    "Auditable accounts-payable review by AIxAI: every decision traceable "
+    + "to a written rule.",
 };
 
 export default function RootLayout({

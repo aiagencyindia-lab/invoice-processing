@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+
+import { BrandLockup } from "@/components/Brand";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -157,7 +159,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <aside className="app-sidebar">
         <Link href="/dashboard" className="sidebar-brand">
-          Invoices
+          <BrandLockup size={26} />
         </Link>
 
         <nav className="app-sidebar-nav" aria-label="Primary">

@@ -215,8 +215,6 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
   display: flex;
   align-items: center;
   gap: 10px;
-  font: 600 14px var(--font-ui);
-  letter-spacing: 0.16em;
   padding: 4px 10px 18px;
   color: var(--ink);
   text-decoration: none;
