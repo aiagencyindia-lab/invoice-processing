@@ -162,7 +162,7 @@ def list_sheet(
         "offset": offset,
         "limit": limit,
         "columns": sheet_columns.catalogue(),
-        "quality_flags": sheet_columns.QUALITY_FLAGS,
+        "quality_flags": sheet_columns.FILTER_FLAGS,
     }
 
 

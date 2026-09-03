@@ -489,6 +489,38 @@ class TestSummary:
         assert body["needs_attention"] == 0
 
 
+    def test_the_needs_attention_filter_matches_any_flag_not_all(
+        self, db, client
+    ):
+        """The bug this closes: the built-in view named three flags, and the
+        filter ANDs them, so "Needs attention" showed almost nothing."""
+        with tenant_session(TENANT, db) as session:
+            duplicate_a = invoice(session, case_id="a", invoice_number="SAME")
+            invoice(session, case_id="b", invoice_number="SAME")
+            mismatch = invoice(session, case_id="c", invoice_number="OTHER")
+            invoice(session, case_id="d", invoice_number="FINE")
+            session.add(
+                Finding(
+                    tenant_id=TENANT,
+                    invoice_id=mismatch.id,
+                    step="4.1",
+                    severity="blocking",
+                    passed=False,
+                )
+            )
+            assert duplicate_a.id  # the row exists; the flag is derived
+
+        body = rows(client, quality="needs_attention")
+        assert {row["case_id"] for row in body["rows"]} == {"a", "b", "c"}
+
+        # And the tile above the grid counts exactly what clicking it shows.
+        summary = client().get("/api/sheet/summary").json()
+        assert summary["needs_attention"] == body["total"] == 3
+
+    def test_the_grid_offers_needs_attention_as_a_filter(self, db, client):
+        assert "needs_attention" in rows(client)["quality_flags"]
+
+
 class TestFacets:
     def test_it_lists_the_vendors_present(self, db, client):
         with tenant_session(TENANT, db) as session:

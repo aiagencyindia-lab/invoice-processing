@@ -728,6 +728,13 @@ class SheetRepository:
     def _flag_condition(self, flag: str, tenant_id: str, filters: dict):
         """The predicate behind one quality flag, or None if unknown."""
 
+        if flag == "needs_attention":
+            # The one flag that is a question rather than a property: any of
+            # these, where two named flags would mean both of them. Asked for
+            # by the built-in view of the same name, and by the tile that
+            # counts it -- the two have to agree or the tile lies about what
+            # clicking through will show.
+            return self._any_flag(ATTENTION_FLAGS, tenant_id, filters)
         if flag in FLAG_STEPS:
             return exists(
                 select(Finding.id).where(
@@ -1052,6 +1059,16 @@ class SheetRepository:
             "needs_attention": needs_attention,
         }
 
+    def _any_flag(self, flags, tenant_id: str, filters: dict):
+        """One predicate matching a row that carries any of these flags."""
+        conditions = [
+            condition
+            for flag in flags
+            if (condition := self._flag_condition(flag, tenant_id, filters))
+            is not None
+        ]
+        return or_(*conditions) if conditions else None
+
     def _count_flagged(
         self, session, tenant_id: str, filters: dict, flags
     ) -> int:
@@ -1061,15 +1078,10 @@ class SheetRepository:
         rows that are all of these things, a count asks how many are any of
         them, and "needs attention" is a question of the second kind.
         """
-        conditions = [
-            condition
-            for flag in flags
-            if (condition := self._flag_condition(flag, tenant_id, filters))
-            is not None
-        ]
-        if not conditions:
+        condition = self._any_flag(flags, tenant_id, filters)
+        if condition is None:
             return 0
-        statement = self._base(tenant_id, filters).where(or_(*conditions))
+        statement = self._base(tenant_id, filters).where(condition)
         return (
             session.scalar(
                 select(func.count()).select_from(statement.subquery())

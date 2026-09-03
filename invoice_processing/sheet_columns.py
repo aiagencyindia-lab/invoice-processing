@@ -155,6 +155,16 @@ ATTENTION_FLAGS: tuple[str, ...] = (
     "no_text_layer",
 )
 
+# Flags that are questions about a row rather than properties of it. A row
+# never carries one -- it is only ever something to filter by -- which is why
+# they live beside `QUALITY_FLAGS` rather than in it, and why the grid asks
+# for `FILTER_FLAGS` when it draws the filter chips.
+COMPOSITE_FLAGS: dict[str, str] = {
+    "needs_attention": "Carries any of the flags worth a second look",
+}
+
+FILTER_FLAGS: dict[str, str] = {**QUALITY_FLAGS, **COMPOSITE_FLAGS}
+
 # The single-invoice CSV export predates this catalogue and names its columns
 # its own way. The two must describe the same fields or a finance team gets two
 # different answers for one invoice, so the correspondence is written down here

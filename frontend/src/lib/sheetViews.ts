@@ -21,8 +21,11 @@ export const BUILT_IN_VIEWS: { id: string; name: string; definition: SheetFilter
   },
   {
     id: "needs-attention",
+    // One flag, not three: naming three would ask for rows that are all of
+    // them at once, which is almost nothing. The server composes the "any of"
+    // behind this name, and the summary tile counts the same set.
     name: "Needs attention",
-    definition: { quality: ["duplicate_number", "totals_mismatch", "lines_mismatch"] },
+    definition: { quality: ["needs_attention"] },
   },
   { id: "edited", name: "Edited after extraction", definition: { quality: ["edited"] } },
 ];
