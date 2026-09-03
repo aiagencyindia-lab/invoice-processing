@@ -146,6 +146,16 @@ export default function RulesPage() {
               Approving it will re-decide them too.
             </div>
           ) : null}
+          {proposal.llm_actions?.length ? (
+            <div className="banner" role="status">
+              This rule calls a model ({proposal.llm_actions.join(", ")}) every
+              time it matches an invoice — minutes of processing, a cost per
+              invoice, and no guarantee of the same answer twice. A rule that
+              sets fields directly is instant, free and reproducible; ask for a
+              redraft unless this one genuinely has to recompute downstream
+              fields.
+            </div>
+          ) : null}
           {proposal.error ? (
             <div className="banner" role="alert">
               {proposal.error}

@@ -20,6 +20,9 @@ from fastapi.testclient import TestClient
 from invoice_processing.api import auth, service
 from invoice_processing.api import rules as rules_api
 from invoice_processing.api.service import app
+from invoice_processing.core.prompts import (
+    RULE_DISCOVERY_SYSTEM_PROMPT as prompt,
+)
 from invoice_processing.db.models import Base, Tenant
 from invoice_processing.db.repositories import (
     PgCaseRepository,
@@ -350,6 +353,79 @@ class TestScopeExclusion:
             json={"decision": "approve"},
         )
         assert response.status_code == 200
+
+
+class TestModelCallingActionsAreFlagged:
+    """A rule that calls a model runs Gemini on every invoice it matches, for
+    as long as it is enabled -- minutes of latency, a cost per invoice, and no
+    guarantee of the same answer twice. Approving that is a different
+    commitment than approving a rule that sets a field, and the approver
+    should be able to tell which one they are looking at.
+
+    The first real drafting run produced exactly this: the prompt called the
+    model action "PREFERRED", so the model wrote one.
+    """
+
+    def _proposal_with(self, db, client, actions):
+        overrule(client)
+        rule_id = (
+            client()
+            .get("/api/rules/proposals")
+            .json()["proposals"][0]["rule_id"]
+        )
+        PgRuleRepository(db).update_proposal(
+            TENANT, rule_id, status="draft", actions=actions
+        )
+        return rule_id
+
+    def test_a_model_calling_action_is_named(self, db, client):
+        rule_id = self._proposal_with(
+            db,
+            client,
+            [{"type": "llm_continue_processing", "resume_from": "phase4"}],
+        )
+
+        proposal = client().get(f"/api/rules/proposals/{rule_id}").json()
+        assert proposal["llm_actions"] == ["llm_continue_processing"]
+
+    def test_a_deterministic_rule_is_not_flagged(self, db, client):
+        rule_id = self._proposal_with(db, client, DRAFTED_RULE["actions"])
+
+        proposal = client().get(f"/api/rules/proposals/{rule_id}").json()
+        assert proposal["llm_actions"] == []
+
+    def test_the_trail_records_what_was_armed(self, db, client, monkeypatch):
+        """Six months later nobody remembers which kind was approved."""
+        events = []
+
+        class RecordingAudit:
+            def emit(self, ctx, event, payload, before=None):
+                events.append((event, payload))
+
+        rule_id = self._proposal_with(
+            db, client, [{"type": "llm_patch_fields", "target_fields": []}]
+        )
+        monkeypatch.setattr(service, "_audit", RecordingAudit())
+
+        client("root").post(
+            f"/api/rules/proposals/{rule_id}/decision",
+            json={"decision": "approve"},
+        )
+
+        approved = next(p for name, p in events if name == "rule_approved")
+        assert approved["llm_actions"] == ["llm_patch_fields"]
+
+
+class TestThePromptPrefersDeterministicActions:
+    def test_set_field_is_what_the_writer_is_told_to_reach_for(self):
+        """It used to say the opposite in as many words."""
+        preferred = prompt.index("THIS IS THE PREFERRED ACTION")
+        assert (
+            prompt.index("set_field ")
+            < preferred
+            < prompt.index("llm_continue_processing  -")
+        ), "the preferred action is no longer set_field"
+        assert "USE ONLY IF" in prompt
 
 
 class TestTheKillSwitch:

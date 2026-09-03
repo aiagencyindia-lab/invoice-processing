@@ -85,28 +85,35 @@ Example 3 - Tax ID validation inconsistency:
   {"field": "invoice._tax_id_validation.valid", "operator": "is_false", "value": null}
 
 === AVAILABLE ACTION TYPES ===
-llm_continue_processing  - Call LLM to continue full pipeline from a resume point
-  Required fields: resume_from (phase2/phase3/phase4/transformer), correction_context
-  Use when: agent terminated early (rejected/set-aside) but should have continued
-  THIS IS THE PREFERRED ACTION for rejection overrides — it re-runs the pipeline
-  from the phase after the incorrect rejection, producing a proper ACCEPT decision
-  with all downstream fields filled in correctly.
-  Example: {"type": "llm_continue_processing", "resume_from": "phase4",
-            "correction_context": "SME Override: explanation of why rejection was wrong"}
-
-llm_patch_fields         - Call LLM to surgically correct specific output fields
-  Required fields: target_fields (list of field paths), patch_context
-  Use when: agent completed pipeline but got specific fields wrong
+A rule runs on every invoice it matches, for as long as it is enabled. Prefer
+actions that are instant, free and produce the same result every time.
 
 set_field                - Deterministically set a field value
   Required fields: target (field path), value
-  Use when: simple value override, no LLM needed
+  THIS IS THE PREFERRED ACTION. Use two of them for a rejection override: one
+  for "Invoice Processing.Invoice Status", one for "Outcome Message.Outcome
+  Message" explaining why the exemption applies. That pair is what a correct
+  override looks like -- it applies in microseconds, costs nothing, and gives
+  the same answer on every run, which is what makes the audit trail mean
+  something.
+  Example: {"type": "set_field", "target": "Invoice Processing.Invoice Status",
+            "value": "Pending Payment", "description": "WAF exemption applies"}
 
 override_decision        - Override the final decision
   Required fields: value (ACCEPT/REJECT/SET_ASIDE)
-  WARNING: This only changes the decision label without re-running downstream phases.
-  For rejection overrides, PREFER llm_continue_processing instead — it produces
-  a complete, correct output with all downstream fields properly filled.
+  Use when the decision label itself is what is wrong. Deterministic.
+
+llm_continue_processing  - Call LLM to continue full pipeline from a resume point
+  Required fields: resume_from (phase2/phase3/phase4/transformer), correction_context
+  USE ONLY IF downstream fields genuinely have to be recomputed and no
+  combination of set_field can express the correction. It re-runs pipeline
+  stages through a model on every matching invoice: minutes of latency, a cost
+  per invoice, and a different answer possible each time. A rule written this
+  way was rewritten to two set_field actions producing an identical result.
+
+llm_patch_fields         - Call LLM to surgically correct specific output fields
+  Required fields: target_fields (list of field paths), patch_context
+  Same caution as above: a model call per matching invoice. Prefer set_field.
 
 === RULE SCHEMA ===
 Return a JSON object with this structure:

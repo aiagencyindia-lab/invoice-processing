@@ -351,10 +351,25 @@ class PgRuleRepository:
             session.flush()
             return self._proposal(rule)
 
-    @staticmethod
-    def _proposal(rule: Rule) -> dict:
+    # Action types that call a model. A rule carrying one runs Gemini on every
+    # invoice it matches, for as long as it is enabled -- minutes of latency,
+    # a cost per invoice, and no guarantee of the same answer twice. That is a
+    # different thing to approve than a rule that sets a field, so the
+    # approver is told which one they are looking at.
+    LLM_ACTIONS = ("llm_continue_processing", "llm_patch_fields")
+
+    @classmethod
+    def _proposal(cls, rule: Rule) -> dict:
         metadata = dict(rule.rule_metadata or {})
+        llm_actions = sorted(
+            {
+                action.get("type")
+                for action in (rule.actions or [])
+                if action.get("type") in cls.LLM_ACTIONS
+            }
+        )
         return {
+            "llm_actions": llm_actions,
             "rule_id": rule.rule_id,
             "name": rule.name,
             "description": rule.description,

@@ -265,6 +265,9 @@ export type RuleProposal = {
    *  deliberate acknowledgement, because that is how an exemption for one
    *  supplier quietly re-decides everyone else's invoices. */
   has_collateral: boolean;
+  /** Action types that call a model. A rule carrying one runs Gemini on every
+   *  invoice it matches, for as long as it is enabled. */
+  llm_actions: string[];
   collateral_warning: string | null;
   error: string | null;
   created_at: string | null;

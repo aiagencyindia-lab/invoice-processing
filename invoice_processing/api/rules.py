@@ -280,6 +280,11 @@ def decide_proposal(
             # Visible rather than hidden: whether anyone else checked this.
             "self_approved": proposal["author"] == principal.email,
             "accepted_collateral": bool(body.get("accept_collateral")),
+            # On the trail, because a rule that calls a model on every
+            # matching invoice is a different commitment than one that sets a
+            # field, and six months later nobody will remember which was
+            # approved.
+            "llm_actions": proposal["llm_actions"],
             "note": body.get("note"),
         },
         before={"status": proposal["status"]},
