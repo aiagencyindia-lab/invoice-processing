@@ -170,6 +170,25 @@ def _feedback(proposal: dict) -> str:
     )
 
 
+def _scope_clash(tenant_id: str, proposal: dict) -> str | None:
+    """A live rule already holding this proposal's scope, if there is one.
+
+    Read from the rules actually in force rather than from a file on disk,
+    which is where this check used to look and is no longer where rules live.
+    """
+    from . import service  # noqa: PLC0415
+
+    scope = proposal.get("scope") or "global"
+    doc, _ = service.get_rules().load(tenant_id)
+    occupied = [
+        rule["id"]
+        for rule in doc.get("rules", [])
+        if (rule.get("scope") or "global") == scope
+        and rule["id"] != proposal["rule_id"]
+    ]
+    return ", ".join(occupied) if occupied else None
+
+
 @router.post("/api/rules/proposals/{rule_id}/decision")
 def decide_proposal(
     body: dict,
@@ -200,6 +219,24 @@ def decide_proposal(
             status_code=409,
             detail=f"That proposal is {proposal['status']}, not drafted.",
         )
+
+    if decision == "approve":
+        clash = _scope_clash(principal.tenant_id, proposal)
+        if clash and not body.get("accept_collateral"):
+            # Only one rule per scope ever fires -- that mutual exclusion is
+            # how the engine stops two corrections contradicting each other.
+            # So approving a second rule into an occupied scope does not add a
+            # rule, it shadows one, silently, and the rule that stops firing is
+            # one somebody else approved.
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": f"Scope '{proposal['scope']}' already has "
+                    f"{clash}. Only one rule per scope fires, so approving "
+                    "this may stop that one working.",
+                    "conflicts_with": clash,
+                },
+            )
 
     if (
         decision == "approve"

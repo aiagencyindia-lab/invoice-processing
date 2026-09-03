@@ -194,7 +194,9 @@ The diagram above illustrates the three-zone architecture of the Invoice Process
 
 - **Zone 2 -- The Runtime Inference Pipeline:** An input invoice flows through three sequential stages. First, the **Acting Agent** processes it through a 4-step internal pipeline (Classify, Extract, Validate, Reason). Next, the **Critic Agent** (Investigation) audits the Acting Agent's output against the constitution, with the ability to STOP or allow continuation. Finally, the **ALF engine** (Adaptive Learning Framework) checks its Rule Base for matching correction rules and applies a Collect-Plan-Execute pipeline to produce the final approved output.
 
-- **Zone 3 -- The Learning & Evolution Loop:** When a Human Expert (SME) flags an error in the final output, they provide feedback to the **Rule Learning Agent (RLA)**. The RLA generates a new exception rule that is written into the ALF Rule Base. On subsequent inference runs, the ALF engine automatically applies this correction. Over time, a Periodic System Review promotes frequent exception rules into permanent changes to the Acting Agent itself (green arrow), closing the evolution loop.
+- **Zone 3 -- The Learning & Evolution Loop:** When a reviewer overrules a decision in the app and records the reason as a policy exception, that becomes a rule proposal. The safety loop drafts a rule from their own words, measured against that tenant's cases, and an approver sees the conditions and the blast radius before saying yes. An approved rule is evaluated by the worker on every subsequent invoice -- in shadow, recording what it *would* change, until the tenant sets `rules_binding`. Over time, frequently-firing exception rules are candidates for permanent changes to the Acting Agent itself (green arrow), closing the evolution loop.
+
+  > Until recently this described something that did not happen. Rules were taught through an ADK chat session and written to a file no deployed process read, so approving one changed nothing. The loop above is what runs now; the chat agent keeps only its inference tools.
 
 ```
                  exemplary_data/

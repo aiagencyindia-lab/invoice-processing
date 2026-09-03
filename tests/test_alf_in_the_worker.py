@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import pytest
 
-from invoice_processing import alf_stage, case_projection
+from invoice_processing import alf_stage, case_projection, root_agent
 from invoice_processing.api import service
+from invoice_processing.core.rule_writer import RuleWriterAgent
 from invoice_processing.ports import RunContext
 from invoice_processing.worker import runner
 
@@ -214,3 +215,26 @@ class TestTheCorrectionExplainsItself:
 
         assert "Would correct" in finding["evidence"]
         assert finding["informational"] is True
+
+
+class TestTheChatIsRetired:
+    """Teaching happens in the product now.
+
+    The chat agent could do it for one person with a terminal, wrote to a file
+    nothing read, and had no idea which tenant it was talking about. Leaving
+    the tools bound would leave a second way to write rules that skips the
+    approval, the blast radius and the tenant boundary.
+    """
+
+    def test_the_agent_keeps_only_its_inference_tools(self):
+        names = {getattr(t, "__name__", str(t)) for t in root_agent.tools}
+        assert names == {"list_inference_cases", "run_inference"}
+
+    def test_nothing_writes_a_rule_base_to_disk_any_more(self):
+        """The unlocked read-modify-write is gone: two people teaching a rule
+        at once each allocated the same id and the second write dropped the
+        first rule."""
+        for gone in ("run", "delete_rule", "next_rule_id", "load_rule_base"):
+            assert not hasattr(RuleWriterAgent, gone), (
+                f"RuleWriterAgent.{gone} writes rules outside the repository"
+            )

@@ -45,24 +45,7 @@ from .shared_libraries.investigation.investigate_agent_reconst import (  # noqa:
     load_agent_case_data,
 )
 from .tools.tools import (  # noqa: E402
-    assess_impact,
-    build_rule_discovery_context,
-    build_rule_revision_context,
-    check_conflicts,
-    delete_rule,
-    discover_safe_rule,
-    format_rule_display,
-    get_existing_rules,
-    get_existing_scopes,
-    get_next_rule_id,
-    list_cases,
     list_inference_cases,
-    load_case,
-    log_session_event,
-    revise_safe_rule,
-    save_session,
-    validate_rule,
-    write_rule,
 )
 
 # ============================================================================
@@ -292,11 +275,18 @@ def _run_alf_stage(
     alf_stage_num = 2 if skip_inv else 3
     print(f"\nStage {alf_stage_num}/{total_stages}: Running ALF Agent...")
 
-    rule_base_path = DATA_DIR / "rule_base.json"
     output_folder = DATA_DIR / "agent_output" / case_id
 
     try:
-        alf_engine = ALFEngine(rule_base_path)
+        # Through the repository, so there is one path in this codebase from a
+        # rule document to a loaded engine. This is the local seed file; the
+        # deployed system reads a tenant's own rules through the Postgres
+        # implementation of the same port.
+        from .adapters import JsonRuleRepository  # noqa: PLC0415
+
+        document, _ = JsonRuleRepository().load("local")
+        alf_engine = ALFEngine()
+        alf_engine.load_document(document)
     except Exception as e:
         pipeline_time = (
             datetime.now(timezone.utc) - pipeline_start
@@ -541,27 +531,12 @@ root_agent = LlmAgent(
     generate_content_config=types.GenerateContentConfig(temperature=0),
     instruction=INVOICE_PROCESSING_INSTRUCTION,
     tools=[
-        # Inference tools
+        # Inference only. Teaching a rule happens in the product now -- a
+        # reviewer overrules a decision, says it was policy, and approves the
+        # rule that comes back, on a screen with the blast radius on it. The
+        # chat could do that for one person with a terminal, wrote to a file
+        # nothing read, and had no idea which tenant it was talking about.
         list_inference_cases,
         run_inference,
-        # Learning tools (primary)
-        list_cases,
-        load_case,
-        discover_safe_rule,
-        revise_safe_rule,
-        # Learning tools (manual)
-        assess_impact,
-        validate_rule,
-        check_conflicts,
-        write_rule,
-        delete_rule,
-        get_existing_rules,
-        get_existing_scopes,
-        format_rule_display,
-        get_next_rule_id,
-        build_rule_discovery_context,
-        build_rule_revision_context,
-        log_session_event,
-        save_session,
     ],
 )

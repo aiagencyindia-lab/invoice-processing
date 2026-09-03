@@ -294,6 +294,64 @@ class TestTheCollateralGate:
         assert response.status_code == 200
 
 
+class TestScopeExclusion:
+    """Only one rule per scope fires. Approving a second into an occupied
+    scope does not add a rule, it silently shadows one somebody else
+    approved -- and the shadowed rule stops correcting anything."""
+
+    def _approved_rule_in_scope(self, db, client):
+        overrule(client)
+        first = (
+            client()
+            .get("/api/rules/proposals")
+            .json()["proposals"][0]["rule_id"]
+        )
+        drafted(db, first)
+        PgRuleRepository(db).update_proposal(
+            TENANT, first, scope="WAF_EXEMPTION"
+        )
+        client("root").post(
+            f"/api/rules/proposals/{first}/decision",
+            json={"decision": "approve"},
+        )
+        return first
+
+    def test_a_second_rule_in_the_same_scope_is_refused(self, db, client):
+        self._approved_rule_in_scope(db, client)
+
+        second = PgRuleRepository(db).propose(
+            TENANT, case_id=CASE, author="ada@acme.test", note="another"
+        )["rule_id"]
+        drafted(db, second)
+        PgRuleRepository(db).update_proposal(
+            TENANT, second, scope="WAF_EXEMPTION"
+        )
+
+        response = client("root").post(
+            f"/api/rules/proposals/{second}/decision",
+            json={"decision": "approve"},
+        )
+        assert response.status_code == 409
+        assert "Only one rule per scope" in response.json()["detail"]["message"]
+
+    def test_a_different_scope_is_fine(self, db, client):
+        self._approved_rule_in_scope(db, client)
+
+        second = PgRuleRepository(db).propose(
+            TENANT, case_id=CASE, author="ada@acme.test", note="another"
+        )["rule_id"]
+        drafted(db, second)
+        PgRuleRepository(db).update_proposal(
+            TENANT, second, scope="SOMETHING_ELSE"
+        )
+
+        response = client("root").post(
+            f"/api/rules/proposals/{second}/decision",
+            json={"decision": "approve"},
+        )
+        assert response.status_code == 200
+
+
 class TestTheKillSwitch:
     def test_disabling_stops_a_live_rule(self, db, client):
         overrule(client)

@@ -1,14 +1,18 @@
-"""Tests for RuleWriterAgent -- validation, conflicts, ID generation, formatting."""
+"""Tests for RuleWriterAgent -- validation and formatting.
+
+Writing rules, allocating their ids and checking for conflicts left with the
+chat agent: rules live per tenant in a repository now, approving one is a
+status change on a row, and the scope-conflict warning moved to the approval
+route where it can read the rules actually in force.
+"""
 
 import json
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import invoice_processing.core.rule_writer as rw_module
 from invoice_processing.core.rule_writer import RuleWriterAgent
 
 _EXPECTED_RULE_COUNT = 2
@@ -141,93 +145,7 @@ class TestValidateRule:
 # ---------------------------------------------------------------------------
 # check_conflicts
 # ---------------------------------------------------------------------------
-
-
-class TestCheckConflicts:
-    def test_duplicate_id_warning(self):
-        agent, tmp_path = _make_agent_with_rule_base(SAMPLE_RULE_BASE)
-        with patch("invoice_processing.core.config.RULE_BASE_PATH", tmp_path):
-            with patch.object(
-                type(agent), "load_rule_base", return_value=SAMPLE_RULE_BASE
-            ):
-                rule = {**VALID_RULE, "id": "ALF-001"}  # duplicate
-                with patch.object(
-                    agent,
-                    "get_existing_rules",
-                    return_value=SAMPLE_RULE_BASE["rules"],
-                ):
-                    warnings = agent.check_conflicts(rule)
-        assert any("already exists" in w for w in warnings)
-        tmp_path.unlink(missing_ok=True)
-
-    def test_priority_collision_warning(self):
-        agent = RuleWriterAgent()
-        rule = {
-            **VALID_RULE,
-            "scope": "customer_entity_validation",
-            "priority": 50,
-        }
-        with patch.object(
-            agent, "get_existing_rules", return_value=SAMPLE_RULE_BASE["rules"]
-        ):
-            warnings = agent.check_conflicts(rule)
-        assert any("Priority collision" in w for w in warnings)
-
-    def test_scope_mutual_exclusion_warning(self):
-        agent = RuleWriterAgent()
-        rule = {**VALID_RULE, "scope": "customer_entity_validation"}
-        with patch.object(
-            agent, "get_existing_rules", return_value=SAMPLE_RULE_BASE["rules"]
-        ):
-            warnings = agent.check_conflicts(rule)
-        assert any("mutual exclusion" in w for w in warnings)
-
-    def test_no_conflicts_different_scope(self):
-        agent = RuleWriterAgent()
-        with patch.object(
-            agent, "get_existing_rules", return_value=SAMPLE_RULE_BASE["rules"]
-        ):
-            warnings = agent.check_conflicts(VALID_RULE)
-        # Should only have no duplicate/priority warnings
-        assert not any("already exists" in w for w in warnings)
-        assert not any("Priority collision" in w for w in warnings)
-
-
-# ---------------------------------------------------------------------------
 # next_rule_id
-# ---------------------------------------------------------------------------
-
-
-class TestNextRuleId:
-    def test_increments_from_existing(self):
-        agent = RuleWriterAgent()
-        with patch.object(
-            agent, "get_existing_rules", return_value=SAMPLE_RULE_BASE["rules"]
-        ):
-            assert agent.next_rule_id() == "ALF-002"
-
-    def test_starts_at_001_when_empty(self):
-        agent = RuleWriterAgent()
-        with patch.object(agent, "get_existing_rules", return_value=[]):
-            assert agent.next_rule_id() == "ALF-001"
-
-    def test_handles_multiple_rules(self):
-        rules = [
-            {"id": "ALF-001"},
-            {"id": "ALF-005"},
-            {"id": "ALF-003"},
-        ]
-        agent = RuleWriterAgent()
-        with patch.object(agent, "get_existing_rules", return_value=rules):
-            assert agent.next_rule_id() == "ALF-006"
-
-    def test_handles_malformed_ids(self):
-        rules = [{"id": "ALF-001"}, {"id": "BAD"}, {"id": "ALF-xyz"}]
-        agent = RuleWriterAgent()
-        with patch.object(agent, "get_existing_rules", return_value=rules):
-            assert agent.next_rule_id() == "ALF-002"
-
-
 # ---------------------------------------------------------------------------
 # format_rule_display
 # ---------------------------------------------------------------------------
@@ -259,67 +177,3 @@ class TestFormatRuleDisplay:
 
 # ---------------------------------------------------------------------------
 # run (write rule to file)
-# ---------------------------------------------------------------------------
-
-
-class TestRunWriteRule:
-    def _make_tmp_rule_base(self):
-        """Write SAMPLE_RULE_BASE to a temp file and return path."""
-        f = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, encoding="utf-8"
-        )
-        json.dump(SAMPLE_RULE_BASE, f, indent=2)
-        f.close()
-        return Path(f.name)
-
-    def _cleanup(self, tmp_path):
-        tmp_path.unlink(missing_ok=True)
-        for bak in tmp_path.parent.glob(f"{tmp_path.stem}*.bak.*"):
-            bak.unlink(missing_ok=True)
-
-    def test_add_rule_success(self):
-        tmp_path = self._make_tmp_rule_base()
-        try:
-            original = rw_module.RULE_BASE_PATH
-            rw_module.RULE_BASE_PATH = tmp_path
-            try:
-                agent = RuleWriterAgent()
-                result = agent.run(VALID_RULE, mode="add")
-
-                assert result.success is True
-                assert result.rule_id == "ALF-002"
-                assert result.mode == "add"
-                assert result.total_rules == _EXPECTED_RULE_COUNT
-
-                # Verify file contents
-                with open(tmp_path) as f:
-                    saved = json.load(f)
-                assert len(saved["rules"]) == _EXPECTED_RULE_COUNT
-                assert saved["rules"][1]["id"] == "ALF-002"
-            finally:
-                rw_module.RULE_BASE_PATH = original
-        finally:
-            self._cleanup(tmp_path)
-
-    def test_add_duplicate_id_fails(self):
-        tmp_path = self._make_tmp_rule_base()
-        try:
-            original = rw_module.RULE_BASE_PATH
-            rw_module.RULE_BASE_PATH = tmp_path
-            try:
-                dup_rule = {**VALID_RULE, "id": "ALF-001"}
-                agent = RuleWriterAgent()
-                result = agent.run(dup_rule, mode="add")
-                assert result.success is False
-                assert "already exists" in result.message
-            finally:
-                rw_module.RULE_BASE_PATH = original
-        finally:
-            self._cleanup(tmp_path)
-
-    def test_validation_failure_prevents_write(self):
-        agent = RuleWriterAgent()
-        bad_rule = {"id": "ALF-999"}  # missing name, conditions, actions
-        result = agent.run(bad_rule, mode="add")
-        assert result.success is False
-        assert "Validation errors" in result.message

@@ -192,20 +192,37 @@ def rule_base_roundtrip():
 
 
 def session_logging_durable():
-    import invoice_processing.core.session_logger as sl
+    """Teaching a rule is recorded durably, and now by the audit trail.
 
-    with tempfile.TemporaryDirectory() as tmp:
-        orig = sl.SESSIONS_DIR
-        sl.SESSIONS_DIR = Path(tmp)
-        try:
-            logger = sl.SessionLogger()
-            logger.log_case_loaded("case_005", "summary")
-            files = list(Path(tmp).glob("*.json"))
-            assert files, "nothing persisted before save()"
-            assert json.loads(files[0].read_text())["events"]
-        finally:
-            sl.SESSIONS_DIR = orig
-    return "events persist without save()"
+    The original check covered `SessionLogger`, which wrote an SME chat
+    session to a JSON file and lost everything on a crash before `save()`.
+    That agent is retired: teaching happens in the product, and every step --
+    proposed, drafted, approved, rejected, disabled -- is an append-only audit
+    event with an actor and a tenant on it, which the file never had.
+    """
+    from invoice_processing.api import rules, service
+
+    events = {
+        # Proposed where the decision is made, decided where rules are
+        # reviewed -- both halves of the loop, both on the trail.
+        "rule_proposed",
+        "rule_approved",
+        "rule_rejected",
+        "rule_disabled",
+    }
+    source = "".join(
+        Path(module.__file__).read_text(encoding="utf-8")
+        for module in (rules, service)
+    )
+    missing = sorted(e for e in events if f'"{e}"' not in source)
+    assert not missing, f"rule lifecycle events not audited: {missing}"
+
+    from invoice_processing import core
+
+    assert not (Path(core.__file__).parent / "session_logger.py").exists(), (
+        "the file-based session logger is back"
+    )
+    return "rule lifecycle is audited, not written to a session file"
 
 
 def step_43_gated():

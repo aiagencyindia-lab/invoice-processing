@@ -191,9 +191,16 @@ class TestRuleWriterRejectsUnfireableRules:
         assert RuleWriterAgent().validate_rule(rule) == []
 
     def test_the_shipped_rule_base_validates(self):
-        """ALF-001 must not be rejected by the new check."""
+        """ALF-001 must not be rejected by the new check.
+
+        Read from the seed file directly. The writer used to read it for
+        itself, which is exactly the file access that went with the chat --
+        rules live per tenant in a repository now, and this file is a starting
+        point for local development rather than anybody's rule base.
+        """
         writer = RuleWriterAgent()
-        for rule in writer.get_existing_rules():
+        seed = json.loads(paths.RULE_BASE_PATH.read_text(encoding="utf-8"))
+        for rule in seed.get("rules", []):
             assert writer.validate_rule(rule) == [], (
                 f"shipped rule {rule.get('id')} fails validation"
             )
