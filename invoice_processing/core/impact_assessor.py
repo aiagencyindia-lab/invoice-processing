@@ -243,7 +243,13 @@ class ImpactAssessorAgent:
         if report.collateral_matches:
             lines.append("")
             lines.append(
-                f"  Collateral matches ({len(report.collateral_matches)}):"
+                # "at least" when sampled, because a rule's collateral can
+                # sit in the cases nobody looked at. Measured live: 9 matching
+                # invoices in a corpus of 260, of which a 200-case sample
+                # found 8. A count printed flat would have read as all of them.
+                f"  Collateral matches "
+                f"({'at least ' if report.sampled else ''}"
+                f"{len(report.collateral_matches)}):"
             )
             for cm in report.collateral_matches:
                 lines.append(f"    Case {cm.case_id}: MATCH (unintended)")
@@ -260,6 +266,11 @@ class ImpactAssessorAgent:
         else:
             lines.append(
                 f"  {len(report.safe_cases)} other cases: NO MATCH (safe)"
+                + (
+                    " -- of those checked; the rest were not"
+                    if report.sampled
+                    else ""
+                )
             )
 
         lines.append("")

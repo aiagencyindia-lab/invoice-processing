@@ -121,6 +121,32 @@ class TestTheReportStatesItsOwnDenominator:
         assert "Measured against 3 of 5 cases" in report.summary
         assert "2 cases were not checked" in report.summary
 
+    def test_a_sampled_count_of_collateral_is_a_lower_bound(self, corpus):
+        """Found live: 9 matching invoices in a corpus of 260, of which a
+        200-case sample found 8. Printed flat, that reads as all of them --
+        and the number an approver is trusting is the one that says how many
+        other invoices a rule will re-decide."""
+        for n in range(4):
+            corpus.cases[f"case_{n}"] = case("REJECT")
+        loader = TenantCaseLoader(corpus, "tenant-acme")
+
+        report = ImpactAssessorAgent(loader=loader).run(
+            CONDITIONS, "case_target", sample_size=3
+        )
+
+        assert "at least" in report.summary
+
+    def test_a_full_scan_states_the_count_plainly(self, corpus):
+        corpus.cases["case_2"] = case("REJECT")
+        loader = TenantCaseLoader(corpus, "tenant-acme")
+
+        report = ImpactAssessorAgent(loader=loader).run(
+            CONDITIONS, "case_target"
+        )
+
+        assert "Collateral matches (1)" in report.summary
+        assert "at least" not in report.summary
+
     def test_two_hundred_cases_are_read_before_sampling_starts(self):
         """Ten was the chat's sample. Ten of forty thousand is not a safety
         guarantee; it is theatre with a progress bar."""
