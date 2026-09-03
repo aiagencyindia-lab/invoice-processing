@@ -1831,7 +1831,17 @@ class ALFEngine:
 
         with open(path, encoding="utf-8") as f:
             raw = json.load(f)
+        self.load_document(raw)
 
+    def load_document(self, raw: dict):
+        """Load a rule base already in hand, from wherever it came from.
+
+        The file-reading half above is one source; a per-tenant repository is
+        the other, and in a deployed system it is the only one -- the worker
+        has no file anybody has written rules to. Same validation, same
+        parsing, so the two cannot drift into disagreeing about what a rule
+        base means.
+        """
         # Validate schema
         self._validate_schema(raw)
 
@@ -1856,7 +1866,7 @@ class ALFEngine:
         self.rules.sort(key=lambda r: r.priority)
 
         logger.info(
-            f"Loaded {len(self.rules)} active rules from {path.name} "
+            f"Loaded {len(self.rules)} active rules "
             f"(schema v{raw.get('schema_version', 'unknown')})"
         )
 

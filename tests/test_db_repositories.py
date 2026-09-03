@@ -27,6 +27,7 @@ from invoice_processing.db.models import (
     Invoice,
     InvoiceLine,
     PipelineRun,
+    Rule,
     Tenant,
     User,
 )
@@ -161,6 +162,43 @@ class TestCrossTenantIsolation:
 
         assert len(repo.load(ACME)[0]["rules"]) == 1
         assert repo.load(GLOBEX)[0]["rules"] == [], "rule leaked across tenants"
+
+    def test_a_proposed_rule_is_not_evaluated(self, db):
+        """`Rule.status` defaults to "proposed". A load with no status filter
+        would hand the engine every draft anyone had started -- a rule nobody
+        approved, changing decisions on real invoices."""
+        repo = PgRuleRepository(db)
+        with tenant_session(ACME, db) as session:
+            session.add(
+                Rule(
+                    tenant_id=ACME,
+                    rule_id="ALF-999",
+                    name="Somebody's unreviewed draft",
+                    conditions=[],
+                    actions=[],
+                )
+            )
+
+        doc, _ = repo.load(ACME)
+        assert [r["id"] for r in doc["rules"]] == []
+
+    def test_a_disabled_rule_is_not_evaluated(self, db):
+        """The kill switch. Turning a rule off must stop it, not merely hide
+        it from a list somewhere."""
+        repo = PgRuleRepository(db)
+        doc, version = repo.load(ACME)
+        doc["rules"].append(
+            {
+                "id": "ALF-001",
+                "name": "Live",
+                "enabled": False,
+                "conditions": [],
+                "actions": [],
+            }
+        )
+        repo.save(ACME, doc, expected_version=version)
+
+        assert repo.load(ACME)[0]["rules"] == []
 
     def test_audit_events_are_scoped(self, db):
         sink = PgAuditSink(db)

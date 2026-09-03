@@ -160,6 +160,35 @@ def seen_invoices_for(ctx: RunContext, cases):
     return load
 
 
+def _apply_rules(ctx: RunContext, cases, artifacts: dict, *, binding: bool):
+    """Evaluate this tenant's correction rules and store what they said.
+
+    Never fails the invoice. A malformed rule is an operator's problem and an
+    un-corrected invoice is still a processed invoice; refusing to file it
+    would turn a bad rule into an accounts-payable outage. That is the
+    opposite of the policy for a failed extraction just above, deliberately:
+    extraction failing means there is no invoice at all.
+    """
+    from .. import alf_stage  # noqa: PLC0415
+    from ..api import service  # noqa: PLC0415
+
+    try:
+        rules_doc, version = service.get_rules().load(ctx.tenant_id)
+        written = alf_stage.run(
+            artifacts,
+            rules_doc,
+            binding=binding,
+            rule_base_version=version,
+        )
+    except Exception as exc:
+        logger.warning("Rules not applied to %s: %s", ctx.case_id, exc)
+        written = {alf_stage.AUDIT_ARTIFACT: {"error": str(exc)[:2000]}}
+
+    for key, payload in written.items():
+        cases.put_artifact(ctx, key, payload)
+    return written
+
+
 def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
     """Run the acting pipeline over one stored document.
 
@@ -189,7 +218,7 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
         # and rejected for belonging to somebody else.
         from ..tenant_settings import apply_to_pipeline  # noqa: PLC0415
 
-        apply_to_pipeline(ctx.tenant_id)
+        settings = apply_to_pipeline(ctx.tenant_id)
 
         # Publish each step through the CaseRepository as the pipeline
         # reaches it. It goes through the port rather than onto local disk
@@ -246,6 +275,20 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
             cases.put_artifact(ctx, key, payload)
             artifacts[key] = payload
             stored += 1
+
+        # Then this tenant's own correction rules, before the projection, so
+        # a rule that changes the decision changes the column the sheet and
+        # the queue read. This is the half of the learning loop that was
+        # missing: rules were taught, validated, impact-assessed and written,
+        # and nothing on any deployed path ever read them.
+        artifacts.update(
+            _apply_rules(
+                ctx,
+                cases,
+                artifacts,
+                binding=bool(settings.get("rules_binding")),
+            )
+        )
 
         # Then the queryable view of them. Deliberately after: the artifacts
         # are the record, and a projection that failed must not cost a run

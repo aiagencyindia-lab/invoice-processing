@@ -233,11 +233,23 @@ class PgRuleRepository:
             "metadata": rule.rule_metadata,
         }
 
+    # What the engine is allowed to act on. `Rule.status` defaults to
+    # "proposed", so a load with no status filter would hand the evaluator
+    # every draft anybody had ever started -- a rule nobody approved, changing
+    # decisions on real invoices. That is a one-word bug with a payment
+    # attached, so the filter lives here rather than in each caller.
+    LIVE_STATUS = "approved"
+
     def load(self, tenant_id: str) -> tuple[dict, int]:
+        """The rules this tenant has approved and left enabled."""
         with tenant_session(tenant_id, self.url) as session:
             rows = session.scalars(
                 select(Rule)
-                .where(Rule.tenant_id == tenant_id)
+                .where(
+                    Rule.tenant_id == tenant_id,
+                    Rule.status == self.LIVE_STATUS,
+                    Rule.enabled.is_(True),
+                )
                 .order_by(Rule.priority, Rule.rule_id)
             ).all()
             rules = [self._to_dict(r) for r in rows]
@@ -255,9 +267,18 @@ class PgRuleRepository:
             existing = session.scalars(
                 select(Rule).where(Rule.tenant_id == tenant_id)
             ).all()
+            # Every rule, so an id already taken by a draft is updated rather
+            # than inserted twice -- but the version is computed over the same
+            # rules `load` returns, or the two could never agree and every save
+            # would look like a conflict.
+            live = [
+                r
+                for r in existing
+                if r.status == self.LIVE_STATUS and r.enabled
+            ]
             current = self._version(
                 sorted(
-                    (self._to_dict(r) for r in existing),
+                    (self._to_dict(r) for r in live),
                     key=lambda r: (r["priority"], r["id"]),
                 )
             )
@@ -284,6 +305,10 @@ class PgRuleRepository:
                 rule.conditions = payload.get("conditions", [])
                 rule.actions = payload.get("actions", [])
                 rule.rule_metadata = payload.get("metadata", {})
+                # Saving the rule base is how a rule goes live. A proposal
+                # becomes one through the approval path instead, which is the
+                # only reason `status` exists.
+                rule.status = self.LIVE_STATUS
 
         return self._version(incoming)
 

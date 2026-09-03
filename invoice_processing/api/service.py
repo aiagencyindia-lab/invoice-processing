@@ -126,6 +126,7 @@ _audit = None
 _corrections = None
 _claim_store = None
 _locks = None
+_rules = None
 _tenant_settings = None
 _claims_writer = None
 
@@ -238,6 +239,30 @@ def get_claim_store(worker_id: str = ""):
 
             _claim_store = ClaimStore(paths.DATA_DIR / "claims")
     return _claim_store
+
+
+def get_rules():
+    """This tenant's correction rules. Postgres when configured, else a file.
+
+    Postgres is not a preference in a deployed system, it is the only thing
+    that works: the API and the worker are separate containers, so a rule
+    approved through the API would never reach a worker reading its own disk.
+
+    The rule base is the thing that was written and never read -- the port has
+    carried a "no live consumer" note since it was designed. This is the live
+    consumer.
+    """
+    global _rules
+    if _rules is None:
+        if _database_configured():
+            from ..db.repositories import PgRuleRepository  # noqa: PLC0415
+
+            _rules = PgRuleRepository()
+        else:
+            from ..adapters import JsonRuleRepository  # noqa: PLC0415
+
+            _rules = JsonRuleRepository()
+    return _rules
 
 
 def get_locks():
@@ -579,6 +604,8 @@ def _findings(artifacts: dict) -> list[dict]:
                     "rejection_template": validation.get("rejection_template"),
                 }
             )
+    # The rules that fired, so a corrected decision can say what corrected it.
+    out.extend(case_projection.alf_findings(artifacts))
     return out
 
 

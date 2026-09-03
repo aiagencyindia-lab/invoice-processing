@@ -35,13 +35,18 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     "po_tolerance_pct": (int, float),
     "po_tolerance_abs": (int, float),
     "high_value_threshold": (int, float),
+    "rules_binding": bool,
 }
 
 # Settings the validation engine knows nothing about, with their defaults.
 # `DEFAULT_CONFIG` supplies the default for every other key; this one belongs to
 # the approved-invoices sheet, so its default is stated here -- otherwise an
 # unset threshold reaches the settings form as `null` in a number field.
-NON_ENGINE_DEFAULTS: dict[str, Any] = {"high_value_threshold": 0}
+NON_ENGINE_DEFAULTS: dict[str, Any] = {
+    "high_value_threshold": 0,
+    # Off. A rule starts by being watched, not obeyed.
+    "rules_binding": False,
+}
 
 # Shown alongside each field in the UI so an administrator can tell what a
 # setting does without reading the rulebook.
@@ -74,6 +79,12 @@ DESCRIPTIONS: dict[str, str] = {
         "Invoices at or above this amount are flagged as high value on the "
         "approved-invoices sheet, so they can be filtered and reviewed as a "
         "group. Zero turns the flag off. It changes no decision."
+    ),
+    "rules_binding": (
+        "Let approved correction rules change decisions. Off, every rule is "
+        "still evaluated and what it would have changed is recorded against "
+        "the invoice -- so you can read a month of real cases before a rule "
+        "is allowed to alter one."
     ),
 }
 

@@ -252,6 +252,44 @@ def findings(artifacts: dict) -> list[dict]:
                     "rejection_template": validation.get("rejection_template"),
                 }
             )
+    out.extend(alf_findings(artifacts))
+    return out
+
+
+def alf_findings(artifacts: dict) -> list[dict]:
+    """The rules that fired, as validation records like any other.
+
+    A corrected decision that cannot say which rule corrected it is exactly
+    the opaque automation this product exists not to be. Rendering them as
+    findings means the drawer, the workbench and the export explain a rule
+    without a line of new frontend code.
+    """
+    audit = artifacts.get("alf") or {}
+    out: list[dict] = []
+    for applied in audit.get("rules_applied") or []:
+        conditions = ", ".join(
+            f"{c.get('field')} {c.get('operator')} {c.get('expected')!r}"
+            for c in applied.get("conditions_evaluated") or []
+        )
+        shadow = audit.get("mode") == "shadow"
+        out.append(
+            {
+                "phase": "alf",
+                "step": applied.get("rule_id"),
+                "rule": applied.get("rule_name") or applied.get("rule_id"),
+                # A rule firing is not a check failing. `passed` is what the
+                # UI colours on, and a correction is not a problem.
+                "passed": True,
+                "informational": shadow,
+                "implemented": True,
+                "evidence": (
+                    f"{'Would correct' if shadow else 'Corrected'} "
+                    f"{audit.get('status_before')} -> "
+                    f"{audit.get('status_after')}. Fired on: {conditions}"
+                ),
+                "rejection_template": None,
+            }
+        )
     return out
 
 

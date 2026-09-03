@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from invoice_processing import alf_stage
 from invoice_processing.api import service
 from invoice_processing.connectors.xero import HttpTransport, Transport
 from invoice_processing.ports import RunContext
@@ -337,6 +338,47 @@ class TestProcessDocument:
         assert blobs.requested == ["documents/abc.pdf"]
         assert calls["pdf_exists"], "the pipeline was given no PDF to read"
         assert result["decision"] == "ACCEPT"
+
+    def test_the_tenants_rules_are_applied_before_projection(
+        self, pipeline, monkeypatch
+    ):
+        """The connection this whole feature is: a rule reaching a decision.
+
+        `process_document` ran the pipeline, stored what it produced and
+        projected it, and never once consulted the rules an expert had taught
+        -- so a rule could be written, validated, impact-assessed and approved
+        and change nothing at all. Calling `_apply_rules` in a test of its own
+        would not have caught that; only asking `process_document` does.
+        """
+        seen = {}
+
+        class Rules:
+            def load(self, tenant_id):
+                seen["tenant"] = tenant_id
+                return {"rules": [{"id": "ALF-1"}]}, 3
+
+        monkeypatch.setattr(service, "get_rules", Rules)
+        monkeypatch.setattr(
+            alf_stage,
+            "run",
+            lambda artifacts, doc, **kw: {
+                "alf": {"rules_applied": [], "mode": "shadow", "seen": doc}
+            },
+        )
+
+        blobs, cases = StubBlobs(), RecordingCases()
+        runner.process_document(
+            RunContext(tenant_id="t-1", case_id="case_x"),
+            {"id": "d-1", "storage_key": "documents/abc.pdf"},
+            blobs,
+            cases,
+        )
+
+        assert seen["tenant"] == "t-1", "rules were not loaded for this tenant"
+        assert "alf" in cases.written, "the rule stage never ran"
+        # And the projection saw it, so a corrected decision reaches the
+        # column the sheet and the queue read.
+        assert "alf" in (cases.projected or {})
 
     def test_artifacts_are_written_through_the_port(self, pipeline):
         """Not straight to disk: the port is where the tenant boundary lives.
