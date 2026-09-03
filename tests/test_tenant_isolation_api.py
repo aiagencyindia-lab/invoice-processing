@@ -434,12 +434,20 @@ class TestSheetIsolation:
                 "decided_at": "2026-08-01T10:00:00+00:00",
             }
         }
-        for tenant_id, slug, vendor in (
+        TENANTS = (
             (ACME, "acme", "Acme Supplier"),
             (GLOBEX, "globex", "Globex Supplier"),
-        ):
+        )
+        # Tenants first, committed, before anything referencing them. In the
+        # same session SQLAlchemy is free to flush the invoice first, which
+        # SQLite accepts -- it does not enforce foreign keys unless asked --
+        # and Postgres refuses outright.
+        for tenant_id, slug, _ in TENANTS:
             with db_session(tenant_id, url) as session:
                 session.add(Tenant(id=tenant_id, slug=slug, name=slug))
+
+        for tenant_id, slug, vendor in TENANTS:
+            with db_session(tenant_id, url) as session:
                 session.add(
                     Invoice(
                         tenant_id=tenant_id,

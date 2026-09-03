@@ -488,7 +488,6 @@ class TestSummary:
         assert body["duplicates"] == 0
         assert body["needs_attention"] == 0
 
-
     def test_the_needs_attention_filter_matches_any_flag_not_all(
         self, db, client
     ):
@@ -573,12 +572,16 @@ class TestRoles:
         assert response.status_code == 403
 
     def test_a_viewer_cannot_touch_someone_elses_view(self, db, client):
-        theirs = client("clerk").post(
-            "/api/sheet/views", json={"name": "Theirs", "definition": {}}
-        ).json()
+        theirs = (
+            client("clerk")
+            .post("/api/sheet/views", json={"name": "Theirs", "definition": {}})
+            .json()
+        )
 
         assert (
-            client("viewer").delete(f"/api/sheet/views/{theirs['id']}").status_code
+            client("viewer")
+            .delete(f"/api/sheet/views/{theirs['id']}")
+            .status_code
             == 403
         )
 
@@ -718,14 +721,18 @@ class TestSavedViews:
 
 class TestDuplicatingAView:
     def test_a_copy_is_private_and_owned_by_whoever_asked(self, db, client):
-        shared = client("approver").post(
-            "/api/sheet/views",
-            json={
-                "name": "Team view",
-                "shared": True,
-                "definition": {"filters": {"currency": "AUD"}},
-            },
-        ).json()
+        shared = (
+            client("approver")
+            .post(
+                "/api/sheet/views",
+                json={
+                    "name": "Team view",
+                    "shared": True,
+                    "definition": {"filters": {"currency": "AUD"}},
+                },
+            )
+            .json()
+        )
 
         copy = client("clerk").post(
             f"/api/sheet/views/{shared['id']}/duplicate"
@@ -739,9 +746,11 @@ class TestDuplicatingAView:
         assert body["id"] != shared["id"]
 
     def test_the_original_is_untouched(self, db, client):
-        original = client("clerk").post(
-            "/api/sheet/views", json={"name": "Mine", "definition": {}}
-        ).json()
+        original = (
+            client("clerk")
+            .post("/api/sheet/views", json={"name": "Mine", "definition": {}})
+            .json()
+        )
         client("clerk").post(f"/api/sheet/views/{original['id']}/duplicate")
 
         names = {
@@ -751,9 +760,13 @@ class TestDuplicatingAView:
         assert names == {"Mine", "Mine (copy)"}
 
     def test_someone_elses_private_view_cannot_be_copied(self, db, client):
-        private = client("clerk").post(
-            "/api/sheet/views", json={"name": "Private", "definition": {}}
-        ).json()
+        private = (
+            client("clerk")
+            .post(
+                "/api/sheet/views", json={"name": "Private", "definition": {}}
+            )
+            .json()
+        )
 
         response = client("approver").post(
             f"/api/sheet/views/{private['id']}/duplicate"
@@ -777,9 +790,11 @@ class TestSharingIsItsOwnEvent:
         return events
 
     def test_sharing_an_existing_view_is_recorded(self, db, client, recorded):
-        view = client("approver").post(
-            "/api/sheet/views", json={"name": "Mine", "definition": {}}
-        ).json()
+        view = (
+            client("approver")
+            .post("/api/sheet/views", json={"name": "Mine", "definition": {}})
+            .json()
+        )
         assert "sheet_view_shared" not in recorded
 
         client("approver").patch(
@@ -795,10 +810,14 @@ class TestSharingIsItsOwnEvent:
         assert "sheet_view_shared" in recorded
 
     def test_unsharing_is_not_recorded_as_sharing(self, db, client, recorded):
-        view = client("approver").post(
-            "/api/sheet/views",
-            json={"name": "Everyone", "shared": True, "definition": {}},
-        ).json()
+        view = (
+            client("approver")
+            .post(
+                "/api/sheet/views",
+                json={"name": "Everyone", "shared": True, "definition": {}},
+            )
+            .json()
+        )
         recorded.clear()
 
         client("approver").patch(
