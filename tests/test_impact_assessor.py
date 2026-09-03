@@ -92,8 +92,16 @@ class TestGetCaseSummary:
         assert reason == ""
 
     def test_empty_context(self):
+        """A case with no decision reads as undecided, not as accepted.
+
+        It used to default to ACCEPT, and the key it read -- `decision.decision`
+        -- is not one the real context builder produces, so on live data every
+        case in a collateral list displayed as accepted whatever it actually
+        was. Telling an approver that three accepted invoices would change,
+        about three rejected ones, is the opposite of the truth.
+        """
         decision, reason = self.agent._get_case_summary({})
-        assert decision == "ACCEPT"  # fallback from empty decision dict
+        assert decision == "UNDECIDED"
         assert reason == ""
 
 
@@ -270,7 +278,7 @@ class TestSampling:
         assert report.sample_size == _SMALL_CASE_COUNT
         # All non-target cases should be in safe_cases
         assert len(report.safe_cases) == _EXPECTED_SAFE_ALL
-        assert "Scanning 5 cases" in report.summary
+        assert "Measured against all 5 cases" in report.summary
 
     def test_sampling_when_more_than_sample_size(self):
         contexts = _make_contexts(_LARGE_CASE_COUNT)
@@ -292,7 +300,10 @@ class TestSampling:
         assert report.sample_size == _DEFAULT_SAMPLE_SIZE
         # Only 9 non-target cases should be evaluated (10 - 1 target)
         assert len(report.safe_cases) == _EXPECTED_SAFE_SAMPLED
-        assert "Sampled 10 of 50" in report.summary
+        # The denominator, stated: "no collateral" over an unnamed sample
+        # reads as a guarantee and is not one.
+        assert "Measured against 10 of 50 cases" in report.summary
+        assert "40 cases were not checked" in report.summary
         assert "NOTE:" in report.summary
 
     def test_target_always_included_in_sample(self):

@@ -51,6 +51,15 @@ class ImpactReport:
 # ---------------------------------------------------------------------------
 
 
+# How many cases a rule is measured against before the report starts
+# sampling. Ten was the sample the SME chat used, and ten of forty thousand is
+# not a safety guarantee, it is theatre with a progress bar -- this is the
+# number an approver is being asked to trust when they let a rule change what
+# gets paid. Condition evaluation is pure Python with no model calls, so the
+# cost is reading cases, not judging them.
+DEFAULT_SAMPLE_SIZE = 200
+
+
 class ImpactAssessorAgent:
     """
     Sub-agent: Evaluates proposed conditions against all cases.
@@ -96,8 +105,17 @@ class ImpactAssessorAgent:
         return self._contexts_cache
 
     def _get_case_summary(self, context: dict) -> tuple[str, str]:
-        """Extract decision and rejection reason from context."""
-        # Find the terminal decision
+        """What this case currently decides, and why.
+
+        The phase decision first, because a rule's blast radius is about which
+        gate a case is sitting behind. The final verdict is normalised through
+        `case_projection.machine_verdict`, the same reading the invoice list,
+        the sheet and the disagreement column use -- an impact report that
+        described decisions in its own private vocabulary would be describing
+        a different system than the one the approver is looking at.
+        """
+        from ..case_projection import machine_verdict  # noqa: PLC0415
+
         for phase_key in ["phase1", "phase2", "phase3", "phase4"]:
             phase = context.get(phase_key, {})
             decision = phase.get("decision", "")
@@ -105,15 +123,13 @@ class ImpactAssessorAgent:
                 rejection = phase.get("rejection_template", "")
                 return decision, rejection
 
-        # If no phase rejected, check final decision
-        final = context.get("decision", {})
-        return final.get("decision", "ACCEPT"), ""
+        return machine_verdict(context).upper(), ""
 
     def run(
         self,
         conditions: list[dict],
         target_case_id: str,
-        sample_size: int = 10,
+        sample_size: int = DEFAULT_SAMPLE_SIZE,
     ) -> ImpactReport:
         """
         Evaluate conditions against a sample of cases.
@@ -199,13 +215,20 @@ class ImpactAssessorAgent:
         """Build human-readable impact summary."""
         lines = []
         lines.append("=== Impact Assessment ===")
+        # The denominator, always, and first. A report that says "no
+        # collateral" without saying what it looked at is the most dangerous
+        # sentence in this product: it reads as a safety guarantee and it is
+        # a statement about a sample somebody chose.
         if report.sampled:
             lines.append(
-                f"Sampled {report.sample_size} of {report.total_cases} cases "
-                f"(deterministic selection; target case always included)."
+                f"Measured against {report.sample_size} of "
+                f"{report.total_cases} cases (deterministic selection; the "
+                f"target case is always included). "
+                f"{report.total_cases - report.sample_size} cases were not "
+                f"checked."
             )
         else:
-            lines.append(f"Scanning {report.total_cases} cases...")
+            lines.append(f"Measured against all {report.total_cases} cases.")
         lines.append("")
 
         # Target case

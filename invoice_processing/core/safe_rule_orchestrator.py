@@ -20,7 +20,9 @@ from .rule_writer import RuleWriterAgent
 logger = logging.getLogger("LearningAgent.SafeRuleOrchestrator")
 
 MAX_SAFETY_ATTEMPTS = 3
-DEFAULT_SAMPLE_SIZE = 10
+# The assessor owns this number; importing it keeps the loop and the report
+# from disagreeing about how much of the corpus was actually looked at.
+from .impact_assessor import DEFAULT_SAMPLE_SIZE  # noqa: E402
 
 
 class SafeRuleOrchestrator:

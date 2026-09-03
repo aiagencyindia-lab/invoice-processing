@@ -82,6 +82,10 @@ def machine_verdict(artifacts: dict) -> str:
     verdict = (
         str(
             decision.get("final_decision")
+            # The flattened rule-evaluation context spells it this way. Both
+            # are read here so one answer to "what did the machine decide"
+            # serves the sheet, the disagreement column and the impact report.
+            or decision.get("decision")
             or postprocessing.get("Invoice Status")
             or ""
         )
