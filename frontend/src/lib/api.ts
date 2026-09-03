@@ -240,6 +240,36 @@ export const REASON_CATEGORIES: { value: string; label: string }[] = [
   { value: "other", label: "Other" },
 ];
 
+export type RuleProposal = {
+  rule_id: string;
+  name: string;
+  description: string | null;
+  status: "pending_draft" | "drafting" | "draft" | "approved" | "rejected" | "failed";
+  enabled: boolean;
+  conditions: { field: string; operator: string; value: unknown }[];
+  actions: { type: string; target?: string; value?: unknown }[];
+  author: string | null;
+  approver: string | null;
+  source_case_id: string | null;
+  reason_category: string | null;
+  note: string | null;
+  impact: {
+    target_matched?: boolean;
+    collateral_matches?: { case_id?: string; decision?: string }[];
+    total_cases?: number;
+    sampled?: boolean;
+    sample_size?: number;
+    summary?: string;
+  } | null;
+  /** The rule still matches cases nobody meant it to. Approving it needs a
+   *  deliberate acknowledgement, because that is how an exemption for one
+   *  supplier quietly re-decides everyone else's invoices. */
+  has_collateral: boolean;
+  collateral_warning: string | null;
+  error: string | null;
+  created_at: string | null;
+};
+
 export type Workflow = {
   decision?: string;
   decided_by?: string;

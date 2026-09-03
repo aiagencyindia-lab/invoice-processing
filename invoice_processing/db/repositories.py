@@ -312,6 +312,137 @@ class PgRuleRepository:
 
         return self._version(incoming)
 
+    # --- proposals -------------------------------------------------------
+    #
+    # A proposal is a rule that is not live yet, so it lives in the same table
+    # under a status the evaluator's `load` filter excludes. What it must NOT
+    # go through is `load`/`save`: `load` returns only approved rules, so a
+    # read-modify-write round-trip would carry none of the drafts, and `save`
+    # would then be writing a document with every proposal missing. Approval
+    # is a status flip on one row instead.
+
+    def propose(
+        self,
+        tenant_id: str,
+        *,
+        case_id: str,
+        author: str,
+        note: str = "",
+        reason_category: str = "",
+    ) -> dict:
+        """Record that a case is worth a rule. No rule has been written yet."""
+        with tenant_session(tenant_id, self.url) as session:
+            rule = Rule(
+                tenant_id=tenant_id,
+                rule_id=self.next_rule_id(tenant_id),
+                name=f"Proposed from {case_id}",
+                status="pending_draft",
+                enabled=True,
+                conditions=[],
+                actions=[],
+                author_id=author,
+                rule_metadata={
+                    "source_case_id": case_id,
+                    "reason_category": reason_category,
+                    "note": note,
+                },
+            )
+            session.add(rule)
+            session.flush()
+            return self._proposal(rule)
+
+    @staticmethod
+    def _proposal(rule: Rule) -> dict:
+        metadata = dict(rule.rule_metadata or {})
+        return {
+            "rule_id": rule.rule_id,
+            "name": rule.name,
+            "description": rule.description,
+            "status": rule.status,
+            "enabled": rule.enabled,
+            "conditions": list(rule.conditions or []),
+            "actions": list(rule.actions or []),
+            "scope": rule.scope,
+            "priority": rule.priority,
+            "author": rule.author_id,
+            "approver": rule.approver_id,
+            "source_case_id": metadata.get("source_case_id"),
+            "reason_category": metadata.get("reason_category"),
+            "note": metadata.get("note"),
+            "impact": metadata.get("impact"),
+            # The orchestrator reports success even when a rule still matches
+            # cases it was never meant to. Carried separately so a reader
+            # cannot mistake "it ran" for "it is safe".
+            "has_collateral": bool(metadata.get("has_collateral")),
+            "collateral_warning": metadata.get("collateral_warning"),
+            "error": metadata.get("error"),
+            "created_at": rule.created_at.isoformat()
+            if rule.created_at
+            else None,
+        }
+
+    def proposals(self, tenant_id: str, status: str | None = None) -> list:
+        with tenant_session(tenant_id, self.url) as session:
+            statement = select(Rule).where(Rule.tenant_id == tenant_id)
+            if status:
+                statement = statement.where(Rule.status == status)
+            else:
+                statement = statement.where(
+                    Rule.status != self.LIVE_STATUS,
+                )
+            rows = session.scalars(
+                statement.order_by(Rule.created_at.desc())
+            ).all()
+            return [self._proposal(r) for r in rows]
+
+    def proposal(self, tenant_id: str, rule_id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            rule = self._rule_row(session, tenant_id, rule_id)
+            return self._proposal(rule) if rule else None
+
+    @staticmethod
+    def _rule_row(session, tenant_id: str, rule_id: str):
+        return session.scalar(
+            select(Rule).where(
+                Rule.tenant_id == tenant_id, Rule.rule_id == rule_id
+            )
+        )
+
+    def update_proposal(self, tenant_id: str, rule_id: str, **changes) -> dict:
+        """Write a drafted rule, or its failure, onto the proposal."""
+        metadata_changes = changes.pop("metadata", None)
+        with tenant_session(tenant_id, self.url) as session:
+            rule = self._rule_row(session, tenant_id, rule_id)
+            if rule is None:
+                return {}
+            for field, value in changes.items():
+                setattr(rule, field, value)
+            if metadata_changes:
+                rule.rule_metadata = {
+                    **(rule.rule_metadata or {}),
+                    **metadata_changes,
+                }
+            session.flush()
+            return self._proposal(rule)
+
+    def set_status(
+        self, tenant_id: str, rule_id: str, status: str, *, approver: str
+    ) -> dict:
+        """Approve or reject one proposal.
+
+        Deliberately not a `save`: approving is one row changing status, and
+        routing it through the document would mean writing back a rule base
+        that, by construction, contains no proposals.
+        """
+        with tenant_session(tenant_id, self.url) as session:
+            rule = self._rule_row(session, tenant_id, rule_id)
+            if rule is None:
+                return {}
+            rule.status = status
+            rule.approver_id = approver
+            session.flush()
+            return self._proposal(rule)
+
     def next_rule_id(self, tenant_id: str) -> str:
         """Allocated from stored rules; the version check makes racing visible."""
         with tenant_session(tenant_id, self.url) as session:

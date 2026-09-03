@@ -35,6 +35,7 @@ const NAV = [
   { href: "/sheet", label: "Approved invoices", glyph: "▥" },
   { href: "/documents", label: "Documents", glyph: "▣", min: "clerk" },
   { href: "/activity", label: "Activity", glyph: "≡" },
+  { href: "/rules", label: "Rules", glyph: "◇", min: "approver" },
   { href: "/purchase-orders", label: "Purchase orders", glyph: "◈", min: "clerk" },
   { href: "/settings", label: "Settings", glyph: "⚙", min: "admin" },
   { href: "/admin", label: "Admin", glyph: "✦", min: "admin" },

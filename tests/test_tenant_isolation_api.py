@@ -39,6 +39,7 @@ from invoice_processing.api import (
 )
 from invoice_processing.api.service import app
 from invoice_processing.db.models import Base, Invoice, Tenant
+from invoice_processing.db.repositories import PgRuleRepository
 from invoice_processing.db.session import (
     create_all,
     get_engine,
@@ -640,6 +641,89 @@ class TestSheetIsolation:
         )
 
 
+class TestRuleIsolation:
+    """A rule decides what a tenant pays. Reaching another's is the worst
+    version of a cross-tenant leak: not reading their data, but changing what
+    happens to it."""
+
+    @pytest.fixture
+    def rule_clients(self, scratch_db, monkeypatch):
+        url = scratch_db("rules.db")
+        monkeypatch.setenv("DATABASE_URL", url)
+        monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
+        engine = get_engine(url)
+        Base.metadata.drop_all(engine)
+        create_all(url)
+        for tenant_id, slug in ((ACME, "acme"), (GLOBEX, "globex")):
+            with db_session(tenant_id, url) as session:
+                session.add(Tenant(id=tenant_id, slug=slug, name=slug))
+
+        monkeypatch.delenv("AUTH_DISABLED", raising=False)
+        monkeypatch.setattr(auth, "_verifier", FakeVerifier())
+
+        proposal = PgRuleRepository(url).propose(
+            ACME,
+            case_id="acme-case",
+            author="someone@acme.test",
+            note="Acme policy",
+        )
+
+        def client_for(slug, role="admin"):
+            return TestClient(
+                app, headers={"Authorization": f"Bearer {slug}-{role}"}
+            )
+
+        return client_for, proposal["rule_id"]
+
+    def test_a_proposal_is_invisible_to_another_tenant(self, rule_clients):
+        client_for, _ = rule_clients
+
+        assert (
+            client_for("acme").get("/api/rules/proposals").json()["proposals"]
+        )
+        assert (
+            client_for("globex").get("/api/rules/proposals").json()["proposals"]
+            == []
+        )
+
+    def test_another_tenant_cannot_read_one_by_id(self, rule_clients):
+        client_for, rule_id = rule_clients
+
+        response = client_for("globex").get(f"/api/rules/proposals/{rule_id}")
+        assert response.status_code == 404
+
+    def test_another_tenant_cannot_draft_one(self, rule_clients):
+        """Drafting spends Vertex calls against a corpus. Doing it on someone
+        else's case would read their ledger to write it."""
+        client_for, rule_id = rule_clients
+
+        response = client_for("globex").post(
+            f"/api/rules/proposals/{rule_id}/draft"
+        )
+        assert response.status_code == 404
+
+    def test_another_tenant_cannot_approve_one(self, rule_clients):
+        """The one that would change what a customer pays."""
+        client_for, rule_id = rule_clients
+
+        response = client_for("globex").post(
+            f"/api/rules/proposals/{rule_id}/decision",
+            json={"decision": "approve"},
+        )
+        assert response.status_code == 404
+
+    def test_another_tenant_cannot_disable_one(self, rule_clients):
+        client_for, rule_id = rule_clients
+
+        response = client_for("globex").post(f"/api/rules/{rule_id}/disable")
+        assert response.status_code == 404
+
+    def test_the_rule_base_does_not_cross_tenants(self, rule_clients):
+        client_for, _ = rule_clients
+
+        assert client_for("globex").get("/api/rules").json()["rules"] == []
+
+
 class TestCoverage:
     # Routes that legitimately serve no tenant data, with the reason each is
     # exempt. Anything not listed must be probed above.
@@ -676,6 +760,12 @@ class TestCoverage:
         "/api/sheet/invoices",
         "/api/sheet/summary",
         "/api/sheet/facets",
+        "/api/rules",
+        "/api/rules/proposals",
+        "/api/rules/proposals/{rule_id}",
+        "/api/rules/proposals/{rule_id}/draft",
+        "/api/rules/proposals/{rule_id}/decision",
+        "/api/rules/{rule_id}/disable",
         "/api/sheet/views",
         "/api/sheet/views/{view_id}",
         "/api/sheet/views/{view_id}/duplicate",

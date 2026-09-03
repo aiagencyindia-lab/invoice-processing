@@ -934,6 +934,50 @@ def unlock_record(
     return {"released": broken}
 
 
+def _propose_rule_if_warranted(
+    principal: Principal,
+    case_id: str,
+    category: str,
+    agreement: str | None,
+    state: dict,
+) -> None:
+    """Note that this case may be worth a rule. Writes a row, nothing more.
+
+    Two conditions, and both matter. The reviewer has to have *overruled* the
+    pipeline -- agreeing with it teaches nothing. And they have to have said
+    the reason was policy, because that is the one thing no classifier can
+    infer: "we read the invoice wrong" and "the rulebook is missing a rule"
+    look identical from the outside and mean opposite things. Teaching a rule
+    from the first is how a control becomes a hole.
+
+    No LLM here. Drafting the rule costs several Vertex calls and Vertex has
+    been seen hanging for twenty minutes; a reviewer pressing Reject must not
+    wait for that, or find their rejection failed because a model did.
+    """
+    if category != "policy_exception" or agreement in (None, "agree"):
+        return
+    rules = get_rules()
+    if not hasattr(rules, "propose"):  # the file-backed store has no drafts
+        return
+    try:
+        proposal = rules.propose(
+            principal.tenant_id,
+            case_id=case_id,
+            author=principal.email,
+            note=state.get("reason") or "",
+            reason_category=category,
+        )
+    except Exception as exc:
+        # A decision is not lost because a suggestion could not be recorded.
+        logger.warning("Could not propose a rule for %s: %s", case_id, exc)
+        return
+    get_audit().emit(
+        principal.context(case_id),
+        "rule_proposed",
+        {"rule": proposal["rule_id"], "reason": state.get("reason")},
+    )
+
+
 @app.post("/api/invoices/{case_id}/actions")
 def act(
     case_id: str,
@@ -982,6 +1026,7 @@ def act(
     agreement = case_projection.agreement(
         {**artifacts, WORKFLOW_ARTIFACT: state}
     )
+    _propose_rule_if_warranted(principal, case_id, category, agreement, state)
     # Spelled out rather than built from the action: `f"invoice_{action}d"`
     # produced "invoice_rejectd", and an audit trail is immutable, so the typo
     # is now permanent in every row already written.
@@ -1198,6 +1243,7 @@ def export_invoice(
 from .admin_routes import router as admin_router  # noqa: E402
 from .config_routes import router as config_router  # noqa: E402
 from .ingest import router as ingest_router  # noqa: E402
+from .rules import router as rules_router  # noqa: E402
 from .sheet import router as sheet_router  # noqa: E402
 from .signup import router as signup_router  # noqa: E402
 from .system import router as system_router  # noqa: E402
@@ -1208,6 +1254,7 @@ app.include_router(config_router)
 app.include_router(admin_router)
 app.include_router(signup_router)
 app.include_router(sheet_router)
+app.include_router(rules_router)
 
 
 @app.get("/", response_class=HTMLResponse)

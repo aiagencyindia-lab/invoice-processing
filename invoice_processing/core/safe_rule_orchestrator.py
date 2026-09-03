@@ -30,11 +30,15 @@ class SafeRuleOrchestrator:
       generate/revise → validate → assess impact → if collateral, auto-tighten → repeat
     """
 
-    def __init__(self):
+    def __init__(self, loader=None):
+        # Injectable for the same reason the impact assessor's is: in a
+        # deployed system the cases live in a tenant's store, not in a folder
+        # on somebody's laptop, and a rule drafted against an empty folder is
+        # drafted against nothing.
+        self._loader = loader or CaseLoaderAgent()
         self._discoverer = RuleDiscovererAgent()
         self._writer = RuleWriterAgent()
-        self._impact = ImpactAssessorAgent()
-        self._loader = CaseLoaderAgent()
+        self._impact = ImpactAssessorAgent(loader=self._loader)
 
     def _format_collateral_info(self, collateral_matches: list) -> str:
         """Format collateral match details for the revision prompt."""

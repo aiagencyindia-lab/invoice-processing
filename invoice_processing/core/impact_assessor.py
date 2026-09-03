@@ -58,8 +58,12 @@ class ImpactAssessorAgent:
     Deterministic - no LLM calls. Uses ALF ConditionEvaluator directly.
     """
 
-    def __init__(self):
-        self._loader = CaseLoaderAgent()
+    def __init__(self, loader=None):
+        # Injectable so the same assessor can measure a rule against a
+        # tenant's real corpus in the deployed system and against the local
+        # sample folder in the eval harness. Defaulted, so every existing
+        # caller and test is unaffected.
+        self._loader = loader or CaseLoaderAgent()
         self._contexts_cache: dict[str, dict] = {}
 
     def _load_all_contexts(self) -> dict[str, dict]:
@@ -68,6 +72,20 @@ class ImpactAssessorAgent:
             return self._contexts_cache
 
         case_ids = self._loader.list_cases()
+
+        # One read for the whole corpus where the loader can do it. Against a
+        # database, a round trip per case is the difference between a report
+        # somebody waits for and one they abandon -- and the blast radius of a
+        # rule is the number this product's safety claim rests on.
+        batch = getattr(self._loader, "load_many", None)
+        if batch is not None:
+            try:
+                for cid, case_data in batch(case_ids).items():
+                    self._contexts_cache[cid] = case_data.context
+                return self._contexts_cache
+            except Exception:
+                pass  # fall through to one at a time
+
         for cid in case_ids:
             try:
                 case_data = self._loader.run(cid)
