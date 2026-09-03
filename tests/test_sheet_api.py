@@ -553,9 +553,39 @@ class TestRoles:
         for role in ("viewer", "clerk", "approver", "admin"):
             assert client(role).get("/api/sheet/invoices").status_code == 200
 
-    def test_a_viewer_cannot_save_a_view(self, db, client):
+    def test_a_viewer_can_save_a_private_view(self, db, client):
+        """A bookmark over rows they may already read.
+
+        The one write a viewer gets. Sharing is what puts a filter on someone
+        else's screen, and that is still approver's.
+        """
         response = client("viewer").post(
             "/api/sheet/views", json={"name": "Mine", "definition": {}}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["shared"] is False
+
+    def test_a_viewer_still_cannot_share_one(self, db, client):
+        response = client("viewer").post(
+            "/api/sheet/views",
+            json={"name": "Everyone", "definition": {}, "shared": True},
+        )
+        assert response.status_code == 403
+
+    def test_a_viewer_cannot_touch_someone_elses_view(self, db, client):
+        theirs = client("clerk").post(
+            "/api/sheet/views", json={"name": "Theirs", "definition": {}}
+        ).json()
+
+        assert (
+            client("viewer").delete(f"/api/sheet/views/{theirs['id']}").status_code
+            == 403
+        )
+
+    def test_a_viewer_cannot_request_an_export(self, db, client):
+        """Saving a filter is not the same as producing a file of the ledger."""
+        response = client("viewer").post(
+            "/api/sheet/exports", json={"format": "csv"}
         )
         assert response.status_code == 403
 

@@ -477,44 +477,43 @@ export default function SheetPage() {
               {view.name}
               {view.shared ? " (shared)" : ""}
             </button>
-            {can(me, "clerk") ? (
-              <button
-                type="button"
-                className="btn-chip"
-                aria-label={`Duplicate ${view.name}`}
-                title="Make a private copy to change"
-                onClick={async () => {
-                  await api(`/api/sheet/views/${view.id}/duplicate`, {
-                    method: "POST",
-                  });
-                  reloadViews();
-                }}
-              >
-                copy
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className="btn-chip"
+              aria-label={`Duplicate ${view.name}`}
+              title="Make a private copy to change"
+              onClick={async () => {
+                await api(`/api/sheet/views/${view.id}/duplicate`, {
+                  method: "POST",
+                });
+                reloadViews();
+              }}
+            >
+              copy
+            </button>
           </Fragment>
         ))}
-        {can(me, "clerk") ? (
-          <button
-            type="button"
-            className="btn-chip"
-            onClick={async () => {
-              const name = window.prompt("Name this view");
-              if (!name) return;
-              await api("/api/sheet/views", {
-                method: "POST",
-                body: JSON.stringify({
-                  name,
-                  definition: { filters, sort: { key: sort, order }, columns: layout },
-                }),
-              });
-              reloadViews();
-            }}
-          >
-            Save view
-          </button>
-        ) : null}
+        {/* Ungated, unlike the export buttons above: saving a private view is
+            the one write a viewer has, because it only remembers where they
+            were already allowed to look. */}
+        <button
+          type="button"
+          className="btn-chip"
+          onClick={async () => {
+            const name = window.prompt("Name this view");
+            if (!name) return;
+            await api("/api/sheet/views", {
+              method: "POST",
+              body: JSON.stringify({
+                name,
+                definition: { filters, sort: { key: sort, order }, columns: layout },
+              }),
+            });
+            reloadViews();
+          }}
+        >
+          Save view
+        </button>
       </div>
 
       <div className="chip-row">

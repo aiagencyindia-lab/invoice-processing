@@ -287,8 +287,16 @@ def list_views(
 @router.post("/api/sheet/views")
 def create_view(
     body: dict,
-    principal: Annotated[Principal, Depends(require_role("clerk"))],
+    principal: Annotated[Principal, Depends(current_principal)],
 ) -> dict:
+    """Save the current filters under a name.
+
+    Open to a viewer, unlike every other write on the sheet: a private view is
+    a bookmark over rows that reader is already allowed to see, and a role that
+    may read a ledger but not remember where it was looking is a role nobody
+    can work in. Sharing one with the tenant is still approver's -- it is
+    sharing, not saving, that puts a filter on someone else's screen.
+    """
     from . import service  # noqa: PLC0415
 
     name = str(body.get("name") or "").strip()
@@ -321,7 +329,7 @@ def create_view(
 def update_view(
     view_id: str,
     body: dict,
-    principal: Annotated[Principal, Depends(require_role("clerk"))],
+    principal: Annotated[Principal, Depends(current_principal)],
 ) -> dict:
     from . import service  # noqa: PLC0415
 
@@ -378,7 +386,7 @@ def _audit_shared(principal: Principal, view_id: str, name: str) -> None:
 @router.post("/api/sheet/views/{view_id}/duplicate")
 def duplicate_view(
     view_id: str,
-    principal: Annotated[Principal, Depends(require_role("clerk"))],
+    principal: Annotated[Principal, Depends(current_principal)],
 ) -> dict:
     """Copy a view to work from, without touching the one it came from.
 
@@ -415,7 +423,7 @@ def duplicate_view(
 @router.delete("/api/sheet/views/{view_id}")
 def delete_view(
     view_id: str,
-    principal: Annotated[Principal, Depends(require_role("clerk"))],
+    principal: Annotated[Principal, Depends(current_principal)],
 ) -> dict:
     from . import service  # noqa: PLC0415
 
