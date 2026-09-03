@@ -34,7 +34,14 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     "disabled_checks": list,
     "po_tolerance_pct": (int, float),
     "po_tolerance_abs": (int, float),
+    "high_value_threshold": (int, float),
 }
+
+# Settings the validation engine knows nothing about, with their defaults.
+# `DEFAULT_CONFIG` supplies the default for every other key; this one belongs to
+# the approved-invoices sheet, so its default is stated here -- otherwise an
+# unset threshold reaches the settings form as `null` in a number field.
+NON_ENGINE_DEFAULTS: dict[str, Any] = {"high_value_threshold": 0}
 
 # Shown alongside each field in the UI so an administrator can tell what a
 # setting does without reading the rulebook.
@@ -63,6 +70,11 @@ DESCRIPTIONS: dict[str, str] = {
     ),
     "po_tolerance_pct": "Permitted over-billing against a PO, as a fraction (0.02 = 2%).",
     "po_tolerance_abs": "Permitted over-billing against a PO, as a flat amount.",
+    "high_value_threshold": (
+        "Invoices at or above this amount are flagged as high value on the "
+        "approved-invoices sheet, so they can be filtered and reviewed as a "
+        "group. Zero turns the flag off. It changes no decision."
+    ),
 }
 
 
@@ -128,7 +140,11 @@ def validate(payload: dict) -> dict:
                     "invoice will be rejected as addressed to someone else."
                 )
             cleaned[key] = names
-        elif key in ("po_tolerance_pct", "po_tolerance_abs"):
+        elif key in (
+            "po_tolerance_pct",
+            "po_tolerance_abs",
+            "high_value_threshold",
+        ):
             if value < 0:
                 raise SettingsError(f"{key} cannot be negative.")
             cleaned[key] = float(value)
@@ -227,7 +243,10 @@ def effective(tenant_id: str, store=None) -> dict:
 
         store = service.get_tenant_settings()
 
-    defaults = {k: agent.DEFAULT_CONFIG.get(k) for k in SETTABLE}
+    defaults = {
+        k: agent.DEFAULT_CONFIG.get(k, NON_ENGINE_DEFAULTS.get(k))
+        for k in SETTABLE
+    }
     overrides = {
         k: v for k, v in (store.get(tenant_id) or {}).items() if k in SETTABLE
     }

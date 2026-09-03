@@ -458,3 +458,66 @@ class TestWorkAuthorizationIsSettable:
             json={"settings": {"require_work_authorization": "yes please"}},
         )
         assert response.status_code == 400
+
+
+class TestHighValueThresholdIsSettable:
+    """The sheet can flag high-value invoices; until now nobody could say what
+    high value meant.
+
+    `_high_value_threshold` read the setting all along, but the key was missing
+    from the allow-list, so `PUT /api/settings` refused it and the flag could
+    never fire for anyone.
+    """
+
+    def test_it_is_in_the_allow_list_with_a_description(self):
+        assert tenant_settings.SETTABLE["high_value_threshold"] == (int, float)
+        assert tenant_settings.DESCRIPTIONS["high_value_threshold"]
+
+    def test_it_round_trips(self, env):
+        client = env["client"]("admin")
+        response = client.put(
+            "/api/settings", json={"settings": {"high_value_threshold": 50000}}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["settings"]["high_value_threshold"] == 50000
+        assert (
+            client.get("/api/settings").json()["settings"][
+                "high_value_threshold"
+            ]
+            == 50000
+        )
+
+    def test_unset_reads_as_zero_not_null(self, env):
+        """The engine's DEFAULT_CONFIG has no such key, so without its own
+        default the settings form renders `null` in a number field."""
+        body = env["client"]().get("/api/settings").json()
+
+        assert body["settings"]["high_value_threshold"] == 0
+        field = next(
+            f for f in body["fields"] if f["key"] == "high_value_threshold"
+        )
+        assert field["type"] == "number"
+        assert field["value"] == 0
+
+    def test_a_negative_threshold_is_refused(self, env):
+        response = env["client"]("admin").put(
+            "/api/settings", json={"settings": {"high_value_threshold": -1}}
+        )
+
+        assert response.status_code == 400
+        assert "negative" in response.text
+
+    def test_a_non_number_is_refused(self, env):
+        response = env["client"]("admin").put(
+            "/api/settings", json={"settings": {"high_value_threshold": "lots"}}
+        )
+
+        assert response.status_code == 400
+
+    def test_a_clerk_cannot_change_it(self, env):
+        response = env["client"]("clerk").put(
+            "/api/settings", json={"settings": {"high_value_threshold": 1}}
+        )
+
+        assert response.status_code == 403

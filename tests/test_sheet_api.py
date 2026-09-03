@@ -379,6 +379,33 @@ class TestQualityFlags:
         assert rows(client, quality="high_value")["total"] == 0
         assert "high_value" not in rows(client)["rows"][0]["quality_flags"]
 
+    def test_setting_the_threshold_makes_the_flag_fire(self, db, client):
+        """The whole path: an administrator says what high value means, and the
+        sheet flags it. The setting was read from the start but was missing
+        from the allow-list, so it could never be given a value."""
+        with tenant_session(TENANT, db) as session:
+            invoice(session, case_id="big", total_inc_tax=90_000)
+            invoice(session, case_id="small", total_inc_tax=100)
+
+        put = client("admin").put(
+            "/api/settings", json={"settings": {"high_value_threshold": 50000}}
+        )
+        assert put.status_code == 200, put.text
+
+        body = rows(client, quality="high_value")
+        assert [row["case_id"] for row in body["rows"]] == ["big"]
+
+    def test_the_threshold_is_inclusive(self, db, client):
+        """ "At or above", as the description says."""
+        with tenant_session(TENANT, db) as session:
+            invoice(session, case_id="exactly", total_inc_tax=50_000)
+
+        client("admin").put(
+            "/api/settings", json={"settings": {"high_value_threshold": 50000}}
+        )
+
+        assert rows(client, quality="high_value")["total"] == 1
+
 
 class TestSummary:
     def test_totals_are_grouped_by_currency(self, db, client):
