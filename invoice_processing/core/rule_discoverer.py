@@ -223,6 +223,8 @@ class RuleDiscovererAgent:
         self,
         case_data: CaseData,
         sme_feedback: str,
+        existing_rules: list[dict] | None = None,
+        next_id: str | None = None,
     ) -> ProposedRule:
         """
         Propose a new ALF rule based on case data and SME feedback.
@@ -230,6 +232,12 @@ class RuleDiscovererAgent:
         Args:
             case_data: Loaded case data from CaseLoaderAgent.
             sme_feedback: SME's natural language description of desired change.
+            existing_rules: The rules already in force, so the model can see
+                what it must not duplicate or contradict. Passed in rather
+                than read from a file: rules are per tenant now, and the file
+                the writer used to read is nobody's rule base.
+            next_id: The id to give the new rule, allocated by whoever owns
+                the rule base.
 
         Returns:
             ProposedRule with the proposed rule dict.
@@ -244,10 +252,15 @@ class RuleDiscovererAgent:
             "Invoice Processing", {}
         ).get("Invoice Status", "Unknown")
 
-        # Get existing rules and scopes
-        existing_rules = self._writer.get_existing_rules()
-        existing_scopes = self._writer.get_existing_scopes()
-        next_id = self._writer.next_rule_id()
+        existing_rules = list(existing_rules or [])
+        # Which scopes are taken, derived rather than fetched: only one rule
+        # per scope fires, so the model needs to know what is already there.
+        existing_scopes: dict[str, list[str]] = {}
+        for rule in existing_rules:
+            existing_scopes.setdefault(rule.get("scope", "global"), []).append(
+                rule.get("id")
+            )
+        next_id = next_id or "ALF-001"
 
         # Get relevant rules book sections
         rules_book = self._load_rules_book()

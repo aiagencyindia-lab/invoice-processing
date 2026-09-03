@@ -112,8 +112,15 @@ def draft(tenant_id: str, rule_id: str) -> dict:
     case_id = proposal.get("source_case_id")
     try:
         loader = TenantCaseLoader(service.get_cases(), tenant_id)
+        # What this tenant already has in force, so the model can see the
+        # scopes that are taken and the rules it must not contradict. The
+        # writer used to read these from a file; rules are per tenant now.
+        live, _ = rules.load(tenant_id)
         result = SafeRuleOrchestrator(loader=loader).discover(
-            case_id, _feedback(proposal)
+            case_id,
+            _feedback(proposal),
+            existing_rules=live.get("rules", []),
+            next_id=rule_id,
         )
     except Exception as exc:
         logger.exception("Drafting %s failed", rule_id)

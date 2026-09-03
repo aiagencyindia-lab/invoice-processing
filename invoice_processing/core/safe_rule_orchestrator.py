@@ -240,6 +240,8 @@ class SafeRuleOrchestrator:
         case_id: str,
         sme_feedback: str,
         sample_size: int = DEFAULT_SAMPLE_SIZE,
+        existing_rules: list[dict] | None = None,
+        next_id: str | None = None,
     ) -> dict:
         """Generate a new safe ALF rule.
 
@@ -259,7 +261,9 @@ class SafeRuleOrchestrator:
         case_data = self._loader.run(case_id)
 
         # Step 1: Generate initial rule
-        proposed = self._discoverer.run(case_data, sme_feedback)
+        proposed = self._discoverer.run(
+            case_data, sme_feedback, existing_rules, next_id
+        )
         if not proposed.success:
             return {
                 "success": False,
