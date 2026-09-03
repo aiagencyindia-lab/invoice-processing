@@ -76,7 +76,13 @@ test("approve, then export, produces a CSV", async ({ page }) => {
   await page.locator(".queue-item").last().click();
   await expect(page.locator("#f_vendor_name")).toBeVisible();
 
+  // Deciding asks why now: the category is what routes a disagreement into
+  // the learning loop, and an approval over a pipeline rejection is the
+  // exemption a rule gets written from.
   await page.getByRole("button", { name: /^Approve/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Approve invoice" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Approve" }).click();
   await expect(page.getByText(/^Approved /)).toBeVisible();
 
   // Filtered: headless Chromium treats the document pane's PDF as a download
@@ -86,6 +92,25 @@ test("approve, then export, produces a CSV", async ({ page }) => {
   });
   await page.getByRole("button", { name: /^Export/ }).click();
   expect((await download).suggestedFilename()).toMatch(/\.csv$/);
+});
+
+test("a rejection has to say why, and in which sense", async ({ page }) => {
+  // The reason used to be a `window.prompt`, which Playwright cannot see and
+  // a person cannot classify. The category is the half the system acts on:
+  // only "policy exception" describes a rule the rulebook is missing.
+  await goto(page, "/invoices");
+  await page.locator(".queue-item").last().click();
+
+  await page.getByRole("button", { name: /^Reject/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Reject invoice" });
+  await expect(dialog).toBeVisible();
+
+  // No note, no rejection: the API refuses one and so does the button.
+  await expect(dialog.getByRole("button", { name: "Reject" })).toBeDisabled();
+
+  await dialog.getByRole("textbox").fill("Wrong entity: this is Acme UK");
+  await dialog.getByRole("button", { name: "Reject" }).click();
+  await expect(page.getByText(/^Rejected /)).toBeVisible();
 });
 
 test("an edit is recorded as a correction", async ({ page }) => {
