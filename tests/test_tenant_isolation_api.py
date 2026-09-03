@@ -207,6 +207,17 @@ class TestWritesDoNotCross:
         response = globex.post("/api/documents/some-doc-id/retry")
         assert response.status_code in (403, 404)
 
+    def test_cannot_lock_another_tenants_invoice(self, clients):
+        """A lock refuses other people's writes; across tenants it would be a
+        denial of service on a ledger you cannot even see."""
+        globex = clients("globex")
+        assert globex.post("/api/invoices/case_002/lock").status_code == 404
+        # And releasing is scoped the same way: nothing of theirs to release.
+        assert (
+            globex.delete("/api/invoices/case_002/lock").json()["released"]
+            is None
+        )
+
     def test_documents_listing_does_not_cross_tenants(self, clients):
         globex = clients("globex")
         assert globex.get("/api/documents").json()["total"] == 0
@@ -647,6 +658,7 @@ class TestCoverage:
         "/api/invoices/{case_id}",
         "/api/invoices/{case_id}/document",
         "/api/invoices/{case_id}/fields",
+        "/api/invoices/{case_id}/lock",
         "/api/invoices/{case_id}/actions",
         "/api/invoices/{case_id}/export",
         "/api/stats",

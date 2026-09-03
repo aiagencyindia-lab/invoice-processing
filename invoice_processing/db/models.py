@@ -460,8 +460,39 @@ class ExportJob(Base, TenantMixin, TimestampMixin):
     )
 
 
+class RecordLock(Base, TenantMixin, TimestampMixin):
+    """Who is editing one invoice, so two people cannot fix it at once.
+
+    Second person wins under last-write-wins: two reviewers correcting the same
+    invoice each read the extraction artifact, each write it back whole, and
+    the one who saves second silently discards the other's corrections. The
+    corrections store still holds both, which makes the trail say two people
+    fixed a field and the invoice show only one of them.
+
+    Same shape as `DocumentClaim`: the unique constraint is the lock, so
+    `INSERT ... ON CONFLICT DO NOTHING` picks one winner for every process at
+    once. Unlike a claim it carries an expiry -- a reviewer who closes the tab
+    must not strand the record, and there is nobody to notice that they did.
+    """
+
+    __tablename__ = "record_locks"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "case_id", name="uq_record_locks_case"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    # The authenticated caller's email, not a self-reported name: this appears
+    # in a refusal shown to someone else.
+    holder: Mapped[str] = mapped_column(String(320), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 TENANT_TABLES = (
     "users",
+    "record_locks",
     "document_claims",
     "documents",
     "invoices",

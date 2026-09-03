@@ -1,16 +1,30 @@
 "use client";
 
-import { useEffect } from "react";
-import { objectUrl, type InvoiceDetail } from "@/lib/api";
+import { useCallback, useEffect, useRef } from "react";
+import {
+  ApiError,
+  api,
+  can,
+  clockTime,
+  objectUrl,
+  type InvoiceDetail,
+  type Me,
+} from "@/lib/api";
 import { useState } from "react";
 
 /** One invoice, beside the sheet rather than instead of it.
  *
- *  Read-only on purpose. Editing lives in the workbench, which already has the
- *  field form, the corrections trail and the keyboard map -- a second editor
- *  would be a second place for the same rules to drift apart. The drawer links
- *  there instead, and j/k move through the page without closing it, so a
- *  reviewer keeps their place in the list.
+ *  Editing here posts to the same `PATCH /fields` the workbench does, so there
+ *  is one editor's worth of rules reachable through two doors: same
+ *  corrections, same audit trail, same values. What the drawer does not have
+ *  is a second set of them.
+ *
+ *  Editing takes a lock first. Without one, two reviewers working the same
+ *  exception queue each read the extraction artifact and each write it back
+ *  whole, and whoever saves second silently discards the other's corrections.
+ *
+ *  j/k still move through the page without closing the drawer, so a reviewer
+ *  keeps their place in the list.
  */
 /** A line item's fields are untyped JSON, so they are rendered as text at the
  *  boundary rather than trusted to be strings. */
@@ -21,18 +35,125 @@ function text(value: unknown): string {
 export function Drawer({
   detail,
   loading,
+  me,
   onClose,
   onPrevious,
   onNext,
+  onSaved,
 }: {
   detail: InvoiceDetail | null;
   loading: boolean;
+  me: Me | null;
   onClose: () => void;
   onPrevious: () => void;
   onNext: () => void;
+  /** Reload the row and the detail: a saved edit changes both. */
+  onSaved: () => void;
 }) {
   const [documentUrl, setDocumentUrl] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const [notice, setNotice] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  // Whether *we* hold the lock, readable from a cleanup function that runs
+  // after the state is gone.
+  const held = useRef(false);
   const caseId = detail?.case_id ?? null;
+  const lock = detail?.lock ?? null;
+  const theirs = Boolean(lock && lock.holder !== me?.email);
+
+  const release = useCallback(async (id: string) => {
+    try {
+      await api(`/api/invoices/${id}/lock`, { method: "DELETE" });
+    } catch {
+      // Nothing useful to do: the lock lapses on its own, which is the whole
+      // reason it has an expiry.
+    }
+  }, []);
+
+  const startEditing = async () => {
+    if (!caseId) return;
+    setNotice(null);
+    try {
+      await api(`/api/invoices/${caseId}/lock`, { method: "POST" });
+      held.current = true;
+      setEdits({});
+      setEditing(true);
+    } catch (caught) {
+      setNotice(
+        caught instanceof ApiError ? caught.friendly : String(caught),
+      );
+      onSaved(); // Re-read: someone else holds it, and the banner should say so.
+    }
+  };
+
+  const stopEditing = async () => {
+    setEditing(false);
+    setEdits({});
+    if (caseId && held.current) {
+      held.current = false;
+      await release(caseId);
+    }
+  };
+
+  const save = async () => {
+    if (!caseId) return;
+    const changed = Object.entries(edits);
+    if (!changed.length) {
+      await stopEditing();
+      return;
+    }
+    setSaving(true);
+    setNotice(null);
+    try {
+      await api(`/api/invoices/${caseId}/fields`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          edits: changed.map(([field, value]) => ({ field, value })),
+        }),
+      });
+      setEditing(false);
+      setEdits({});
+      held.current = false;
+      await release(caseId);
+      onSaved();
+    } catch (caught) {
+      setNotice(
+        caught instanceof ApiError ? caught.friendly : String(caught),
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Renewed well inside the fifteen-minute expiry, because reading an invoice
+  // properly takes longer than one: without this the lock lapses under a
+  // reviewer who is still typing, and someone else can take the record.
+  useEffect(() => {
+    if (!editing || !caseId) return;
+    const timer = setInterval(
+      () => {
+        api(`/api/invoices/${caseId}/lock`, { method: "POST" }).catch(() => {});
+      },
+      10 * 60 * 1000,
+    );
+    return () => clearInterval(timer);
+  }, [editing, caseId]);
+
+  // Moving to another invoice, or closing the drawer, gives the lock back
+  // rather than leaving it to expire: the next reviewer should not wait out a
+  // quarter of an hour for a record nobody is looking at any more. A ref
+  // rather than the `editing` state because this must run on unmount, when
+  // state is already gone.
+  useEffect(() => {
+    if (!caseId) return;
+    return () => {
+      if (held.current) {
+        held.current = false;
+        release(caseId);
+      }
+    };
+  }, [caseId, release]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -95,6 +216,71 @@ export function Drawer({
 
       {detail ? (
         <div className="stack" style={{ gap: 20 }}>
+          {theirs && lock ? (
+            <div className="banner" role="status">
+              {lock.holder} is editing this invoice until{" "}
+              {clockTime(lock.expires_at)}. Your changes would overwrite
+              theirs, so editing is closed until they finish.
+              {can(me, "admin") ? (
+                <button
+                  type="button"
+                  className="btn-chip"
+                  style={{ marginLeft: 8 }}
+                  onClick={async () => {
+                    await api(
+                      `/api/invoices/${detail.case_id}/lock?force=true`,
+                      { method: "DELETE" },
+                    );
+                    onSaved();
+                  }}
+                >
+                  Break the lock
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {notice ? (
+            <div className="banner" role="alert">
+              {notice}
+            </div>
+          ) : null}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            {editing ? (
+              <>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={saving}
+                  onClick={save}
+                >
+                  {saving ? "Saving…" : "Save changes"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={stopEditing}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={theirs || !can(me, "clerk")}
+                title={
+                  can(me, "clerk")
+                    ? undefined
+                    : "Editing an invoice needs the clerk role."
+                }
+                onClick={startEditing}
+              >
+                Edit fields
+              </button>
+            )}
+          </div>
+
           <section>
             <div className="eyebrow">Summary</div>
             <dl className="kv">
@@ -121,7 +307,25 @@ export function Drawer({
                 <div key={field.name} style={{ display: "contents" }}>
                   <dt>{field.name}</dt>
                   <dd>
-                    {String(field.value ?? "—")}{" "}
+                    {editing ? (
+                      <input
+                        className="input-field"
+                        aria-label={field.name}
+                        value={
+                          field.name in edits
+                            ? edits[field.name]
+                            : String(field.value ?? "")
+                        }
+                        onChange={(event) =>
+                          setEdits({
+                            ...edits,
+                            [field.name]: event.target.value,
+                          })
+                        }
+                      />
+                    ) : (
+                      String(field.value ?? "—")
+                    )}{" "}
                     {field.checked && (field.confidence ?? 1) < 1 ? (
                       <span className="badge badge-warn">needs review</span>
                     ) : null}
@@ -219,7 +423,7 @@ export function Drawer({
           </section>
 
           <a className="btn-secondary" href={`/invoices?case=${detail.case_id}`}>
-            Open in workbench to edit
+            Open in workbench
           </a>
         </div>
       ) : (

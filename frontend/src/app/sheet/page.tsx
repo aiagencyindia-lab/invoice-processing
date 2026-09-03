@@ -80,9 +80,11 @@ export default function SheetPage() {
     [filters, sort, order, limit, offset],
   );
 
-  const { data: page, error } = usePoll<SheetPage>(
-    `/api/sheet/invoices?${query}`,
-  );
+  const {
+    data: page,
+    error,
+    reload: reloadPage,
+  } = usePoll<SheetPage>(`/api/sheet/invoices?${query}`);
   const { data: summary } = usePoll<SheetSummary>(
     `/api/sheet/summary?${sheetQuery(filters)}`,
   );
@@ -99,7 +101,11 @@ export default function SheetPage() {
     exports: ExportJob[];
   }>("/api/sheet/exports", watchExports ? 2000 : 0);
 
-  const { data: detail, loading: detailLoading } = usePoll<InvoiceDetail>(
+  const {
+    data: detail,
+    loading: detailLoading,
+    reload: reloadDetail,
+  } = usePoll<InvoiceDetail>(
     openCase ? `/api/invoices/${openCase}` : null,
   );
 
@@ -678,6 +684,13 @@ export default function SheetPage() {
         <Drawer
           detail={detail ?? null}
           loading={detailLoading}
+          me={me}
+          onSaved={() => {
+            // The row and the drawer both show field values, so a saved edit
+            // has to refresh both or the grid keeps the old number.
+            reloadDetail();
+            reloadPage();
+          }}
           onClose={() => setOpenCase(null)}
           onPrevious={() => {
             const index = rows.findIndex((row) => row.case_id === openCase);

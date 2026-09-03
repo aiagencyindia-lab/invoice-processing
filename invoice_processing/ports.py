@@ -66,6 +66,17 @@ class RuleBaseConflict(RuntimeError):
     """The rule base changed since it was read. Re-read and retry."""
 
 
+class LockHeld(RuntimeError):
+    """Someone else is editing this record. Carries the lock, so the refusal
+    can say who and until when -- "locked" without a name is unactionable."""
+
+    def __init__(self, lock: dict):
+        super().__init__(
+            f"Locked by {lock.get('holder')} until {lock.get('expires_at')}"
+        )
+        self.lock = lock
+
+
 # ---------------------------------------------------------------------------
 # Ports
 # ---------------------------------------------------------------------------

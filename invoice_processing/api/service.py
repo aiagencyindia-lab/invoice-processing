@@ -48,6 +48,7 @@ from ..adapters import (
     JsonlCorrectionStore,
     LocalBlobStore,
 )
+from ..ports import LockHeld
 from . import auth
 from .auth import Principal, current_principal, require_role
 
@@ -124,6 +125,7 @@ _documents = None
 _audit = None
 _corrections = None
 _claim_store = None
+_locks = None
 _tenant_settings = None
 _claims_writer = None
 
@@ -236,6 +238,51 @@ def get_claim_store(worker_id: str = ""):
 
             _claim_store = ClaimStore(paths.DATA_DIR / "claims")
     return _claim_store
+
+
+def get_locks():
+    """Who is editing what. `None` when there is no database.
+
+    Without one there is nowhere two containers could both see a lock, and the
+    filesystem stores are a single-developer mode where nobody is racing
+    anybody. Returning None makes the guard a no-op there rather than
+    inventing an exclusion that does not hold.
+
+    # ponytail: a file-backed lock would exclude one machine's processes and
+    # read as safety everywhere else. Postgres or nothing is the honest pair.
+    """
+    global _locks
+    if _locks is None and _database_configured() and _lock_table_exists():
+        from ..db.repositories import PgRecordLocks  # noqa: PLC0415
+
+        _locks = PgRecordLocks()
+    return _locks
+
+
+def _lock_table_exists() -> bool:
+    """Whether the schema this feature needs is actually there.
+
+    A database can be configured and unmigrated -- an in-memory one in a test,
+    or a deployment with `RUN_MIGRATIONS=0`. Asking the database beats assuming
+    either way: assuming the table exists turns every edit into a 500, and
+    assuming it does not would disable locking on a real deployment. Said out
+    loud when it is missing, because silence is how the storage and RLS gaps in
+    this codebase's own audit stayed invisible.
+    """
+    from sqlalchemy import inspect  # noqa: PLC0415
+
+    from ..db.session import get_engine  # noqa: PLC0415
+
+    try:
+        if inspect(get_engine()).has_table("record_locks"):
+            return True
+    except Exception:
+        logger.warning("Could not check for the record_locks table")
+        return False
+    logger.warning(
+        "No record_locks table: editing is unprotected until migrations run"
+    )
+    return False
 
 
 def get_queue():
@@ -598,6 +645,13 @@ def get_invoice(
         "findings": _findings(artifacts),
         "corrections": get_corrections().list(principal.tenant_id, case_id),
         "evidence_summary": evidence.get("_summary") or {},
+        # So a reader can see the record is being edited without asking a
+        # second endpoint -- and so the editor knows whether it may start.
+        "lock": (
+            locks.get(principal.tenant_id, case_id)
+            if (locks := get_locks())
+            else None
+        ),
     }
 
 
@@ -664,6 +718,7 @@ def edit_fields(
     The correction -- old value, new value, who, when -- is the point. It is
     what accuracy is measured from and what the learning loop mines for rules.
     """
+    _require_unlocked(principal, case_id)
     ctx = principal.context(case_id)
     artifacts = get_cases().get_artifacts(ctx)
     if not artifacts:
@@ -714,6 +769,95 @@ def edit_fields(
     return {"corrections": recorded, "count": len(recorded)}
 
 
+def _require_unlocked(principal: Principal, case_id: str) -> None:
+    """Refuse a write to a record someone else is editing.
+
+    This is the one place the sheet work was allowed to change existing
+    behaviour, and it is deliberately the smallest possible change: two
+    callers, one lookup, no lock taken. Not holding a lock stays legal --
+    holding one only excludes other people -- so every existing client keeps
+    working and only learns about locks when it collides with one.
+    """
+    locks = get_locks()
+    if locks is None:
+        return
+    held = locks.get(principal.tenant_id, case_id)
+    if held and held["holder"] != principal.email:
+        raise HTTPException(status_code=423, detail=held)
+
+
+@app.post("/api/invoices/{case_id}/lock")
+def lock_record(
+    case_id: str,
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+) -> dict:
+    """Claim the invoice for editing, or renew a claim already held.
+
+    Renewal is this same call, so an open editor keeps its lock by saying "I am
+    still here" on a timer rather than through an endpoint of its own.
+    """
+    artifacts = get_cases().get_artifacts(principal.context(case_id))
+    if not artifacts:
+        raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
+
+    locks = get_locks()
+    if locks is None:
+        # Honest rather than encouraging: the caller learns it has no lock,
+        # instead of being told it holds one that excludes nobody.
+        return {"lock": None, "mine": False, "locking": "unavailable"}
+
+    mine, lock = locks.acquire(principal.tenant_id, case_id, principal.email)
+    if not mine:
+        raise HTTPException(status_code=423, detail=lock)
+
+    get_audit().emit(
+        principal.context(case_id),
+        "record_locked",
+        {"until": lock["expires_at"]},
+    )
+    return {"lock": lock, "mine": True, "locking": "enabled"}
+
+
+@app.delete("/api/invoices/{case_id}/lock")
+def unlock_record(
+    case_id: str,
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+    force: bool = False,
+) -> dict:
+    """Give up the lock, or -- as an admin -- break someone else's.
+
+    A lock nobody can break outlives whoever left it; a lock anybody can break
+    is not a lock. So: the holder releases their own, an admin breaks another's
+    and the trail records that they did.
+    """
+    locks = get_locks()
+    if locks is None:
+        return {"released": None}
+
+    if force and not principal.can("admin"):
+        raise HTTPException(
+            status_code=403, detail="Breaking someone else's lock needs admin."
+        )
+
+    try:
+        broken = locks.release(
+            principal.tenant_id, case_id, principal.email, force=force
+        )
+    except LockHeld as held:
+        raise HTTPException(status_code=423, detail=held.lock) from held
+
+    if broken:
+        get_audit().emit(
+            principal.context(case_id),
+            "record_lock_broken"
+            if broken["holder"] != principal.email
+            else "record_unlocked",
+            {},
+            before={"holder": broken["holder"]},
+        )
+    return {"released": broken}
+
+
 @app.post("/api/invoices/{case_id}/actions")
 def act(
     case_id: str,
@@ -731,6 +875,7 @@ def act(
             status_code=400, detail="A rejection requires a reason"
         )
 
+    _require_unlocked(principal, case_id)
     ctx = principal.context(case_id)
     artifacts = get_cases().get_artifacts(ctx)
     if not artifacts:

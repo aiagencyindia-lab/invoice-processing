@@ -9,6 +9,9 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The raw `detail`, for the refusals that carry structure rather than a
+     *  sentence -- a 423 names the lock holder and when it lapses. */
+    readonly detail?: unknown,
   ) {
     super(message);
   }
@@ -19,8 +22,33 @@ export class ApiError extends Error {
   get friendly(): string {
     if (this.status === 401) return "Your session has expired. Sign in again.";
     if (this.status === 403) return "Your role does not allow this.";
+    if (this.status === 423) {
+      const lock = this.detail as RecordLock | undefined;
+      return lock?.holder
+        ? `${lock.holder} is editing this invoice until ${clockTime(lock.expires_at)}.`
+        : "Someone else is editing this invoice.";
+    }
     return this.message;
   }
+}
+
+export type RecordLock = {
+  case_id?: string;
+  holder: string;
+  expires_at: string | null;
+};
+
+/** An expiry as a wall clock, because "until 14:35" is actionable and an ISO
+ *  timestamp is something the reader has to decode. */
+export function clockTime(iso: string | null | undefined): string {
+  if (!iso) return "shortly";
+  const when = new Date(iso);
+  return Number.isNaN(when.getTime())
+    ? "shortly"
+    : when.toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
 }
 
 /** Where the bearer token comes from.
@@ -55,7 +83,13 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       .json()
       .then((body) => body?.detail)
       .catch(() => null);
-    throw new ApiError(response.status, detail || response.statusText);
+    // A structured detail is kept whole and never squeezed into the message:
+    // `String({holder})` is "[object Object]", which tells the reader nothing.
+    throw new ApiError(
+      response.status,
+      typeof detail === "string" && detail ? detail : response.statusText,
+      detail,
+    );
   }
   return response.json() as Promise<T>;
 }
@@ -197,6 +231,10 @@ export type InvoiceDetail = InvoiceSummary & {
   line_items: Record<string, unknown>[];
   findings: Finding[];
   corrections: Correction[];
+  /** Who is editing this record, if anyone. Null also means the deployment has
+   *  no lock table, so a caller must not read absence as "free to edit
+   *  exclusively" -- only as "nobody is stopping you". */
+  lock: RecordLock | null;
 };
 
 export type PurchaseOrder = {

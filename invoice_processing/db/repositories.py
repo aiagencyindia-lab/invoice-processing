@@ -22,7 +22,7 @@ from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import aliased
 
-from ..ports import RuleBaseConflict, RunContext
+from ..ports import LockHeld, RuleBaseConflict, RunContext
 from ..sheet_columns import (
     ATTENTION_FLAGS,
     BY_KEY,
@@ -40,6 +40,7 @@ from .models import (
     Invoice,
     InvoiceLine,
     PipelineRun,
+    RecordLock,
     Rule,
     SheetView,
     Tenant,
@@ -436,6 +437,128 @@ class PgAuditSink:
                     .limit(limit)
                 ).all()
             )
+
+
+# How long a lock lives without being renewed. Long enough for a reviewer to
+# read an invoice and correct it, short enough that a closed tab is not a
+# support ticket.
+LOCK_TTL = timedelta(minutes=15)
+
+
+class PgRecordLocks:
+    """One editor per invoice, where every container can see who it is.
+
+    The exclusion is the unique constraint, as with `PgClaimStore`: an insert
+    either wins or does nothing, atomically, for however many people press
+    Edit at the same moment. What differs is expiry -- a claim is finished by
+    the worker that took it, and a person may simply walk away, so an
+    unrenewed lock lapses and the next caller takes it over.
+    """
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    @staticmethod
+    def _to_dict(lock: RecordLock) -> dict:
+        expires = lock.expires_at
+        if expires is not None and expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        return {
+            "case_id": lock.case_id,
+            "holder": lock.holder,
+            "expires_at": expires.isoformat() if expires else None,
+        }
+
+    @staticmethod
+    def _row(session, tenant_id: str, case_id: str):
+        return session.scalar(
+            select(RecordLock).where(
+                RecordLock.tenant_id == tenant_id,
+                RecordLock.case_id == case_id,
+            )
+        )
+
+    @staticmethod
+    def _live(lock) -> bool:
+        if lock is None:
+            return False
+        expires = lock.expires_at
+        if expires is None:
+            return False
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        return expires > datetime.now(timezone.utc)
+
+    def get(self, tenant_id: str, case_id: str) -> dict | None:
+        """The live lock on this case, or None. A lapsed lock reads as absent."""
+        with tenant_session(tenant_id, self.url) as session:
+            lock = self._row(session, tenant_id, case_id)
+            return self._to_dict(lock) if self._live(lock) else None
+
+    def acquire(
+        self, tenant_id: str, case_id: str, holder: str, ttl=LOCK_TTL
+    ) -> tuple[bool, dict]:
+        """Take or renew the lock. Returns (is_yours, lock).
+
+        Renewing is the same call as taking, so the editor keeps its lock by
+        doing what it would do anyway rather than through a second endpoint
+        nobody remembers to call.
+        """
+        expires_at = datetime.now(timezone.utc) + ttl
+        with tenant_session(tenant_id, self.url) as session:
+            values = {
+                "id": str(uuid.uuid4()),
+                "tenant_id": tenant_id,
+                "case_id": case_id,
+                "holder": holder,
+                "expires_at": expires_at,
+            }
+            insert = (
+                postgresql.insert
+                if session.get_bind().dialect.name == "postgresql"
+                else sqlite.insert
+            )
+            result = session.execute(
+                insert(RecordLock)
+                .values(**values)
+                .on_conflict_do_nothing(index_elements=["tenant_id", "case_id"])
+            )
+            if result.rowcount:
+                return True, {
+                    "case_id": case_id,
+                    "holder": holder,
+                    "expires_at": expires_at.isoformat(),
+                }
+
+            # Somebody has a row. Ours to renew, theirs to respect, or lapsed
+            # and free to take over.
+            lock = self._row(session, tenant_id, case_id)
+            if self._live(lock) and lock.holder != holder:
+                return False, self._to_dict(lock)
+
+            lock.holder = holder
+            lock.expires_at = expires_at
+            session.flush()
+            return True, self._to_dict(lock)
+
+    def release(
+        self, tenant_id: str, case_id: str, holder: str, force: bool = False
+    ) -> dict | None:
+        """Give up the lock. Returns the lock that was broken, if any.
+
+        `force` is for an admin breaking someone else's: without it a stuck
+        lock outlives the person who left it, and with it unqualified the lock
+        would mean nothing.
+        """
+        with tenant_session(tenant_id, self.url) as session:
+            lock = self._row(session, tenant_id, case_id)
+            if lock is None:
+                return None
+            if not force and self._live(lock) and lock.holder != holder:
+                raise LockHeld(self._to_dict(lock))
+            broken = self._to_dict(lock)
+            session.delete(lock)
+            return broken
 
 
 class PgClaimStore:
