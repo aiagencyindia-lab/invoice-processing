@@ -14,6 +14,7 @@ test_rls_policies.py.
 """
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from invoice_processing.case_projection import _decimal
 from invoice_processing.db import session as session_module
@@ -72,6 +73,23 @@ class TestSchema:
             assert "tenant_id" in Base.metadata.tables[table].columns, (
                 f"{table} has no tenant_id and cannot be isolated"
             )
+
+    def test_a_row_cannot_point_at_a_tenant_that_does_not_exist(self, db):
+        """Both dialects refuse it, which took turning SQLite's pragma on.
+
+        SQLite ships with foreign keys off, so a fixture writing an invoice
+        before its tenant passed locally for months and failed the first time
+        CI ran the same tests against Postgres. The two now agree.
+        """
+        with pytest.raises(IntegrityError):
+            with tenant_session("tenant-that-was-never-created", db) as session:
+                session.add(
+                    Invoice(
+                        tenant_id="tenant-that-was-never-created",
+                        case_id="orphan",
+                        vendor_name="Nobody",
+                    )
+                )
 
     def test_money_is_not_float(self, db):
         """A float total is a rounding argument with a supplier waiting to happen."""

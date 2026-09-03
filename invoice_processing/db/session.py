@@ -127,8 +127,31 @@ def get_engine(url: str | None = None, **kwargs) -> Engine:
     if _engine is None or str(_engine.url) != target:
         _engine = create_engine(target, future=True, **kwargs)
         _engine._target = target
+        if _engine.dialect.name == "sqlite":
+            _enforce_sqlite_foreign_keys(_engine)
         _Session = sessionmaker(bind=_engine, expire_on_commit=False)
     return _engine
+
+
+def _enforce_sqlite_foreign_keys(engine: Engine) -> None:
+    """Make SQLite refuse what Postgres refuses.
+
+    SQLite ships with foreign keys off, per connection. The suite runs on
+    SQLite and production runs on Postgres, so every reference the tests write
+    in the wrong order is accepted here and rejected there -- which is how a
+    fixture writing an invoice before its tenant passed for months and then
+    failed the first time CI met a real database.
+
+    On for every connection this engine opens, so the two dialects disagree
+    about one less thing.
+    """
+    from sqlalchemy import event  # noqa: PLC0415
+
+    @event.listens_for(engine, "connect")
+    def _pragma(connection, _record):  # pragma: no cover - trivial
+        cursor = connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 def create_all(url: str | None = None) -> Engine:
