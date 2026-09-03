@@ -297,6 +297,33 @@ export function Drawer({
               <dd>{detail.decision ?? "—"}</dd>
               <dt>Routing</dt>
               <dd>{detail.routing ?? "—"}</dd>
+              {detail.workflow?.decision ? (
+                <>
+                  <dt>Reviewed</dt>
+                  <dd>
+                    {detail.workflow.decision} by {detail.workflow.decided_by}
+                    {detail.agreement && detail.agreement !== "agree" ? (
+                      <span
+                        className="badge badge-warn"
+                        style={{ marginLeft: 6 }}
+                        title={
+                          detail.agreement === "exemption"
+                            ? "The pipeline rejected this and a person approved it"
+                            : "The pipeline accepted this and a person rejected it"
+                        }
+                      >
+                        overruled the pipeline
+                      </span>
+                    ) : null}
+                    {detail.workflow.reason ? (
+                      <div className="evidence">
+                        {detail.workflow.reason_category}:{" "}
+                        {detail.workflow.reason}
+                      </div>
+                    ) : null}
+                  </dd>
+                </>
+              ) : null}
             </dl>
           </section>
 

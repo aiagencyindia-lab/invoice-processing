@@ -155,6 +155,8 @@ class Invoice(Base, TenantMixin, TimestampMixin):
             "ix_invoices_dupe", "tenant_id", "vendor_tax_id", "invoice_number"
         ),
         Index("ix_invoices_status", "tenant_id", "status"),
+        # "Everything a reviewer overruled" is the learning loop's one query.
+        Index("ix_invoices_agreement", "tenant_id", "decision_agreement"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -190,6 +192,15 @@ class Invoice(Base, TenantMixin, TimestampMixin):
     )
     decision: Mapped[str | None] = mapped_column(String(32))
     decision_reason: Mapped[str | None] = mapped_column(Text)
+
+    # What the person decided, and whether that agreed with the machine.
+    # Columns rather than a JSON path because "show me everything a reviewer
+    # overruled" is the question the learning loop is built on, and it has to
+    # be answerable in one indexed query rather than a scan of every row.
+    #   agreement: agreed | overruled_reject | overruled_accept | unknown
+    human_decision: Mapped[str | None] = mapped_column(String(16))
+    decision_agreement: Mapped[str | None] = mapped_column(String(24))
+    decision_category: Mapped[str | None] = mapped_column(String(32))
     routing: Mapped[str | None] = mapped_column(String(16))  # AUTO | REVIEW
     min_confidence: Mapped[float | None] = mapped_column(Numeric(4, 3))
 

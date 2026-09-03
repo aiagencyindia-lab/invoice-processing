@@ -58,6 +58,66 @@ def extraction(artifacts: dict) -> dict:
     return (artifacts.get("extraction") or {}).get("invoice") or {}
 
 
+# The machine and the person do not speak the same language: the pipeline says
+# ACCEPT/REJECT/SET_ASIDE and a reviewer says approve/reject. Until now nothing
+# in the system had ever put the two side by side, so a reviewer overruling a
+# validation was indistinguishable from one agreeing with it -- and the single
+# most useful thing a reviewer produces was discarded at the moment they
+# produced it.
+_ACCEPTED = {"ACCEPT", "ACCEPTED", "PENDING PAYMENT", "APPROVED"}
+_REJECTED = {"REJECT", "REJECTED"}
+
+
+def machine_verdict(artifacts: dict) -> str:
+    """What the pipeline decided: accept | reject | undecided.
+
+    Same precedence `invoice_columns` uses -- the decision artifact first, the
+    postprocessing status second -- so the two can never disagree about what
+    the machine said.
+    """
+    decision = artifacts.get("decision") or {}
+    postprocessing = (artifacts.get("postprocessing") or {}).get(
+        "Invoice Processing"
+    ) or {}
+    verdict = (
+        str(
+            decision.get("final_decision")
+            or postprocessing.get("Invoice Status")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+
+    if verdict in _ACCEPTED:
+        return "accept"
+    if verdict in _REJECTED:
+        return "reject"
+    # SET_ASIDE, "To Verify", an unfinished pipeline: nothing to disagree with.
+    return "undecided"
+
+
+def agreement(artifacts: dict) -> str | None:
+    """Did the person agree with the machine? None until someone decides.
+
+    `exemption` is the valuable one: the rulebook rejected an invoice a human
+    then approved, which is precisely the case ALF rules exist for.
+    `too_permissive` is the expensive one -- the machine would have paid it.
+    """
+    human = (artifacts.get("workflow") or {}).get("decision")
+    if human not in ("approve", "reject"):
+        return None
+
+    verdict = machine_verdict(artifacts)
+    if verdict == "reject":
+        return "agree" if human == "reject" else "exemption"
+    if verdict == "accept":
+        return "agree" if human == "approve" else "too_permissive"
+    # Routed to a human because the pipeline would not decide. Them deciding
+    # it is the system working, not a disagreement with it.
+    return "agree"
+
+
 def invoice_columns(artifacts: dict) -> dict:
     """The typed columns of one invoice row.
 
@@ -105,6 +165,25 @@ def invoice_columns(artifacts: dict) -> dict:
         # approved it -- approval lives in the workflow artifact and the audit
         # trail. Without this every row stayed "received" forever.
         "status": "processed" if verdict else "received",
+        **_human_columns(artifacts),
+    }
+
+
+def _human_columns(artifacts: dict) -> dict:
+    """The reviewer's decision, or nothing at all.
+
+    Omitted rather than nulled when no one has decided, because the worker
+    reprojects from the pipeline's own output files -- which never contain the
+    workflow artifact -- and a dict of Nones would wipe a recorded decision
+    every time its document was retried.
+    """
+    workflow = artifacts.get("workflow") or {}
+    if workflow.get("decision") not in ("approve", "reject"):
+        return {}
+    return {
+        "human_decision": _text(workflow.get("decision"), 16),
+        "decision_agreement": _text(agreement(artifacts), 24),
+        "decision_category": _text(workflow.get("reason_category"), 32),
     }
 
 

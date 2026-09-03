@@ -878,6 +878,12 @@ class SheetRepository:
                     Invoice.invoice_number.is_not(None),
                 )
             )
+        if flag == "overruled":
+            # Either direction: an exemption the rulebook is missing, or a
+            # check it is missing. Both are the rulebook being wrong.
+            return Invoice.decision_agreement.in_(
+                ("exemption", "too_permissive")
+            )
         if flag == "edited":
             return exists(
                 select(Correction.id).where(
@@ -1097,6 +1103,8 @@ class SheetRepository:
 
         if row.get("corrected_fields"):
             flags.append("edited")
+        if invoice.decision_agreement in ("exemption", "too_permissive"):
+            flags.append("overruled")
         if duplicate:
             flags.append("duplicate_number")
 

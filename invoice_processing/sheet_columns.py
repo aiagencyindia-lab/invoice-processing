@@ -69,6 +69,12 @@ COLUMNS: tuple[Column, ...] = (
     Column("routing", "Routing", "text", "column"),
     Column("min_confidence", "Confidence", "number", "column", default=True),
     Column("status", "Status", "text", "column"),
+    # What the reviewer decided, beside what the pipeline decided. The two
+    # columns next to each other are the report: every row where they differ
+    # is a case the rulebook got wrong in one direction or the other.
+    Column("human_decision", "Reviewed as", "text", "column"),
+    Column("decision_agreement", "Agreement", "text", "column"),
+    Column("decision_category", "Reason", "text", "column"),
     # Written by the approval flow into the workflow artifact.
     Column("approved_at", "Approved", "timestamp", "workflow", default=True),
     Column("approved_by", "Approved by", "text", "workflow", default=True),
@@ -124,6 +130,7 @@ QUALITY_FLAGS: dict[str, str] = {
     "no_text_layer": "The document has no readable text, so nothing was checked",
     "high_value": "At or above the configured high-value threshold",
     "edited": "A reviewer changed a field after extraction",
+    "overruled": "A reviewer disagreed with the pipeline's decision",
 }
 
 # The validation steps behind the mismatch flags, so the mapping lives next to

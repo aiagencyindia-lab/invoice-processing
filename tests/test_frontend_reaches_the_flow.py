@@ -78,8 +78,19 @@ class TestTheFlowHasControls:
     def test_correcting_approving_and_rejecting_have_controls(self):
         invoices = page("invoices")
         assert "onClick={save}" in invoices
-        assert 'onClick={() => act("approve")}' in invoices
-        assert 'onClick={() => act("reject")}' in invoices
+        # Both decisions now open the dialog that asks why, rather than
+        # deciding on the spot -- an approval over a pipeline rejection is
+        # worth as much as a rejection, and neither is worth much unrecorded.
+        assert 'onClick={() => setDeciding("approve")}' in invoices
+        assert 'onClick={() => setDeciding("reject")}' in invoices
+
+    def test_a_decision_carries_a_reason_category(self):
+        """The category is what routes a disagreement into the learning loop.
+        A page that collects only free text cannot tell "we read it wrong"
+        from "the rulebook is missing a rule"."""
+        invoices = page("invoices")
+        assert "reason_category: reasonCategory" in invoices
+        assert "REASON_CATEGORIES.map" in invoices
 
     def test_export_has_a_control(self):
         assert "onClick={exportCsv}" in page("invoices")

@@ -7,6 +7,7 @@ import {
   ApiError,
   can,
   objectUrl,
+  REASON_CATEGORIES,
   type Correction,
   type DocumentList,
   type Finding,
@@ -65,6 +66,10 @@ function InvoicesWorkbench() {
   const [selected, setSelected] = useState<string | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string | null>(null);
+  // Which decision is being explained, if any. Approvals ask too: an approval
+  // over a pipeline rejection is the exemption the rulebook is missing, and it
+  // is worth more than the rejections if anyone records why it happened.
+  const [deciding, setDeciding] = useState<"approve" | "reject" | null>(null);
 
   // Memoised because it is a dependency of the keyboard handler: a fresh []
   // on every render would re-bind the listener on every render.
@@ -158,19 +163,20 @@ function InvoicesWorkbench() {
   }, [detail, dirty, edits, say, reloadDetail]);
 
   const act = useCallback(
-    async (action: "approve" | "reject") => {
+    async (
+      action: "approve" | "reject",
+      reason: string | null = null,
+      reasonCategory = "other",
+    ) => {
       if (!detail) return;
-      let reason: string | null = null;
-      if (action === "reject") {
-        reason = window.prompt("Reason for rejection (required):");
-        // The API refuses a reasonless rejection too: the vendor cannot fix it
-        // and an auditor cannot be told why it happened.
-        if (!reason) return say("Rejection needs a reason");
-      }
       try {
         await api(`/api/invoices/${detail.case_id}/actions`, {
           method: "POST",
-          body: JSON.stringify({ action, reason }),
+          body: JSON.stringify({
+            action,
+            reason,
+            reason_category: reasonCategory,
+          }),
         });
         say(`${action === "approve" ? "Approved" : "Rejected"} ${detail.case_id}`);
         reloadQueue();
@@ -233,10 +239,10 @@ function InvoicesWorkbench() {
           if (index > 0) open(queue[index - 1].case_id);
           break;
         case "a":
-          if (canAct) act("approve");
+          if (canAct) setDeciding("approve");
           break;
         case "r":
-          if (canAct) act("reject");
+          if (canAct) setDeciding("reject");
           break;
         case "s":
           if (canEdit) save();
@@ -396,14 +402,14 @@ function InvoicesWorkbench() {
                         <button
                           type="button"
                           className="btn-chip"
-                          onClick={() => act("approve")}
+                          onClick={() => setDeciding("approve")}
                         >
                           Approve<kbd>a</kbd>
                         </button>
                         <button
                           type="button"
                           className="btn-chip"
-                          onClick={() => act("reject")}
+                          onClick={() => setDeciding("reject")}
                         >
                           Reject<kbd>r</kbd>
                         </button>
@@ -494,6 +500,97 @@ function InvoicesWorkbench() {
           {notice}
         </div>
       ) : null}
+
+      {deciding ? (
+        <DecisionDialog
+          action={deciding}
+          onCancel={() => setDeciding(null)}
+          onConfirm={(reason, category) => {
+            setDeciding(null);
+            act(deciding, reason || null, category);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** Why this decision, in one small form.
+ *
+ *  It replaces a `window.prompt`, which could ask for one line of free text
+ *  and nothing else. The category is what the system can act on -- only
+ *  "policy exception" describes a rule the rulebook is missing -- and the note
+ *  is what a person reads, and what a rule writer would be given to work from.
+ */
+function DecisionDialog({
+  action,
+  onCancel,
+  onConfirm,
+}: {
+  action: "approve" | "reject";
+  onCancel: () => void;
+  onConfirm: (reason: string, category: string) => void;
+}) {
+  const [category, setCategory] = useState("policy_exception");
+  const [reason, setReason] = useState("");
+  const rejecting = action === "reject";
+  // The API refuses a reasonless rejection, so the button does too rather than
+  // letting someone press it and read an error.
+  const ready = !rejecting || reason.trim().length > 0;
+
+  return (
+    <div className="dialog-scrim" role="presentation" onClick={onCancel}>
+      <div
+        className="panel dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={rejecting ? "Reject invoice" : "Approve invoice"}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 style={{ margin: "0 0 4px" }}>
+          {rejecting ? "Reject this invoice" : "Approve this invoice"}
+        </h2>
+        <label className="stack" style={{ gap: 4 }}>
+          <span className="eyebrow">Why</span>
+          <select
+            className="input-field"
+            value={category}
+            autoFocus
+            onChange={(event) => setCategory(event.target.value)}
+          >
+            {REASON_CATEGORIES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="stack" style={{ gap: 4 }}>
+          <span className="eyebrow">
+            Note {rejecting ? "(required)" : "(optional)"}
+          </span>
+          <textarea
+            className="input-field"
+            rows={3}
+            value={reason}
+            placeholder="What a colleague would need to know in six months."
+            onChange={(event) => setReason(event.target.value)}
+          />
+        </label>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button type="button" className="btn-secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={!ready}
+            onClick={() => onConfirm(reason.trim(), category)}
+          >
+            {rejecting ? "Reject" : "Approve"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

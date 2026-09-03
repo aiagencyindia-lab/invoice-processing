@@ -230,7 +230,28 @@ export type Correction = {
   at: string;
 };
 
+/** Why a reviewer decided what they did. Mirrors REASON_CATEGORIES in
+ *  `api/service.py`; the labels are what a person reads. */
+export const REASON_CATEGORIES: { value: string; label: string }[] = [
+  { value: "policy_exception", label: "Policy exception — the rulebook doesn't cover this" },
+  { value: "extraction_wrong", label: "Read the invoice wrong" },
+  { value: "duplicate", label: "Duplicate — already paid or in flight" },
+  { value: "vendor_issue", label: "Something the supplier must fix" },
+  { value: "other", label: "Other" },
+];
+
+export type Workflow = {
+  decision?: string;
+  decided_by?: string;
+  decided_at?: string;
+  reason?: string | null;
+  reason_category?: string;
+};
+
 export type InvoiceDetail = InvoiceSummary & {
+  workflow: Workflow;
+  /** null until someone decides; then agree | exemption | too_permissive. */
+  agreement: string | null;
   fields: InvoiceField[];
   line_items: Record<string, unknown>[];
   findings: Finding[];

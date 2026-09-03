@@ -40,7 +40,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
-from .. import paths
+from .. import case_projection, paths
 from ..adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
@@ -453,9 +453,24 @@ class EditRequest(BaseModel):
     edits: list[FieldEdit]
 
 
+# Why a reviewer decided what they did. Short on purpose: a long list is a
+# list nobody reads honestly, and the only distinction the system acts on is
+# whether the machine was wrong about the *data* or about the *policy*.
+REASON_CATEGORIES = (
+    "extraction_wrong",  # the machine read the invoice wrong
+    "duplicate",  # already paid or already in flight
+    "policy_exception",  # the rulebook does not cover this case
+    "vendor_issue",  # something the supplier must fix
+    "other",
+)
+
+
 class ActionRequest(BaseModel):
     action: str  # approve | reject
     reason: str | None = None
+    # Defaulted rather than required, so a client written before this existed
+    # keeps working. The workbench always sends one.
+    reason_category: str | None = None
 
 
 class ExportRequest(BaseModel):
@@ -645,6 +660,12 @@ def get_invoice(
         "findings": _findings(artifacts),
         "corrections": get_corrections().list(principal.tenant_id, case_id),
         "evidence_summary": evidence.get("_summary") or {},
+        # Who decided, why, and whether they agreed with the pipeline. The
+        # detail endpoint returned none of this, so the one screen a reviewer
+        # opens could not say that the last person to look at this invoice
+        # had overruled a validation on it.
+        "workflow": artifacts.get(WORKFLOW_ARTIFACT) or {},
+        "agreement": case_projection.agreement(artifacts),
         # So a reader can see the record is being edited without asking a
         # second endpoint -- and so the editor knows whether it may start.
         "lock": (
@@ -902,6 +923,13 @@ def act(
         raise HTTPException(
             status_code=400, detail="A rejection requires a reason"
         )
+    category = request.reason_category or "other"
+    if category not in REASON_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown reason: {category}. "
+            f"One of: {', '.join(REASON_CATEGORIES)}.",
+        )
 
     _require_unlocked(principal, case_id)
     ctx = principal.context(case_id)
@@ -911,12 +939,21 @@ def act(
 
     # From the artifacts already in hand rather than a second read.
     previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
-    _record_workflow(
+    state = _record_workflow(
         ctx,
         decision=request.action,
         decided_by=principal.email,
         decided_at=datetime.now(timezone.utc).isoformat(),
         reason=request.reason,
+        reason_category=category,
+    )
+    # The columns as well as the artifact. "Show me every invoice where a
+    # person overruled the pipeline" is the question this whole feature is
+    # built on, and answering it by scanning a JSON path over every row is the
+    # wrong answer to it.
+    _reproject(ctx, {**artifacts, WORKFLOW_ARTIFACT: state})
+    agreement = case_projection.agreement(
+        {**artifacts, WORKFLOW_ARTIFACT: state}
     )
     # Spelled out rather than built from the action: `f"invoice_{action}d"`
     # produced "invoice_rejectd", and an audit trail is immutable, so the typo
@@ -926,13 +963,19 @@ def act(
         "invoice_approved"
         if request.action == "approve"
         else "invoice_rejected",
-        {"reason": request.reason},
+        {
+            "reason": request.reason,
+            "reason_category": category,
+            "agreement": agreement,
+        },
         before={"decision": previous.get("decision")} if previous else None,
     )
     return {
         "case_id": case_id,
         "action": request.action,
         "reason": request.reason,
+        "reason_category": category,
+        "agreement": agreement,
     }
 
 

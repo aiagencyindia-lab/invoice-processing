@@ -616,3 +616,24 @@ button.tile:hover { background: var(--surface-alt); }
   .sheet-wrap { max-height: 50vh; }
   .drawer { width: 100vw; }
 }
+
+/* A decision has to be explained, so it gets a dialog rather than a
+   `window.prompt`: a prompt can ask for one line of text and nothing else. */
+.dialog-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 24, 40, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 40;
+}
+
+.dialog {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+}
