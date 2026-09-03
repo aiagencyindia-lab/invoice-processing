@@ -18,6 +18,7 @@ from invoice_processing import alf_stage, case_projection, root_agent
 from invoice_processing.api import service
 from invoice_processing.core.rule_writer import RuleWriterAgent
 from invoice_processing.ports import RunContext
+from invoice_processing.prompt import INVOICE_PROCESSING_INSTRUCTION
 from invoice_processing.worker import runner
 
 # A postprocessing document shaped the way the pipeline writes one.
@@ -263,6 +264,27 @@ class TestTheChatIsRetired:
     def test_the_agent_keeps_only_its_inference_tools(self):
         names = {getattr(t, "__name__", str(t)) for t in root_agent.tools}
         assert names == {"list_inference_cases", "run_inference"}
+
+    def test_the_instruction_does_not_offer_what_the_agent_cannot_do(self):
+        """The tools came off and the prompt still described them.
+
+        A user picking "Learning Mode" got an agent reaching for
+        `discover_safe_rule` and `write_rule`, which are not bound to it --
+        the model would flail or invent a result. Removing a capability means
+        removing what tells the model it has one.
+        """
+        for gone in (
+            "discover_safe_rule",
+            "revise_safe_rule",
+            "write_rule",
+            "delete_rule",
+            "save_session",
+            "Learning Mode",
+        ):
+            assert gone not in INVOICE_PROCESSING_INSTRUCTION, gone
+
+        # And it says where rules actually come from.
+        assert "Rules page" in INVOICE_PROCESSING_INSTRUCTION
 
     def test_nothing_writes_a_rule_base_to_disk_any_more(self):
         """The unlocked read-modify-write is gone: two people teaching a rule
