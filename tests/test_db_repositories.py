@@ -14,7 +14,7 @@ test_rls_policies.py.
 """
 
 import pytest
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DatabaseError
 
 from invoice_processing.case_projection import _decimal
 from invoice_processing.db import session as session_module
@@ -80,8 +80,13 @@ class TestSchema:
         SQLite ships with foreign keys off, so a fixture writing an invoice
         before its tenant passed locally for months and failed the first time
         CI ran the same tests against Postgres. The two now agree.
+
+        `DatabaseError` rather than `IntegrityError`, because they disagree
+        about which one this is: SQLite raises the integrity error you would
+        expect, and pg8000 reports the same refusal as a programming error.
+        The message is what both are asked to agree on.
         """
-        with pytest.raises(IntegrityError):
+        with pytest.raises(DatabaseError) as refused:
             with tenant_session("tenant-that-was-never-created", db) as session:
                 session.add(
                     Invoice(
@@ -90,6 +95,7 @@ class TestSchema:
                         vendor_name="Nobody",
                     )
                 )
+        assert "foreign key" in str(refused.value).lower()
 
     def test_money_is_not_float(self, db):
         """A float total is a rounding argument with a supplier waiting to happen."""
