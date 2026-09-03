@@ -41,6 +41,9 @@ OUTPUT_ARTIFACT = "postprocessing"
 # sentence without "from what".
 PRE_ALF_ARTIFACT = "postprocessing_pre_alf"
 AUDIT_ARTIFACT = "alf"
+# The pipeline's own verdict, and what it was before a rule reached it.
+DECISION_ARTIFACT = "decision"
+DECISION_PRE_ALF_ARTIFACT = "decision_pre_alf"
 
 
 def status_of(output: dict | None) -> str | None:
@@ -103,4 +106,43 @@ def run(
     if binding and revised != provisional:
         written[PRE_ALF_ARTIFACT] = provisional
         written[OUTPUT_ARTIFACT] = revised
+        written.update(_corrected_decision(artifacts, revised, audit))
     return written
+
+
+def _corrected_decision(
+    artifacts: dict, revised: dict, audit: dict
+) -> dict[str, Any]:
+    """Carry the correction into the decision artifact as well.
+
+    A rule sets a field in the postprocessing document, and `final_decision`
+    in the decision artifact keeps saying what the pipeline concluded before
+    the rule ran. Everything that asks "what was decided" reads that key
+    first: the typed column the sheet and the review queue filter on, and
+    `machine_verdict`, which is how the system knows whether a reviewer later
+    agreed with it. Left alone, a corrected invoice is corrected in the
+    artifact nobody queries and unchanged in every answer anyone reads.
+    """
+    from .case_projection import machine_verdict  # noqa: PLC0415
+
+    verdict = machine_verdict({"postprocessing": revised})
+    if verdict == "undecided":
+        # The rule changed something else -- a message, a field. Nothing to
+        # say about the decision, so nothing is said.
+        return {}
+
+    previous = artifacts.get(DECISION_ARTIFACT) or {}
+    corrected = {
+        **previous,
+        "final_decision": verdict.upper(),
+        "decision_class": verdict.upper(),
+        "invoice_status": status_of(revised),
+        # Named, so the decision artifact itself says a rule reached it.
+        "corrected_by": [
+            applied.get("rule_id") for applied in audit.get("rules_applied", [])
+        ],
+    }
+    return {
+        DECISION_PRE_ALF_ARTIFACT: previous,
+        DECISION_ARTIFACT: corrected,
+    }

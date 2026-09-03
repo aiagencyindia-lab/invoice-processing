@@ -38,6 +38,14 @@ ARTIFACTS = {
         "decision": "REJECT",
         "rejection_template": "Invoice does not match work authorization",
     },
+    # The pipeline's own verdict, which is what everything asking "what was
+    # decided" reads first -- so a correction that does not reach it is a
+    # correction nothing downstream can see.
+    "decision": {
+        "final_decision": "REJECT",
+        "decision_class": "REJECT",
+        "rejection_template": "Invoice does not match work authorization",
+    },
     "postprocessing": REJECTED,
 }
 
@@ -118,6 +126,32 @@ class TestBindingMode:
         )
         # And the caller's own dict was not mutated underneath it.
         assert ARTIFACTS["postprocessing"] == REJECTED
+
+    def test_the_decision_artifact_is_corrected_too(self):
+        """Otherwise the correction lands where nobody reads it.
+
+        A rule sets a field in the postprocessing document; `final_decision`
+        keeps saying what the pipeline concluded before the rule ran. That key
+        is what the projected column comes from -- the one the sheet and the
+        review queue filter on -- and what `machine_verdict` reads to decide
+        whether a reviewer later agreed with the machine. Found by running the
+        stage end to end: the artifact said Pending Payment and the column
+        still said REJECT.
+        """
+        written = alf_stage.run(ARTIFACTS, exemption_rule(), binding=True)
+
+        assert written["decision"]["final_decision"] == "ACCEPT"
+        assert written["decision"]["invoice_status"] == "Pending Payment"
+        assert written["decision"]["corrected_by"] == ["ALF-001"]
+        assert written["decision_pre_alf"]["final_decision"] == "REJECT"
+
+        # And the column derived from it follows.
+        assert (
+            case_projection.invoice_columns({**ARTIFACTS, **written})[
+                "decision"
+            ]
+            == "ACCEPT"
+        )
 
     def test_a_rule_that_matches_nothing_changes_nothing(self):
         doc = exemption_rule()
