@@ -330,6 +330,8 @@ export type SheetSummary = {
   vendors: number;
   approved_today: number;
   approved_this_month: number;
+  duplicates: number;
+  needs_attention: number;
 };
 
 export type SheetFacets = { vendors: string[]; currencies: string[] };
@@ -376,6 +378,8 @@ export type ExportJob = {
   error: string | null;
   created_at: string | null;
   finished_at: string | null;
+  /** Unfinished for so long that its runner is gone. Offers a retry. */
+  stale: boolean;
 };
 
 /** Filters as a query string, omitting anything unset.

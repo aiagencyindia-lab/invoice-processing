@@ -530,6 +530,19 @@ class TestSheetIsolation:
         )
         assert response.status_code == 404
 
+    def test_another_tenant_cannot_retry_an_export(self, sheet_clients):
+        """Retry re-runs someone's query; the job must not be reachable."""
+        job = (
+            sheet_clients("acme")
+            .post("/api/sheet/exports", json={"format": "csv"})
+            .json()
+        )
+
+        response = sheet_clients("globex").post(
+            f"/api/sheet/exports/{job['id']}/retry"
+        )
+        assert response.status_code == 404
+
     def test_an_export_contains_only_this_tenants_rows(self, sheet_clients):
         """The file is the dangerous artefact: it leaves the system."""
         job = (
@@ -631,6 +644,7 @@ class TestCoverage:
         "/api/sheet/exports",
         "/api/sheet/exports/{job_id}",
         "/api/sheet/exports/{job_id}/download",
+        "/api/sheet/exports/{job_id}/retry",
     }
 
     def test_every_route_is_covered(self):

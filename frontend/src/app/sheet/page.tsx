@@ -224,6 +224,20 @@ export default function SheetPage() {
     }
   };
 
+  const retry = async (job: ExportJob) => {
+    setNotice(null);
+    try {
+      await api<ExportJob>(`/api/sheet/exports/${job.id}/retry`, {
+        method: "POST",
+      });
+      setNotice("Export restarted.");
+      setWatchExports(true);
+      reloadExports();
+    } catch (caught) {
+      setNotice(caught instanceof ApiError ? caught.friendly : String(caught));
+    }
+  };
+
   const download = async (job: ExportJob) => {
     try {
       const response = await fetch(`/api/sheet/exports/${job.id}/download`, {
@@ -302,15 +316,22 @@ export default function SheetPage() {
             <span className="tile-value">{summary.vendors}</span>
             <span className="tile-label">Vendors</span>
           </div>
+          <div className="tile">
+            <span className="tile-value">{summary.needs_attention}</span>
+            <span className="tile-label">Need attention</span>
+          </div>
           <button
             type="button"
             className="tile"
             onClick={() => toggleQuality("duplicate_number")}
           >
-            <span className="tile-value">
-              {filters.quality?.includes("duplicate_number") ? "on" : "filter"}
+            <span className="tile-value">{summary.duplicates}</span>
+            <span className="tile-label">
+              Duplicate numbers
+              {filters.quality?.includes("duplicate_number")
+                ? " (filtered)"
+                : ""}
             </span>
-            <span className="tile-label">Duplicate numbers</span>
           </button>
         </div>
       ) : null}
@@ -603,7 +624,7 @@ export default function SheetPage() {
                               : "badge-neutral"
                         }`}
                       >
-                        {job.status}
+                        {job.stale ? "stalled" : job.status}
                       </span>
                       {job.error ? (
                         <div className="evidence">{job.error}</div>
@@ -617,6 +638,15 @@ export default function SheetPage() {
                           onClick={() => download(job)}
                         >
                           Download
+                        </button>
+                      ) : null}
+                      {job.stale || job.status === "failed" ? (
+                        <button
+                          type="button"
+                          className="btn-chip"
+                          onClick={() => retry(job)}
+                        >
+                          Retry
                         </button>
                       ) : null}
                     </td>

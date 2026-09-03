@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from datetime import datetime, timezone
 from typing import ClassVar
 
 import openpyxl
@@ -19,8 +20,11 @@ from fastapi.testclient import TestClient
 from invoice_processing import exports
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
-from invoice_processing.db.models import Base, Invoice, Tenant
-from invoice_processing.db.repositories import PgExportJobs
+from invoice_processing.db.models import Base, ExportJob, Invoice, Tenant
+from invoice_processing.db.repositories import (
+    STALE_EXPORT_AFTER,
+    PgExportJobs,
+)
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 
 TENANT = "tenant-acme"
@@ -406,3 +410,64 @@ class TestAudit:
 
         assert "export_requested" in recorded
         assert "export_completed" in recorded
+
+
+class TestAStuckJobCanBeRestarted:
+    """The runner lives in the API process, so a deploy mid-export orphans the
+    job. It has to be visible as stuck and startable again, or the user's only
+    recourse is to rebuild the filters and hope."""
+
+    def test_a_fresh_job_is_not_stale(self, db, client):
+        seed(db, 1)
+        job = export(client, format="csv")
+        assert job["stale"] is False
+
+    def test_an_unfinished_job_goes_stale(self, db, client):
+        seed(db, 1)
+        job = export(client, format="csv")
+        long_ago = datetime.now(timezone.utc) - STALE_EXPORT_AFTER * 2
+        with tenant_session(TENANT, db) as session:
+            row = session.get(ExportJob, job["id"])
+            row.status = "running"
+            row.created_at = long_ago
+
+        assert PgExportJobs().get(TENANT, job["id"])["stale"] is True
+
+    def test_retrying_a_failed_job_produces_the_file(
+        self, db, client, blobs, monkeypatch
+    ):
+        seed(db, 2)
+
+        def explode(*args, **kwargs):
+            raise RuntimeError("disk is full")
+
+        working = exports.WRITERS["csv"]
+        monkeypatch.setitem(exports.WRITERS, "csv", explode)
+        job = client().post("/api/sheet/exports", json={"format": "csv"}).json()
+        assert job["status"] == "failed"
+
+        monkeypatch.setitem(exports.WRITERS, "csv", working)
+        retried = client().post(f"/api/sheet/exports/{job['id']}/retry")
+        assert retried.status_code == 200, retried.text
+
+        # The background task runs inline under TestClient, so by now it is done.
+        finished = client().get(f"/api/sheet/exports/{job['id']}").json()
+        assert finished["status"] == "done"
+        assert finished["row_count"] == 2
+        assert finished["error"] is None
+
+    def test_a_finished_job_cannot_be_retried(self, db, client):
+        seed(db, 1)
+        job = export(client, format="csv")
+
+        response = client().post(f"/api/sheet/exports/{job['id']}/retry")
+        assert response.status_code == 409
+
+    def test_retrying_needs_clerk(self, db, client):
+        seed(db, 1)
+        job = export(client, format="csv")
+
+        response = client("viewer").post(
+            f"/api/sheet/exports/{job['id']}/retry"
+        )
+        assert response.status_code == 403

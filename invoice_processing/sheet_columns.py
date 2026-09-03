@@ -144,3 +144,32 @@ def catalogue() -> list[dict]:
 def is_sortable(key: str) -> bool:
     column = BY_KEY.get(key)
     return bool(column and column.sortable)
+
+
+# The flags that mean a person should look at the row before trusting it, as
+# opposed to the ones that merely describe it (`missing_po` is a fact about an
+# invoice; `totals_mismatch` is a reason to stop). The summary counts these.
+ATTENTION_FLAGS: tuple[str, ...] = (
+    *FLAG_STEPS,
+    "duplicate_number",
+    "no_text_layer",
+)
+
+# The single-invoice CSV export predates this catalogue and names its columns
+# its own way. The two must describe the same fields or a finance team gets two
+# different answers for one invoice, so the correspondence is written down here
+# and `test_sheet_api.py` fails when either side gains or renames a column.
+CSV_EQUIVALENT: dict[str, str] = {
+    "case_id": "case_id",
+    "vendor_name": "vendor_name",
+    "vendor_tax_id": "vendor_tax_id",
+    "invoice_number": "invoice_number",
+    "invoice_date": "invoice_date",
+    "due_date": "due_date",
+    "currency": "currency",
+    "subtotal_ex_tax": "total_ex_tax",
+    "tax_total": "tax_amount",
+    "total_inc_tax": "total_inc_tax",
+    "po_number": "po_number",
+    "payment_terms": "payment_terms",
+}

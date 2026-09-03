@@ -15,7 +15,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import and_, exists, func, or_, select
@@ -24,6 +24,7 @@ from sqlalchemy.orm import aliased
 
 from ..ports import RuleBaseConflict, RunContext
 from ..sheet_columns import (
+    ATTENTION_FLAGS,
     BY_KEY,
     FLAG_STEPS,
     WORKFLOW_PATHS,
@@ -1031,13 +1032,50 @@ class SheetRepository:
                 .where(decided_at.like(f"{month}%"))
             )
 
+            # Counted here rather than from the page: a reader who sees
+            # "3 duplicates" above a page of 100 rows needs it to mean three in
+            # the whole filtered set, not three among the hundred on screen.
+            duplicates = self._count_flagged(
+                session, tenant_id, filters, ["duplicate_number"]
+            )
+            needs_attention = self._count_flagged(
+                session, tenant_id, filters, ATTENTION_FLAGS
+            )
+
         return {
             "total": total or 0,
             "by_currency": sorted(by_currency, key=lambda c: c["currency"]),
             "vendors": vendors or 0,
             "approved_today": approved_today or 0,
             "approved_this_month": approved_month or 0,
+            "duplicates": duplicates,
+            "needs_attention": needs_attention,
         }
+
+    def _count_flagged(
+        self, session, tenant_id: str, filters: dict, flags
+    ) -> int:
+        """How many filtered rows carry any one of these quality flags.
+
+        `or_`, not the `and_` the `quality` filter uses: a filter narrows to
+        rows that are all of these things, a count asks how many are any of
+        them, and "needs attention" is a question of the second kind.
+        """
+        conditions = [
+            condition
+            for flag in flags
+            if (condition := self._flag_condition(flag, tenant_id, filters))
+            is not None
+        ]
+        if not conditions:
+            return 0
+        statement = self._base(tenant_id, filters).where(or_(*conditions))
+        return (
+            session.scalar(
+                select(func.count()).select_from(statement.subquery())
+            )
+            or 0
+        )
 
     def facets(self, tenant_id: str, filters: dict) -> dict:
         """Distinct vendors and currencies, for the filter dropdowns."""
@@ -1154,6 +1192,21 @@ class PgSheetViews:
                 session.delete(view)
 
 
+# A job that started before this much time has passed and is still not
+# finished has lost its runner. Fifteen minutes is well past any export the
+# in-process runner can honestly still be working on.
+STALE_EXPORT_AFTER = timedelta(minutes=15)
+
+
+def _export_is_stale(job) -> bool:
+    if job.status not in ("queued", "running") or job.created_at is None:
+        return False
+    started = job.created_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - started > STALE_EXPORT_AFTER
+
+
 class PgExportJobs:
     """Export jobs: what was asked for, how it went, where the file is."""
 
@@ -1176,6 +1229,11 @@ class PgExportJobs:
             "created_at": job.created_at.isoformat()
             if job.created_at
             else None,
+            # In-process jobs die with the API, and a job whose process is
+            # gone stays `running` for ever with nobody left to finish it.
+            # Rather than a sweeper, say so on the way out: anything still
+            # unfinished after the window is stale, and stale offers a retry.
+            "stale": _export_is_stale(job),
             "finished_at": (
                 job.finished_at.isoformat() if job.finished_at else None
             ),

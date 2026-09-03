@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event
 
 from invoice_processing.api import auth
-from invoice_processing.api.service import app
+from invoice_processing.api.service import CSV_COLUMNS, app
 from invoice_processing.db.models import (
     Base,
     Correction,
@@ -25,6 +25,7 @@ from invoice_processing.db.models import (
 )
 from invoice_processing.db.repositories import SheetRepository, _as_number
 from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.sheet_columns import BY_KEY, CSV_EQUIVALENT
 
 TENANT = "tenant-acme"
 CLAIMS = {
@@ -451,6 +452,42 @@ class TestSummary:
         )
         assert body["total"] == 1
 
+    def test_it_counts_duplicates_and_attention_across_the_whole_filter(
+        self, db, client
+    ):
+        """Counted over the filter, not the page.
+
+        A tile that counted only the rows on screen would say "1 duplicate"
+        above page one and "2" above page two, for the same ledger.
+        """
+        with tenant_session(TENANT, db) as session:
+            invoice(session, case_id="a", invoice_number="SAME")
+            invoice(session, case_id="b", invoice_number="SAME")
+            clean = invoice(session, case_id="c", invoice_number="OTHER")
+            session.add(
+                Finding(
+                    tenant_id=TENANT,
+                    invoice_id=clean.id,
+                    step="4.1",
+                    severity="blocking",
+                    passed=False,
+                )
+            )
+
+        body = client().get("/api/sheet/summary").json()
+        assert body["duplicates"] == 2
+        # Any of the attention flags, not all of them: two duplicates plus one
+        # totals mismatch is three rows worth looking at.
+        assert body["needs_attention"] == 3
+
+    def test_attention_counts_nothing_when_nothing_is_wrong(self, db, client):
+        with tenant_session(TENANT, db) as session:
+            invoice(session, case_id="a")
+
+        body = client().get("/api/sheet/summary").json()
+        assert body["duplicates"] == 0
+        assert body["needs_attention"] == 0
+
 
 class TestFacets:
     def test_it_lists_the_vendors_present(self, db, client):
@@ -764,3 +801,18 @@ class TestAmountFiltersArriveAsText:
         found = rows(client, min_total="1000")["rows"]
 
         assert [r["invoice_number"] for r in found] == ["INV-BIG"]
+
+
+class TestTheTwoExportsDescribeTheSameInvoice:
+    """The single-invoice CSV and the sheet must not drift apart.
+
+    They are two files of the same ledger with different column names, and a
+    finance team that reconciles one against the other has to be able to. The
+    correspondence is written down in `sheet_columns.CSV_EQUIVALENT`; this test
+    is what makes adding a column to either side a deliberate act.
+    """
+
+    def test_every_csv_column_names_a_catalogue_column(self):
+        assert list(CSV_EQUIVALENT) == list(CSV_COLUMNS)
+        missing = [key for key in CSV_EQUIVALENT.values() if key not in BY_KEY]
+        assert missing == []

@@ -491,6 +491,45 @@ def get_export(
     return job
 
 
+@router.post("/api/sheet/exports/{job_id}/retry")
+def retry_export(
+    job_id: str,
+    background: BackgroundTasks,
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+) -> dict:
+    """Run a stale or failed export again, from the spec it already carries.
+
+    The runner lives in the API process, so a deploy in the middle of a large
+    export leaves a job that will never finish. Rather than make the user
+    rebuild the same filters, offer them the job back.
+    """
+    from .. import exports  # noqa: PLC0415
+    from . import service  # noqa: PLC0415
+
+    jobs = _jobs()
+    job = jobs.get(principal.tenant_id, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown export.")
+    if job["status"] not in ("failed", "queued", "running") or (
+        job["status"] != "failed" and not job["stale"]
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"That export is {job['status']}, not stuck.",
+        )
+
+    queued = jobs.update(
+        principal.tenant_id, job_id, status="queued", error=None
+    )
+    service.get_audit().emit(
+        principal.context(),
+        "export_requested",
+        {"export": job_id, "format": job["format"], "retry": True},
+    )
+    background.add_task(exports.run, job_id, principal.tenant_id)
+    return queued
+
+
 @router.get("/api/sheet/exports/{job_id}/download")
 def download_export(
     job_id: str,
