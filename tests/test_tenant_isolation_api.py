@@ -583,6 +583,23 @@ class TestSheetIsolation:
         )
         assert response.status_code == 404
 
+    def test_another_tenant_cannot_copy_a_view(self, sheet_clients):
+        """A copy would carry the filters -- and the filters are the ledger."""
+        view = (
+            sheet_clients("acme")
+            .post(
+                "/api/sheet/views", json={"name": "Acme view", "definition": {}}
+            )
+            .json()
+        )
+
+        assert (
+            sheet_clients("globex")
+            .post(f"/api/sheet/views/{view['id']}/duplicate")
+            .status_code
+            == 404
+        )
+
     def test_another_tenant_cannot_delete_a_view(self, sheet_clients):
         view = (
             sheet_clients("acme")
@@ -641,6 +658,7 @@ class TestCoverage:
         "/api/sheet/facets",
         "/api/sheet/views",
         "/api/sheet/views/{view_id}",
+        "/api/sheet/views/{view_id}/duplicate",
         "/api/sheet/exports",
         "/api/sheet/exports/{job_id}",
         "/api/sheet/exports/{job_id}/download",

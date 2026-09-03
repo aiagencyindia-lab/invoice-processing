@@ -312,6 +312,8 @@ def create_view(
         "sheet_view_created",
         {"view": view["id"], "name": name},
     )
+    if shared:
+        _audit_shared(principal, view["id"], name)
     return view
 
 
@@ -354,7 +356,60 @@ def update_view(
         },
         before={"name": existing["name"], "shared": existing["shared"]},
     )
+    if changes.get("shared") and not existing["shared"]:
+        # Its own event, not a field inside an update: this is the moment a
+        # view stops being one person's and starts being the tenant's, and an
+        # auditor looking for that will search for the act, not for an update
+        # that happens to carry a flag.
+        _audit_shared(principal, view_id, updated["name"])
     return updated
+
+
+def _audit_shared(principal: Principal, view_id: str, name: str) -> None:
+    from . import service  # noqa: PLC0415
+
+    service.get_audit().emit(
+        principal.context(),
+        "sheet_view_shared",
+        {"view": view_id, "name": name},
+    )
+
+
+@router.post("/api/sheet/views/{view_id}/duplicate")
+def duplicate_view(
+    view_id: str,
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+) -> dict:
+    """Copy a view to work from, without touching the one it came from.
+
+    The copy is private and owned by whoever asked for it, whatever the
+    original was: the usual reason to duplicate a shared view is to change it,
+    and changing a copy that stayed shared would edit everyone's screen.
+    """
+    from . import service  # noqa: PLC0415
+
+    views = _views()
+    original = views.get(principal.tenant_id, view_id)
+    if original is None or (
+        original["owner"] != principal.email and not original["shared"]
+    ):
+        # Not "403 someone else's": a view a reader cannot see should not be
+        # confirmed to exist by the error it produces.
+        raise HTTPException(status_code=404, detail="Unknown view.")
+
+    copy = views.create(
+        principal.tenant_id,
+        name=f"{original['name']} (copy)"[:128],
+        owner=principal.email,
+        shared=False,
+        definition=original["definition"],
+    )
+    service.get_audit().emit(
+        principal.context(),
+        "sheet_view_created",
+        {"view": copy["id"], "name": copy["name"], "copy_of": view_id},
+    )
+    return copy
 
 
 @router.delete("/api/sheet/views/{view_id}")

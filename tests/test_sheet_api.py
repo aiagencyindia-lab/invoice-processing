@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event
 
-from invoice_processing.api import auth
+from invoice_processing.api import auth, service
 from invoice_processing.api.service import CSV_COLUMNS, app
 from invoice_processing.db.models import (
     Base,
@@ -684,6 +684,98 @@ class TestSavedViews:
             client("admin").delete(f"/api/sheet/views/{view['id']}").status_code
             == 200
         )
+
+
+class TestDuplicatingAView:
+    def test_a_copy_is_private_and_owned_by_whoever_asked(self, db, client):
+        shared = client("approver").post(
+            "/api/sheet/views",
+            json={
+                "name": "Team view",
+                "shared": True,
+                "definition": {"filters": {"currency": "AUD"}},
+            },
+        ).json()
+
+        copy = client("clerk").post(
+            f"/api/sheet/views/{shared['id']}/duplicate"
+        )
+        assert copy.status_code == 200, copy.text
+        body = copy.json()
+        assert body["name"] == "Team view (copy)"
+        assert body["owner"] == "clerk@acme.test"
+        assert body["shared"] is False
+        assert body["definition"] == {"filters": {"currency": "AUD"}}
+        assert body["id"] != shared["id"]
+
+    def test_the_original_is_untouched(self, db, client):
+        original = client("clerk").post(
+            "/api/sheet/views", json={"name": "Mine", "definition": {}}
+        ).json()
+        client("clerk").post(f"/api/sheet/views/{original['id']}/duplicate")
+
+        names = {
+            view["name"]
+            for view in client("clerk").get("/api/sheet/views").json()["views"]
+        }
+        assert names == {"Mine", "Mine (copy)"}
+
+    def test_someone_elses_private_view_cannot_be_copied(self, db, client):
+        private = client("clerk").post(
+            "/api/sheet/views", json={"name": "Private", "definition": {}}
+        ).json()
+
+        response = client("approver").post(
+            f"/api/sheet/views/{private['id']}/duplicate"
+        )
+        assert response.status_code == 404
+
+
+class TestSharingIsItsOwnEvent:
+    """An auditor asking "when did this become visible to everyone" searches
+    for the act, not for an update that happens to carry a flag."""
+
+    @pytest.fixture
+    def recorded(self, monkeypatch):
+        events: list[str] = []
+
+        class RecordingAudit:
+            def emit(self, ctx, event, payload, before=None):
+                events.append(event)
+
+        monkeypatch.setattr(service, "_audit", RecordingAudit())
+        return events
+
+    def test_sharing_an_existing_view_is_recorded(self, db, client, recorded):
+        view = client("approver").post(
+            "/api/sheet/views", json={"name": "Mine", "definition": {}}
+        ).json()
+        assert "sheet_view_shared" not in recorded
+
+        client("approver").patch(
+            f"/api/sheet/views/{view['id']}", json={"shared": True}
+        )
+        assert "sheet_view_shared" in recorded
+
+    def test_a_view_born_shared_is_recorded_too(self, db, client, recorded):
+        client("approver").post(
+            "/api/sheet/views",
+            json={"name": "Everyone", "shared": True, "definition": {}},
+        )
+        assert "sheet_view_shared" in recorded
+
+    def test_unsharing_is_not_recorded_as_sharing(self, db, client, recorded):
+        view = client("approver").post(
+            "/api/sheet/views",
+            json={"name": "Everyone", "shared": True, "definition": {}},
+        ).json()
+        recorded.clear()
+
+        client("approver").patch(
+            f"/api/sheet/views/{view['id']}", json={"shared": False}
+        )
+        assert "sheet_view_shared" not in recorded
+        assert "sheet_view_updated" in recorded
 
 
 class TestWithoutADatabase:

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
   ApiError,
@@ -465,18 +465,35 @@ export default function SheetPage() {
           </button>
         ))}
         {(views?.views ?? []).map((view) => (
-          <button
-            key={view.id}
-            type="button"
-            className="btn-chip"
-            aria-pressed={activeView === view.id}
-            onClick={() =>
-              applyView({ id: view.id, definition: view.definition.filters ?? {} })
-            }
-          >
-            {view.name}
-            {view.shared ? " (shared)" : ""}
-          </button>
+          <Fragment key={view.id}>
+            <button
+              type="button"
+              className="btn-chip"
+              aria-pressed={activeView === view.id}
+              onClick={() =>
+                applyView({ id: view.id, definition: view.definition.filters ?? {} })
+              }
+            >
+              {view.name}
+              {view.shared ? " (shared)" : ""}
+            </button>
+            {can(me, "clerk") ? (
+              <button
+                type="button"
+                className="btn-chip"
+                aria-label={`Duplicate ${view.name}`}
+                title="Make a private copy to change"
+                onClick={async () => {
+                  await api(`/api/sheet/views/${view.id}/duplicate`, {
+                    method: "POST",
+                  });
+                  reloadViews();
+                }}
+              >
+                copy
+              </button>
+            ) : null}
+          </Fragment>
         ))}
         {can(me, "clerk") ? (
           <button
