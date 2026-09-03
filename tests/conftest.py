@@ -15,6 +15,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
+@pytest.fixture
+def scratch_db(tmp_path):
+    """A URL for a throwaway database: SQLite, or Postgres when CI says so.
+
+    The suite runs on SQLite because it is free and needs no service. That is
+    also how three real bugs shipped: SQLite coerces `numeric >= varchar` where
+    Postgres refuses outright, it parses a thousands separator Postgres will
+    not, and a query per row is invisible when queries cost nothing. None of
+    those could fail on the test dialect.
+
+    So the DB-backed modules take their URL from here, and one CI job runs them
+    again with `TEST_DATABASE_URL` pointing at a real Postgres. Same tests,
+    second dialect -- rather than a parallel suite that would drift.
+    """
+
+    def make(name: str = "test.db") -> str:
+        return os.getenv("TEST_DATABASE_URL") or f"sqlite:///{tmp_path / name}"
+
+    return make
+
+
 @pytest.fixture(autouse=True)
 def a_project_id_that_is_not_real(monkeypatch):
     """Give Vertex a project so construction never needs a configured machine.

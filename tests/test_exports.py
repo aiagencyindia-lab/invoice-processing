@@ -70,8 +70,8 @@ def approved(when="2026-08-15T09:00:00+00:00") -> dict:
 
 
 @pytest.fixture
-def db(tmp_path, monkeypatch):
-    url = f"sqlite:///{tmp_path / 'exports.db'}"
+def db(scratch_db, monkeypatch):
+    url = scratch_db("exports.db")
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
     engine = get_engine(url)

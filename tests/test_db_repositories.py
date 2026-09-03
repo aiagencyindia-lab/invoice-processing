@@ -54,9 +54,9 @@ GLOBEX = "tenant-globex"
 
 
 @pytest.fixture
-def db(tmp_path):
-    """A fresh SQLite database with two tenants."""
-    url = f"sqlite:///{tmp_path / 'test.db'}"
+def db(scratch_db):
+    """A fresh database with two tenants."""
+    url = scratch_db("test.db")
     engine = get_engine(url)
     Base.metadata.drop_all(engine)
     create_all(url)

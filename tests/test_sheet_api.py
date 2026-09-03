@@ -76,8 +76,8 @@ def invoice(session, tenant_id=TENANT, **overrides) -> Invoice:
 
 
 @pytest.fixture
-def db(tmp_path, monkeypatch):
-    url = f"sqlite:///{tmp_path / 'sheet.db'}"
+def db(scratch_db, monkeypatch):
+    url = scratch_db("sheet.db")
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
     engine = get_engine(url)
