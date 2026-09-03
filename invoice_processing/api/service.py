@@ -750,6 +750,7 @@ def edit_fields(
     if recorded:
         extraction["invoice"] = invoice
         get_cases().put_artifact(ctx, "extraction", extraction)
+        _reproject(ctx, artifacts)
         get_audit().emit(
             ctx,
             "fields_corrected",
@@ -767,6 +768,33 @@ def edit_fields(
         )
 
     return {"corrections": recorded, "count": len(recorded)}
+
+
+def _reproject(ctx, artifacts: dict) -> None:
+    """Mirror a corrected artifact back into the typed columns.
+
+    The artifacts are the record and the columns are the queryable view of
+    them, written by `project_case` when the worker finishes a case. A
+    reviewer's correction changed the record and left the view behind: the
+    sheet, the review queue and every filter read columns, so a PO corrected in
+    the drawer still showed the old one in the row beside it -- which reads as
+    a save that did not work.
+
+    Same call the worker makes, wrapped the same way: the correction is already
+    stored, and a projection that fails must not undo it.
+    """
+    projector = getattr(get_cases(), "project_case", None)
+    if projector is None:  # filesystem stores have no columns to project into
+        return
+    try:
+        projector(ctx, artifacts)
+    except Exception as exc:
+        logger.warning(
+            "Case %s corrected but not re-projected into the relational "
+            "tables: %s",
+            ctx.case_id,
+            exc,
+        )
 
 
 def _require_unlocked(principal: Principal, case_id: str) -> None:

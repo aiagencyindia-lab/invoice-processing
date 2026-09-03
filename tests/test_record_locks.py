@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
@@ -157,6 +158,34 @@ class TestWhatALockRefuses:
         """Not holding a lock stays legal. A lock excludes other people; it is
         not a permit its holder must first obtain."""
         assert edit(client, "sam").status_code == 200
+
+
+class TestACorrectionReachesTheSheet:
+    """The artifact is the record; the columns are what the sheet queries.
+
+    Correcting a field wrote the artifact and left the column behind, so an
+    edit made in the drawer showed the old value in the row beside it -- a
+    save that reads as broken.
+    """
+
+    def test_the_typed_column_follows_the_edit(self, db, client):
+        edit(client, "dana", field="po_number", value="PO-9999")
+
+        with tenant_session(TENANT, db) as session:
+            stored = session.scalar(
+                select(Invoice.po_number).where(
+                    Invoice.tenant_id == TENANT, Invoice.case_id == CASE
+                )
+            )
+        assert stored == "PO-9999"
+
+    def test_the_sheet_can_then_filter_on_it(self, db, client):
+        edit(client, "dana", field="po_number", value="PO-9999")
+
+        rows = client("dana").get(
+            "/api/sheet/invoices", params={"status": "all", "q": "PO-9999"}
+        )
+        assert [row["po_number"] for row in rows.json()["rows"]] == ["PO-9999"]
 
 
 class TestExpiry:
