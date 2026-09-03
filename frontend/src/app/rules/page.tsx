@@ -141,9 +141,11 @@ export default function RulesPage() {
 
           {proposal.has_collateral ? (
             <div className="banner" role="status">
-              {proposal.collateral_warning ??
-                "This rule also matches cases it was not written for."}{" "}
-              Approving it will re-decide them too.
+              <div>
+                {proposal.collateral_warning ??
+                  "This rule also matches cases it was not written for."}
+              </div>
+              <div>Approving it will re-decide those cases too.</div>
             </div>
           ) : null}
           {proposal.llm_actions?.length ? (
