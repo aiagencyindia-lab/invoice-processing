@@ -6,6 +6,35 @@ import { usePoll } from "@/lib/hooks";
 
 const POLL_MS = 10000;
 
+type Change = { field: string; was: string; now: string };
+
+/** What actually changed, from the two states the trail stores.
+ *
+ *  `fields_corrected` nests its values one level down (`{values: {po: ...}}`)
+ *  because that is the shape the edit path writes; everything else compares
+ *  key by key. Both are rendered the same way, so a reader learns one format.
+ */
+function changes(event: AuditEvent): Change[] {
+  const unwrap = (state: Record<string, unknown> | null) => {
+    const values = state?.values;
+    return (values && typeof values === "object" ? values : state) as
+      | Record<string, unknown>
+      | null
+      | undefined;
+  };
+  const was = unwrap(event.before);
+  const now = unwrap(event.payload);
+  if (!was) return [];
+
+  return Object.entries(was)
+    .filter(([, value]) => value !== null && value !== undefined)
+    .map(([field, value]) => ({
+      field,
+      was: String(value),
+      now: now && field in now ? String(now[field]) : "—",
+    }));
+}
+
 function when(value: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -101,6 +130,7 @@ export default function ActivityPage() {
                 <th>Who</th>
                 <th>Did what</th>
                 <th>To</th>
+                <th>Changed</th>
               </tr>
             </thead>
             <tbody>
@@ -116,6 +146,17 @@ export default function ActivityPage() {
                       </>
                     ) : (
                       "—"
+                    )}
+                  </td>
+                  <td className="muted">
+                    {changes(event).length ? (
+                      changes(event).map((change) => (
+                        <div key={change.field}>
+                          {change.field}: <s>{change.was}</s> → {change.now}
+                        </div>
+                      ))
+                    ) : (
+                      <>—</>
                     )}
                   </td>
                 </tr>

@@ -82,6 +82,7 @@ def env(tmp_path, monkeypatch):
         "documents": documents,
         "queue": queue,
         "cases": cases,
+        "audit": audit,
         "claims": claims,
         "tmp": tmp_path,
         "client": lambda role="admin": TestClient(
@@ -562,6 +563,35 @@ class TestAudit:
         event = env["client"]().get("/api/audit").json()["events"][0]
         assert event["at"], "audit event has no timestamp"
         assert event["entity_id"] == doc_id
+
+    def test_an_event_says_what_the_value_was(self, env):
+        """ "Changed from what?" is the question a trail exists to answer.
+
+        Both sinks have stored `before` since the trail learnt to record it.
+        This endpoint returned only the new value, so the Activity page could
+        say a field was corrected and never what it held before -- the half
+        that makes a correction reviewable.
+        """
+        env["audit"].emit(
+            RunContext(tenant_id=TENANT, case_id="case_001", actor="a@b.test"),
+            "fields_corrected",
+            {"values": {"po_number": "PO-9999"}},
+            before={"values": {"po_number": "PO-8891"}},
+        )
+
+        event = env["client"]().get("/api/audit").json()["events"][0]
+        assert event["before"] == {"values": {"po_number": "PO-8891"}}
+        assert event["payload"] == {"values": {"po_number": "PO-9999"}}
+
+    def test_an_event_with_no_previous_state_says_so(self, env):
+        """An upload had no "before". Null, not a missing key: the reader has
+        to tell "nothing changed into this" from "we did not record it"."""
+        doc_id = add_document(env, sha="au3")
+        env["client"]("approver").post(f"/api/documents/{doc_id}/retry")
+
+        event = env["client"]().get("/api/audit").json()["events"][0]
+        assert "before" in event
+        assert event["before"] is None
 
     def test_every_role_can_read_the_trail(self, env):
         """A viewer who cannot see why an invoice was rejected cannot answer

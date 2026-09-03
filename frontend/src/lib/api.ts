@@ -163,6 +163,10 @@ export type AuditEvent = {
   action: string | null;
   entity_type: string | null;
   entity_id: string | null;
+  /** What the event recorded. `before` is the prior state where there was
+   *  one -- null on an event that created something rather than changing it. */
+  payload: Record<string, unknown> | null;
+  before: Record<string, unknown> | null;
 };
 
 export type SettingField = {

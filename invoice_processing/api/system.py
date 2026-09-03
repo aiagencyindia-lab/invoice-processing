@@ -438,6 +438,12 @@ def list_audit(
                 "entity_type": e.entity_type,
                 "entity_id": e.entity_id,
                 "payload": e.after,
+                # What the value was. Both sinks have stored this since the
+                # trail was made able to answer "changed from what?", and this
+                # endpoint dropped it on the floor -- so the Activity page
+                # could say a field was corrected but never what it held
+                # before, which is the half an auditor needs.
+                "before": e.before,
             }
             for e in events
         ]
@@ -485,6 +491,7 @@ def _read_jsonl_audit(tenant_id: str, limit: int) -> list[dict]:
                 or ("document" if entity_id else None),
                 "entity_id": entity_id,
                 "payload": record.get("payload"),
+                "before": record.get("before"),
             }
         )
     return list(reversed(events))[:limit]
