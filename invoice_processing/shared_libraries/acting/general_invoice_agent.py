@@ -1669,10 +1669,16 @@ class Phase1ValidatorAgent(BaseAgent):
         # Where they have not, the check is what it was: is a form attached?
         if _get_config().get("require_work_authorization"):
             authorizations = _load_work_authorizations()
-            match = wa_matching.match_invoice_to_wa(invoice, authorizations)
+            match = wa_matching.match_invoice_to_wa(
+                invoice, authorizations, vendors=_load_vendors()
+            )
             has_waf = (extraction.get("waf_count") or 0) > 0
 
-            if match.outcome == wa_matching.NOT_CONFIGURED:
+            if match.outcome == wa_matching.NOT_APPLICABLE:
+                # Nothing to check, and nothing to record: a verdict on a
+                # question that does not arise is noise in the audit trail.
+                pass
+            elif match.outcome == wa_matching.NOT_CONFIGURED:
                 work_type = self._determine_work_type(invoice)
                 exempt_types = [
                     t.upper()
@@ -2200,7 +2206,7 @@ class Phase4ValidatorAgent(BaseAgent):
         # evidence names which one happened.
         if _get_config().get("require_work_authorization"):
             match = wa_matching.match_invoice_to_wa(
-                invoice, _load_work_authorizations()
+                invoice, _load_work_authorizations(), vendors=_load_vendors()
             )
             if match.outcome == wa_matching.MATCHED:
                 result = wa_matching.hours_check(

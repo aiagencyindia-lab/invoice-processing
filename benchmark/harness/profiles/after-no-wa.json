@@ -1,0 +1,19 @@
+{
+  "_note": "Replay-only variant: the work-authorization checks need a field the baseline run never extracted, so leaving them on makes every replayed invoice fail 1.4 and hides everything downstream. Not used for the AFTER run.",
+  "settings": {
+    "duplicate_check_enabled": true,
+    "require_purchase_order": false,
+    "require_work_authorization": false,
+    "disabled_checks": [],
+    "tax_id_format": "GSTIN",
+    "require_tax_breakup": true,
+    "organization_tax_ids": "@company_gstin",
+    "tax_rates_by_hsn": "@hsn_rates",
+    "tax_rate_tolerance": 1.0
+  },
+  "masters": {
+    "purchase_orders": "extended",
+    "vendors": true,
+    "work_authorizations": false
+  }
+}

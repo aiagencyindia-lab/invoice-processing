@@ -211,8 +211,24 @@ def main(argv=None) -> int:
         result = ingest.ingest_document(
             ctx, data, filename=sub.filename, source="upload"
         )
+        # A document registered by an interrupted run looks exactly like a
+        # duplicate to ingestion -- same bytes, same hash, already on file --
+        # and recording it as one would credit the application with catching a
+        # duplicate it never saw. Only a document that actually produced
+        # artifacts was really processed before.
+        processed_before = bool(
+            cases.get_artifacts(
+                RunContext(tenant_id=tenant_id, case_id=result.document_id)
+            )
+        )
+        interrupted = result.duplicate and not processed_before
+        if interrupted:
+            from invoice_processing.worker.runner import enqueue_document
+
+            enqueue_document(service.get_queue(), ctx, result)
+
         outcome = "ingest-duplicate"
-        if not result.duplicate:
+        if not result.duplicate or interrupted:
             outcome = "retry"
             while outcome == "retry":
                 outcomes = worker.run_once(max_messages=1)
@@ -232,7 +248,7 @@ def main(argv=None) -> int:
             sub,
             result.document_id,
             artifacts,
-            ingest_duplicate=result.duplicate,
+            ingest_duplicate=result.duplicate and not interrupted,
             wall_seconds=wall,
             outcome=outcome,
             error_text=error_text,

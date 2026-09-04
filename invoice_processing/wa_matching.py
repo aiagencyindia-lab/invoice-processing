@@ -27,6 +27,7 @@ from . import master_files, po_matching
 RECORD_KEY = "work_authorizations"
 
 # 1.4 -- does the authorisation exist and belong here?
+NOT_APPLICABLE = "not_applicable"
 NO_REFERENCE = "no_reference"
 NOT_FOUND = "not_found"
 OTHER_VENDOR = "other_vendor"
@@ -149,11 +150,28 @@ class WorkAuthorizations:
 
 
 def match_invoice_to_wa(
-    invoice: dict, authorizations: WorkAuthorizations
+    invoice: dict,
+    authorizations: WorkAuthorizations,
+    *,
+    vendors=None,
 ) -> WaMatch:
-    """Step 1.4: does the quoted authorisation exist, and is it this vendor's?"""
+    """Step 1.4: does the quoted authorisation exist, and is it this vendor's?
+
+    `vendors` is the tenant's supplier list, used only to answer whether this
+    supplier bills for work at all. A supplier of goods has nothing to
+    authorise, and demanding an authorisation from them would reject every
+    delivery they ever invoice.
+    """
     if not len(authorizations):
         return WaMatch(NOT_CONFIGURED, evidence="No work authorizations loaded")
+
+    if vendors is not None and len(vendors):
+        vendor = vendors.find(invoice.get("vendor_name"))
+        if vendor is not None and vendor.kind == "goods":
+            return WaMatch(
+                NOT_APPLICABLE,
+                evidence=f"{vendor.name} supplies goods; no work to authorise",
+            )
 
     quoted = invoice.get("work_authorization_reference")
     reference = normalize_reference(quoted)

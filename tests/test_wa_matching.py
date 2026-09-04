@@ -15,7 +15,7 @@ import json
 
 import pytest
 
-from invoice_processing import wa_matching
+from invoice_processing import vendor_master, wa_matching
 from invoice_processing.shared_libraries.acting import general_invoice_agent
 from invoice_processing.shared_libraries.acting.general_invoice_agent import (
     Phase1ValidatorAgent,
@@ -291,3 +291,83 @@ class TestWorkTypeKeywords:
                 )
                 == "PREVENTATIVE"
             )
+
+
+class TestSuppliersOfGoods:
+    """A supplier of goods has no work to authorise. Demanding an
+    authorization from them rejects every delivery they ever invoice -- 153 of
+    the benchmark's 300 submissions are goods invoices, and the dataset marks
+    check 1.4 as not applicable to every one of them."""
+
+    def _vendors(self, kind):
+        return vendor_master.VendorMaster(
+            records=[
+                {"name": VENDOR, "tax_id": "29ZOICE4828P1ZD", "kind": kind}
+            ]
+        )
+
+    def test_a_goods_supplier_is_not_asked_for_one(self):
+        result = wa_matching.match_invoice_to_wa(
+            invoice(work_authorization_reference=None),
+            authorizations(WA),
+            vendors=self._vendors("goods"),
+        )
+        assert result.outcome == wa_matching.NOT_APPLICABLE
+        assert result.ok
+
+    def test_a_service_supplier_still_is(self):
+        result = wa_matching.match_invoice_to_wa(
+            invoice(work_authorization_reference=None),
+            authorizations(WA),
+            vendors=self._vendors("service"),
+        )
+        assert result.outcome == wa_matching.NO_REFERENCE
+
+    def test_an_unknown_supplier_is_still_asked(self):
+        """Silence is not permission: a supplier nobody has classified is
+        treated as one whose work needs authorising."""
+        result = wa_matching.match_invoice_to_wa(
+            invoice(work_authorization_reference=None),
+            authorizations(WA),
+            vendors=vendor_master.VendorMaster(
+                records=[{"name": OTHER_VENDOR, "tax_id": "27UHVFN1303Z1Z9"}]
+            ),
+        )
+        assert result.outcome == wa_matching.NO_REFERENCE
+
+    def test_the_pipeline_records_no_verdict_for_a_goods_supplier(
+        self, tmp_path, monkeypatch
+    ):
+        """Not a pass -- no entry at all. A verdict on a question that does not
+        arise is noise in the audit trail."""
+        settings = general_invoice_agent.DEFAULT_CONFIG.copy()
+        settings["require_work_authorization"] = True
+        path = tmp_path / "wa.json"
+        path.write_text(
+            json.dumps({"work_authorizations": [WA]}), encoding="utf-8"
+        )
+        vendors = tmp_path / "vendors.json"
+        vendors.write_text(
+            json.dumps(
+                {
+                    "vendors": [
+                        {
+                            "name": VENDOR,
+                            "tax_id": "29ZOICE4828P1ZD",
+                            "kind": "goods",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        settings["work_authorization_file"] = str(path)
+        settings["vendor_master_file"] = str(vendors)
+        monkeypatch.setitem(
+            general_invoice_agent._config_store, "CONFIG", settings
+        )
+
+        result = Phase1ValidatorAgent().run(
+            tmp_path, {"invoice": invoice(work_authorization_reference=None)}
+        )
+        assert not [v for v in result["validations"] if v["step"] == "1.4"]
