@@ -280,7 +280,14 @@ _FALLBACK_CONFIG = {
     "hours_tolerance": 0.5,
     # Tax ID validation
     "validate_tax_id_checksum": True,
-    "tax_id_format": "ABN",  # "ABN", "VAT", "EIN", "NONE"
+    "tax_id_format": "ABN",  # "ABN", "GSTIN", "NONE"
+    # Our own tax registrations, checked against the invoice's bill-to when it
+    # states one. Empty means the name check stands alone, as before.
+    "organization_tax_ids": [],
+    # Off: an invoice with no tax on it is not automatically wrong. Where input
+    # tax can only be claimed against a proper tax invoice, turning this on
+    # makes step 1.3 say so.
+    "require_tax_breakup": False,
 }
 
 
@@ -338,12 +345,42 @@ MODEL_PRICING = {
 # ============================================================================
 
 
+# What a submission can turn out to be. The classifier used to answer one
+# question -- "does this look like an invoice?" -- so a receipt, a quotation, a
+# proforma or a credit note with an invoice-shaped header was extracted and
+# validated as an invoice, and step 1.1 reported success on a document that is
+# not a payable at all. Naming the kinds is what lets 1.1 and 1.3 disagree with
+# each other: a Bill of Supply *is* a real document from a real supplier, it is
+# simply not a tax invoice.
+TAX_INVOICE = "tax_invoice"
+NON_TAX_INVOICE = "invoice"  # an invoice with no tax stated: bill of supply etc
+NON_PAYABLE_TYPES = frozenset(
+    {
+        "receipt",
+        "quotation",
+        "proforma_invoice",
+        "credit_note",
+        "purchase_order",
+        "delivery_challan",
+        "statement",
+        "unreadable",
+    }
+)
+DOCUMENT_TYPES = (
+    TAX_INVOICE,
+    NON_TAX_INVOICE,
+    *sorted(NON_PAYABLE_TYPES),
+    "other",
+)
+
+
 class DocumentContent(BaseModel):
     """Identifies document types present in a file"""
 
     has_invoice: bool = False
     has_work_authorization: bool = False
     invoice_count: int = 0
+    document_type: str = ""
     reasoning: str = ""
 
 
@@ -352,11 +389,30 @@ class InvoiceLineItem(BaseModel):
 
     description: str
     quantity: float | None = None
+    unit: str | None = None
     unit_price: float | None = None
     amount_ex_tax: float | None = None
     tax_code: str | None = "TAX"
     tax_amount: float | None = None
     amount_inc_tax: float | None = None
+    # The classification code that decides the statutory rate for this line
+    # (HSN/SAC in India, and the same idea elsewhere). Without it a multi-rate
+    # invoice can only be checked against one blended rate, which is not a
+    # check at all.
+    hsn_sac: str | None = None
+    tax_rate: float | None = None  # 0.18 for 18%
+    line_discount: float | None = None
+
+
+class OtherCharge(BaseModel):
+    """Freight, insurance, a delivery fee: taxable, and outside the line table.
+
+    They belong to the total but not to the line items, so an invoice carrying
+    them reconciles only if they are read separately."""
+
+    description: str | None = None
+    amount: float | None = None
+    tax_rate: float | None = None
 
 
 class TaxBreakdownLine(BaseModel):
@@ -405,6 +461,34 @@ class InvoiceExtraction(BaseModel):
     bank_code: str | None = None  # BSB / sort code / routing number
     bank_iban: str | None = None
     tax_breakdown: list[TaxBreakdownLine] | None = []
+
+    # --- Added for the India GST pack -------------------------------------
+    #
+    # Every one of these is optional and defaults to None, so an invoice from a
+    # jurisdiction that does not print them reaches the checks exactly as it
+    # did before. What they buy: a reconciliation that accounts for discounts,
+    # freight and rounding rather than assuming they are absent; a tax check
+    # that can compare against statutory rates per line instead of one blended
+    # rate; and a work-authorization check that can look up the reference the
+    # invoice quotes rather than requiring the form to be attached.
+    document_type: str | None = None
+    customer_tax_id: str | None = None
+    work_authorization_reference: str | None = None
+    project: str | None = None
+    service_period_start: str | None = None
+    service_period_end: str | None = None
+    place_of_supply: str | None = None
+    subtotal: float | None = None  # before discount, as printed
+    discount: float | None = None
+    other_charges: list[OtherCharge] | None = []
+    round_off: float | None = None
+    # Tax components where the jurisdiction splits them (CGST/SGST within a
+    # state, IGST across states). Their consistency with the place of supply is
+    # a check of its own: charging IGST on a local supply is a real error that
+    # a single tax total hides completely.
+    cgst_amount: float | None = None
+    sgst_amount: float | None = None
+    igst_amount: float | None = None
 
 
 class WorkAuthorizationExtraction(BaseModel):
@@ -774,7 +858,7 @@ class ClassifierAgent(BaseAgent):
         print(" [1/9] Classifier Agent: Starting...")
 
         files_info = {}
-        summary = {"invoice_count": 0, "waf_count": 0}
+        summary = {"invoice_count": 0, "waf_count": 0, "document_type": ""}
         invoice_sources = []
         waf_sources = []
 
@@ -798,6 +882,14 @@ class ClassifierAgent(BaseAgent):
                     )
                     summary["invoice_count"] += doc_info.invoice_count
 
+                # The submission's kind is the kind of the document being
+                # billed. A work authorization alongside an invoice does not
+                # change what is being paid.
+                if not summary["document_type"] or doc_info.has_invoice:
+                    summary["document_type"] = (
+                        doc_info.document_type or summary["document_type"]
+                    )
+
                 if doc_info.has_work_authorization:
                     waf_sources.append(
                         {
@@ -813,6 +905,7 @@ class ClassifierAgent(BaseAgent):
                     "extraction_method": method,
                     "has_invoice": doc_info.has_invoice,
                     "has_waf": doc_info.has_work_authorization,
+                    "document_type": doc_info.document_type,
                 }
 
             elif file_path.suffix.lower() == ".json":
@@ -855,11 +948,33 @@ WORK AUTHORIZATION INDICATORS:
 - Authorized hours
 - Technician signatures
 
+DOCUMENT TYPE -- what the document says it is, not what it resembles. Its own
+title is the strongest evidence, and a disclaimer such as "this is not a tax
+invoice" settles it:
+- "tax_invoice": a tax invoice -- titled as one, with a supplier tax
+  registration and tax stated or itemised.
+- "invoice": billed as an invoice but with no tax registration or no tax
+  charged, including a Bill of Supply or a composition-scheme invoice.
+- "receipt": records a payment already made.
+- "quotation": an offer or estimate, often "valid for N days".
+- "proforma_invoice": titled proforma; a request for payment in advance, not a
+  tax invoice.
+- "credit_note": reverses an earlier invoice.
+- "purchase_order": the buyer's own order document.
+- "delivery_challan": a delivery or dispatch note, usually without prices.
+- "statement": a statement of account listing several invoices.
+- "unreadable": nothing legible could be recovered from the page.
+- "other": none of the above.
+
+invoice_count: how many DISTINCT invoices this file contains -- count distinct
+invoice numbers, not pages. Several pages of one invoice is 1.
+
 Return ONLY this JSON:
 {{
   "has_invoice": true/false,
   "has_work_authorization": true/false,
   "invoice_count": 0-N,
+  "document_type": "one of the values above",
   "reasoning": "brief explanation"
 }}"""
 
@@ -870,16 +985,50 @@ Return ONLY this JSON:
             return result
         except Exception as e:
             print(f"    Warning: Document analysis failed: {e}")
-            # Fallback to keyword detection
-            content_lower = content.lower()
-            return DocumentContent(
-                has_invoice="invoice" in content_lower
-                and "total" in content_lower,
-                has_work_authorization="work authorization" in content_lower
-                or "waf" in content_lower,
-                invoice_count=1 if "invoice" in content_lower else 0,
-                reasoning="Keyword fallback",
-            )
+            return self._classify_by_keyword(content)
+
+    # Titles, most specific first: "proforma invoice" and "tax invoice" both
+    # contain "invoice", so the order is the logic.
+    _TITLE_MARKERS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("proforma invoice", "proforma_invoice"),
+        ("pro forma invoice", "proforma_invoice"),
+        ("credit note", "credit_note"),
+        ("delivery challan", "delivery_challan"),
+        ("delivery note", "delivery_challan"),
+        ("purchase order", "purchase_order"),
+        ("quotation", "quotation"),
+        ("quote no", "quotation"),
+        ("statement of account", "statement"),
+        ("bill of supply", NON_TAX_INVOICE),
+        ("tax invoice", TAX_INVOICE),
+        ("receipt", "receipt"),
+        ("invoice", NON_TAX_INVOICE),
+    )
+
+    def _classify_by_keyword(self, content: str) -> DocumentContent:
+        """What can be told from the text when the model call fails.
+
+        It used to answer "invoice" for anything containing the word, which
+        made a quotation a payable. Reading the title instead is barely more
+        code and is right about the documents that matter.
+        """
+        lowered = content.lower()
+        document_type = next(
+            (kind for marker, kind in self._TITLE_MARKERS if marker in lowered),
+            "unreadable" if not lowered.strip() else "other",
+        )
+        if document_type == NON_TAX_INVOICE and "gstin" in lowered:
+            document_type = TAX_INVOICE
+        return DocumentContent(
+            has_invoice=document_type in (TAX_INVOICE, NON_TAX_INVOICE),
+            has_work_authorization="work authorization" in lowered
+            or "waf" in lowered,
+            invoice_count=1
+            if document_type in (TAX_INVOICE, NON_TAX_INVOICE)
+            else 0,
+            document_type=document_type,
+            reasoning="Keyword fallback",
+        )
 
 
 # ============================================================================
@@ -978,6 +1127,13 @@ class ExtractorAgent(BaseAgent):
                 "waf_count": classification.get("summary", {}).get(
                     "waf_count", 0
                 ),
+                # What the classifier decided this submission is. Checks 1.1
+                # and 1.3 read it: whether a document is payable at all, and
+                # whether it is a tax invoice, are different questions and a
+                # single "looks like an invoice" boolean answered neither.
+                "document_type": classification.get("summary", {}).get(
+                    "document_type", ""
+                ),
             },
             input_refs=["01_classification.json"],
         )
@@ -1008,6 +1164,26 @@ Return ONLY valid JSON with these fields:
   "bank_account_number": "string or null",
   "bank_code": "string or null (BSB, sort code or routing number)",
   "bank_iban": "string or null",
+  "document_type": "string or null (what the document calls itself, e.g. 'Tax Invoice', 'Bill of Supply')",
+  "customer_tax_id": "string or null (the tax registration of the party billed)",
+  "work_authorization_reference": "string or null (work authorization / work order / WA reference quoted on the invoice)",
+  "project": "string or null",
+  "service_period_start": "YYYY-MM-DD or null",
+  "service_period_end": "YYYY-MM-DD or null",
+  "place_of_supply": "string or null (as printed, e.g. '29-Karnataka')",
+  "subtotal": decimal or null (the stated sub total, before any discount),
+  "discount": decimal or null (an invoice-level discount, as a positive number),
+  "round_off": decimal or null (a rounding adjustment; negative if it reduces the total),
+  "cgst_amount": decimal or null,
+  "sgst_amount": decimal or null,
+  "igst_amount": decimal or null,
+  "other_charges": [
+    {
+      "description": "string or null (freight, insurance, packing)",
+      "amount": decimal or null,
+      "tax_rate": decimal or null (0.18 for 18%)
+    }
+  ],
   "tax_breakdown": [
     {
       "rate": decimal or null (0.10 for 10%),
@@ -1020,10 +1196,14 @@ Return ONLY valid JSON with these fields:
     {
       "description": "string",
       "quantity": decimal or null,
+      "unit": "string or null (hour, nos, box, kg)",
       "unit_price": decimal or null,
       "amount_ex_tax": decimal,
       "tax_code": "TAX/GST/NA",
-      "tax_amount": decimal or null
+      "tax_amount": decimal or null,
+      "hsn_sac": "string or null (HSN or SAC classification code)",
+      "tax_rate": decimal or null (0.18 for an 18% line),
+      "line_discount": decimal or null (discount on this line, positive)
     }
   ]
 }
@@ -1040,7 +1220,18 @@ against the vendor's records to detect payment-redirection fraud, so a value
 inferred rather than read defeats the control.
 
 tax_breakdown: one entry per distinct tax rate shown. Leave empty if the
-invoice states a single tax amount with no rate breakdown."""
+invoice states a single tax amount with no rate breakdown.
+
+Tax components: where the invoice splits its tax into separate components
+(CGST and SGST within a state, IGST across states, or an equivalent split
+elsewhere), report each. Leave them null where the invoice states one tax
+amount. tax_amount stays the total of the tax charged either way.
+
+Percentages as decimals: an 18% line is 0.18.
+
+Null means "the invoice does not state it". Do not compute a field from the
+others -- a subtotal you calculated hides the discrepancy a later check exists
+to find."""
 
         result, _ = call_gemini_with_pdf(
             pdf_path, prompt, _gcp_config.GEMINI_PRO_MODEL, InvoiceExtraction
@@ -1151,8 +1342,29 @@ class Phase1ValidatorAgent(BaseAgent):
         invoice = extraction.get("invoice", {})
         validations = []
 
-        # Step 1.1: Extraction Success
-        if extraction.get("extraction_failed"):
+        # Step 1.1: Extraction Success.
+        #
+        # "Could this be read?" and "is this a payable document?" were one
+        # question, answered by whether the extractor returned anything. A
+        # receipt, a quotation or a delivery note with an invoice-shaped header
+        # extracted perfectly and passed -- and then went on to be validated,
+        # and possibly paid, as an invoice.
+        document_type = str(extraction.get("document_type") or "").lower()
+        if document_type in NON_PAYABLE_TYPES:
+            validations.append(
+                {
+                    "step": "1.1",
+                    "rule": "Invoice extraction must succeed",
+                    "passed": False,
+                    "evidence": (
+                        f"Document is a {document_type.replace('_', ' ')}, "
+                        "not an invoice"
+                    ),
+                    "outcome": document_type,
+                    "rejection_template": "Document is not a valid Tax Invoice",
+                }
+            )
+        elif extraction.get("extraction_failed"):
             validations.append(
                 {
                     "step": "1.1",
@@ -1187,12 +1399,33 @@ class Phase1ValidatorAgent(BaseAgent):
             else True
         )
 
+        # A name can be typed; a tax registration is issued. Where the customer
+        # has told us theirs and the invoice states one, they must agree --
+        # otherwise an invoice addressed to a similarly-named company passes on
+        # the strength of a substring.
+        our_tax_ids = {
+            tax_ids.normalize(t)
+            for t in (_get_config().get("organization_tax_ids") or [])
+            if tax_ids.normalize(t)
+        }
+        stated_customer_id = tax_ids.normalize(invoice.get("customer_tax_id"))
+        evidence = f"Customer: {invoice.get('customer_name')}"
+        if our_tax_ids and stated_customer_id:
+            if stated_customer_id in our_tax_ids:
+                evidence += f", tax ID {invoice.get('customer_tax_id')} matches"
+            else:
+                customer_match = False
+                evidence += (
+                    f", tax ID {invoice.get('customer_tax_id')} is not one of "
+                    "this organisation's"
+                )
+
         validations.append(
             {
                 "step": "1.2",
                 "rule": "Invoice addressed to organization",
                 "passed": customer_match,
-                "evidence": f"Customer: {invoice.get('customer_name')}",
+                "evidence": evidence,
                 "rejection_template": None
                 if customer_match
                 else "Invoice addressed to different company",
@@ -1207,13 +1440,39 @@ class Phase1ValidatorAgent(BaseAgent):
             and invoice.get("vendor_name") != "UNKNOWN"
         )
         tax_compliant = has_tax_id and has_date and has_vendor
+        evidence = (
+            f"Tax ID: {has_tax_id}, Date: {has_date}, Vendor: {has_vendor}"
+        )
+
+        # A Bill of Supply is a real document from a real supplier with a real
+        # date -- and it is not a tax invoice, so no input tax can be claimed
+        # against it. The presence of three fields cannot tell the difference;
+        # the document's own kind and whether it states any tax can. Gated,
+        # because plenty of jurisdictions and plenty of suppliers legitimately
+        # invoice with no tax at all.
+        if _get_config().get("require_tax_breakup"):
+            has_tax = any(
+                invoice.get(key) is not None
+                for key in (
+                    "tax_amount",
+                    "cgst_amount",
+                    "sgst_amount",
+                    "igst_amount",
+                )
+            ) or bool(invoice.get("tax_breakdown"))
+            if document_type == NON_TAX_INVOICE:
+                tax_compliant = False
+                evidence += ", billed without a tax registration"
+            elif not has_tax:
+                tax_compliant = False
+                evidence += ", no tax stated"
 
         validations.append(
             {
                 "step": "1.3",
                 "rule": "Tax compliance (tax ID, date, vendor)",
                 "passed": tax_compliant,
-                "evidence": f"Tax ID: {has_tax_id}, Date: {has_date}, Vendor: {has_vendor}",
+                "evidence": evidence,
                 "rejection_template": None
                 if tax_compliant
                 else "Document is not a Tax Invoice",

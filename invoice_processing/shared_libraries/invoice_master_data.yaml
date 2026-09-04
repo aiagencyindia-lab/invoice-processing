@@ -472,6 +472,8 @@ config_defaults:
   hours_tolerance: 0.5
   validate_tax_id_checksum: true
   tax_id_format: "ABN"
+  organization_tax_ids: []
+  require_tax_breakup: false
 
 # ============================================================================
 # Section 9: Labour/Hours Detection

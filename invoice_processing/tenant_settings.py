@@ -42,6 +42,10 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     # Indian GSTIN was rejected for being the wrong length -- the right verdict
     # for the wrong reason, and the same verdict for the valid ones.
     "tax_id_format": str,
+    # The tax registrations this organisation is invoiced under. A name can be
+    # typed; a registration is issued, so where both are known both must agree.
+    "organization_tax_ids": list,
+    "require_tax_breakup": bool,
 }
 
 # Settings the validation engine knows nothing about, with their defaults.
@@ -96,6 +100,17 @@ DESCRIPTIONS: dict[str, str] = {
         "The tax registration your suppliers carry: ABN in Australia, GSTIN "
         "in India. It decides which checksum verifies a supplier's tax ID, so "
         "setting the wrong one rejects perfectly valid invoices."
+    ),
+    "organization_tax_ids": (
+        "Your own tax registrations. When an invoice states who it is billed "
+        "to by registration number, it must be one of these -- a name can be "
+        "typed, a registration is issued."
+    ),
+    "require_tax_breakup": (
+        "Require every invoice to be a tax invoice: a supplier registration "
+        "and tax stated. Turn it on where you can only claim input tax "
+        "against a proper tax invoice; leave it off where suppliers "
+        "legitimately bill without tax."
     ),
 }
 
@@ -154,6 +169,8 @@ def validate(payload: dict) -> dict:
                     "examine."
                 )
             cleaned[key] = sorted(wanted)
+        elif key == "organization_tax_ids":
+            cleaned[key] = [str(t).strip() for t in value if str(t).strip()]
         elif key == "organization_names":
             names = [str(n).strip() for n in value if str(n).strip()]
             if not names:

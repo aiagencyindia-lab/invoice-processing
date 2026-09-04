@@ -159,3 +159,52 @@ guard demanded before the suite would pass).
 fails four named tests including two that predate this change.
 
 **Regression status.** Green.
+
+---
+
+## 2026-09-04 — P3: what kind of document is this?
+
+**Problem.** The classifier answered one question — "does this look like an
+invoice?" — so a receipt, a quotation, a proforma, a credit note, a purchase
+order or a delivery challan with an invoice-shaped header extracted cleanly,
+passed check 1.1, and went on to be validated as a payable. That is 50 of the
+benchmark's 300 submissions. And check 1.3 could not tell a Bill of Supply from
+a tax invoice, because it tested only that three fields were present.
+
+**Root cause.** `DocumentContent` had `has_invoice: bool` and nothing else. The
+keyword fallback was worse: anything containing the word "invoice" was one.
+
+**Fix.**
+- `document_type` on the classifier's schema, with eleven named kinds and a
+  prompt that says the document's own title is the strongest evidence. It flows
+  into the classification artifact and the extraction artifact.
+- Check 1.1 fails a document that is not payable, naming the kind in its
+  evidence. Check 1.3 fails a non-tax invoice or one stating no tax at all,
+  gated by a new `require_tax_breakup` setting — suppliers in plenty of places
+  legitimately bill without tax.
+- Check 1.2 gains `organization_tax_ids`: where the customer has stated their
+  own registrations and the invoice states who it is billed to by number, they
+  must agree. A name can be typed; a registration is issued.
+- The keyword fallback reads the title, most specific first ("proforma invoice"
+  before "invoice"), and counts only payable kinds as invoices.
+- The extraction schema gains what the rest of the pack needs and nothing more:
+  `document_type`, `customer_tax_id`, `work_authorization_reference`, `project`,
+  service period, `place_of_supply`, `subtotal`, `discount`, `other_charges`,
+  `round_off`, `cgst/sgst/igst_amount`; per line `unit`, `hsn_sac`, `tax_rate`,
+  `line_discount`. Every one optional and defaulting to None, so an invoice
+  that does not print them reaches the checks exactly as before. The prompt
+  says null means "the invoice does not state it" — a computed subtotal would
+  hide the discrepancy a later check exists to find.
+
+**Files.** `shared_libraries/acting/general_invoice_agent.py`,
+`tenant_settings.py`, `shared_libraries/invoice_master_data.yaml`.
+
+**Tests.** `tests/test_document_taxonomy.py` (27): each non-payable kind fails
+1.1; a Bill of Supply fails 1.3 and not 1.1; an untyped document behaves as
+before; component tax counts as tax; a foreign registration fails 1.2; the
+fallback reads titles.
+
+**Result.** 1511 passed. Reverting either taxonomy branch fails 8 named tests.
+
+**Regression status.** Green. Nothing here fires on an invoice that does not
+carry the new fields, which is what keeps the existing pilot tenant unchanged.
