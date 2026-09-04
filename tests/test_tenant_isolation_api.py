@@ -277,6 +277,34 @@ class TestWritesDoNotCross:
         acme = clients("acme").get("/api/vendors").json()["vendors"]
         assert [v["name"] for v in acme] == ["Acme Supplier"]
 
+    def test_work_authorizations_do_not_cross_tenants(
+        self, clients, tmp_path, monkeypatch
+    ):
+        """An authorization says who may bill what. One tenant's leaking into
+        another's checks would authorise a supplier nobody approved."""
+        monkeypatch.setattr(
+            paths, "WORK_AUTHORIZATION_DIR", tmp_path / "work_authorizations"
+        )
+
+        clients("acme").put(
+            "/api/work-authorizations",
+            json={
+                "work_authorizations": [
+                    {
+                        "reference": "WA-1",
+                        "vendor_name": "Acme Supplier",
+                        "approved_hours": 40,
+                    }
+                ]
+            },
+        )
+        assert (
+            clients("globex")
+            .get("/api/work-authorizations")
+            .json()["work_authorizations"]
+            == []
+        )
+
     def test_admin_sees_only_its_own_tenant(
         self, clients, tmp_path, monkeypatch
     ):
@@ -782,6 +810,7 @@ class TestCoverage:
         "/api/settings",
         "/api/purchase-orders",
         "/api/vendors",
+        "/api/work-authorizations",
         "/api/admin/tenants",
         "/api/admin/users",
         "/api/admin/users/claims",

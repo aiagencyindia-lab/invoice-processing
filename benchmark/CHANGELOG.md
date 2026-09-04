@@ -208,3 +208,51 @@ fallback reads titles.
 
 **Regression status.** Green. Nothing here fires on an invoice that does not
 carry the new fields, which is what keeps the existing pilot tenant unchanged.
+
+---
+
+## 2026-09-04 — P4: work authorization by reference
+
+**Problem.** Check 1.4 asked whether a Work Authorization *form* was attached to
+the submission (`waf_count > 0`, counted by the classifier over the PDFs in the
+case folder). The worker materialises only `invoice.pdf`, so that count is
+always zero and the check could never pass — with the setting on, 9 of the 14
+invoices in the smoke run died there before phases 2–4 ran at all. And it is
+the wrong question: most customers do not attach the form, the invoice quotes a
+reference, and the authorisation lives in their records. All 48 of the
+benchmark's 1.4 failures are reference faults (missing, unknown, another
+supplier's, expired); none is a missing form.
+
+**Root cause.** `WorkAuthorizationExtraction.reference_number` was extracted and
+read by nothing, and there was no concept of an authorization master anywhere.
+
+**Fix.** `wa_matching.py`, the same shape as `po_matching`: the customer loads
+what they authorised (`GET`/`PUT /api/work-authorizations`), check 1.4 asks
+whether the quoted reference exists, belongs to this supplier and is active, and
+check 4.3 asks whether the invoice stays inside it — hours, rate, project and
+period, each reported separately, because billing 200 hours against 40 and
+billing 40 hours at twice the rate cost the same and are different
+conversations with the supplier. An attached form still satisfies 1.4, and with
+no master loaded both checks behave exactly as they did.
+
+**Bug found while doing it.** `_determine_work_type` matched `"pm"` as a bare
+substring, so "Develo**pm**ent" classified as PREVENTATIVE — which is on the
+exemption list, so a software invoice exempted itself from the authorization
+check by spelling. Now whole-word, and the two divergent copies of the function
+are one.
+
+**Also fixed.** Check 4.3 used to be the last thing phase 4 did; restructuring
+it revealed that an early return would have skipped 4.4 entirely. There is now a
+test that phase 4 always reports all four of its steps.
+
+**Files.** `wa_matching.py` (new), `api/config_routes.py`,
+`shared_libraries/acting/general_invoice_agent.py`, `paths.py`,
+`tests/test_tenant_isolation_api.py` (+probe, +PROBED entry).
+
+**Tests.** `tests/test_wa_matching.py` (22).
+
+**Result.** 1534 passed. Reverting the supplier comparison fails two named
+tests; reverting the whole-word fix fails
+`test_development_is_not_preventative_maintenance`.
+
+**Regression status.** Green.

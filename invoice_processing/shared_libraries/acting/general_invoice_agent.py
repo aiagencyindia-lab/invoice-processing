@@ -66,7 +66,14 @@ except ImportError:
 # ============================================================================
 
 try:
-    from ... import confidence, duplicates, po_matching, tax_ids, vendor_master
+    from ... import (
+        confidence,
+        duplicates,
+        po_matching,
+        tax_ids,
+        vendor_master,
+        wa_matching,
+    )
     from ...llm_guard import CallBudget, guarded_generate
     from ...paths import (
         AGENT_ROOT,
@@ -95,6 +102,7 @@ except ImportError:  # executed as a script: no parent package context
         po_matching,
         tax_ids,
         vendor_master,
+        wa_matching,
     )
     from invoice_processing.llm_guard import CallBudget, guarded_generate
     from invoice_processing.paths import (
@@ -163,6 +171,42 @@ def _generate(model, contents):
             deadline_seconds=VERTEX_TIMEOUT_SECONDS * 3,
         ),
     )
+
+
+# Work types, and the words that mean them. Matched as whole words: "pm" as a
+# bare substring made "Development" preventative maintenance, and a work type
+# on the exempt list is a work type that needs no authorization -- so a
+# software invoice exempted itself from the check by spelling.
+_WORK_TYPE_KEYWORDS = (
+    (
+        "PREVENTATIVE",
+        ("preventative", "preventive", "pm", "scheduled", "maintenance"),
+    ),
+    ("CLEANING", ("cleaning", "clean", "janitorial")),
+    (
+        "EMERGENCY",
+        ("emergency", "urgent", "after hours", "callout", "call-out"),
+    ),
+)
+
+
+def determine_work_type(invoice: dict) -> str:
+    """What kind of work this invoice bills for, from its line descriptions."""
+    words = set()
+    phrases = []
+    for line in invoice.get("line_items") or []:
+        text = (line.get("description") or "").lower()
+        phrases.append(text)
+        words.update(
+            "".join(ch if ch.isalnum() else " " for ch in text).split()
+        )
+    joined = " ".join(phrases)
+    for work_type, keywords in _WORK_TYPE_KEYWORDS:
+        for keyword in keywords:
+            hit = keyword in joined if " " in keyword else keyword in words
+            if hit:
+                return work_type
+    return "REPAIRS"
 
 
 @lru_cache(maxsize=32)
@@ -1479,22 +1523,57 @@ class Phase1ValidatorAgent(BaseAgent):
             }
         )
 
-        # Step 1.4: Work Authorization Check
+        # Step 1.4: Work Authorization Check.
+        #
+        # Two ways an authorisation can be established, because customers work
+        # both ways. Where the tenant has loaded what they authorised, the
+        # invoice's quoted reference is looked up against it -- which is what
+        # most invoices carry, and what the form-counting path could never see.
+        # Where they have not, the check is what it was: is a form attached?
         if _get_config().get("require_work_authorization"):
-            work_type = self._determine_work_type(invoice)
-            exempt_types = _get_config().get("waf_exempt_work_types", [])
-            waf_required = work_type not in exempt_types
+            authorizations = _load_work_authorizations()
+            match = wa_matching.match_invoice_to_wa(invoice, authorizations)
             has_waf = (extraction.get("waf_count") or 0) > 0
 
-            if waf_required:
+            if match.outcome == wa_matching.NOT_CONFIGURED:
+                work_type = self._determine_work_type(invoice)
+                exempt_types = [
+                    t.upper()
+                    for t in _get_config().get("waf_exempt_work_types", [])
+                ]
+                if work_type not in exempt_types:
+                    validations.append(
+                        {
+                            "step": "1.4",
+                            "rule": "Work authorization required",
+                            "passed": has_waf,
+                            "evidence": f"WAF required for {work_type}, WAF present: {has_waf}",
+                            "rejection_template": None
+                            if has_waf
+                            else "Missing Work Authorization Form",
+                        }
+                    )
+            else:
+                # An attached form still satisfies the check: a tenant who
+                # sends the paperwork should not be told it is missing because
+                # they have also started loading a master.
+                passed = match.ok or has_waf
                 validations.append(
                     {
                         "step": "1.4",
-                        "rule": "Work authorization required",
-                        "passed": has_waf,
-                        "evidence": f"WAF required for {work_type}, WAF present: {has_waf}",
+                        "rule": "Work authorization valid for this supplier",
+                        "passed": passed,
+                        "evidence": (
+                            match.evidence
+                            + (
+                                " (work authorization form attached)"
+                                if has_waf and not match.ok
+                                else ""
+                            )
+                        ),
+                        "outcome": match.outcome,
                         "rejection_template": None
-                        if has_waf
+                        if passed
                         else "Missing Work Authorization Form",
                     }
                 )
@@ -1538,27 +1617,7 @@ class Phase1ValidatorAgent(BaseAgent):
 
     def _determine_work_type(self, invoice: dict) -> str:
         """Determine work type from invoice content"""
-        descriptions = " ".join(
-            [
-                (line.get("description") or "").lower()
-                for line in (invoice.get("line_items") or [])
-            ]
-        )
-
-        if any(
-            kw in descriptions
-            for kw in ["preventative", "pm", "scheduled", "maintenance"]
-        ):
-            return "PREVENTATIVE"
-        if any(
-            kw in descriptions for kw in ["cleaning", "clean", "janitorial"]
-        ):
-            return "CLEANING"
-        if any(
-            kw in descriptions for kw in ["emergency", "urgent", "after hours"]
-        ):
-            return "EMERGENCY"
-        return "REPAIRS"
+        return determine_work_type(invoice)
 
 
 # ============================================================================
@@ -1703,6 +1762,26 @@ def _load_purchase_orders() -> "_PurchaseOrderFile":
 def _load_vendors() -> "vendor_master.VendorMaster":
     """This tenant's supplier list, injected through config by the worker."""
     return vendor_master.VendorMaster(_get_config().get("vendor_master_file"))
+
+
+def _load_work_authorizations() -> "wa_matching.WorkAuthorizations":
+    """What this tenant has authorised, injected through config by the worker."""
+    return wa_matching.WorkAuthorizations(
+        _get_config().get("work_authorization_file")
+    )
+
+
+def _labour_keywords() -> tuple[str, ...]:
+    """Words that mean an hour of somebody's time, from master data."""
+    try:
+        from ..master_data_loader import load_master_data  # noqa: PLC0415
+
+        keywords = (
+            load_master_data().data.get("labour_detection", {}).get("keywords")
+        )
+    except Exception:  # pragma: no cover - master data is optional
+        keywords = None
+    return tuple(keywords or ("labour", "labor", "technician", "hours"))
 
 
 def _load_seen_invoices(exclude_case_id: str = "") -> list:
@@ -1915,57 +1994,48 @@ class Phase4ValidatorAgent(BaseAgent):
             }
         )
 
-        # Step 4.3: WAF Hours Check (conditional)
+        # Step 4.3: is the invoice inside what was authorised?
         #
-        # Gated on `require_work_authorization`, as declared by this step's
-        # `enabled_when_config` in invoice_master_data.yaml and by rules book
-        # Step 4.3. The gate was previously declared in both specs but not
-        # honoured in code, so an organization that does not require work
-        # authorization still had invoices rejected for lacking it.
+        # Gated on `require_work_authorization`, as this step's
+        # `enabled_when_config` in invoice_master_data.yaml declares -- the
+        # gate was previously specified and not honoured, so an organization
+        # that does not require work authorization still had invoices rejected
+        # for lacking one.
+        #
+        # Where the tenant has loaded what they authorised, "inside it" means
+        # all four of hours, rate, project and period. Billing 200 hours
+        # against 40, and billing 40 hours at twice the agreed rate, cost the
+        # same and are different conversations with the supplier, so the
+        # evidence names which one happened.
         if _get_config().get("require_work_authorization"):
-            work_type = self._determine_work_type(invoice)
-            exempt_types = [
-                t.upper()
-                for t in _get_config().get("waf_exempt_work_types", [])
-            ]
-            waf_required = work_type not in exempt_types
-
-            invoice_hours = self._calculate_labour_hours(invoice)
-            waf_hours = waf.get("authorized_hours", 0) if waf else 0
-            hours_tolerance = _get_config().get("hours_tolerance", 0.5)
-
-            if waf and waf_hours and waf_hours > 0:
-                # WAF present with authorized hours — check limits
-                hours_valid = invoice_hours <= waf_hours + hours_tolerance
+            match = wa_matching.match_invoice_to_wa(
+                invoice, _load_work_authorizations()
+            )
+            if match.outcome == wa_matching.MATCHED:
+                result = wa_matching.hours_check(
+                    invoice,
+                    match.authorization,
+                    hours_tolerance=_get_config().get("hours_tolerance", 0.5),
+                    labour_keywords=_labour_keywords(),
+                )
                 validations.append(
                     {
                         "step": "4.3",
-                        "rule": "Labour hours within authorization",
-                        "passed": hours_valid,
-                        "evidence": f"Invoice: {invoice_hours}h, Authorized: {waf_hours}h, Work type: {work_type}",
+                        "rule": "Invoice within its work authorization",
+                        "passed": result.ok,
+                        "evidence": result.evidence,
+                        "outcome": result.outcome,
+                        "details": result.details,
                         "rejection_template": None
-                        if hours_valid
+                        if result.ok
                         else "Invoice does not match work authorization",
                     }
                 )
-            elif (
-                waf_required
-                and invoice_hours > 0
-                and (not waf or not waf_hours)
-            ):
-                # Non-exempt work type has labour hours but no WAF authorization
-                validations.append(
-                    {
-                        "step": "4.3",
-                        "rule": "Labour hours within authorization",
-                        "passed": False,
-                        "evidence": (
-                            f"Invoice: {invoice_hours}h, Work type: {work_type} (non-exempt), "
-                            f"WAF authorized hours: {waf_hours} — no authorization for billed labour"
-                        ),
-                        "rejection_template": "Invoice does not match work authorization",
-                    }
-                )
+            elif match.outcome == wa_matching.NOT_CONFIGURED:
+                self._legacy_hours_check(invoice, waf, validations)
+            # Any other outcome means step 1.4 has already rejected this
+            # invoice for the missing or wrong authorisation, and repeating
+            # itself in the findings helps nobody.
 
         # Step 4.4: Tax Rate Verification
         currency = str(invoice.get("currency") or "").upper()
@@ -1992,8 +2062,11 @@ class Phase4ValidatorAgent(BaseAgent):
             }
         )
 
-        # Determine decision. Informational steps record evidence but never
-        # reject -- see Step 4.1.
+        return self._finish_phase4(output_folder, validations)
+
+    def _finish_phase4(self, output_folder: Path, validations: list) -> dict:
+        """Settle the phase and write it. Informational steps record evidence
+        but never reject -- see Step 4.1."""
         failed = _settle(validations)
         decision = "REJECT" if failed else "ACCEPT"
 
@@ -2013,29 +2086,54 @@ class Phase4ValidatorAgent(BaseAgent):
         print(f"   Phase 4: {decision}")
         return output
 
+    def _legacy_hours_check(self, invoice: dict, waf: dict, validations: list):
+        """The form-based path, for a tenant with no authorization master.
+
+        Unchanged behaviour: hours read off an attached Work Authorization
+        Form, with the work-type exemption deciding whether one was needed.
+        """
+        work_type = self._determine_work_type(invoice)
+        exempt_types = [
+            t.upper() for t in _get_config().get("waf_exempt_work_types", [])
+        ]
+        waf_required = work_type not in exempt_types
+
+        invoice_hours = self._calculate_labour_hours(invoice)
+        waf_hours = waf.get("authorized_hours", 0) if waf else 0
+        hours_tolerance = _get_config().get("hours_tolerance", 0.5)
+
+        if waf and waf_hours and waf_hours > 0:
+            # WAF present with authorized hours — check limits
+            hours_valid = invoice_hours <= waf_hours + hours_tolerance
+            validations.append(
+                {
+                    "step": "4.3",
+                    "rule": "Labour hours within authorization",
+                    "passed": hours_valid,
+                    "evidence": f"Invoice: {invoice_hours}h, Authorized: {waf_hours}h, Work type: {work_type}",
+                    "rejection_template": None
+                    if hours_valid
+                    else "Invoice does not match work authorization",
+                }
+            )
+        elif waf_required and invoice_hours > 0 and (not waf or not waf_hours):
+            # Non-exempt work type has labour hours but no WAF authorization
+            validations.append(
+                {
+                    "step": "4.3",
+                    "rule": "Labour hours within authorization",
+                    "passed": False,
+                    "evidence": (
+                        f"Invoice: {invoice_hours}h, Work type: {work_type} (non-exempt), "
+                        f"WAF authorized hours: {waf_hours} — no authorization for billed labour"
+                    ),
+                    "rejection_template": "Invoice does not match work authorization",
+                }
+            )
+
     def _determine_work_type(self, invoice: dict) -> str:
         """Determine work type from invoice line item descriptions."""
-        descriptions = " ".join(
-            [
-                (line.get("description") or "").lower()
-                for line in (invoice.get("line_items") or [])
-            ]
-        )
-
-        if any(
-            kw in descriptions
-            for kw in ["preventative", "pm", "scheduled", "maintenance"]
-        ):
-            return "PREVENTATIVE"
-        if any(
-            kw in descriptions for kw in ["cleaning", "clean", "janitorial"]
-        ):
-            return "CLEANING"
-        if any(
-            kw in descriptions for kw in ["emergency", "urgent", "after hours"]
-        ):
-            return "EMERGENCY"
-        return "REPAIRS"
+        return determine_work_type(invoice)
 
     def _calculate_labour_hours(self, invoice: dict) -> float:
         """Calculate total labour hours from invoice"""
