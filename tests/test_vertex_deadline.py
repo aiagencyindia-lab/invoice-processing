@@ -24,6 +24,9 @@ from invoice_processing.llm_guard import (
     guarded_generate,
 )
 from invoice_processing.shared_libraries.acting import general_invoice_agent
+from invoice_processing.shared_libraries.investigation import (
+    investigate_agent_reconst as critic,
+)
 
 GIA_SOURCE = Path(general_invoice_agent.__file__)
 
@@ -44,7 +47,9 @@ class TestTheGuardStopsAHang:
         started = time.monotonic()
         with pytest.raises(LlmCallTimeout):
             guarded_generate(
-                model, "prompt", CallBudget(timeout_seconds=0.3, deadline_seconds=2)
+                model,
+                "prompt",
+                CallBudget(timeout_seconds=0.3, deadline_seconds=2),
             )
         assert time.monotonic() - started < 5
 
@@ -55,13 +60,18 @@ class TestTheGuardStopsAHang:
             return "second time lucky"
 
         model = FakeModel(flaky)
-        assert guarded_generate(model, "prompt", CallBudget()) == "second time lucky"
+        assert (
+            guarded_generate(model, "prompt", CallBudget())
+            == "second time lucky"
+        )
         assert model.calls == 2
 
     def test_a_real_error_is_surfaced_immediately(self):
         """A malformed request is not a flaky network. Retrying it three times
         spends three times as much to fail the same way."""
-        model = FakeModel(lambda _n: (_ for _ in ()).throw(ValueError("bad schema")))
+        model = FakeModel(
+            lambda _n: (_ for _ in ()).throw(ValueError("bad schema"))
+        )
         with pytest.raises(ValueError):
             guarded_generate(model, "prompt", CallBudget())
         assert model.calls == 1
@@ -102,9 +112,5 @@ class TestThePipelineUsesIt:
     def test_the_critic_shares_the_same_guard(self):
         """Moved, not copied: a second implementation would drift from this one
         exactly as the first two did."""
-        from invoice_processing.shared_libraries.investigation import (
-            investigate_agent_reconst as critic,
-        )
-
         assert critic.guarded_generate is guarded_generate
         assert critic.CallBudget is CallBudget

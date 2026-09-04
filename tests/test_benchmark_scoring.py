@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from benchmark.harness import dataset, score
+from invoice_processing import po_matching
 
 
 def record(invoice_id: str, **overrides) -> dict:
@@ -58,7 +59,9 @@ def first_failing(check_id: str) -> str:
 
 def row_for(rows: list[dict], invoice_id: str, check_id: str) -> dict:
     return next(
-        r for r in rows if r["invoice_id"] == invoice_id and r["check_id"] == check_id
+        r
+        for r in rows
+        if r["invoice_id"] == invoice_id and r["check_id"] == check_id
     )
 
 
@@ -98,14 +101,21 @@ class TestAbsentIsNotAPass:
             }
         )
         assert row_for(rows, invoice_id, "4.4")["passed"] is None
-        assert score.check_metrics(rows, "cascade", balanced=False)["4.4"]["n"] == 0
+        assert (
+            score.check_metrics(rows, "cascade", balanced=False)["4.4"]["n"]
+            == 0
+        )
 
 
 class TestSkippedAndInformational:
     def test_a_disabled_check_is_skipped_not_passed(self):
         invoice_id = first_failing("3.3")
         rows = score.build_rows(
-            {invoice_id: record(invoice_id, findings=[finding("3.3", None, skipped=True)])}
+            {
+                invoice_id: record(
+                    invoice_id, findings=[finding("3.3", None, skipped=True)]
+                )
+            }
         )
         assert row_for(rows, invoice_id, "3.3")["actual_result"] == "SKIPPED"
 
@@ -142,7 +152,9 @@ class TestNotApplicable:
             {
                 invoice_id: record(
                     invoice_id,
-                    findings=[finding("1.4", False, rejection_template="Missing")],
+                    findings=[
+                        finding("1.4", False, rejection_template="Missing")
+                    ],
                 )
             }
         )
@@ -158,7 +170,9 @@ class TestIngestLevelDuplicates:
         ingestion refuses them first. That is real detection at a different
         seam, and it is recorded as such rather than as a missed duplicate."""
         invoice_id = next(
-            i for i, row in dataset.master().items() if row["is_duplicate"] == "True"
+            i
+            for i, row in dataset.master().items()
+            if row["is_duplicate"] == "True"
         )
         rows = score.build_rows(
             {
@@ -181,8 +195,6 @@ class TestReasonMapping:
         """The matcher tells a vendor exactly which part of the PO was wrong.
         The dataset has one string for all of them, so the mapping is read from
         the product rather than retyped here."""
-        from invoice_processing import po_matching
-
         mapping = score.app_reason_map()
         for template in po_matching._REJECTION_TEMPLATES.values():
             assert mapping[template] == "Invalid purchase order"

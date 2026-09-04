@@ -60,6 +60,40 @@ ITEM_CODE_CACHE_PATH = DATA_DIR / "item_code_cache.json"
 PURCHASE_ORDER_FILE = DATA_DIR / "purchase_orders.json"
 PURCHASE_ORDER_DIR = DATA_DIR / "purchase_orders"
 
+# Reference data a tenant loads so the checks have something to check against.
+# Same shape as purchase orders and same reason for being per-tenant: these
+# name a customer's suppliers, their tax registrations and what work they have
+# authorised, and one shared file would disclose all three between tenants.
+VENDOR_MASTER_DIR = DATA_DIR / "vendors"
+WORK_AUTHORIZATION_DIR = DATA_DIR / "work_authorizations"
+
+
+def tenant_file(directory: Path, tenant_id: str) -> Path:
+    """`<directory>/<tenant>.json`, with the tenant id made filename-safe.
+
+    A tenant id reaches this from a signed token, but it still ends up in a
+    path, and a path built from an identifier without sanitising it is how a
+    directory traversal starts.
+    """
+    safe = "".join(
+        c if c.isalnum() or c in "-_" else "_" for c in str(tenant_id or "")
+    )
+    return directory / f"{safe or 'default'}.json"
+
+
+def vendor_master_file(tenant_id: str) -> Path:
+    """This tenant's vendors: names and tax registrations.
+
+    Step 3.2 needs it to answer the half of the question a checksum cannot:
+    this identifier is well-formed, but is it *this supplier's*?
+    """
+    return tenant_file(VENDOR_MASTER_DIR, tenant_id)
+
+
+def work_authorization_file(tenant_id: str) -> Path:
+    """This tenant's work authorizations: who may bill what, at what rate."""
+    return tenant_file(WORK_AUTHORIZATION_DIR, tenant_id)
+
 
 def purchase_order_file(tenant_id: str):
     """The purchase-order source for one tenant.
@@ -71,10 +105,7 @@ def purchase_order_file(tenant_id: str):
     Falls back to the legacy shared file when a tenant has none of its own, so
     an existing local setup keeps matching without being migrated.
     """
-    safe = "".join(
-        c if c.isalnum() or c in "-_" else "_" for c in str(tenant_id or "")
-    )
-    scoped = PURCHASE_ORDER_DIR / f"{safe or 'default'}.json"
+    scoped = tenant_file(PURCHASE_ORDER_DIR, tenant_id)
     if scoped.exists() or not PURCHASE_ORDER_FILE.exists():
         return scoped
     return PURCHASE_ORDER_FILE

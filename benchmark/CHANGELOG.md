@@ -104,3 +104,58 @@ printed formats parse; nonsense is still `None`.
 `test_it_comes_from_the_environment`.
 
 **Regression status.** Green.
+
+---
+
+## 2026-09-04 — P2: the tax-ID format is a customer's, and a checksum is half the check
+
+**Problem.** Two things, found together. Every tenant validated supplier tax IDs
+as Australian ABNs, because `tax_id_format` lives in master data and is the same
+for everyone — so all 300 Indian GSTINs in the corpus were rejected for being
+15 characters long, which is the right verdict for the 49 planted faults and
+the wrong one for the other 251. And a checksum cannot answer the question that
+catches fraud: an invoice quoting *another supplier's* registration is
+arithmetically perfect. 18 of the 49 tax-ID faults are exactly that.
+
+**Root cause.** A per-product setting where a per-customer one belonged, and a
+control that stopped at arithmetic.
+
+**Fix.**
+- `tax_id_format` joins the settings allow-list, validated against the
+  registered validators — an unknown format is refused rather than silently
+  leaving tax IDs unchecked.
+- `vendor_master.py`: an optional per-tenant supplier list (`GET`/`PUT
+  /api/vendors`, admin to write). Step 3.2 now reports the checksum *and*
+  whether the identifier is the one that supplier is registered under. With no
+  master loaded the check is byte-for-byte what it was, because a tenant who
+  has not listed their suppliers must not have every invoice rejected as coming
+  from an unknown one.
+- The GSTIN validator's `UNVERIFIED — DO NOT ENABLE` warning is removed: it now
+  has a 49-identifier corpus (`tests/fixtures/gstin_corpus.json`) and accepts
+  all 33 well-formed GSTINs while rejecting all 16 corrupted ones.
+- `master_files.py`: one reader for tenant reference data, because the
+  purchase-order loader had already been written twice and the copies disagreed.
+
+**Bug found while doing it.** `po_matching.normalize_vendor` stripped legal
+suffixes as bare substrings anywhere in the name: "Coca Cola Company" became
+"CA LA MPANY" and "Consulting" became "NSULTING". Invisible while both sides
+were mangled identically — and not invisible at all once a vendor master is
+indexed by that key, where two different suppliers collapsing to one string
+means one supplier's invoice is checked against another's tax ID. Now
+whole-word and suffix-only, with "Pvt"/"Private" kept as one token so an Indian
+private limited is not confused with its LLP namesake.
+
+**Files.** `tenant_settings.py`, `paths.py`, `master_files.py` (new),
+`vendor_master.py` (new), `po_matching.py`, `api/config_routes.py`,
+`shared_libraries/acting/general_invoice_agent.py`, `tax_ids.py`.
+
+**Tests.** `tests/test_vendor_master.py` (12), `test_tax_id_registry.py`
+(+3 corpus tests), `test_po_matching.py` (+4 normalisation tests),
+`test_tenant_isolation_api.py` (+1 cross-tenant probe, which the route-coverage
+guard demanded before the suite would pass).
+
+**Result.** 1484 passed. Reverting the tax-ID comparison fails
+`test_another_suppliers_tax_id_is_caught`; reverting the normalisation fix
+fails four named tests including two that predate this change.
+
+**Regression status.** Green.

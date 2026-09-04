@@ -66,7 +66,7 @@ except ImportError:
 # ============================================================================
 
 try:
-    from ... import confidence, duplicates, po_matching, tax_ids
+    from ... import confidence, duplicates, po_matching, tax_ids, vendor_master
     from ...llm_guard import CallBudget, guarded_generate
     from ...paths import (
         AGENT_ROOT,
@@ -89,7 +89,13 @@ except ImportError:  # executed as a script: no parent package context
         if (p / "invoice_processing").is_dir()
     )
     _sys.path.insert(0, str(_repo_root))
-    from invoice_processing import confidence, duplicates, po_matching, tax_ids
+    from invoice_processing import (
+        confidence,
+        duplicates,
+        po_matching,
+        tax_ids,
+        vendor_master,
+    )
     from invoice_processing.llm_guard import CallBudget, guarded_generate
     from invoice_processing.paths import (
         AGENT_ROOT,
@@ -1435,6 +1441,11 @@ def _load_purchase_orders() -> "_PurchaseOrderFile":
     return _PurchaseOrderFile()
 
 
+def _load_vendors() -> "vendor_master.VendorMaster":
+    """This tenant's supplier list, injected through config by the worker."""
+    return vendor_master.VendorMaster(_get_config().get("vendor_master_file"))
+
+
 def _load_seen_invoices(exclude_case_id: str = "") -> list:
     """Previously processed invoices, read from the case output directory.
 
@@ -1501,17 +1512,34 @@ class Phase3ValidatorAgent(BaseAgent):
                 print(f"   Duplicate check: {entry['evidence']}")
             validations.append(entry)
 
-        # Step 3.2: Tax ID Validation
+        # Step 3.2: Tax ID Validation.
+        #
+        # Two questions, and the checksum only answers the first. "Is this
+        # identifier well-formed?" is arithmetic; "is it *this supplier's*?"
+        # needs a vendor master, and it is the question that catches an invoice
+        # carrying somebody else's registration -- structurally perfect, and
+        # not theirs. Where no master is loaded the check is the checksum
+        # alone, exactly as before: a tenant who has not listed their suppliers
+        # must not have every invoice rejected as coming from an unknown one.
         tax_validation = invoice.get("_tax_id_validation", {})
-        if tax_validation:
+        match = vendor_master.check_vendor_tax_id(invoice, _load_vendors())
+        if tax_validation or not match.matched:
+            checksum_ok = (
+                tax_validation.get("valid", True) if tax_validation else True
+            )
+            passed = checksum_ok and match.matched
+            evidence = tax_validation.get("reason", "Checksum not run")
+            if match.outcome != vendor_master.NOT_CONFIGURED:
+                evidence = f"{evidence}. {match.evidence}"
             validations.append(
                 {
                     "step": "3.2",
-                    "rule": "Valid tax ID checksum",
-                    "passed": tax_validation.get("valid", True),
-                    "evidence": tax_validation.get("reason", "Not validated"),
+                    "rule": "Tax ID valid and registered to this supplier",
+                    "passed": passed,
+                    "evidence": evidence,
+                    "outcome": match.outcome,
                     "rejection_template": None
-                    if tax_validation.get("valid")
+                    if passed
                     else "Vendor tax ID invalid",
                 }
             )

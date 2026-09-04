@@ -392,3 +392,37 @@ class TestPipelineWiring:
 
     def test_the_matcher_satisfies_the_source_protocol(self):
         assert isinstance(Orders(po()), po_matching.PurchaseOrders)
+
+
+class TestVendorNormalisationIsWordwise:
+    """Legal suffixes used to be stripped as bare substrings anywhere in the
+    name, which is invisible while both sides are mangled the same way and
+    dangerous the moment a vendor master is indexed by the result."""
+
+    def test_a_suffix_inside_a_word_survives(self):
+        assert po_matching.normalize_vendor("Coca Cola Company") == "COCA COLA"
+        assert (
+            po_matching.normalize_vendor("Quantar DevOps Consulting Pvt Ltd")
+            == "QUANTAR DEVOPS CONSULTING PVT"
+        )
+
+    def test_two_different_suppliers_do_not_collapse_together(self):
+        """The failure that matters: one supplier's invoice checked against
+        another's purchase order or tax ID."""
+        assert po_matching.normalize_vendor(
+            "Corp Solutions"
+        ) != po_matching.normalize_vendor("Solutions")
+
+    def test_the_same_company_written_two_ways_still_matches(self):
+        assert po_matching.normalize_vendor(
+            "Cloudhaven Infra Services Pvt Ltd"
+        ) == po_matching.normalize_vendor(
+            "Cloudhaven Infra Services Private Limited"
+        )
+
+    def test_a_private_limited_is_not_its_llp_namesake(self):
+        """Different legal entities, and after suffix-stripping the legal form
+        is the only thing left telling them apart."""
+        assert po_matching.normalize_vendor(
+            "Lumora Brandcraft Pvt Ltd"
+        ) != po_matching.normalize_vendor("Lumora Brandcraft LLP")

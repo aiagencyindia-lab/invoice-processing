@@ -133,28 +133,55 @@ def normalize_po_number(value: Any) -> str:
     return "".join(ch for ch in str(value).upper() if ch.isalnum())
 
 
+# Legal forms, as whole words. Each maps to what it collapses to, so that
+# "Pvt Ltd" and "Private Limited" -- the same company written two ways on the
+# purchase order and the invoice -- reach the same key.
+_LEGAL_FORMS = {
+    "PTY": "",
+    "PROPRIETARY": "",
+    "LIMITED": "",
+    "LTD": "",
+    "PRIVATE": "PVT",
+    "PVT": "PVT",
+    "INCORPORATED": "",
+    "INC": "",
+    "LLC": "",
+    "LLP": "LLP",
+    "PLC": "",
+    "GMBH": "",
+    "CORPORATION": "",
+    "CORP": "",
+    "COMPANY": "",
+    "CO": "",
+}
+
+
 def normalize_vendor(value: Any) -> str:
-    """Drop the legal suffixes that differ between the PO and the invoice."""
+    """Drop the legal suffixes that differ between the PO and the invoice.
+
+    Whole words, and only where they trail the name. This used to be a
+    substring replacement over the whole string, which turned "Coca Cola
+    Company" into "CA LA MPANY" and "Consulting" into "NSULTING" -- harmless
+    while both sides were mangled identically, and not harmless at all once a
+    vendor master is indexed by this key, where two different suppliers
+    collapsing to the same string means one supplier's invoice is checked
+    against another's tax ID.
+
+    "Pvt" and "Private" survive as one token rather than being dropped: an
+    Indian private limited company and its LLP namesake are different legal
+    entities, and this is the only thing distinguishing them.
+    """
     if value is None:
         return ""
-    text = str(value).upper()
-    for suffix in (
-        "PTY LTD",
-        "PTY. LTD.",
-        "PROPRIETARY LIMITED",
-        "LIMITED",
-        "LTD",
-        "INCORPORATED",
-        "INC",
-        "LLC",
-        "PLC",
-        "GMBH",
-        "CORPORATION",
-        "CORP",
-        "CO",
-    ):
-        text = text.replace(suffix, " ")
-    return " ".join("".join(ch if ch.isalnum() else " " for ch in text).split())
+    words = "".join(
+        ch if ch.isalnum() else " " for ch in str(value).upper()
+    ).split()
+    while words and words[-1] in _LEGAL_FORMS:
+        replacement = _LEGAL_FORMS[words.pop()]
+        if replacement:
+            words.append(replacement)
+            break
+    return " ".join(words)
 
 
 def _as_float(value: Any) -> float | None:

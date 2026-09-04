@@ -36,6 +36,12 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     "po_tolerance_abs": (int, float),
     "high_value_threshold": (int, float),
     "rules_binding": bool,
+    # The tax identifier suppliers in this country carry. Settable because it
+    # is a property of where the customer buys, not of the product: a single
+    # master-data value meant every tenant validated Australian ABNs, so an
+    # Indian GSTIN was rejected for being the wrong length -- the right verdict
+    # for the wrong reason, and the same verdict for the valid ones.
+    "tax_id_format": str,
 }
 
 # Settings the validation engine knows nothing about, with their defaults.
@@ -85,6 +91,11 @@ DESCRIPTIONS: dict[str, str] = {
         "still evaluated and what it would have changed is recorded against "
         "the invoice -- so you can read a month of real cases before a rule "
         "is allowed to alter one."
+    ),
+    "tax_id_format": (
+        "The tax registration your suppliers carry: ABN in Australia, GSTIN "
+        "in India. It decides which checksum verifies a supplier's tax ID, so "
+        "setting the wrong one rejects perfectly valid invoices."
     ),
 }
 
@@ -151,6 +162,18 @@ def validate(payload: dict) -> dict:
                     "invoice will be rejected as addressed to someone else."
                 )
             cleaned[key] = names
+        elif key == "tax_id_format":
+            from .tax_ids import supported_formats  # noqa: PLC0415
+
+            wanted = str(value).strip().upper()
+            if wanted not in supported_formats():
+                raise SettingsError(
+                    f"No validator for tax ID format {value!r}. "
+                    f"Available: {', '.join(supported_formats())}. "
+                    "Choosing an unknown format would leave supplier tax IDs "
+                    "unchecked without saying so."
+                )
+            cleaned[key] = wanted
         elif key in (
             "po_tolerance_pct",
             "po_tolerance_abs",
@@ -285,5 +308,12 @@ def apply_to_pipeline(tenant_id: str, store=None) -> dict:
     # Purchase orders are per-tenant: one shared file would let a customer see
     # and overwrite another's supplier commitments.
     config["purchase_order_file"] = str(paths.purchase_order_file(tenant_id))
+    # Reference data the checks compare against, scoped the same way and for
+    # the same reason: these name a customer's suppliers and the work they
+    # have authorised.
+    config["vendor_master_file"] = str(paths.vendor_master_file(tenant_id))
+    config["work_authorization_file"] = str(
+        paths.work_authorization_file(tenant_id)
+    )
     agent._config_store["CONFIG"] = config
     return config

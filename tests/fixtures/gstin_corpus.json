@@ -1,0 +1,250 @@
+{
+ "_provenance": "Synthetic GSTINs from benchmark/dataset (30 vendors, 3 customers) and the corrupted values its fault manifest planted. Structurally valid, invented, and belonging to no real taxpayer.",
+ "identifiers": [
+  {
+   "gstin": "29ZOICE4828P1ZD",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "27UHVFN1303Z1Z9",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "36WZTCY9070Y1ZI",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "33HRAPY4075N1Z2",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "27SXHCL2209T1Z5",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "29PECCX8526R1ZO",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "06DQHCL2214B1Z6",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "29SZYCW2550W1ZV",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "09BBUCO9128L1ZD",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "29ZVYFE9157E1ZS",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "24ITCCR9797D1ZQ",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "24YVBCK3734K1ZQ",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "03NSQPM1376V1ZF",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "33MIICN8423Z1ZL",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "08NIVCC8635A1ZK",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "24ZMEPQ9014W1ZI",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "21KYVCR7607Q1ZX",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "24CVSCV1210F1ZC",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "24DBOCA6353A1ZT",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "24OXMPF9713X1Z2",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "27XEIFZ6541Q1ZD",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "27ZCOCI3643U1ZR",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "27AUEPN9867J1ZT",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "07JSMCJ8126A1ZE",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "27GSECO7967Z1ZO",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "29KVCCR4786B1ZR",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "27RXOPC4192W1ZX",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "27DFGFU7780H1ZA",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "06VIPCC7334T1ZP",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "27GITPV5766M1ZS",
+   "valid": true,
+   "source": "vendor"
+  },
+  {
+   "gstin": "29AAFCZ4821L1ZS",
+   "valid": true,
+   "source": "customer"
+  },
+  {
+   "gstin": "24AAECF9034M1ZE",
+   "valid": true,
+   "source": "customer"
+  },
+  {
+   "gstin": "27AAMFL2760R1ZJ",
+   "valid": true,
+   "source": "customer"
+  },
+  {
+   "gstin": "29ZOICE4B28P1ZD",
+   "valid": false,
+   "source": "taxid_altered_digit"
+  },
+  {
+   "gstin": "27UHVFN1303Z1ZG",
+   "valid": false,
+   "source": "taxid_bad_checksum"
+  },
+  {
+   "gstin": "29ZVYFE9157E1ZZ",
+   "valid": false,
+   "source": "taxid_bad_checksum"
+  },
+  {
+   "gstin": "29PECCX8529R1ZO",
+   "valid": false,
+   "source": "taxid_altered_digit"
+  },
+  {
+   "gstin": "33HRAPY4075N1Z9",
+   "valid": false,
+   "source": "taxid_bad_checksum"
+  },
+  {
+   "gstin": "241VBCK3734K1ZQ",
+   "valid": false,
+   "source": "taxid_altered_digit"
+  },
+  {
+   "gstin": "24ITCCR9797D1ZX",
+   "valid": false,
+   "source": "taxid_bad_checksum"
+  },
+  {
+   "gstin": "03NSQPM1676V1ZF",
+   "valid": false,
+   "source": "taxid_altered_digit"
+  },
+  {
+   "gstin": "24DBOCA6353A1Z0",
+   "valid": false,
+   "source": "taxid_bad_checksum"
+  },
+  {
+   "gstin": "24ZMEPQ9014Z1ZI",
+   "valid": false,
+   "source": "taxid_altered_digit"
+  },
+  {
+   "gstin": "03NSQPM13A6V1ZF",
+   "valid": false,
+   "source": "taxid_altered_digit"
+  },
+  {
+   "gstin": "24YVBFK3734K1ZQ",
+   "valid": false,
+   "source": "taxid_altered_digit"
+  },
+  {
+   "gstin": "27RXOPC4192W1Z4",
+   "valid": false,
+   "source": "taxid_bad_checksum"
+  },
+  {
+   "gstin": "27DFGFX7780H1ZA",
+   "valid": false,
+   "source": "taxid_altered_digit"
+  },
+  {
+   "gstin": "27AUEPNC867J1ZT",
+   "valid": false,
+   "source": "taxid_altered_digit"
+  },
+  {
+   "gstin": "29KVCCR4786B1ZY",
+   "valid": false,
+   "source": "taxid_bad_checksum"
+  }
+ ]
+}

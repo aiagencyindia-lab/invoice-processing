@@ -35,9 +35,9 @@ def extraction(invoice_date: str) -> dict:
 
 
 def step_33(tmp_path, invoice_date: str) -> dict | None:
-    result = Phase3ValidatorAgent(seen_invoices=lambda exclude_case_id="": []).run(
-        tmp_path, extraction(invoice_date), {}
-    )
+    result = Phase3ValidatorAgent(
+        seen_invoices=lambda exclude_case_id="": []
+    ).run(tmp_path, extraction(invoice_date), {})
     return next((v for v in result["validations"] if v["step"] == "3.3"), None)
 
 
