@@ -401,3 +401,31 @@ nothing in the change touched extraction.
 
 **The AFTER run was restarted from scratch**, so all 300 invoices are measured
 on one version of the application.
+
+---
+
+## 2026-09-05 — AFTER run complete, and two regressions it found
+
+300 invoices on `2521ff9`, no errors, no credential failures. The numbers are in
+`benchmark/comparison/report.md`. Two of the 24 regressed rows have causes worth
+recording, because both are defects these changes introduced.
+
+**Check 1.2 rejects an invoice over an OCR misread (4 invoices).** The customer
+tax-ID comparison added in P3 is exact. On a scanned invoice the extractor read
+`24AAECF9034MIZE` where the document says `24AAECF9034M1ZE` — a `1` read as an
+`I`. The comparison then reports a registration "not one of this
+organisation's", which is a rejection caused by our own reading rather than by
+anything on the invoice. **The fix:** compare only when the extracted
+identifier is checksum-valid. A misread identifier fails its own checksum, and
+a checksum-valid one that differs really is somebody else's.
+
+**Check 1.3 rejects invoices that state a tax-inclusive total (5 invoices).**
+`require_tax_breakup` fails an invoice where no tax amount was extracted. Five
+of these print "Amount payable: ₹X, inclusive of all applicable taxes" with a
+supplier registration on the page: they are tax invoices, and the dataset
+expects 1.3 to pass and 2.1 (not itemized) to be the check that catches them.
+**The fix:** 1.3 should fail a document that is not a tax invoice — a bill of
+supply, or one with no supplier registration — and leave "no itemised tax" to
+2.1, whose job it is.
+
+Both are reported as measured. Neither is fixed in this run.
