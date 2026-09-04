@@ -297,6 +297,56 @@ class TestTheCollateralGate:
         assert response.status_code == 200
 
 
+class TestProposalsAreNotTheRuleBase:
+    """The two listings answer different questions, and a caller who confuses
+    them gets a silent wrong answer rather than an error.
+
+    Learned on production: a cleanup script disabled "every proposal by this
+    author" and left the rule it had just approved running, because an
+    approved rule is not a proposal.
+    """
+
+    def test_an_approved_rule_leaves_the_proposal_list(self, db, client):
+        overrule(client)
+        rule_id = (
+            client()
+            .get("/api/rules/proposals")
+            .json()["proposals"][0]["rule_id"]
+        )
+        drafted(db, rule_id)
+        client("root").post(
+            f"/api/rules/proposals/{rule_id}/decision",
+            json={"decision": "approve"},
+        )
+
+        assert client().get("/api/rules/proposals").json()["proposals"] == []
+        # It is in the rule base instead -- the other question.
+        assert [
+            r["id"] for r in client().get("/api/rules").json()["rules"]
+        ] == [rule_id]
+
+    def test_asking_for_approved_by_name_finds_it(self, db, client):
+        """So a caller that does want every row has a way to get one."""
+        overrule(client)
+        rule_id = (
+            client()
+            .get("/api/rules/proposals")
+            .json()["proposals"][0]["rule_id"]
+        )
+        drafted(db, rule_id)
+        client("root").post(
+            f"/api/rules/proposals/{rule_id}/decision",
+            json={"decision": "approve"},
+        )
+
+        listed = (
+            client()
+            .get("/api/rules/proposals", params={"status": "approved"})
+            .json()["proposals"]
+        )
+        assert [p["rule_id"] for p in listed] == [rule_id]
+
+
 class TestScopeExclusion:
     """Only one rule per scope fires. Approving a second into an occupied
     scope does not add a rule, it silently shadows one somebody else

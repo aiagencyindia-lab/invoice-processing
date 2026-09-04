@@ -397,6 +397,17 @@ class PgRuleRepository:
         }
 
     def proposals(self, tenant_id: str, status: str | None = None) -> list:
+        """Rules that are not in force: drafts, failures, rejections.
+
+        With no status this returns everything EXCEPT approved rules, because
+        a proposal is a thing awaiting a decision and an approved rule has had
+        one -- `load` is where the live rule base comes from.
+
+        That is the right split for the page, and it is a trap for anything
+        cleaning up: a script that disabled "every proposal this author made"
+        silently skipped the rule it had just approved, and left it in force
+        on a production tenant. If you want every row, ask for both.
+        """
         with tenant_session(tenant_id, self.url) as session:
             statement = select(Rule).where(Rule.tenant_id == tenant_id)
             if status:
