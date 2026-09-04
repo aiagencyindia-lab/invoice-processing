@@ -29,6 +29,15 @@ function toInput(field: SettingField): string | boolean {
   if (field.type === "list") {
     return Array.isArray(field.value) ? field.value.join("\n") : "";
   }
+  // A rate table, one "code: rate" per line. It is a table of numbers and it
+  // belongs in the settings screen: without it every line of an invoice is
+  // checked against a single rate, and a terminal is the only other way in.
+  if (field.type === "dict") {
+    const entries = Object.entries(
+      (field.value ?? {}) as Record<string, unknown>,
+    );
+    return entries.map(([code, rate]) => `${code}: ${rate}`).join("\n");
+  }
   return field.value === null || field.value === undefined
     ? ""
     : String(field.value);
@@ -45,8 +54,25 @@ function toPayload(field: SettingField, raw: string | boolean): unknown {
       .map((line) => line.trim())
       .filter(Boolean);
   }
+  if (field.type === "dict") {
+    const table: Record<string, number> = {};
+    for (const line of String(raw).split("\n")) {
+      const [code, rate] = line.split(":");
+      if (!code?.trim() || rate === undefined) continue;
+      const value = Number(rate.trim());
+      // A malformed line is left for the server to refuse by name, rather
+      // than silently dropped here -- a rate table missing one code checks
+      // that code against the wrong rate and says nothing.
+      table[code.trim()] = Number.isNaN(value) ? (rate.trim() as never) : value;
+    }
+    return table;
+  }
   const text = String(raw).trim();
   if (text === "") return undefined;
+  // Text settings are sent as typed. Coercing them to numbers, which is what
+  // this used to do for anything that was not a boolean or a list, turned a
+  // tax-ID format into NaN and quietly discarded it.
+  if (field.type === "str") return text;
   const value = Number(text);
   return Number.isNaN(value) ? undefined : value;
 }
@@ -196,14 +222,29 @@ export default function SettingsPage() {
                 {shown(field) ? "On" : "Off"}
               </span>
             </label>
-          ) : field.type === "list" ? (
+          ) : field.type === "list" || field.type === "dict" ? (
             <textarea
               id={field.key}
               className="input-field"
               rows={4}
               disabled={!editable}
               value={String(shown(field) ?? "")}
-              placeholder="One name per line"
+              placeholder={
+                field.type === "dict"
+                  ? "One per line, e.g. 998315: 0.18"
+                  : "One per line"
+              }
+              onChange={(event) =>
+                setEdits({ ...edits, [field.key]: event.target.value })
+              }
+            />
+          ) : field.type === "str" ? (
+            <input
+              id={field.key}
+              className="input-field"
+              type="text"
+              disabled={!editable}
+              value={String(shown(field) ?? "")}
               onChange={(event) =>
                 setEdits({ ...edits, [field.key]: event.target.value })
               }
