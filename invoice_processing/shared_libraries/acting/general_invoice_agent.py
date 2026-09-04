@@ -1595,11 +1595,28 @@ class Phase1ValidatorAgent(BaseAgent):
             if stated_customer_id in our_tax_ids:
                 evidence += f", tax ID {invoice.get('customer_tax_id')} matches"
             else:
-                customer_match = False
-                evidence += (
-                    f", tax ID {invoice.get('customer_tax_id')} is not one of "
-                    "this organisation's"
+                # Only when the identifier we read is well-formed. On a scanned
+                # invoice the extractor read 24AAECF9034MIZE where the document
+                # says 24AAECF9034M1ZE -- a 1 read as an I -- and an exact
+                # comparison then rejected the invoice for being addressed to
+                # someone else. That is a rejection caused by our own reading,
+                # and the checksum is what tells the two apart: a misread
+                # identifier fails it, and one that passes and still differs
+                # really is another company's.
+                readable, reason = tax_ids.validate(
+                    stated_customer_id, _get_config().get("tax_id_format")
                 )
+                if readable:
+                    customer_match = False
+                    evidence += (
+                        f", tax ID {invoice.get('customer_tax_id')} is not one "
+                        "of this organisation's"
+                    )
+                else:
+                    evidence += (
+                        f", tax ID {invoice.get('customer_tax_id')} could not "
+                        f"be read ({reason}); the name alone was checked"
+                    )
 
         validations.append(
             {
@@ -1631,22 +1648,12 @@ class Phase1ValidatorAgent(BaseAgent):
         # the document's own kind and whether it states any tax can. Gated,
         # because plenty of jurisdictions and plenty of suppliers legitimately
         # invoice with no tax at all.
-        if _get_config().get("require_tax_breakup"):
-            has_tax = any(
-                invoice.get(key) is not None
-                for key in (
-                    "tax_amount",
-                    "cgst_amount",
-                    "sgst_amount",
-                    "igst_amount",
-                )
-            ) or bool(invoice.get("tax_breakdown"))
-            if document_type == NON_TAX_INVOICE:
-                tax_compliant = False
-                evidence += ", billed without a tax registration"
-            elif not has_tax:
-                tax_compliant = False
-                evidence += ", no tax stated"
+        if (
+            _get_config().get("require_tax_breakup")
+            and document_type == NON_TAX_INVOICE
+        ):
+            tax_compliant = False
+            evidence += ", billed without a tax registration"
 
         validations.append(
             {

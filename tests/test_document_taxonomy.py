@@ -110,15 +110,23 @@ class TestCheck13:
             == "Document is not a Tax Invoice"
         )
 
-    def test_an_invoice_stating_no_tax_fails_when_tax_is_required(
+    def test_a_tax_inclusive_total_is_still_a_tax_invoice(
         self, tmp_path, config
     ):
+        """An invoice reading "Amount payable, inclusive of all applicable
+        taxes" over a supplier registration is a tax invoice. It failed this
+        check for five real invoices in the benchmark because no tax amount
+        could be extracted -- which is the itemisation question that check 2.1
+        exists to ask."""
         config(require_tax_breakup=True)
-        payload = {"invoice": {**INVOICE, "tax_amount": None}}
-        result = Phase1ValidatorAgent().run(tmp_path, payload)
+        payload = {
+            "invoice": {**INVOICE, "tax_amount": None, "document_type": None}
+        }
+        result = Phase1ValidatorAgent().run(
+            tmp_path, {**payload, "document_type": TAX_INVOICE}
+        )
         step = next(v for v in result["validations"] if v["step"] == "1.3")
-        assert step["passed"] is False
-        assert "no tax stated" in step["evidence"]
+        assert step["passed"] is True
 
     def test_it_is_only_required_when_configured(self, tmp_path, config):
         """Suppliers in plenty of places legitimately bill without tax, and a
@@ -149,7 +157,7 @@ class TestCheck13:
 class TestCheck12TaxIds:
     def test_a_registration_that_is_not_ours_fails(self, tmp_path, config):
         """The name matched. Names can be typed; registrations are issued."""
-        config(organization_tax_ids=["29AAFCZ4821L1ZS"])
+        config(organization_tax_ids=["29AAFCZ4821L1ZS"], tax_id_format="GSTIN")
         payload = {"invoice": {**INVOICE, "customer_tax_id": "24AAECF9034M1ZE"}}
         result = Phase1ValidatorAgent().run(tmp_path, payload)
         step = next(v for v in result["validations"] if v["step"] == "1.2")
@@ -160,13 +168,27 @@ class TestCheck12TaxIds:
         )
 
     def test_our_own_registration_passes(self, tmp_path, config):
-        config(organization_tax_ids=["29AAFCZ4821L1ZS"])
+        config(organization_tax_ids=["29AAFCZ4821L1ZS"], tax_id_format="GSTIN")
         payload = {
             "invoice": {**INVOICE, "customer_tax_id": "29 AAFCZ 4821 L1ZS"}
         }
         result = Phase1ValidatorAgent().run(tmp_path, payload)
         step = next(v for v in result["validations"] if v["step"] == "1.2")
         assert step["passed"] is True
+
+    def test_an_unreadable_registration_does_not_reject_the_invoice(
+        self, tmp_path, config
+    ):
+        """The extractor read 24AAECF9034MIZE off a scan where the document
+        says 24AAECF9034M1ZE -- a 1 read as an I. Rejecting the invoice for
+        that is rejecting it for our own reading. The checksum tells them
+        apart: a misread identifier fails it."""
+        config(organization_tax_ids=["24AAECF9034M1ZE"], tax_id_format="GSTIN")
+        payload = {"invoice": {**INVOICE, "customer_tax_id": "24AAECF9034MIZE"}}
+        result = Phase1ValidatorAgent().run(tmp_path, payload)
+        step = next(v for v in result["validations"] if v["step"] == "1.2")
+        assert step["passed"] is True
+        assert "could not be read" in step["evidence"]
 
     def test_no_configured_registration_leaves_the_name_check_alone(
         self, tmp_path, config

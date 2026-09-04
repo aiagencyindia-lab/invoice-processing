@@ -429,3 +429,35 @@ supply, or one with no supplier registration — and leave "no itemised tax" to
 2.1, whose job it is.
 
 Both are reported as measured. Neither is fixed in this run.
+
+---
+
+## 2026-09-05 — P9: two regressions the AFTER run found, fixed
+
+**1.2 — an invoice rejected because of our own OCR.** The customer tax-ID
+comparison was exact, so when the extractor read `24AAECF9034MIZE` off a scan
+where the document says `24AAECF9034M1ZE` — a `1` read as an `I` — the invoice
+was rejected as addressed to another company. Four real invoices. The fix is the
+checksum: an identifier we misread fails it, and one that passes and still
+differs really is somebody else's, so the comparison now runs only on a
+well-formed identifier and otherwise says the name alone was checked.
+
+**1.3 — a tax-inclusive total is still a tax invoice.** `require_tax_breakup`
+failed any invoice where no tax amount could be extracted. Five invoices print
+"Amount payable, inclusive of all applicable taxes" over a supplier
+registration: they are tax invoices, and what is wrong with them is that they
+are not itemised — which is check 2.1's question, and 2.1 asks it. 1.3 now fails
+a document that is not a tax invoice and nothing else.
+
+**Files.** `shared_libraries/acting/general_invoice_agent.py`.
+
+**Tests.** `test_an_unreadable_registration_does_not_reject_the_invoice`,
+`test_a_tax_inclusive_total_is_still_a_tax_invoice`; two tests that encoded the
+old behaviour were rewritten to the intended rule rather than deleted.
+
+**Measured before re-running.** Replayed over the AFTER run's own extractions:
+11 invoices flip 1.3 to pass, 5 flip 1.2 to pass, and 6 now reach check 2.1 and
+fail there — the hand-off the 1.3 fix was made for.
+
+**Result.** 1575 passed. Reverting the checksum gate fails
+`test_an_unreadable_registration_does_not_reject_the_invoice`.
