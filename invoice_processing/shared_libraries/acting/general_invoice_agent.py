@@ -67,6 +67,7 @@ except ImportError:
 
 try:
     from ... import confidence, duplicates, po_matching, tax_ids
+    from ...llm_guard import CallBudget, guarded_generate
     from ...paths import (
         AGENT_ROOT,
         ITEM_CODE_CACHE_PATH,
@@ -89,6 +90,7 @@ except ImportError:  # executed as a script: no parent package context
     )
     _sys.path.insert(0, str(_repo_root))
     from invoice_processing import confidence, duplicates, po_matching, tax_ids
+    from invoice_processing.llm_guard import CallBudget, guarded_generate
     from invoice_processing.paths import (
         AGENT_ROOT,
         ITEM_CODE_CACHE_PATH,
@@ -130,6 +132,31 @@ def _generation_config(**overrides) -> "GenerationConfig":
     params: dict[str, Any] = {"temperature": 0, "seed": _GENERATION_SEED}
     params.update(overrides)
     return GenerationConfig(**params)
+
+
+# How long one Vertex call may take before the caller stops waiting. The SDK
+# offers no timeout of its own, so without this a stalled request holds the
+# worker until its queue lease expires, gets redelivered, stalls again, and
+# after three attempts dead-letters an invoice nobody ever rejected. 180s is
+# roughly three times the slowest healthy extraction observed.
+VERTEX_TIMEOUT_SECONDS = float(os.getenv("VERTEX_TIMEOUT_SECONDS", "180"))
+
+
+def _generate(model, contents):
+    """Every Vertex call in this pipeline. See invoice_processing/llm_guard.py.
+
+    A per-call budget rather than a per-case one: this pipeline makes about
+    four calls per invoice and its ceiling is the phase structure, not a
+    counter. What it needs is that no single call can hang.
+    """
+    return guarded_generate(
+        model,
+        contents,
+        CallBudget(
+            timeout_seconds=VERTEX_TIMEOUT_SECONDS,
+            deadline_seconds=VERTEX_TIMEOUT_SECONDS * 3,
+        ),
+    )
 
 
 @lru_cache(maxsize=32)
@@ -452,7 +479,7 @@ def extract_pdf_with_gemini(pdf_path: Path) -> str:
 Return the text exactly as it appears, preserving numbers, dates, amounts, and structure.
 Do not summarize - extract complete text content."""
 
-    response = model.generate_content([pdf_part, prompt])
+    response = _generate(model, [pdf_part, prompt])
 
     if _gcp_config.API_CALL_DELAY_SECONDS > 0:
         time.sleep(_gcp_config.API_CALL_DELAY_SECONDS)
@@ -562,7 +589,7 @@ def call_gemini(
     model = _model_for(model_name, 0)
 
     start_time = time.time()
-    response = model.generate_content(prompt)
+    response = _generate(model, prompt)
     latency_ms = (time.time() - start_time) * 1000
 
     # Update metrics
@@ -605,7 +632,7 @@ def call_gemini_with_pdf(
     pdf_part = Part.from_data(mime_type="application/pdf", data=pdf_data)
 
     start_time = time.time()
-    response = model.generate_content([pdf_part, prompt])
+    response = _generate(model, [pdf_part, prompt])
     latency_ms = (time.time() - start_time) * 1000
 
     # Update metrics
@@ -631,11 +658,54 @@ def call_gemini_with_pdf(
     return response.text, latency_ms
 
 
+# The formats invoices actually print. Every one here was found on a real or
+# synthetic supplier document; an unparseable date is not a small problem,
+# because step 3.3 then emits no verdict at all and a future-dated invoice
+# passes unremarked because nobody looked.
+_DATE_FORMATS = (
+    "%d/%m/%Y",
+    "%Y-%m-%d",
+    "%d-%m-%Y",
+    "%Y/%m/%d",
+    "%m/%d/%Y",
+    "%d-%b-%Y",  # 09-Aug-2026
+    "%d.%m.%Y",  # 09.08.2026
+    "%d %B %Y",  # 09 August 2026
+    "%d %b %Y",  # 09 Aug 2026
+    "%b %d, %Y",  # Aug 09, 2026
+)
+
+
+def _reference_date() -> date:
+    """The day "is this invoice dated in the future?" is asked against.
+
+    Normally today. `INVOICE_REFERENCE_DATE` pins it, so a corpus with a stated
+    reference date -- an evaluation set, a regression fixture, a replay of last
+    month's queue -- gives the same answer whenever it is run.
+
+    Deliberately an environment variable and not a tenant setting: a customer
+    who could move the clock could accept invoices dated into next year, which
+    is the fraud this check exists to stop. An unreadable value falls back to
+    today rather than refusing to process: a typo must not stop the queue, and
+    must not quietly accept future dates either.
+    """
+    raw = os.getenv("INVOICE_REFERENCE_DATE", "").strip()
+    if raw:
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").date()
+        except ValueError:
+            print(
+                f"  Warning: INVOICE_REFERENCE_DATE={raw!r} is not YYYY-MM-DD;"
+                " using today."
+            )
+    return date.today()
+
+
 def parse_date(date_str: str | None) -> date | None:
     """Parse date string in various formats"""
     if not date_str:
         return None
-    for fmt in ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%m/%d/%Y"]:
+    for fmt in _DATE_FORMATS:
         try:
             return datetime.strptime(date_str, fmt).date()
         except ValueError:
@@ -1448,7 +1518,7 @@ class Phase3ValidatorAgent(BaseAgent):
 
         # Step 3.3: Future Date Check
         invoice_date = parse_date(invoice.get("invoice_date"))
-        today = date.today()
+        today = _reference_date()
 
         if invoice_date:
             is_future = invoice_date > today

@@ -38,3 +38,69 @@ expected failures are scored as false negatives — the honest reading: the
 application cannot validate a work-authorization reference today. Both values
 are reachable through the settings API, so this stays within "configured as an
 administrator could configure it".
+
+---
+
+## 2026-09-04 — P0: a Vertex call that cannot hang
+
+**Problem.** One benchmark document took 294 seconds against a ~60 second norm,
+and the repo already records two 15–25 minute stalls.
+
+**Root cause.** `model.generate_content` takes no timeout and the RPC beneath it
+has none either, so a stalled request blocked its caller indefinitely. In the
+worker that is worse than slow: the queue lease expires, the document is
+redelivered, stalls again, and after three attempts an invoice nobody rejected
+is dead-lettered. The critic had already hit this and had already fixed it
+(`guarded_generate`) — in its own file, shared with nobody.
+
+**Fix.** Moved the guard to `invoice_processing/llm_guard.py`; the critic
+re-exports it so every existing caller and test keeps its import. The acting
+pipeline's three Vertex calls now go through one `_generate` helper with
+`VERTEX_TIMEOUT_SECONDS` (default 180). A timeout raises, so the classifier
+falls back to keywords, extraction is marked failed, and the worker's existing
+retry and dead-letter path does its job.
+
+**Files.** `invoice_processing/llm_guard.py` (new),
+`shared_libraries/investigation/investigate_agent_reconst.py`,
+`shared_libraries/acting/general_invoice_agent.py`.
+
+**Tests.** `tests/test_vertex_deadline.py` — a stalled call is abandoned; an
+infrastructure error is retried; a malformed request is not; an AST sweep fails
+if any future code calls `generate_content` outside `_generate`; the critic and
+the pipeline share one guard object.
+
+**Result.** 1464 passed. Reverting the routing fails
+`test_no_pipeline_code_calls_vertex_directly`. The critic's own 13 tests pass
+unchanged, which is what makes this a move rather than a rewrite.
+
+**Regression status.** Green.
+
+---
+
+## 2026-09-04 — P1: a reference date step 3.3 can be held to
+
+**Problem.** "Is this invoice dated in the future?" was answered against
+`date.today()`, read at validation time, so the dataset's 48 future-dated
+invoices stop being future-dated as the calendar advances and the benchmark
+cannot be reproduced. Separately, the corpus prints seven date formats and
+`parse_date` knew five — and an unparseable date makes step 3.3 emit no verdict
+at all, so a future-dated invoice passes because nobody looked.
+
+**Root cause.** No injection point for the clock; a hardcoded format list.
+
+**Fix.** `_reference_date()` reads `INVOICE_REFERENCE_DATE` (ISO) and falls back
+to today, including when the value is unreadable — a typo must not stop the
+queue. An environment variable rather than a tenant setting: a customer who can
+move the clock can accept invoices dated into next year. `_DATE_FORMATS` gains
+`09-Aug-2026`, `09.08.2026`, `09 August 2026`, `09 Aug 2026`, `Aug 09, 2026`.
+
+**Files.** `shared_libraries/acting/general_invoice_agent.py`.
+
+**Tests.** `tests/test_reference_date.py` — the date comes from the environment;
+unset means today; an unreadable value falls back rather than failing; the eight
+printed formats parse; nonsense is still `None`.
+
+**Result.** 1464 passed. Reverting to `date.today()` fails
+`test_it_comes_from_the_environment`.
+
+**Regression status.** Green.
