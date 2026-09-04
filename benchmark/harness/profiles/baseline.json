@@ -1,0 +1,14 @@
+{
+  "_note": "BEFORE: only what an administrator can set through PUT /api/settings and PUT /api/purchase-orders today. organization_names is filled from customer_master.csv per company. require_work_authorization is OFF: check 1.4 can only be satisfied by a Work Authorization *form* inside the submission PDF, and this dataset carries WA reference numbers instead, so switching it on rejects essentially every invoice at 1.4 and leaves phases 2-4 unmeasured (see benchmark/runs/smoke15, where 9 of 14 invoices died there). Off is the configuration an administrator would keep, and it lets every other check be measured; 1.4's own 48 expected failures are then scored as false negatives, which is the honest reading -- the app cannot validate a WA reference.",
+  "settings": {
+    "duplicate_check_enabled": true,
+    "require_purchase_order": false,
+    "require_work_authorization": false,
+    "disabled_checks": []
+  },
+  "masters": {
+    "purchase_orders": "legacy",
+    "vendors": false,
+    "work_authorizations": false
+  }
+}

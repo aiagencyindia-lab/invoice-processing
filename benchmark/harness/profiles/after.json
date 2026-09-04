@@ -1,0 +1,19 @@
+{
+  "_note": "AFTER: the India-GST pack configured per tenant. '@hsn_rates' expands to reference/hsn_rates.json; '@company_gstin' to the company's GSTIN from customer_master.csv. Same 300 documents, same order, same ground truth as baseline.",
+  "settings": {
+    "duplicate_check_enabled": true,
+    "require_purchase_order": false,
+    "require_work_authorization": true,
+    "disabled_checks": [],
+    "tax_id_format": "GSTIN",
+    "require_tax_breakup": true,
+    "organization_tax_ids": "@company_gstin",
+    "tax_rates_by_hsn": "@hsn_rates",
+    "tax_rate_tolerance": 1.0
+  },
+  "masters": {
+    "purchase_orders": "extended",
+    "vendors": true,
+    "work_authorizations": true
+  }
+}

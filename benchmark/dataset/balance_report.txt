@@ -1,0 +1,18 @@
+CHECK                              PASS   FAIL   INFO-MATCH  INFO-DISCREP   N/A   | BALANCED PASS  BALANCED FAIL
+----------------------------------------------------------------------------------------------------------------------
+1.1 Extraction Success              250     50            0             0     0   |            50             50
+1.2 Customer Verification           203     47            0             0    50   |            47             47
+1.3 Tax Compliance                  240     52            0             0     8   |            52             52
+1.4 Work Authorization               99     48            0             0   153   |            48             48
+1.5 Single Document                 204     46            0             0    50   |            46             46
+2.1 Line Items Present              202     48            0             0    50   |            48             48
+2.2 PO Validation                   131     51            0             0   118   |            51             51
+3.1 Duplicate Detection             199     51            0             0    50   |            51             51
+3.2 Tax ID Validation               200     49            0             0    51   |            49             49
+3.3 Future Date Check               202     48            0             0    50   |            48             48
+4.1 Total Verification (info)         0      0          192            41    67   |            41             41
+4.2 Line Sum Validation             151     51            0             0    98   |            51             51
+4.3 Authorization Hours              43     50            0             0   207   |            43             43
+4.4 Tax Rate Verification           142     50            0             0   108   |            50             50
+
+NOTE: For 4.1 the FAIL population means 'calculation discrepancy detected' (INFORMATIONAL), never a rejection.

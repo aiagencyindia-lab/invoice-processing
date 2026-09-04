@@ -72,6 +72,10 @@ default = true
 # path that does not exist and broke every ruff invocation.
 line-length = 80
 target-version = "py310"
+# The dataset generator is vendored evidence of how the benchmark corpus was
+# produced. It is never imported and never edited, so formatting it would only
+# make it harder to compare against the original drop.
+extend-exclude = ["benchmark/dataset/generator"]
 
 [tool.ruff.lint]
 select = [
@@ -102,6 +106,10 @@ ignore = [
 # one broken import fails a single check instead of preventing the whole sweep
 # from running -- which is exactly when you most want the other results.
 "scripts/verify_phase*.py" = ["PLC0415"]
+# The benchmark stack fixes its environment before importing the product,
+# because paths and store resolvers bind at import time; the score module
+# imports the product lazily so scoring a saved run needs no dependencies.
+"benchmark/harness/*.py" = ["PLC0415"]
 
 [tool.ruff.format]
 quote-style = "double"

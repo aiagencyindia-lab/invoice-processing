@@ -1,0 +1,102 @@
+[
+ {
+  "check": "1. Exactly 300 submissions",
+  "passed": true,
+  "detail": "300"
+ },
+ {
+  "check": "2. Exactly 100 per company",
+  "passed": true,
+  "detail": ""
+ },
+ {
+  "check": "3. Unique invoice IDs",
+  "passed": true,
+  "detail": ""
+ },
+ {
+  "check": "4. Ground truth complete",
+  "passed": true,
+  "detail": ""
+ },
+ {
+  "check": "5. Every intentional fault documented",
+  "passed": true,
+  "detail": "682 faults"
+ },
+ {
+  "check": "6. Balanced PASS/FAIL per check (balanced population; each >=40)",
+  "passed": true,
+  "detail": "1.1:50/50; 1.2:47/47; 1.3:52/52; 1.4:48/48; 1.5:46/46; 2.1:48/48; 2.2:51/51; 3.1:51/51; 3.2:49/49; 3.3:48/48; 4.1:41/41; 4.2:51/51; 4.3:43/43; 4.4:50/50"
+ },
+ {
+  "check": "7. All correct (ground-truth) calculations reconcile",
+  "passed": true,
+  "detail": ""
+ },
+ {
+  "check": "8. Injected calculation faults reproducible (derived expectations == planned)",
+  "passed": true,
+  "detail": ""
+ },
+ {
+  "check": "9. PO relationships consistent",
+  "passed": true,
+  "detail": ""
+ },
+ {
+  "check": "10. Vendor tax IDs consistent (all master GSTINs checksum-valid, unique)",
+  "passed": true,
+  "detail": ""
+ },
+ {
+  "check": "11. Work authorizations consistent",
+  "passed": true,
+  "detail": ""
+ },
+ {
+  "check": "12. Duplicates documented and ordered after originals",
+  "passed": true,
+  "detail": "51 duplicates"
+ },
+ {
+  "check": "13. Future-date cases relative to 2026-09-03",
+  "passed": true,
+  "detail": ""
+ },
+ {
+  "check": "14. 4.1 never has a rejection action",
+  "passed": true,
+  "detail": ""
+ },
+ {
+  "check": "15. No unintended faults; clean cases all-PASS",
+  "passed": true,
+  "detail": "45 fully clean invoices"
+ },
+ {
+  "check": "16. No real-world PII/companies (all names synthetic, .example domains, fictional banks)",
+  "passed": true,
+  "detail": ""
+ },
+ {
+  "check": "17. Layout templates not reused excessively (7 layouts, max share)",
+  "passed": true,
+  "detail": "{'L1': 65, 'L2': 64, 'L6': 26, 'L5': 38, 'L3': 64, 'L4': 20, 'L7': 23}"
+ },
+ {
+  "check": "18. PASS/FAIL counts match evaluation summary",
+  "passed": true,
+  "detail": ""
+ },
+ {
+  "check": "page_count_distribution",
+  "passed": true,
+  "detail": "{1: 210, 2: 48, 3: 25, 4: 15, 5: 2}"
+ },
+ {
+  "check": "difficulty_distribution",
+  "passed": true,
+  "detail": "{'EASY': 85, 'MEDIUM': 127, 'HARD': 58, 'ADVERSARIAL': 30}"
+ }
+]
