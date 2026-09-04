@@ -335,3 +335,28 @@ ordering that check 3.1 depends on.
 
 **Left in place.** Nothing about the application changed. This is a harness
 defect and a note in the method, not a product finding.
+
+---
+
+## 2026-09-05 — Found during the AFTER run, deliberately not fixed mid-run
+
+**Check 2.2 rejects multi-line invoices against per-item purchase orders.** The
+ex-tax comparison from P5 works — the evidence quotes net totals, not gross —
+but the comparison itself is against the wrong thing. This corpus's purchase
+orders are per-item commitments: `approved_value` is one item's quantity times
+its unit price. The invoices quoting them carry 3 to 14 lines. Comparing an
+invoice total against a single item's approved value produces a rejection every
+time, and the dataset expects all 19 of them to pass.
+
+**Why it is not fixed in this run.** Changing the code now would leave the
+AFTER run measuring two different applications, which is the one thing the
+before-and-after comparison cannot survive. It is reported as measured and
+carried into the remaining-issues list.
+
+**The fix, when it is made.** A purchase order that states an approved quantity
+and unit price is governing that item, and the quantity and price checks
+already added are the right controls for it; the invoice-total comparison
+should apply only where the order states a commitment for the whole order. That
+is a change to `po_matching.match_invoice_to_po`, testable in isolation, and
+its effect is measurable with `replay.py` over the AFTER extractions without
+spending another run.
