@@ -308,3 +308,30 @@ apportionment or the per-line arithmetic each fails named tests (6 in total).
 **Regression status.** Green. Every new comparison is skipped when its field is
 absent, so an invoice from the existing pilot tenant is matched and reconciled
 exactly as before.
+
+---
+
+## 2026-09-05 — 88 baseline invoices were re-run: the worktree had no credentials
+
+**What happened.** Scoring the finished baseline showed 138 documents failing
+check 1.1. Reading their evidence rather than their count: 75 said *"Unable to
+find your project. Please provide a project ID"*. The worktree pinned to the
+pre-fix commit was created by `git worktree add`, and `.env` is gitignored — so
+those invoices never reached Vertex at all. Their extraction failed for want of
+a credential, and the benchmark would have recorded it as the application
+failing to read an invoice.
+
+**How it was caught.** By opening the evidence strings behind a suspicious
+number. 138 extraction failures against a corpus of 250 real invoices is not a
+plausible result, and the scorer reports evidence per row precisely so that a
+number can be interrogated instead of believed.
+
+**What was done.** `.env` copied into the worktree; the 75 credential failures
+and the 13 errored documents removed from the raw records; their rows deleted
+from each stack's database and their queue state cleared; all 88 re-run on the
+same pinned pre-fix code. Checked first that no already-recorded duplicate had
+its original in the re-run set, which would have corrupted the duplicate
+ordering that check 3.1 depends on.
+
+**Left in place.** Nothing about the application changed. This is a harness
+defect and a note in the method, not a product finding.
