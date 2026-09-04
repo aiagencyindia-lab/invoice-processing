@@ -46,6 +46,10 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     # typed; a registration is issued, so where both are known both must agree.
     "organization_tax_ids": list,
     "require_tax_breakup": bool,
+    # Statutory rate per classification code, where the rate depends on what
+    # was sold rather than on who sold it.
+    "tax_rates_by_hsn": dict,
+    "tax_rate_tolerance": (int, float),
 }
 
 # Settings the validation engine knows nothing about, with their defaults.
@@ -105,6 +109,17 @@ DESCRIPTIONS: dict[str, str] = {
         "Your own tax registrations. When an invoice states who it is billed "
         "to by registration number, it must be one of these -- a name can be "
         "typed, a registration is issued."
+    ),
+    "tax_rates_by_hsn": (
+        "Statutory tax rate for each classification code your suppliers use "
+        "(HSN/SAC in India), as a fraction: 0.18 for 18%. Without it every "
+        "line on an invoice is checked against one rate, which cannot catch a "
+        "12% line taxed at 18%."
+    ),
+    "tax_rate_tolerance": (
+        "How far an invoice's stated tax may differ from the calculated "
+        "amount before it is rejected. Per-line rounding makes a difference "
+        "of a rupee or two normal."
     ),
     "require_tax_breakup": (
         "Require every invoice to be a tax invoice: a supplier registration "
@@ -191,10 +206,27 @@ def validate(payload: dict) -> dict:
                     "unchecked without saying so."
                 )
             cleaned[key] = wanted
+        elif key == "tax_rates_by_hsn":
+            rates = {}
+            for code, rate in value.items():
+                try:
+                    rates[str(code).strip()] = float(rate)
+                except (TypeError, ValueError):
+                    raise SettingsError(
+                        f"Tax rate for {code!r} must be a number, e.g. 0.18 "
+                        "for 18%."
+                    ) from None
+                if not 0 <= rates[str(code).strip()] <= 1:
+                    raise SettingsError(
+                        f"Tax rate for {code!r} must be a fraction between 0 "
+                        "and 1, e.g. 0.18 for 18%."
+                    )
+            cleaned[key] = rates
         elif key in (
             "po_tolerance_pct",
             "po_tolerance_abs",
             "high_value_threshold",
+            "tax_rate_tolerance",
         ):
             if value < 0:
                 raise SettingsError(f"{key} cannot be negative.")

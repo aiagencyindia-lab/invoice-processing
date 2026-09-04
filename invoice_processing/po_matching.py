@@ -36,6 +36,10 @@ from typing import Any, Protocol, runtime_checkable
 NO_PO_ON_INVOICE = "no_po_on_invoice"
 PO_NOT_FOUND = "po_not_found"
 VENDOR_MISMATCH = "vendor_mismatch"
+OTHER_CUSTOMER = "other_customer"
+OUTSIDE_VALIDITY = "outside_validity"
+QUANTITY_EXCEEDED = "quantity_exceeded"
+PRICE_MISMATCH = "price_mismatch"
 CURRENCY_MISMATCH = "currency_mismatch"
 PO_CLOSED = "po_closed"
 OVER_BILLED = "over_billed"
@@ -46,6 +50,10 @@ BLOCKING = {
     NO_PO_ON_INVOICE,
     PO_NOT_FOUND,
     VENDOR_MISMATCH,
+    OTHER_CUSTOMER,
+    OUTSIDE_VALIDITY,
+    QUANTITY_EXCEEDED,
+    PRICE_MISMATCH,
     CURRENCY_MISMATCH,
     PO_CLOSED,
     OVER_BILLED,
@@ -74,6 +82,20 @@ class PurchaseOrder:
     # over-billing across several invoices is invisible.
     amount_invoiced: float = 0.0
 
+    # Everything below is optional, and each is checked only when the export
+    # carries it. An ERP that exports a number, a supplier and a total gets
+    # exactly the match it got before; one that exports more gets more checked.
+    customer_name: str = ""
+    valid_from: str = ""
+    valid_to: str = ""
+    approved_quantity: float | None = None
+    approved_unit_price: float | None = None
+    hsn_sac: str = ""
+    # Whether `total_amount` includes tax. The invoice is compared on the same
+    # basis: a PO stated net of tax against an invoice total including it makes
+    # every correctly-taxed invoice look like over-billing.
+    amount_basis: str = "inc_tax"
+
     @property
     def remaining(self) -> float:
         return self.total_amount - self.amount_invoiced
@@ -87,6 +109,13 @@ class PurchaseOrder:
             currency=str(data.get("currency") or "AUD").upper(),
             status=str(data.get("status") or "open").lower(),
             amount_invoiced=_as_float(data.get("amount_invoiced")) or 0.0,
+            customer_name=str(data.get("customer_name") or ""),
+            valid_from=str(data.get("valid_from") or ""),
+            valid_to=str(data.get("valid_to") or ""),
+            approved_quantity=_as_float(data.get("approved_quantity")),
+            approved_unit_price=_as_float(data.get("approved_unit_price")),
+            hsn_sac=str(data.get("hsn_sac") or ""),
+            amount_basis=str(data.get("amount_basis") or "inc_tax").lower(),
         )
 
 
@@ -184,6 +213,15 @@ def normalize_vendor(value: Any) -> str:
     return " ".join(words)
 
 
+def _as_date(value: Any):
+    """Dates on a purchase order, in whatever format the export wrote them."""
+    from .shared_libraries.acting.general_invoice_agent import (  # noqa: PLC0415
+        parse_date,
+    )
+
+    return parse_date(str(value)) if value else None
+
+
 def _as_float(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
         return None
@@ -267,6 +305,39 @@ def match_invoice_to_po(
             },
         )
 
+    # The customer, where the export names one. A purchase order raised by
+    # another company in the group is not this company's commitment.
+    invoice_customer = normalize_vendor(invoice.get("customer_name"))
+    po_customer = normalize_vendor(po.customer_name)
+    if invoice_customer and po_customer and invoice_customer != po_customer:
+        return MatchResult(
+            outcome=OTHER_CUSTOMER,
+            po_number=po_number,
+            reason=(
+                f"Purchase order {shown} was raised by {po.customer_name!r}, "
+                f"not {invoice.get('customer_name')!r}."
+            ),
+            details={
+                "po_customer": po.customer_name,
+                "invoice_customer": invoice.get("customer_name"),
+            },
+        )
+
+    invoice_date = _as_date(invoice.get("invoice_date"))
+    valid_from, valid_to = _as_date(po.valid_from), _as_date(po.valid_to)
+    if invoice_date and (
+        (valid_from and invoice_date < valid_from)
+        or (valid_to and invoice_date > valid_to)
+    ):
+        return MatchResult(
+            outcome=OUTSIDE_VALIDITY,
+            po_number=po_number,
+            reason=(
+                f"Invoice dated {invoice.get('invoice_date')} falls outside "
+                f"purchase order {shown} ({po.valid_from} to {po.valid_to})."
+            ),
+        )
+
     invoice_currency = str(invoice.get("currency") or "").upper()
     if invoice_currency and invoice_currency != po.currency:
         return MatchResult(
@@ -285,7 +356,55 @@ def match_invoice_to_po(
             reason=f"Purchase order {shown} is {po.status}, not open for invoicing.",
         )
 
-    amount = _as_float(invoice.get("invoice_total_inc_tax"))
+    # Quantity and unit price, where the export states them. A total within
+    # tolerance can still be the wrong goods at the wrong price -- twice the
+    # quantity at half the price reconciles perfectly.
+    first_line = (invoice.get("line_items") or [{}])[0]
+    quantity = _as_float(first_line.get("quantity"))
+    if (
+        po.approved_quantity is not None
+        and quantity is not None
+        and quantity > po.approved_quantity
+    ):
+        return MatchResult(
+            outcome=QUANTITY_EXCEEDED,
+            po_number=po_number,
+            reason=(
+                f"Invoice bills {quantity:g} against {po.approved_quantity:g} "
+                f"ordered on purchase order {shown}."
+            ),
+            details={
+                "invoiced_quantity": quantity,
+                "approved_quantity": po.approved_quantity,
+            },
+        )
+
+    unit_price = _as_float(first_line.get("unit_price"))
+    if (
+        po.approved_unit_price is not None
+        and unit_price is not None
+        and abs(unit_price - po.approved_unit_price) > 0.01
+    ):
+        return MatchResult(
+            outcome=PRICE_MISMATCH,
+            po_number=po_number,
+            reason=(
+                f"Invoice prices this at {unit_price:,.2f}; purchase order "
+                f"{shown} approved {po.approved_unit_price:,.2f}."
+            ),
+            details={
+                "invoiced_unit_price": unit_price,
+                "approved_unit_price": po.approved_unit_price,
+            },
+        )
+
+    # On the basis the purchase order states. A PO held net of tax compared
+    # against a tax-inclusive invoice total makes every correctly-taxed invoice
+    # look like over-billing -- 18% of it, every time.
+    if po.amount_basis == "ex_tax":
+        amount = _as_float(invoice.get("invoice_total_ex_tax"))
+    else:
+        amount = _as_float(invoice.get("invoice_total_inc_tax"))
     if amount is None:
         return MatchResult(
             outcome=MATCHED,
@@ -379,6 +498,10 @@ _REJECTION_TEMPLATES = {
     NO_PO_ON_INVOICE: "Purchase order number required",
     PO_NOT_FOUND: "Purchase order not recognised",
     VENDOR_MISMATCH: "Purchase order belongs to a different supplier",
+    OTHER_CUSTOMER: "Purchase order belongs to a different customer",
+    OUTSIDE_VALIDITY: "Purchase order was not valid on the invoice date",
+    QUANTITY_EXCEEDED: "Invoice exceeds the quantity ordered",
+    PRICE_MISMATCH: "Invoice unit price differs from the purchase order",
     CURRENCY_MISMATCH: "Purchase order currency mismatch",
     PO_CLOSED: "Purchase order is closed",
     OVER_BILLED: "Invoice exceeds purchase order value",

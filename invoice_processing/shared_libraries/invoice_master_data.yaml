@@ -467,8 +467,10 @@ config_defaults:
   po_tolerance_abs: 50.0
   duplicate_check_enabled: true
   duplicate_check_type: "none"
+  tax_rates_by_hsn: {}
   balance_tolerance: 0.02
   line_sum_tolerance: 1.00
+  tax_rate_tolerance: 1.00
   hours_tolerance: 0.5
   validate_tax_id_checksum: true
   tax_id_format: "ABN"

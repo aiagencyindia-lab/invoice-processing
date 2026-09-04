@@ -426,3 +426,83 @@ class TestVendorNormalisationIsWordwise:
         assert po_matching.normalize_vendor(
             "Lumora Brandcraft Pvt Ltd"
         ) != po_matching.normalize_vendor("Lumora Brandcraft LLP")
+
+
+class TestTheExtendedPurchaseOrder:
+    """An ERP that exports more than a number, a supplier and a total gets more
+    checked. One that exports the old three fields gets exactly the old match,
+    which is what makes this safe to deploy to an existing tenant."""
+
+    def _po(self, **overrides):
+        return {
+            "po_number": "PO-1",
+            "vendor_name": "Apex Industrial Components Pvt Ltd",
+            "total_amount": 100000.0,
+            "currency": "INR",
+            "status": "open",
+            **overrides,
+        }
+
+    def _invoice(self, **overrides):
+        return {
+            "po_number": "PO-1",
+            "vendor_name": "Apex Industrial Components Pvt Ltd",
+            "customer_name": "Ferrovane Industries Private Limited",
+            "currency": "INR",
+            "invoice_date": "2026-05-25",
+            "invoice_total_ex_tax": 100000.0,
+            "invoice_total_inc_tax": 118000.0,
+            "line_items": [
+                {
+                    "description": "Bearings",
+                    "quantity": 20,
+                    "unit_price": 5000.0,
+                }
+            ],
+            **overrides,
+        }
+
+    def _match(self, po, invoice):
+        return po_matching.match_invoice_to_po(invoice, Orders(po))
+
+    def test_the_old_record_shape_still_matches(self):
+        result = self._match(
+            self._po(), self._invoice(invoice_total_inc_tax=100000.0)
+        )
+        assert result.outcome == po_matching.MATCHED
+
+    def test_a_purchase_order_stated_net_of_tax_is_compared_net_of_tax(self):
+        """The one that mattered most in the benchmark: comparing a tax-
+        inclusive invoice against a net purchase order makes every correctly
+        taxed invoice look like 18% over-billing."""
+        po = self._po(amount_basis="ex_tax")
+        assert self._match(po, self._invoice()).outcome == po_matching.MATCHED
+
+    def test_another_customers_purchase_order_fails(self):
+        po = self._po(customer_name="Zentrix Cloudworks Private Limited")
+        result = self._match(po, self._invoice(invoice_total_inc_tax=100000.0))
+        assert result.outcome == po_matching.OTHER_CUSTOMER
+
+    def test_an_invoice_outside_the_validity_window_fails(self):
+        po = self._po(valid_from="2026-06-01", valid_to="2027-03-31")
+        result = self._match(po, self._invoice(invoice_total_inc_tax=100000.0))
+        assert result.outcome == po_matching.OUTSIDE_VALIDITY
+
+    def test_more_than_the_quantity_ordered_fails(self):
+        po = self._po(amount_basis="ex_tax", approved_quantity=10)
+        result = self._match(po, self._invoice())
+        assert result.outcome == po_matching.QUANTITY_EXCEEDED
+
+    def test_a_different_unit_price_fails(self):
+        """Twice the quantity at half the price reconciles perfectly against
+        the total, and is not what was ordered."""
+        po = self._po(amount_basis="ex_tax", approved_unit_price=4000.0)
+        result = self._match(po, self._invoice())
+        assert result.outcome == po_matching.PRICE_MISMATCH
+
+    def test_fields_the_export_omits_are_not_checked(self):
+        po = self._po(amount_basis="ex_tax")
+        result = self._match(
+            po, self._invoice(invoice_date="2030-01-01", customer_name="Anyone")
+        )
+        assert result.outcome == po_matching.MATCHED

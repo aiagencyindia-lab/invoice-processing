@@ -209,6 +209,135 @@ def determine_work_type(invoice: dict) -> str:
     return "REPAIRS"
 
 
+def _stated_tax_total(invoice: dict) -> float:
+    """The tax the invoice charges, however it chooses to present it.
+
+    A single total where there is one; the sum of the components where the
+    jurisdiction splits them and the document states no total. Reading only
+    `tax_amount` made every component-split invoice look as though it charged
+    no tax at all.
+    """
+    total = invoice.get("tax_amount")
+    if total is not None:
+        return total
+    components = [
+        invoice.get(key) or 0
+        for key in ("cgst_amount", "sgst_amount", "igst_amount")
+    ]
+    return sum(components)
+
+
+def _statutory_rate(line: dict, config: dict, currency: str) -> float:
+    """The rate this line should carry.
+
+    Its classification code first (the tenant's own table), then the rate the
+    invoice itself states, then the country default. A tenant with no table
+    keeps exactly the behaviour they have: one rate for the whole invoice.
+    """
+    by_code = config.get("tax_rates_by_hsn") or {}
+    code = str(line.get("hsn_sac") or "").strip()
+    while code and by_code:
+        if code in by_code:
+            return float(by_code[code])
+        code = code[:-1]  # a code table may be keyed by prefix
+    stated = line.get("tax_rate")
+    if stated is not None:
+        return float(stated)
+    return (config.get("tax_rates_by_currency") or {}).get(
+        currency, config.get("default_tax_rate", 0.10)
+    )
+
+
+def _expected_tax(invoice: dict, config: dict) -> tuple[float, str] | None:
+    """Tax due on this invoice, line by line. None when nothing says how.
+
+    Returns the amount and a description of how it was arrived at, because a
+    tax rejection an AP clerk cannot check by hand is a rejection they have to
+    take on trust.
+    """
+    lines = invoice.get("line_items") or []
+    priced = [
+        line
+        for line in lines
+        if line.get("amount_ex_tax") is not None
+        and (line.get("hsn_sac") or line.get("tax_rate") is not None)
+    ]
+    if not priced:
+        return None
+
+    currency = str(invoice.get("currency") or "").upper()
+
+    # An invoice-level discount reduces what is taxable, and it is not
+    # attributed to any one line -- so each line is taxed on its share of the
+    # taxable amount rather than on its printed value. Taxing the printed
+    # values instead overstates the tax by the whole discount, which reads as
+    # the supplier undercharging when they did nothing of the kind.
+    subtotal = invoice.get("subtotal")
+    taxable = invoice.get("invoice_total_ex_tax")
+    share = 1.0
+    if subtotal and taxable is not None and subtotal > 0:
+        share = taxable / subtotal
+
+    total = 0.0
+    rates = set()
+    for line in lines:
+        base = line.get("amount_ex_tax")
+        if base is None:
+            continue
+        rate = _statutory_rate(line, config, currency)
+        rates.add(rate)
+        total += base * share * rate
+    for charge in invoice.get("other_charges") or []:
+        amount = charge.get("amount")
+        if amount is None:
+            continue
+        rate = charge.get("tax_rate")
+        if rate is None:
+            rate = max(rates) if rates else 0.0
+        total += amount * float(rate)
+    how = ", ".join(f"{r:.0%}" for r in sorted(rates)) or "no rate"
+    return round(total, 2), how
+
+
+def _components_consistent(invoice: dict) -> str:
+    """Are the tax components consistent with where the supply happened?
+
+    Within a state the tax splits in two equal halves; across a state line it
+    is charged as one. Getting this wrong is a real filing error that a single
+    tax total hides completely. Returns an empty string when consistent, or
+    what is wrong.
+    """
+    cgst = invoice.get("cgst_amount")
+    sgst = invoice.get("sgst_amount")
+    igst = invoice.get("igst_amount")
+    if cgst is None and sgst is None and igst is None:
+        return ""
+
+    place = str(invoice.get("place_of_supply") or "")
+    supplier = tax_ids.normalize(invoice.get("vendor_tax_id"))
+    place_code = "".join(ch for ch in place if ch.isdigit())[:2]
+    supplier_code = supplier[:2] if supplier[:2].isdigit() else ""
+    if not place_code or not supplier_code:
+        return ""
+
+    intra_state = place_code == supplier_code
+    cgst, sgst, igst = cgst or 0, sgst or 0, igst or 0
+    if intra_state:
+        if igst:
+            return (
+                f"IGST charged on a supply within state {place_code}, where "
+                "CGST and SGST apply"
+            )
+        if abs(cgst - sgst) > 0.02:
+            return f"CGST {cgst:,.2f} and SGST {sgst:,.2f} differ"
+    elif cgst or sgst:
+        return (
+            f"CGST/SGST charged on a supply from state {supplier_code} to "
+            f"{place_code}, where IGST applies"
+        )
+    return ""
+
+
 @lru_cache(maxsize=32)
 def _model_for(model_name: str, temperature: float) -> "GenerativeModel":
     """One model object per (name, temperature).
@@ -318,9 +447,17 @@ _FALLBACK_CONFIG = {
     # billing (retainers, subscriptions) is not rejected.
     "duplicate_check_enabled": True,
     "duplicate_check_type": "none",  # "none", "file", "database", "api"
+    # Statutory rate per classification code (HSN/SAC and its equivalents),
+    # for jurisdictions where the rate is a property of what was sold rather
+    # than of the invoice. Empty means one rate per currency, as before.
+    "tax_rates_by_hsn": {},
     # Tolerances
     "balance_tolerance": 0.02,
     "line_sum_tolerance": 1.00,
+    # Tax reconciliation used to borrow `balance_tolerance`, which is two
+    # cents: a per-line rounding rule that is normal in some jurisdictions
+    # exceeded it on almost every invoice.
+    "tax_rate_tolerance": 1.00,
     "hours_tolerance": 0.5,
     # Tax ID validation
     "validate_tax_id_checksum": True,
@@ -1949,9 +2086,27 @@ class Phase4ValidatorAgent(BaseAgent):
         stated_tax = invoice.get("tax_amount")
         total_inc = invoice.get("invoice_total_inc_tax") or 0
         total_ex = invoice.get("invoice_total_ex_tax") or 0
-        tax = stated_tax or 0
+        tax = _stated_tax_total(invoice)
 
-        expected_total = total_ex + tax
+        # Subtotal minus discount, plus tax, plus anything charged outside the
+        # line table, plus the rounding the invoice applies to itself. Each
+        # term is absent on most invoices and defaults to zero, so this is
+        # `ex + tax` for a document that states none of them -- and correct for
+        # one that does. Reading only `ex + tax` meant a discount, a freight
+        # charge or a round-off line each looked like an arithmetic error.
+        subtotal = invoice.get("subtotal")
+        base = subtotal if subtotal is not None else total_ex
+        other_charges = sum(
+            (charge.get("amount") or 0)
+            for charge in (invoice.get("other_charges") or [])
+        )
+        expected_total = (
+            base
+            - (invoice.get("discount") or 0)
+            + tax
+            + other_charges
+            + (invoice.get("round_off") or 0)
+        )
         balance = abs(total_inc - expected_total)
         tolerance = _get_config().get("balance_tolerance", 0.02)
 
@@ -1969,27 +2124,63 @@ class Phase4ValidatorAgent(BaseAgent):
                 # The reader is told when the tax was assumed rather than
                 # read: a check that quietly supplies a number it never saw
                 # is the kind of thing this system exists not to do.
-                "evidence": f"Total: {total_inc}, Expected: {expected_total}, Diff: {balance:.2f}"
-                + ("" if stated_tax is not None else " (no tax amount stated)"),
+                "evidence": f"Total: {total_inc}, Expected: {expected_total:.2f}, Diff: {balance:.2f}"
+                + (
+                    ""
+                    if stated_tax is not None or tax
+                    else " (no tax amount stated)"
+                ),
             }
         )
 
-        # Step 4.2: Line Sum Validation
-        line_total = sum(
-            (item.get("amount_ex_tax") or 0)
-            for item in (invoice.get("line_items") or [])
+        # Step 4.2: Line Sum Validation.
+        #
+        # Two arithmetic claims, not one. The lines must add up to the
+        # subtotal, and each line must be the product it says it is: a
+        # quantity changed without its total, or a line discount applied
+        # wrongly, leaves the subtotal untouched and is invisible to a sum.
+        lines = invoice.get("line_items") or []
+        line_total = sum((item.get("amount_ex_tax") or 0) for item in lines)
+        stated_subtotal = (
+            invoice.get("subtotal")
+            if invoice.get("subtotal") is not None
+            else total_ex
         )
-        line_diff = abs(line_total - total_ex)
+        line_diff = abs(line_total - (stated_subtotal or 0))
         line_tolerance = _get_config().get("line_sum_tolerance", 1.00)
+        evidence = (
+            f"Line sum: {line_total:.2f}, Subtotal: {stated_subtotal or 0:.2f}, "
+            f"Diff: {line_diff:.2f}"
+        )
+        reconciles = line_diff <= line_tolerance
+
+        if reconciles:
+            for index, item in enumerate(lines, 1):
+                quantity = item.get("quantity")
+                unit_price = item.get("unit_price")
+                stated = item.get("amount_ex_tax")
+                if quantity is None or unit_price is None or stated is None:
+                    continue
+                computed = quantity * unit_price - (
+                    item.get("line_discount") or 0
+                )
+                if abs(computed - stated) > line_tolerance:
+                    reconciles = False
+                    evidence = (
+                        f"Line {index} ({item.get('description') or 'unnamed'}): "
+                        f"{quantity:g} x {unit_price:,.2f} = {computed:,.2f}, "
+                        f"but the invoice states {stated:,.2f}"
+                    )
+                    break
 
         validations.append(
             {
                 "step": "4.2",
-                "rule": "Sum of lines = Subtotal",
-                "passed": line_diff <= line_tolerance,
-                "evidence": f"Line sum: {line_total:.2f}, Subtotal: {total_ex:.2f}, Diff: {line_diff:.2f}",
+                "rule": "Sum of lines = Subtotal, and each line adds up",
+                "passed": reconciles,
+                "evidence": evidence,
                 "rejection_template": None
-                if line_diff <= line_tolerance
+                if reconciles
                 else "Invoice amounts do not reconcile",
             }
         )
@@ -2037,25 +2228,49 @@ class Phase4ValidatorAgent(BaseAgent):
             # invoice for the missing or wrong authorisation, and repeating
             # itself in the findings helps nobody.
 
-        # Step 4.4: Tax Rate Verification
+        # Step 4.4: Tax Rate Verification.
+        #
+        # Per line where the invoice classifies its lines, because one blended
+        # rate cannot check a multi-rate invoice: a 12% line taxed at 18% and
+        # an 18% line taxed at 12% cancel out perfectly in the total. Where the
+        # lines carry no classification this is the single-rate comparison it
+        # always was.
         currency = str(invoice.get("currency") or "").upper()
         config = _get_config()
-        tax_rate = (config.get("tax_rates_by_currency") or {}).get(
-            currency, config.get("default_tax_rate", 0.10)
-        )
-        expected_tax = round(total_ex * tax_rate, 2)
+        tax_tolerance = config.get("tax_rate_tolerance", tolerance)
+        per_line = _expected_tax(invoice, config)
+
+        if per_line is not None:
+            expected_tax, how = per_line
+            evidence_rate = f"per line at {how}"
+        else:
+            tax_rate = (config.get("tax_rates_by_currency") or {}).get(
+                currency, config.get("default_tax_rate", 0.10)
+            )
+            expected_tax = round(total_ex * tax_rate, 2)
+            evidence_rate = f"{tax_rate:.0%} of {total_ex:.2f}"
+
         tax_diff = abs(tax - expected_tax)
-        tax_valid = tax_diff <= tolerance
+        tax_valid = tax_diff <= tax_tolerance
+        evidence = (
+            f"Tax: {tax:.2f}, Expected: {expected_tax:.2f} "
+            f"({evidence_rate}), Diff: {tax_diff:.2f}"
+        )
+
+        # The components have to agree with where the supply happened, even
+        # when the total is right: charging the wrong kind of tax is a filing
+        # error the customer carries, not the supplier.
+        inconsistent = _components_consistent(invoice)
+        if tax_valid and inconsistent:
+            tax_valid = False
+            evidence = f"{evidence}. {inconsistent}"
 
         validations.append(
             {
                 "step": "4.4",
-                "rule": "Tax amount matches configured rate",
+                "rule": "Tax amount matches the statutory rate",
                 "passed": tax_valid,
-                "evidence": (
-                    f"Tax: {tax:.2f}, Expected: {expected_tax:.2f} "
-                    f"({tax_rate:.0%} of {total_ex:.2f}), Diff: {tax_diff:.2f}"
-                ),
+                "evidence": evidence,
                 "rejection_template": None
                 if tax_valid
                 else "Invoice tax amount incorrect",

@@ -256,3 +256,55 @@ tests; reverting the whole-word fix fails
 `test_development_is_not_preventative_maintenance`.
 
 **Regression status.** Green.
+
+---
+
+## 2026-09-04 — P5, P6, P7: matching and arithmetic against real invoices
+
+**P5 — the purchase order is more than a number and a total.** The two-way
+match compared a tax-inclusive invoice total against whatever amount the export
+stated. The benchmark's purchase orders are stated net of tax, so every
+correctly taxed invoice looked like 18% over-billing — the single most common
+false rejection in the smoke run. `amount_basis` says which basis the amount is
+on and the comparison follows it. Four more optional fields, each checked only
+when the export carries it: `customer_name` (a purchase order raised by another
+company in the group is not this company's commitment), `valid_from`/`valid_to`,
+`approved_quantity` and `approved_unit_price` — twice the quantity at half the
+price reconciles perfectly against a total and is not what was ordered.
+
+**P6 — one blended rate cannot check a multi-rate invoice.** Check 4.4
+multiplied the whole net total by a single rate looked up by currency, and
+there was no INR entry, so every Indian invoice was measured against 10%. It
+now takes the statutory rate per line from the tenant's `tax_rates_by_hsn`
+table, falls back to the rate the invoice itself states, and only then to the
+currency default — so a tenant with no table keeps exactly today's behaviour. An
+invoice-level discount is apportioned across the lines before tax, which is how
+the tax is actually computed; taxing the printed line values overstated it by
+the whole discount. Freight and similar charges carry their own rate. And where
+an invoice splits its tax into components, they must agree with where the supply
+happened: charging one tax across a state line, or a split within one, is a
+filing error the customer carries and a single total hides completely. New
+`tax_rate_tolerance` (default 1.00), because 4.4 borrowed the two-cent balance
+tolerance and per-line rounding exceeded it on almost every invoice.
+
+**P7 — reconciliation that accounts for what invoices actually print.** 4.1
+compared the stated total against `ex + tax`, so a discount, a freight line or a
+rounding adjustment each read as an error the supplier had made. It is now
+subtotal − discount + tax + other charges + round-off, every term defaulting to
+zero. 4.2 gains the second arithmetic claim: each line must be the product it
+says it is. A quantity changed without its total leaves the subtotal untouched
+and was invisible to a sum.
+
+**Files.** `po_matching.py`,
+`shared_libraries/acting/general_invoice_agent.py`, `tenant_settings.py`,
+`shared_libraries/invoice_master_data.yaml`.
+
+**Tests.** `tests/test_phase4_reconciliation.py` (19),
+`tests/test_po_matching.py` (+7).
+
+**Result.** 1553 passed. Reverting the amount-basis fix, the discount
+apportionment or the per-line arithmetic each fails named tests (6 in total).
+
+**Regression status.** Green. Every new comparison is skipped when its field is
+absent, so an invoice from the existing pilot tenant is matched and reconciled
+exactly as before.
