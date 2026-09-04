@@ -506,3 +506,75 @@ class TestTheExtendedPurchaseOrder:
             po, self._invoice(invoice_date="2030-01-01", customer_name="Anyone")
         )
         assert result.outcome == po_matching.MATCHED
+
+
+class TestWhatThePurchaseOrderCommitsTo:
+    """An order for 20 bearings is not a ceiling on the invoice that bills
+    them alongside a dozen other things. Comparing the invoice total against
+    one item's value rejected 19 legitimate invoices in the benchmark corpus,
+    every one of which the dataset expects to pass."""
+
+    def _po(self, **overrides):
+        return {
+            "po_number": "PO-1",
+            "vendor_name": "Apex Industrial Components Pvt Ltd",
+            "total_amount": 90420.0,
+            "currency": "INR",
+            "status": "open",
+            "amount_basis": "ex_tax",
+            **overrides,
+        }
+
+    def _invoice(self, **overrides):
+        return {
+            "po_number": "PO-1",
+            "vendor_name": "Apex Industrial Components Pvt Ltd",
+            "currency": "INR",
+            # Three lines; the order covers one of them.
+            "invoice_total_ex_tax": 156466.50,
+            "invoice_total_inc_tax": 184630.47,
+            "line_items": [
+                {
+                    "description": "Bearings",
+                    "quantity": 20,
+                    "unit_price": 4521.0,
+                },
+                {
+                    "description": "Granules",
+                    "quantity": 12,
+                    "unit_price": 2873.0,
+                },
+                {
+                    "description": "Masterbatch",
+                    "quantity": 10,
+                    "unit_price": 4275.0,
+                },
+            ],
+            **overrides,
+        }
+
+    def _match(self, po, invoice):
+        return po_matching.match_invoice_to_po(invoice, Orders(po))
+
+    def test_an_order_for_one_item_does_not_cap_the_invoice(self):
+        po = self._po(approved_quantity=20, approved_unit_price=4521.0)
+        result = self._match(po, self._invoice())
+        assert result.outcome == po_matching.MATCHED
+        assert "one item" in result.reason
+
+    def test_that_item_is_still_governed(self):
+        """Not a free pass: the quantity and price it does commit to are
+        checked, and they are what over-billing looks like on an order of this
+        shape."""
+        po = self._po(approved_quantity=10, approved_unit_price=4521.0)
+        assert (
+            self._match(po, self._invoice()).outcome
+            == po_matching.QUANTITY_EXCEEDED
+        )
+
+    def test_an_order_with_no_line_detail_still_caps_the_invoice(self):
+        """The case this check was written for, and it is unchanged."""
+        po = self._po(total_amount=100000.0)
+        assert (
+            self._match(po, self._invoice()).outcome == po_matching.OVER_BILLED
+        )

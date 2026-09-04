@@ -398,6 +398,36 @@ def match_invoice_to_po(
             },
         )
 
+    # What the order actually commits to decides what the amount is compared
+    # against.
+    #
+    # An order stating an approved quantity and unit price is a commitment for
+    # *that item*. The invoice quoting it routinely covers a dozen other lines
+    # the order says nothing about, so measuring the whole invoice against one
+    # item's value rejects every legitimate multi-line invoice -- 19 of them in
+    # the benchmark corpus, every one expected to pass. The quantity and price
+    # checks above are the controls for an order of that shape, and they have
+    # already run.
+    #
+    # Where the order states a value and no line detail, it is a commitment for
+    # the order as a whole and the invoice total is exactly the right
+    # comparison. That is the case this check was written for and it is
+    # unchanged.
+    if po.approved_quantity is not None and po.approved_unit_price is not None:
+        return MatchResult(
+            outcome=MATCHED,
+            po_number=po_number,
+            reason=(
+                f"Matched purchase order {shown} on quantity and unit price. "
+                "The order commits to one item, so the invoice total was not "
+                "compared against it."
+            ),
+            details={
+                "approved_quantity": po.approved_quantity,
+                "approved_unit_price": po.approved_unit_price,
+            },
+        )
+
     # On the basis the purchase order states. A PO held net of tax compared
     # against a tax-inclusive invoice total makes every correctly-taxed invoice
     # look like over-billing -- 18% of it, every time.

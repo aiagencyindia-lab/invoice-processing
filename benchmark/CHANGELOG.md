@@ -360,3 +360,44 @@ should apply only where the order states a commitment for the whole order. That
 is a change to `po_matching.match_invoice_to_po`, testable in isolation, and
 its effect is measurable with `replay.py` over the AFTER extractions without
 spending another run.
+
+---
+
+## 2026-09-05 — P8: what a purchase order commits to decides what is compared
+
+**Problem.** Check 2.2 rejected 19 legitimate multi-line invoices as exceeding
+their purchase order. The dataset expects every one to pass.
+
+**Root cause.** An order stating an approved quantity and unit price commits to
+*that item*. The invoices quoting them carry 3 to 14 lines the order says
+nothing about, so measuring the whole invoice against one item's value rejects
+every legitimate multi-line invoice. The ex-tax fix from P5 was working — the
+evidence quotes net totals — but the comparison itself was against the wrong
+quantity.
+
+**Fix.** Where the order states line detail, the quantity and price checks are
+the controls and they have already run; the invoice total is not compared
+against it. Where the order states a value and no line detail, it commits to
+the order as a whole and the invoice total is exactly the right comparison —
+that is the case the check was written for, and it is unchanged.
+
+**Files.** `po_matching.py`.
+
+**Tests.** `tests/test_po_matching.py::TestWhatThePurchaseOrderCommitsTo` (3):
+an order for one item does not cap the invoice; that item is still governed by
+quantity and price; an order with no line detail still caps the invoice.
+
+**Measured, not assumed.** Replayed over the 156 extractions of the abandoned
+AFTER run: exactly 19 verdicts change, all of them 2.2 from FAIL to PASS, and
+nothing else changes except the checks those invoices now go on to reach.
+
+**Result.** 1574 passed. Reverting fails
+`test_an_order_for_one_item_does_not_cap_the_invoice`.
+
+**Also fixed.** The replay tool did not pass `document_type` through, so every
+replayed non-invoice document passed a check the real run failed. Found by an
+implausible replay result — five documents flipping 1.1 from fail to pass when
+nothing in the change touched extraction.
+
+**The AFTER run was restarted from scratch**, so all 300 invoices are measured
+on one version of the application.

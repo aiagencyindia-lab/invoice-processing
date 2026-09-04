@@ -112,6 +112,11 @@ def main(argv=None) -> int:
                 "extraction_failed": (rec["classification"] or {}).get(
                     "extraction_failed"
                 ),
+                # Check 1.1 reads this. Leaving it out made every replayed
+                # non-invoice document pass a check the real run failed.
+                "document_type": (rec["classification"] or {}).get(
+                    "document_type"
+                ),
             }
             folder = workspace / "cases" / rec["invoice_id"]
             folder.mkdir(parents=True, exist_ok=True)
