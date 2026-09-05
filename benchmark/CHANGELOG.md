@@ -572,3 +572,33 @@ refuses anything outside `bench-`.
 **Verified after.** The bucket holds 13 objects, all under the pilot's own
 tenant. The pilot has its 13 documents and 13 invoices. The bench tenants hold
 nothing.
+
+---
+
+## 2026-09-05 — Final AFTER run: the whole corpus on the whole fix set
+
+300 invoices at `18843b3` — the first run carrying everything: the India-GST
+pack, both P9 regression fixes, the P10 goods/service fix, and a harness that
+keeps its documents local. No errors.
+
+The P10 fix, which until now had only been replayed and spot-checked on 45
+invoices, lands as the replay predicted: check 2.2 goes 73.1% → 95.7% with its
+false positives 23 → 2. Three checks reach 100%: duplicate detection, future
+date, and total verification.
+
+**Regressions are 8, from 15, and all eight are one of three things.** Two
+invoices (`MFG-INV-040`, `SVC-INV-042`) failed extraction and take 1.1, 1.2 and
+1.3 down with them — six of the eight. Their evidence names the cause:
+`503 recvmsg:Can't assign requested address` and `LLM call exceeded 180s and
+was abandoned`. That is infrastructure and the deadline doing its job, not
+validation. The remaining two are the extractor returning the receiving
+tenant's own name and registration for an invoice addressed elsewhere
+(`TECH-INV-024`, `TECH-INV-087`) — the hallucination first recorded on
+2026-09-05, still the most serious finding in this work and still not
+something a validation change can reach.
+
+**Two checks are worth reading past their accuracy.** 4.2 (59.3%) and 4.4
+(76.0%) carry 20 and 12 false positives; their precision is 13.0% and 7.7%.
+Both are now reached by ten times as many invoices as before (5 → 54, 1 → 50),
+so they are being asked real questions for the first time, and they are
+answering a good share of them wrongly. That is the next thing to fix.
