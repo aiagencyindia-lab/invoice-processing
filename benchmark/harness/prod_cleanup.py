@@ -10,11 +10,14 @@ tenants, and nothing else. Three things it deliberately does not do:
   prefix is checked before anything is read or deleted, because a cleanup
   script that can reach the pilot's data is a worse risk than the rows it
   removes.
-* **It does not delete audit events.** The trail is append-only by
-  construction: it records that these documents were ingested and processed,
-  and that stays true after the documents are gone. Removing it would make the
-  audit trail lie about its own history, which is the one thing it exists not
-  to do.
+* **It cannot delete audit events, and neither can anything else.** The trail
+  is append-only in the database, not by convention: `audit_events` has SELECT
+  and INSERT policies and no others, under FORCE ROW LEVEL SECURITY, so a
+  DELETE affects zero rows and reports success. That is why the tenant rows
+  themselves stay -- `audit_events` holds a foreign key to `tenants.id`, so
+  removing a tenant would mean dropping that policy on a production database
+  to tidy up an empty row. See `--remove-tenants`, which explains this and
+  refuses.
 * **It does not delete a prefix it was not told about.** Objects are namespaced
   `t/<tenant>/`, and the tenants it cleans are the `bench-` rows in the
   database. A local run that wrote to the bucket under a tenant id no longer in
@@ -51,6 +54,11 @@ def main(argv=None) -> int:
         ),
     )
     p.add_argument(
+        "--remove-tenants",
+        action="store_true",
+        help="refuses, and explains why the tenant rows have to stay",
+    )
+    p.add_argument(
         "--rows-only",
         action="store_true",
         help="delete database rows and leave stored objects alone",
@@ -61,6 +69,16 @@ def main(argv=None) -> int:
         help=f"only tenants whose id starts with this (must itself start {PREFIX!r})",
     )
     args = p.parse_args(argv)
+    if args.remove_tenants:
+        raise SystemExit(
+            "A tenant row cannot be removed while its audit events exist, and "
+            "its audit events cannot be removed at all: `audit_events` carries "
+            "SELECT and INSERT policies and no others, under FORCE ROW LEVEL "
+            "SECURITY, so a DELETE quietly affects nothing. Removing the row "
+            "would mean dropping that policy on the production database, which "
+            "is a real control traded away for three empty rows that cost "
+            "nothing and make the next run a --seed-only away."
+        )
     prefix = args.tenant_prefix
     if not prefix.startswith(PREFIX):
         raise SystemExit(

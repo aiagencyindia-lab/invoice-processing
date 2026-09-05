@@ -760,3 +760,30 @@ that the earlier version never counted.
 The claim I made in between — that it was working and only invisible — was
 wrong, and the check that disproved it was the same one that has caught every
 other mistake here: read the state, not the report.
+
+---
+
+## 2026-09-06 — The bench tenant rows stay, and the database says why
+
+Asked to remove the three `bench-` tenants as well, the answer turned out to be
+no, for a reason worth keeping.
+
+`audit_events` carries a foreign key to `tenants.id`, so a tenant row cannot go
+while its events exist. And its events cannot go at all: the table has SELECT
+and INSERT policies and no others, under FORCE ROW LEVEL SECURITY, so a DELETE
+matches zero rows and reports success. The append-only trail is enforced by
+Postgres, not by the convention this script had been observing — `db/rls.py`
+says so in its docstring, and the database proved it by quietly deleting
+nothing.
+
+Removing the rows would mean dropping that policy on a production database to
+tidy up three empty ones. `--remove-tenants` now refuses and explains, which is
+more useful than the foreign-key traceback it produced first.
+
+**Final production state:** the pilot has its 13 documents, 13 invoices and 64
+audit events; the bench tenants hold no documents, invoices, lines, findings or
+runs, and keep 659 audit events between them recording what the benchmark did;
+the bucket holds 13 objects, all the pilot's.
+
+A silent delete of zero rows is exactly the failure this codebase keeps
+warning about, and it took reading `rls.py` rather than the error to see it.
