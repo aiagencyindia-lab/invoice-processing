@@ -50,6 +50,7 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     # was sold rather than on who sold it.
     "tax_rates_by_hsn": dict,
     "tax_rate_tolerance": (int, float),
+    "tax_rate_tolerance_pct": (int, float),
 }
 
 # Settings the validation engine knows nothing about, with their defaults.
@@ -120,6 +121,11 @@ DESCRIPTIONS: dict[str, str] = {
         "How far an invoice's stated tax may differ from the calculated "
         "amount before it is rejected. Per-line rounding makes a difference "
         "of a rupee or two normal."
+    ),
+    "tax_rate_tolerance_pct": (
+        "The same allowance as a share of the tax due, for invoices large "
+        "enough that a fixed amount is meaningless. 0.002 is a fifth of a "
+        "percent. The larger of the two applies."
     ),
     "require_tax_breakup": (
         "Require every invoice to be a tax invoice: a supplier registration "
@@ -227,6 +233,7 @@ def validate(payload: dict) -> dict:
             "po_tolerance_abs",
             "high_value_threshold",
             "tax_rate_tolerance",
+            "tax_rate_tolerance_pct",
         ):
             if value < 0:
                 raise SettingsError(f"{key} cannot be negative.")

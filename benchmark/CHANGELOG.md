@@ -602,3 +602,65 @@ something a validation change can reach.
 Both are now reached by ten times as many invoices as before (5 → 54, 1 → 50),
 so they are being asked real questions for the first time, and they are
 answering a good share of them wrongly. That is the next thing to fix.
+
+---
+
+## 2026-09-05 — P11: the 4.2 and 4.4 false positives
+
+**Problem.** Check 4.2 read 59.3% with 20 false positives, 4.4 76.0% with 12.
+Both had just started being reached by ten times as many invoices, and were
+answering a good share of them wrongly.
+
+**Three root causes, each measured before it was fixed.**
+
+*A charge counted twice (11 of 4.2's, 9 of 4.4's).* Freight, packing and travel
+are printed outside the line table, and the extractor returns them in both
+places — sometimes describing the charge only as "Other Charges", so the two
+descriptions do not even match. On `MFG-INV-015` the expected tax overshot by
+455.94, which is 2,533.00 of packing at 18% to the cent. The test is now
+arithmetic rather than textual, because the arithmetic is what went wrong: a
+charge is a duplicate when dropping it brings the line sum back to the printed
+subtotal. Where the sums do not say so, both are kept — two things costing the
+same are not the same thing.
+
+*The taxable total is not to be trusted.* `invoice_total_ex_tax` is where an
+extractor's arithmetic errors land; on the same invoice it came back holding
+the packing charge as well. The tax base is now subtotal minus discount, which
+the document prints and which cannot drift that way.
+
+*The discount column is a percentage (5 of 4.2's, 1 of 4.4's).* Most layouts
+print "10%", and the extractor returns 0.1 — read as ten rupees against a
+90,420 line. `line_discount_pct` and `has_discount` are now extracted
+separately, a value below one in the amount field is read as a rate, and a
+discount that is shown but cannot be quantified lets the line pass. That last
+is the tax-ID lesson again: an unreadable column is our problem, not the
+supplier's.
+
+*The tolerance is now proportional as well as fixed.* A rupee or two is the
+right allowance on a small invoice and an impossible one on a two-million-rupee
+tax figure, where legitimate per-line rounding and discount apportionment reach
+several hundred.
+
+**Measured on the AFTER run's own extractions, same invoices, same population:**
+
+| | Before | After |
+|---|---|---|
+| 4.2 | FP 24, precision 11.1%, accuracy 59.0% | **FP 6, precision 25.0%, accuracy 86.9%** |
+| 4.4 | FP 15, precision 28.6%, accuracy 75.4% | **FP 1, precision 80.0%, accuracy 95.1%** |
+
+**What it costs, stated rather than buried.** Recall falls: 4.2 from 75% to 50%,
+4.4 from 100% to 66.7%. Three real faults are no longer caught.
+
+* `MFG-INV-039` (a wrong line discount) is lost only because this measurement
+  replays extractions taken before `line_discount_pct` existed. A fresh run
+  should recover it, and `test_a_wrong_line_discount_is_still_caught_when_it_can_be_read`
+  pins that it is caught whenever the discount can be read.
+* `TECH-INV-031` and `TECH-INV-067` are `TAX_ROUNDING` faults of 4.20 on
+  250,751.58 — 0.0017%, where legitimate drift on this corpus reaches 0.075%.
+  **The fault is smaller than the noise it would have to be told apart from**,
+  so no tolerance separates them. Catching both with a fixed one-rupee band
+  costs twelve wrongly rejected invoices for two discrepancies of four rupees,
+  which is the wrong trade for a system that pays suppliers. Recorded in
+  `test_a_rounding_error_below_our_own_precision_is_not_caught`.
+
+**Result.** 1594 passed.

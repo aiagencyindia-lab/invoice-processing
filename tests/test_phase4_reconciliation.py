@@ -317,3 +317,214 @@ class TestTaxComponents:
     ):
         config(tax_rates_by_hsn={"8482": 0.18})
         assert steps(tmp_path, FULL)["4.4"]["passed"] is True
+
+
+CHARGE_TWICE = {
+    "currency": "INR",
+    "subtotal": 100000.00,
+    "invoice_total_ex_tax": 100000.00,
+    "tax_amount": 18450.00,  # 18% of 100,000 plus 18% of the 2,500 charge
+    "invoice_total_inc_tax": 120950.00,
+    "other_charges": [
+        {
+            "description": "Freight & forwarding",
+            "amount": 2500.00,
+            "tax_rate": 0.18,
+        }
+    ],
+    "line_items": [
+        {
+            "description": "Bearings",
+            "quantity": 20,
+            "unit_price": 5000.00,
+            "amount_ex_tax": 100000.00,
+            "hsn_sac": "8482",
+        },
+        # The same charge, returned again as a line.
+        {"description": "Freight & forwarding", "amount_ex_tax": 2500.00},
+    ],
+}
+
+
+class TestAChargeReadTwice:
+    """Freight and packing are printed outside the line table, and the
+    extractor returns them in both places often enough that it is the single
+    largest source of false rejections in the corpus: 11 of check 4.2's 20 and
+    9 of check 4.4's 12. On one invoice the tax overshot by 455.94, which is
+    2,533.00 of packing at 18% to the cent."""
+
+    INVOICE = CHARGE_TWICE
+
+    def test_the_lines_still_reconcile(self, tmp_path, config):
+        config()
+        assert steps(tmp_path, self.INVOICE)["4.2"]["passed"] is True
+
+    def test_the_tax_is_not_charged_twice(self, tmp_path, config):
+        config(tax_rates_by_hsn={"8482": 0.18})
+        assert steps(tmp_path, self.INVOICE)["4.4"]["passed"] is True
+
+    def test_a_genuine_line_of_equal_value_is_not_swallowed(
+        self, tmp_path, config
+    ):
+        """Two things costing the same are not the same thing."""
+        config()
+        invoice = {
+            **self.INVOICE,
+            "subtotal": 102500.00,
+            "invoice_total_ex_tax": 102500.00,
+            "line_items": [
+                self.INVOICE["line_items"][0],
+                {"description": "Spare seals", "amount_ex_tax": 2500.00},
+            ],
+        }
+        assert steps(tmp_path, invoice)["4.2"]["passed"] is True
+
+
+class TestADiscountColumn:
+    """The discount column is a percentage on most layouts. Reading "10%" as
+    ten rupees rejected five real invoices for arithmetic the supplier got
+    right."""
+
+    def _invoice(self, **line):
+        return {
+            "currency": "INR",
+            "subtotal": 81378.00,
+            "invoice_total_ex_tax": 81378.00,
+            "tax_amount": 14648.04,
+            "invoice_total_inc_tax": 96026.04,
+            "line_items": [
+                {
+                    "description": "Masterbatch black",
+                    "quantity": 20,
+                    "unit_price": 4521.00,  # 90,420 less 10% is 81,378
+                    "amount_ex_tax": 81378.00,
+                    "hsn_sac": "3204",
+                    **line,
+                }
+            ],
+        }
+
+    def test_a_percentage_in_its_own_field(self, tmp_path, config):
+        config()
+        assert (
+            steps(tmp_path, self._invoice(line_discount_pct=0.10))["4.2"][
+                "passed"
+            ]
+            is True
+        )
+
+    def test_a_percentage_returned_as_an_amount(self, tmp_path, config):
+        """What the extractor actually does: "10%" comes back as 0.1. A
+        discount of ten paise is not a reading worth defending."""
+        config()
+        assert (
+            steps(tmp_path, self._invoice(line_discount=0.10))["4.2"]["passed"]
+            is True
+        )
+
+    def test_a_real_amount_still_works(self, tmp_path, config):
+        config()
+        assert (
+            steps(tmp_path, self._invoice(line_discount=9042.00))["4.2"][
+                "passed"
+            ]
+            is True
+        )
+
+    def test_a_discount_we_can_see_but_not_read_does_not_reject(
+        self, tmp_path, config
+    ):
+        config()
+        step = steps(tmp_path, self._invoice(has_discount=True))["4.2"]
+        assert step["passed"] is True
+
+    def test_a_line_with_no_discount_at_all_is_still_checked(
+        self, tmp_path, config
+    ):
+        """The fault this check exists for: a quantity changed without its
+        total, on a line that shows no discount to explain it."""
+        config()
+        invoice = self._invoice()
+        invoice["line_items"][0]["quantity"] = 25
+        assert steps(tmp_path, invoice)["4.2"]["passed"] is False
+
+
+class TestWhatTheToleranceGivesUp:
+    """The tax tolerance is now the larger of a fixed amount and a share of
+    the tax due, and that choice loses something. It is recorded here rather
+    than discovered later.
+    """
+
+    def test_a_wrong_line_discount_is_still_caught_when_it_can_be_read(
+        self, tmp_path, config
+    ):
+        """The fault the percentage handling must not swallow: a discount
+        applied wrongly. Readable, so it is checked."""
+        config()
+        invoice = {
+            "currency": "INR",
+            "subtotal": 85000.00,
+            "invoice_total_ex_tax": 85000.00,
+            "tax_amount": 15300.00,
+            "invoice_total_inc_tax": 100300.00,
+            "line_items": [
+                {
+                    "description": "Masterbatch",
+                    "quantity": 20,
+                    "unit_price": 4521.00,
+                    "line_discount_pct": 0.10,  # 90,420 less 10% is 81,378
+                    "amount_ex_tax": 85000.00,  # and the invoice says 85,000
+                    "hsn_sac": "3204",
+                }
+            ],
+        }
+        assert steps(tmp_path, invoice)["4.2"]["passed"] is False
+
+    def test_a_rounding_error_below_our_own_precision_is_not_caught(
+        self, tmp_path, config
+    ):
+        """4.20 on 250,751.58 is 0.0017%. Legitimate per-line rounding and
+        discount apportionment on this corpus reach 0.075%, so this fault is
+        smaller than the noise it would have to be told apart from -- no
+        tolerance separates them. Catching it with a fixed one-rupee band costs
+        twelve wrongly rejected invoices for two discrepancies of four rupees,
+        which is the wrong trade for a system that pays suppliers.
+        """
+        config(tax_rates_by_hsn={"8482": 0.18})
+        invoice = {
+            "currency": "INR",
+            "subtotal": 1393041.00,
+            "invoice_total_ex_tax": 1393041.00,
+            "tax_amount": 250751.58,  # 4.20 above the statutory 250,747.38
+            "invoice_total_inc_tax": 1643792.58,
+            "line_items": [
+                {
+                    "description": "Bearings",
+                    "amount_ex_tax": 1393041.00,
+                    "hsn_sac": "8482",
+                }
+            ],
+        }
+        assert steps(tmp_path, invoice)["4.4"]["passed"] is True
+
+    def test_a_wrong_rate_is_still_far_outside_the_tolerance(
+        self, tmp_path, config
+    ):
+        """What the check is actually for: 12% charged where 18% is due is a
+        third of the tax, not a fifth of a percent."""
+        config(tax_rates_by_hsn={"8482": 0.18})
+        invoice = {
+            "currency": "INR",
+            "subtotal": 1393041.00,
+            "invoice_total_ex_tax": 1393041.00,
+            "tax_amount": 167164.92,
+            "invoice_total_inc_tax": 1560205.92,
+            "line_items": [
+                {
+                    "description": "Bearings",
+                    "amount_ex_tax": 1393041.00,
+                    "hsn_sac": "8482",
+                }
+            ],
+        }
+        assert steps(tmp_path, invoice)["4.4"]["passed"] is False

@@ -209,6 +209,92 @@ def determine_work_type(invoice: dict) -> str:
     return "REPAIRS"
 
 
+def _line_discount(
+    line: dict, quantity: float, unit_price: float
+) -> tuple[float, bool]:
+    """What this line's discount takes off, and whether we could read it.
+
+    Invoices print the discount column as a percentage far more often than as
+    an amount, and the extractor returns whichever it sees -- so a value below
+    one is a rate rather than a sum of money. A discount that is shown but not
+    readable returns False, and the caller lets the line pass: an unreadable
+    column is our problem and not the supplier's.
+    """
+    rate = line.get("line_discount_pct")
+    amount = line.get("line_discount")
+    if rate is None and amount is not None and 0 < float(amount) < 1:
+        # "10%" read as 0.1. A real discount of under one unit of currency is
+        # not worth the false rejections the other reading causes.
+        rate, amount = float(amount), None
+    discount = 0.0
+    if rate is not None:
+        discount += quantity * unit_price * float(rate)
+    if amount is not None:
+        discount += float(amount)
+    if rate is None and amount is None and line.get("has_discount"):
+        return 0.0, False
+    return discount, True
+
+
+def _charges_and_lines(invoice: dict) -> tuple[list[dict], list[dict]]:
+    """The invoice's line items and its other charges, each counted once.
+
+    Freight, packing and travel are printed outside the line table, and the
+    extractor frequently returns them in both places -- as a line *and* as an
+    other-charge, sometimes describing the charge only as "Other Charges" so
+    the two descriptions do not even match. Counting both makes the lines
+    overshoot the subtotal and the expected tax overshoot by the charge's tax:
+    on one invoice by 455.94, which is 2,533.00 of packing at 18% to the cent.
+
+    The test is arithmetic rather than textual, because the arithmetic is what
+    went wrong: a charge is a duplicate when dropping it brings the line sum
+    back to the subtotal the invoice prints. Where the sums do not say so, both
+    are kept -- two things costing the same are not the same thing.
+    """
+    lines = list(invoice.get("line_items") or [])
+    charges = list(invoice.get("other_charges") or [])
+    if not charges or not lines:
+        return lines, charges
+
+    printed_base = invoice.get("subtotal")
+    if printed_base is None:
+        printed_base = invoice.get("invoice_total_ex_tax")
+    if printed_base is None:
+        return lines, charges
+
+    line_sum = sum((line.get("amount_ex_tax") or 0) for line in lines)
+    overshoot = line_sum - printed_base
+    if overshoot <= 0.01:
+        return lines, charges
+
+    kept, dropped = [], 0.0
+    remaining = list(charges)
+    for line in lines:
+        amount = line.get("amount_ex_tax")
+        twin = next(
+            (
+                c
+                for c in remaining
+                if amount is not None
+                and c.get("amount") is not None
+                and abs(float(c["amount"]) - float(amount)) <= 0.01
+            ),
+            None,
+        )
+        if (
+            twin is not None
+            and dropped + float(twin["amount"]) <= overshoot + 0.01
+        ):
+            remaining.remove(twin)
+            dropped += float(twin["amount"])
+            continue
+        kept.append(line)
+    # Only if removing them actually reconciles the lines with the subtotal.
+    if abs(dropped - overshoot) <= 0.01:
+        return kept, charges
+    return lines, charges
+
+
 def _stated_tax_total(invoice: dict) -> float:
     """The tax the invoice charges, however it chooses to present it.
 
@@ -255,7 +341,7 @@ def _expected_tax(invoice: dict, config: dict) -> tuple[float, str] | None:
     tax rejection an AP clerk cannot check by hand is a rejection they have to
     take on trust.
     """
-    lines = invoice.get("line_items") or []
+    lines, charges = _charges_and_lines(invoice)
     priced = [
         line
         for line in lines
@@ -272,8 +358,16 @@ def _expected_tax(invoice: dict, config: dict) -> tuple[float, str] | None:
     # taxable amount rather than on its printed value. Taxing the printed
     # values instead overstates the tax by the whole discount, which reads as
     # the supplier undercharging when they did nothing of the kind.
+    # What the invoice says is taxable, preferring the figures it prints over
+    # one derived from them. `invoice_total_ex_tax` is where an extractor's
+    # arithmetic errors land -- on one invoice it came back holding the packing
+    # charge as well, so the charge was taxed twice and the expected tax
+    # overshot by 455.94, exactly 2,533.00 at 18%. Subtotal minus discount is
+    # printed on the document and cannot drift that way.
     subtotal = invoice.get("subtotal")
     taxable = invoice.get("invoice_total_ex_tax")
+    if subtotal is not None:
+        taxable = subtotal - (invoice.get("discount") or 0)
     share = 1.0
     if subtotal and taxable is not None and subtotal > 0:
         share = taxable / subtotal
@@ -287,7 +381,7 @@ def _expected_tax(invoice: dict, config: dict) -> tuple[float, str] | None:
         rate = _statutory_rate(line, config, currency)
         rates.add(rate)
         total += base * share * rate
-    for charge in invoice.get("other_charges") or []:
+    for charge in charges:
         amount = charge.get("amount")
         if amount is None:
             continue
@@ -458,6 +552,9 @@ _FALLBACK_CONFIG = {
     # cents: a per-line rounding rule that is normal in some jurisdictions
     # exceeded it on almost every invoice.
     "tax_rate_tolerance": 1.00,
+    # And the same allowance as a share of the tax due, for invoices where a
+    # fixed amount is meaningless.
+    "tax_rate_tolerance_pct": 0.002,
     "hours_tolerance": 0.5,
     # Tax ID validation
     "validate_tax_id_checksum": True,
@@ -582,7 +679,12 @@ class InvoiceLineItem(BaseModel):
     # check at all.
     hsn_sac: str | None = None
     tax_rate: float | None = None  # 0.18 for 18%
-    line_discount: float | None = None
+    # Invoices print the discount column as a percentage more often than as an
+    # amount, so both are captured rather than one being inferred from the
+    # other -- reading "10%" as ten rupees rejected five real invoices.
+    line_discount: float | None = None  # a sum of money
+    line_discount_pct: float | None = None  # 0.10 for 10%
+    has_discount: bool | None = None
 
 
 class OtherCharge(BaseModel):
@@ -1384,7 +1486,9 @@ Return ONLY valid JSON with these fields:
       "tax_amount": decimal or null,
       "hsn_sac": "string or null (HSN or SAC classification code)",
       "tax_rate": decimal or null (0.18 for an 18% line),
-      "line_discount": decimal or null (discount on this line, positive)
+      "line_discount": decimal or null (a discount shown as an AMOUNT of money, positive),
+      "line_discount_pct": decimal or null (a discount shown as a PERCENTAGE, as a fraction: 0.10 for 10%),
+      "has_discount": true/false (does this line show any discount at all, in either form?)
     }
   ]
 }
@@ -1399,6 +1503,15 @@ correcting them hides the error.
 Bank details: report only what appears on this invoice. They are compared
 against the vendor's records to detect payment-redirection fraud, so a value
 inferred rather than read defeats the control.
+
+Discounts: the discount column is a percentage on most layouts and an amount
+on some. Put a percentage in line_discount_pct and an amount in line_discount,
+never the same number in both, and set has_discount whenever the line shows one
+-- a discount we can see but cannot quantify must not read as no discount.
+
+other_charges: freight, packing, insurance and similar, as printed outside the
+line-item table. Do not also repeat them as line items: the same charge in both
+places is counted twice.
 
 tax_breakdown: one entry per distinct tax rate shown. Leave empty if the
 invoice states a single tax amount with no rate breakdown.
@@ -2113,10 +2226,8 @@ class Phase4ValidatorAgent(BaseAgent):
         # charge or a round-off line each looked like an arithmetic error.
         subtotal = invoice.get("subtotal")
         base = subtotal if subtotal is not None else total_ex
-        other_charges = sum(
-            (charge.get("amount") or 0)
-            for charge in (invoice.get("other_charges") or [])
-        )
+        _, charges = _charges_and_lines(invoice)
+        other_charges = sum((charge.get("amount") or 0) for charge in charges)
         expected_total = (
             base
             - (invoice.get("discount") or 0)
@@ -2156,7 +2267,10 @@ class Phase4ValidatorAgent(BaseAgent):
         # subtotal, and each line must be the product it says it is: a
         # quantity changed without its total, or a line discount applied
         # wrongly, leaves the subtotal untouched and is invisible to a sum.
-        lines = invoice.get("line_items") or []
+        # A charge the extractor also returned as a line is not a second
+        # charge: counting both makes the lines overshoot a subtotal that never
+        # included it.
+        lines, _ = _charges_and_lines(invoice)
         line_total = sum((item.get("amount_ex_tax") or 0) for item in lines)
         stated_subtotal = (
             invoice.get("subtotal")
@@ -2178,9 +2292,15 @@ class Phase4ValidatorAgent(BaseAgent):
                 stated = item.get("amount_ex_tax")
                 if quantity is None or unit_price is None or stated is None:
                     continue
-                computed = quantity * unit_price - (
-                    item.get("line_discount") or 0
+                discount, quantifiable = _line_discount(
+                    item, quantity, unit_price
                 )
+                if not quantifiable:
+                    # The line shows a discount and we could not read how much.
+                    # Rejecting here rejects the supplier for our own reading,
+                    # which is what the tax-ID comparison already learned.
+                    continue
+                computed = quantity * unit_price - discount
                 if abs(computed - stated) > line_tolerance:
                     reconciles = False
                     evidence = (
@@ -2254,7 +2374,14 @@ class Phase4ValidatorAgent(BaseAgent):
         # always was.
         currency = str(invoice.get("currency") or "").upper()
         config = _get_config()
-        tax_tolerance = config.get("tax_rate_tolerance", tolerance)
+        # Absolute, or a share of the tax due, whichever is larger. A fixed
+        # rupee or two is the right allowance on a small invoice and an
+        # impossible one on a large: per-line rounding and the apportionment of
+        # an invoice-level discount across twelve lines put a two-million-rupee
+        # tax figure several hundred out, which is 0.07% and not a discrepancy
+        # anyone would investigate. The faults this check exists to catch --
+        # the wrong rate, the wrong base, tax on an exempt line -- are whole
+        # percentage points wide.
         per_line = _expected_tax(invoice, config)
 
         if per_line is not None:
@@ -2267,6 +2394,18 @@ class Phase4ValidatorAgent(BaseAgent):
             expected_tax = round(total_ex * tax_rate, 2)
             evidence_rate = f"{tax_rate:.0%} of {total_ex:.2f}"
 
+        # Absolute, or a share of the tax due, whichever is larger. A fixed
+        # rupee or two is the right allowance on a small invoice and an
+        # impossible one on a large: per-line rounding and the apportionment of
+        # an invoice-level discount across twelve lines put a two-million-rupee
+        # tax figure several hundred out, which is 0.07% and not a discrepancy
+        # anyone would investigate. The faults this check exists to catch --
+        # the wrong rate, the wrong base, tax on an exempt line -- are whole
+        # percentage points wide.
+        tax_tolerance = max(
+            config.get("tax_rate_tolerance", tolerance),
+            abs(expected_tax) * config.get("tax_rate_tolerance_pct", 0.002),
+        )
         tax_diff = abs(tax - expected_tax)
         tax_valid = tax_diff <= tax_tolerance
         evidence = (

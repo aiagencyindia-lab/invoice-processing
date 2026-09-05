@@ -471,6 +471,7 @@ config_defaults:
   balance_tolerance: 0.02
   line_sum_tolerance: 1.00
   tax_rate_tolerance: 1.00
+  tax_rate_tolerance_pct: 0.002
   hours_tolerance: 0.5
   validate_tax_id_checksum: true
   tax_id_format: "ABN"
