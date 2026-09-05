@@ -10,9 +10,12 @@ dataset is edited -- which it must not be.
 
 from __future__ import annotations
 
-import pytest
+import os
 
-from benchmark.harness import dataset, score
+import pytest
+from dotenv import load_dotenv
+
+from benchmark.harness import dataset, score, stack_main
 from invoice_processing import po_matching
 
 
@@ -222,3 +225,55 @@ class TestTheMatrixIsIntact:
             "INFORMATIONAL_MATCH",
             "INFORMATIONAL_DISCREPANCY",
         }
+
+
+class TestALocalRunStaysLocal:
+    """A local benchmark run must not reach production storage.
+
+    It did. `configure_environment` deleted GCS_BUCKET from the environment,
+    and `core.config` calls load_dotenv() at import, which fills in any
+    variable that is absent -- so the bucket name came straight back from the
+    repo's .env and 273 synthetic documents were written to the production
+    bucket while the run reported using a local directory. DATABASE_URL was
+    unaffected because it is set rather than deleted, and dotenv does not
+    override a variable that already has a value.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated_environment(self):
+        """`configure_environment` writes to os.environ by design -- it is
+        preparing a process to run in.
+
+        The whole environment is snapshotted and restored, not just the keys
+        this test names: monkeypatch only undoes what monkeypatch did, and the
+        variable that leaked into the rest of the suite was one the function
+        under test set for itself.
+        """
+        before = dict(os.environ)
+        try:
+            yield
+        finally:
+            os.environ.clear()
+            os.environ.update(before)
+
+    def test_the_infrastructure_variables_are_emptied_not_deleted(
+        self, tmp_path
+    ):
+        os.environ["GCS_BUCKET"] = "a-real-bucket"
+        stack_main.configure_environment(tmp_path)
+        for key in (
+            "GCS_BUCKET",
+            "CLOUD_SQL_INSTANCE",
+            "PUBSUB_TOPIC",
+            "PUBSUB_SUBSCRIPTION",
+        ):
+            assert os.environ.get(key) == "", (
+                f"{key} is {os.environ.get(key)!r}; an absent variable is "
+                "refilled by load_dotenv at import"
+            )
+
+    def test_dotenv_cannot_refill_them(self, tmp_path):
+        """The property that actually matters, asserted against dotenv itself."""
+        stack_main.configure_environment(tmp_path)
+        load_dotenv(dataset.REPO / ".env")
+        assert not os.getenv("GCS_BUCKET")

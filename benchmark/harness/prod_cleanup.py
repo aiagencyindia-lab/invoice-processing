@@ -15,10 +15,12 @@ tenants, and nothing else. Three things it deliberately does not do:
   and that stays true after the documents are gone. Removing it would make the
   audit trail lie about its own history, which is the one thing it exists not
   to do.
-* **It does not add a delete to the blob port.** Nothing in the product needs
-  one, and a port grows a destructive method when a caller needs it rather
-  than when a script would find it convenient. Objects are namespaced
-  `t/<tenant>/`, so this removes them by prefix through the storage client.
+* **It does not delete a prefix it was not told about.** Objects are namespaced
+  `t/<tenant>/`, and the tenants it cleans are the `bench-` rows in the
+  database. A local run that wrote to the bucket under a tenant id no longer in
+  the database leaves objects this cannot see, which is exactly what happened
+  once -- so `--prefix` exists to name such a prefix explicitly, and it still
+  refuses anything outside the `bench-` namespace.
 
 Defaults to a dry run. `--apply` is required to delete anything.
 """
@@ -38,6 +40,20 @@ def main(argv=None) -> int:
         "--apply",
         action="store_true",
         help="actually delete; without it nothing is written",
+    )
+    p.add_argument(
+        "--prefix",
+        action="append",
+        default=[],
+        help=(
+            "also remove objects under t/<prefix>/, for a tenant that is no "
+            "longer in the database; repeatable"
+        ),
+    )
+    p.add_argument(
+        "--rows-only",
+        action="store_true",
+        help="delete database rows and leave stored objects alone",
     )
     p.add_argument(
         "--tenant-prefix",
@@ -94,7 +110,8 @@ def main(argv=None) -> int:
             ).all()
             print(
                 f"{tenant_id}: {len(documents)} documents, {len(invoices)} invoices, "
-                f"{len(findings)} findings, {len(runs)} pipeline runs"
+                f"{len(findings)} findings, {len(runs)} pipeline runs",
+                flush=True,
             )
             total += len(documents) + len(invoices) + len(findings) + len(runs)
 
@@ -102,19 +119,48 @@ def main(argv=None) -> int:
                 for row in (*findings, *runs, *invoices, *documents):
                     session.delete(row)
 
-        if args.apply and bucket_name:
+        if args.apply and bucket_name and not args.rows_only:
             from google.cloud import storage
 
+            print(f"  listing objects under t/{tenant_id}/ ...", flush=True)
             client = storage.Client()
             bucket = client.bucket(bucket_name)
-            removed = 0
-            for blob in client.list_blobs(bucket, prefix=f"t/{tenant_id}/"):
-                blob.delete()
-                removed += 1
-            print(f"  {removed} stored objects removed from {bucket_name}")
+            # Listed first, then deleted, so the count is known before the
+            # deleting starts and a slow bucket looks slow rather than hung.
+            keys = [
+                b.name
+                for b in client.list_blobs(bucket, prefix=f"t/{tenant_id}/")
+            ]
+            print(f"  {len(keys)} objects to remove", flush=True)
+            for n, key in enumerate(keys, 1):
+                bucket.blob(key).delete()
+                if n % 5 == 0 or n == len(keys):
+                    print(f"    {n}/{len(keys)}", flush=True)
+
+    for extra in args.prefix:
+        if not extra.startswith(PREFIX):
+            raise SystemExit(
+                f"Refusing to touch objects outside {PREFIX!r}: {extra!r}."
+            )
+        if not bucket_name:
+            break
+        from google.cloud import storage
+
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        keys = [b.name for b in client.list_blobs(bucket, prefix=f"t/{extra}/")]
+        print(f"t/{extra}/: {len(keys)} stored objects", flush=True)
+        total += len(keys)
+        if args.apply:
+            for n, key in enumerate(keys, 1):
+                bucket.blob(key).delete()
+                if n % 20 == 0 or n == len(keys):
+                    print(f"    {n}/{len(keys)}", flush=True)
 
     if not args.apply:
-        print(f"\nDry run: {total} rows would be deleted. Re-run with --apply.")
+        print(
+            f"\nDry run: {total} rows and objects would be removed. Re-run with --apply."
+        )
     else:
         print(f"\nDeleted {total} rows. Audit events are kept, by design.")
     return 0

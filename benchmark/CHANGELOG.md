@@ -532,3 +532,43 @@ first time follow — 19 reach 3.1 and 3.3, 18 reach 3.2, 13 reach each of 4.1,
 are being asked for the first time.
 
 **Result.** 1581 passed. Reverting the goods/service gate fails two named tests.
+
+---
+
+## 2026-09-05 — Every local run had been writing to the production bucket
+
+**What happened.** Cleaning up after the production subset, an independent
+listing of the bucket showed 273 objects under `t/bench-A/`, `t/bench-B/` and
+`t/bench-C/` — capitalised, which no production run ever used — timestamped
+across the baseline and every AFTER run. Local runs had been writing their
+document PDFs into the production GCS bucket from the start.
+
+**Root cause.** `configure_environment` *deleted* `GCS_BUCKET` from the
+environment before importing the product. `core.config` calls `load_dotenv()`
+at import, and dotenv fills in any variable that is **absent** — so the bucket
+name came straight back from the repo's `.env`. `DATABASE_URL` was unaffected
+because it is *set* rather than deleted, and dotenv does not override a
+variable that already has a value. The asymmetry between the two is the whole
+bug, and it made every local run report a local blob directory while using the
+production bucket.
+
+**What it did and did not affect.** No production database rows: the databases
+really were local SQLite. No benchmark result: blobs are content-addressed
+storage the pipeline reads back by key, so every measurement stands. What it
+did was put 273 synthetic PDFs in a customer's bucket, and make "nothing local
+touches production" false when it was said.
+
+**Fix.** The variables are set to empty rather than deleted; an empty value is
+already present, so dotenv leaves it alone and every reader treats it as unset.
+`tests/test_benchmark_scoring.py::TestALocalRunStaysLocal` pins both halves —
+that the variables are emptied, and that `load_dotenv` against the repo's own
+`.env` cannot refill them. Reverting to `pop` fails both.
+
+**Also fixed.** `prod_cleanup` could only see prefixes belonging to tenants
+still in the database, which is why it reported "0 objects to remove" while 273
+sat in the bucket. `--prefix` names an orphaned one explicitly, and still
+refuses anything outside `bench-`.
+
+**Verified after.** The bucket holds 13 objects, all under the pilot's own
+tenant. The pilot has its 13 documents and 13 invoices. The bench tenants hold
+nothing.

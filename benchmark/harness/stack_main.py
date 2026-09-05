@@ -89,13 +89,19 @@ def configure_environment(root: Path, *, production: bool = False) -> None:
             os.environ.pop(key, None)
     else:
         os.environ["DATABASE_URL"] = f"sqlite:///{root / 'app.db'}"
+        # Set empty, never deleted. `core.config` calls load_dotenv() at import
+        # and dotenv fills in any variable that is *absent* -- so a popped
+        # GCS_BUCKET came straight back from the repo's .env, and every local
+        # run wrote its documents into the production bucket while believing
+        # it was using a local directory. An empty value is already present,
+        # so dotenv leaves it alone, and every reader treats it as unset.
         for key in (
             "CLOUD_SQL_INSTANCE",
             "GCS_BUCKET",
             "PUBSUB_TOPIC",
             "PUBSUB_SUBSCRIPTION",
         ):
-            os.environ.pop(key, None)
+            os.environ[key] = ""
     # The dataset's expectations are computed relative to this date.
     os.environ.setdefault("INVOICE_REFERENCE_DATE", "2026-09-03")
     # Configuration the engine needs to start; never item_code_cache.json,
