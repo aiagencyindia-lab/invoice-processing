@@ -461,3 +461,35 @@ fail there — the hand-off the 1.3 fix was made for.
 
 **Result.** 1575 passed. Reverting the checksum gate fails
 `test_an_unreadable_registration_does_not_reject_the_invoice`.
+
+---
+
+## 2026-09-05 — Final AFTER run, and what the last 15 regressions are
+
+300 invoices on `6db9408`, no errors. Both P9 fixes held: check 1.2's false
+positives went 26 → 0 and 1.3's 32 → 2. 226 rows fixed against 15 regressed.
+
+The 15 have three causes, and only one of them is a validation defect:
+
+**Eight are check 2.2 applying a goods rule to services.** Every one is a
+service vendor, and every one reads "Invoice prices this at X; purchase order
+approved Y". The quantity and unit-price checks added in P5 belong to goods: a
+service invoice's rate is governed by its work authorization, which check 4.3
+already tests, and the purchase order is a budget envelope rather than a price
+list. The vendor master already records which suppliers supply goods —
+`wa_matching` reads it for exactly this reason — so the fix is to gate the
+quantity and price comparisons the same way. Two further regressions (3.1 and
+3.2 on the same invoices) are these eight cascading.
+
+**Two are the extractor inventing the customer.** `MFG-INV-002` and
+`TECH-INV-024` are addressed to Lumora Brandcraft LLP; the extractor returned
+the *receiving tenant's* own name and registration. Check 1.2 then correctly
+passed an invoice that should have failed, because what it was given no longer
+said what the document says. No validation change can fix this: a check cannot
+catch what extraction has already rewritten. It belongs in the extraction
+prompt, and it is the most serious single finding in the run.
+
+**One is the deadline doing its job.** `SVC-INV-025` hit the 180-second Vertex
+timeout, so its extraction failed and 1.1 and 1.3 report it. That is the trade
+P0 makes — a failed invoice instead of a hung worker — and it cost exactly one
+invoice out of 300.

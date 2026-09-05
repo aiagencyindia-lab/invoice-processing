@@ -1,18 +1,9 @@
 kind,test_id,invoice_id,company_id,check_id,expected_result,before_result,after_result,before_evidence,after_evidence
+regressed,SVC-INV-025:1.1,SVC-INV-025,C,1.1,PASS,PASS,FAIL,Extracted invoice SMB-26-00845,LLM call exceeded 180s and was abandoned
 regressed,MFG-INV-002:1.2,MFG-INV-002,B,1.2,FAIL,FAIL,PASS,Customer: None,"Customer: Ferrovane Industries Private Limited, tax ID 24AAECF9034M1ZE matches"
-regressed,MFG-INV-033:1.2,MFG-INV-033,B,1.2,PASS,PASS,FAIL,Customer: Ferrovane Industries Private Limited,"Customer: Ferrovane Industries Private Limited, tax ID 24AAECF9034MIZE is not one of this organisation's"
-regressed,MFG-INV-057:1.2,MFG-INV-057,B,1.2,PASS,PASS,FAIL,Customer: Ferrovane Industries Private Limited,"Customer: Ferrovane Industries Private Limited, tax ID 24AAECF9034MIZE is not one of this organisation's"
-regressed,MFG-INV-078:1.2,MFG-INV-078,B,1.2,PASS,PASS,FAIL,Customer: Ferrovane Industries Private Limited,"Customer: Ferrovane Industries Private Limited, tax ID 24AAECF9034MIZE is not one of this organisation's"
-regressed,TECH-INV-006:1.2,TECH-INV-006,A,1.2,PASS,PASS,FAIL,Customer: Zentrix Cloudworks Private Limited,"Customer: Zentrix Cloudworks Private Limited, tax ID 29AAFCZ4821L1Z5 is not one of this organisation's"
 regressed,TECH-INV-024:1.2,TECH-INV-024,A,1.2,FAIL,FAIL,PASS,Customer: None,"Customer: Zentrix Cloudworks Private Limited, tax ID 29AAFCZ4821L1ZS matches"
-regressed,MFG-INV-008:1.3,MFG-INV-008,B,1.3,PASS,PASS,FAIL,"Tax ID: True, Date: True, Vendor: True","Tax ID: True, Date: True, Vendor: True, no tax stated"
-regressed,MFG-INV-054:1.3,MFG-INV-054,B,1.3,PASS,PASS,FAIL,"Tax ID: True, Date: True, Vendor: True","Tax ID: True, Date: True, Vendor: True, no tax stated"
-regressed,SVC-INV-001:1.3,SVC-INV-001,C,1.3,PASS,PASS,FAIL,"Tax ID: True, Date: True, Vendor: True","Tax ID: True, Date: True, Vendor: True, no tax stated"
-regressed,SVC-INV-051:1.3,SVC-INV-051,C,1.3,PASS,PASS,FAIL,"Tax ID: True, Date: True, Vendor: True","Tax ID: True, Date: True, Vendor: True, no tax stated"
-regressed,SVC-INV-070:1.3,SVC-INV-070,C,1.3,PASS,PASS,FAIL,"Tax ID: True, Date: True, Vendor: True","Tax ID: True, Date: True, Vendor: True, no tax stated"
+regressed,SVC-INV-025:1.3,SVC-INV-025,C,1.3,PASS,PASS,FAIL,"Tax ID: True, Date: True, Vendor: True","Tax ID: False, Date: False, Vendor: False"
 regressed,TECH-INV-087:1.3,TECH-INV-087,A,1.3,FAIL,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
-regressed,MFG-INV-054:2.1,MFG-INV-054,B,2.1,FAIL,FAIL,NOT_RUN,Found 0 line item(s),
-regressed,SVC-INV-051:2.1,SVC-INV-051,C,2.1,FAIL,FAIL,NOT_RUN,Found 0 line item(s),
 regressed,MFG-INV-006:2.2,MFG-INV-006,B,2.2,PASS,PASS,FAIL,"Matched purchase order PO-2026-4063: 60,980.04 against 105,000.00 (105,000.00 remaining).",Invoice prices this at 957.00; purchase order PO-2026-4063 approved 875.00.
 regressed,SVC-INV-008:2.2,SVC-INV-008,C,2.2,PASS,PASS,FAIL,"Matched purchase order LB/PO/0107: 109,598.00 against 266,400.00 (266,400.00 remaining).","Invoice prices this at 1,720.00; purchase order LB/PO/0107 approved 1,665.00."
 regressed,SVC-INV-038:2.2,SVC-INV-038,C,2.2,PASS,PASS,FAIL,"Matched purchase order LB/PO/0090: 337,800.96 against 344,000.00 (344,000.00 remaining).","Invoice prices this at 994.00; purchase order LB/PO/0090 approved 1,075.00."
@@ -42,7 +33,7 @@ fixed,MFG-INV-100:1.1,MFG-INV-100,B,1.1,FAIL,PASS,FAIL,Extracted invoice SEA/202
 fixed,SVC-INV-004:1.1,SVC-INV-004,C,1.1,PASS,FAIL,PASS,No invoice found,Extracted invoice NSC/2026-27/411
 fixed,SVC-INV-012:1.1,SVC-INV-012,C,1.1,PASS,FAIL,PASS,No invoice found,Extracted invoice SMB-26-00840
 fixed,SVC-INV-014:1.1,SVC-INV-014,C,1.1,PASS,FAIL,PASS,No invoice found,Extracted invoice NSC/2026-27/419
-fixed,SVC-INV-016:1.1,SVC-INV-016,C,1.1,PASS,FAIL,PASS,No invoice found,Extracted invoice EIN/2026-27/0201
+fixed,SVC-INV-016:1.1,SVC-INV-016,C,1.1,PASS,FAIL,PASS,No invoice found,Extracted invoice ΕΙΝ/2026-27/0201
 fixed,SVC-INV-027:1.1,SVC-INV-027,C,1.1,PASS,FAIL,PASS,No invoice found,Extracted invoice HCC/2026-27/0745
 fixed,SVC-INV-044:1.1,SVC-INV-044,C,1.1,PASS,FAIL,PASS,No invoice found,Extracted invoice VCC/0325
 fixed,SVC-INV-049:1.1,SVC-INV-049,C,1.1,PASS,FAIL,PASS,No invoice found,Extracted invoice FFP-2605-666
@@ -71,6 +62,7 @@ fixed,TECH-INV-096:1.1,TECH-INV-096,A,1.1,FAIL,PASS,FAIL,Extracted invoice CN-12
 fixed,TECH-INV-097:1.1,TECH-INV-097,A,1.1,FAIL,PASS,FAIL,Extracted invoice CH/2026-27/0576,"Document is a proforma invoice, not an invoice"
 fixed,TECH-INV-100:1.1,TECH-INV-100,A,1.1,FAIL,PASS,FAIL,Extracted invoice KCA-2605-399,"Document is a proforma invoice, not an invoice"
 fixed,MFG-INV-003:1.2,MFG-INV-003,B,1.2,PASS,FAIL,PASS,Customer: None,"Customer: Ferrovane Industries Private Limited, tax ID 24AAECF9034M1ZE matches"
+fixed,MFG-INV-007:1.2,MFG-INV-007,B,1.2,PASS,FAIL,PASS,Customer: None,"Customer: Ferrovane Industries Private Limited, tax ID 24AAECF9034MIZE could not be read (Invalid check character: expected 'X', found 'E'); the name alone was checked"
 fixed,MFG-INV-010:1.2,MFG-INV-010,B,1.2,PASS,FAIL,PASS,Customer: None,"Customer: Ferrovane Industries Private Limited, tax ID 24AAECF9034M1ZE matches"
 fixed,MFG-INV-023:1.2,MFG-INV-023,B,1.2,PASS,FAIL,PASS,Customer: None,"Customer: Ferrovane Industries Private Limited, tax ID 24AAECF9034M1ZE matches"
 fixed,MFG-INV-032:1.2,MFG-INV-032,B,1.2,PASS,FAIL,PASS,Customer: None,"Customer: Ferrovane Industries Private Limited, tax ID 24AAECF9034M1ZE matches"
@@ -103,6 +95,7 @@ fixed,MFG-INV-010:1.3,MFG-INV-010,B,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: Fal
 fixed,MFG-INV-011:1.3,MFG-INV-011,B,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,MFG-INV-016:1.3,MFG-INV-016,B,1.3,FAIL,PASS,FAIL,"Tax ID: True, Date: True, Vendor: True","Tax ID: True, Date: True, Vendor: True, billed without a tax registration"
 fixed,MFG-INV-023:1.3,MFG-INV-023,B,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
+fixed,MFG-INV-032:1.3,MFG-INV-032,B,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,MFG-INV-034:1.3,MFG-INV-034,B,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,MFG-INV-038:1.3,MFG-INV-038,B,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,MFG-INV-046:1.3,MFG-INV-046,B,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
@@ -111,10 +104,12 @@ fixed,MFG-INV-072:1.3,MFG-INV-072,B,1.3,FAIL,PASS,FAIL,"Tax ID: True, Date: True
 fixed,MFG-INV-088:1.3,MFG-INV-088,B,1.3,FAIL,PASS,FAIL,"Tax ID: True, Date: True, Vendor: True","Tax ID: False, Date: False, Vendor: False"
 fixed,MFG-INV-090:1.3,MFG-INV-090,B,1.3,FAIL,PASS,FAIL,"Tax ID: True, Date: True, Vendor: True","Tax ID: False, Date: False, Vendor: False"
 fixed,SVC-INV-004:1.3,SVC-INV-004,C,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
+fixed,SVC-INV-014:1.3,SVC-INV-014,C,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,SVC-INV-016:1.3,SVC-INV-016,C,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,SVC-INV-027:1.3,SVC-INV-027,C,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,SVC-INV-034:1.3,SVC-INV-034,C,1.3,FAIL,PASS,FAIL,"Tax ID: True, Date: True, Vendor: True","Tax ID: True, Date: True, Vendor: True, billed without a tax registration"
 fixed,SVC-INV-044:1.3,SVC-INV-044,C,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
+fixed,SVC-INV-049:1.3,SVC-INV-049,C,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,SVC-INV-052:1.3,SVC-INV-052,C,1.3,FAIL,PASS,FAIL,"Tax ID: True, Date: True, Vendor: True","Tax ID: True, Date: True, Vendor: True, billed without a tax registration"
 fixed,SVC-INV-059:1.3,SVC-INV-059,C,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,SVC-INV-060:1.3,SVC-INV-060,C,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
@@ -129,8 +124,12 @@ fixed,TECH-INV-007:1.3,TECH-INV-007,A,1.3,FAIL,PASS,FAIL,"Tax ID: True, Date: Tr
 fixed,TECH-INV-011:1.3,TECH-INV-011,A,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,TECH-INV-024:1.3,TECH-INV-024,A,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,TECH-INV-027:1.3,TECH-INV-027,A,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
+fixed,TECH-INV-033:1.3,TECH-INV-033,A,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
+fixed,TECH-INV-036:1.3,TECH-INV-036,A,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,TECH-INV-044:1.3,TECH-INV-044,A,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
+fixed,TECH-INV-057:1.3,TECH-INV-057,A,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,TECH-INV-066:1.3,TECH-INV-066,A,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
+fixed,TECH-INV-069:1.3,TECH-INV-069,A,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,TECH-INV-081:1.3,TECH-INV-081,A,1.3,PASS,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 fixed,TECH-INV-096:1.3,TECH-INV-096,A,1.3,FAIL,PASS,FAIL,"Tax ID: True, Date: True, Vendor: True","Tax ID: False, Date: False, Vendor: False"
 fixed,SVC-INV-001:1.4,SVC-INV-001,C,1.4,FAIL,NOT_RUN,FAIL,,Work authorization WA-C-2026-040 is expired
@@ -175,7 +174,12 @@ fixed,TECH-INV-024:1.5,TECH-INV-024,A,1.5,FAIL,PASS,FAIL,Found 0 invoice(s),Foun
 fixed,TECH-INV-027:1.5,TECH-INV-027,A,1.5,FAIL,PASS,FAIL,Found 0 invoice(s),Found 3 invoice(s)
 fixed,TECH-INV-044:1.5,TECH-INV-044,A,1.5,FAIL,PASS,FAIL,Found 0 invoice(s),Found 2 invoice(s)
 fixed,TECH-INV-066:1.5,TECH-INV-066,A,1.5,FAIL,PASS,FAIL,Found 0 invoice(s),Found 3 invoice(s)
+fixed,MFG-INV-032:2.1,MFG-INV-032,B,2.1,FAIL,NOT_RUN,FAIL,,Found 0 line item(s)
+fixed,TECH-INV-033:2.1,TECH-INV-033,A,2.1,FAIL,NOT_RUN,FAIL,,Found 0 line item(s)
+fixed,TECH-INV-036:2.1,TECH-INV-036,A,2.1,FAIL,NOT_RUN,FAIL,,Found 0 line item(s)
+fixed,TECH-INV-069:2.1,TECH-INV-069,A,2.1,FAIL,NOT_RUN,FAIL,,Found 0 line item(s)
 fixed,MFG-INV-005:2.2,MFG-INV-005,B,2.2,PASS,FAIL,PASS,"Invoice of 6,508,524.00 exceeds purchase order PO-2026-4057 (512,240.00) by 5,996,284.00, outside the tolerance of 10,244.80.","Matched purchase order PO-2026-4057 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
+fixed,MFG-INV-007:2.2,MFG-INV-007,B,2.2,FAIL,NOT_RUN,FAIL,,"Invoice prices this at 2,877.12; purchase order PO-2026-4068 approved 2,664.00."
 fixed,MFG-INV-015:2.2,MFG-INV-015,B,2.2,PASS,FAIL,PASS,"Invoice of 25,634,840.17 exceeds purchase order PO-2026-4057 (512,240.00) by 25,122,600.17, outside the tolerance of 10,244.80.","Matched purchase order PO-2026-4057 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-017:2.2,MFG-INV-017,B,2.2,PASS,FAIL,PASS,"Invoice of 393,184.02 exceeds purchase order PO-2026-4066 (309,500.00) by 83,684.02, outside the tolerance of 6,190.00.","Matched purchase order PO-2026-4066 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-018:2.2,MFG-INV-018,B,2.2,PASS,FAIL,PASS,"Invoice of 857,320.74 exceeds purchase order PO-2026-4070 (587,380.00) by 269,940.74, outside the tolerance of 11,747.60.","Matched purchase order PO-2026-4070 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
@@ -185,6 +189,7 @@ fixed,MFG-INV-023:2.2,MFG-INV-023,B,2.2,FAIL,NOT_RUN,FAIL,,"Purchase order PO-20
 fixed,MFG-INV-025:2.2,MFG-INV-025,B,2.2,PASS,FAIL,PASS,"Invoice of 159,835.00 exceeds purchase order PO-2026-4040 (69,000.00) by 90,835.00, outside the tolerance of 1,380.00.","Matched purchase order PO-2026-4040 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-027:2.2,MFG-INV-027,B,2.2,PASS,FAIL,PASS,"Invoice of 2,663,630.00 exceeds purchase order PO-2026-4058 (121,236.00) by 2,542,394.00, outside the tolerance of 2,424.72.","Matched purchase order PO-2026-4058 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-029:2.2,MFG-INV-029,B,2.2,PASS,FAIL,PASS,"Invoice of 184,630.47 exceeds purchase order PO-2026-4065 (90,420.00) by 94,210.47, outside the tolerance of 1,808.40.","Matched purchase order PO-2026-4065 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
+fixed,MFG-INV-033:2.2,MFG-INV-033,B,2.2,PASS,FAIL,PASS,"Invoice of 9,593,596.00 exceeds purchase order PO-2026-4071 (2,587,400.00) by 7,006,196.00, outside the tolerance of 51,748.00.","Matched purchase order PO-2026-4071 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-035:2.2,MFG-INV-035,B,2.2,PASS,FAIL,PASS,"Invoice of 5,462,321.86 exceeds purchase order PO-2026-4043 (64,181.00) by 5,398,140.86, outside the tolerance of 1,283.62.","Matched purchase order PO-2026-4043 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-039:2.2,MFG-INV-039,B,2.2,PASS,FAIL,PASS,"Invoice of 2,618,790.58 exceeds purchase order PO-2026-4057 (512,240.00) by 2,106,550.58, outside the tolerance of 10,244.80.","Matched purchase order PO-2026-4057 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-042:2.2,MFG-INV-042,B,2.2,PASS,FAIL,PASS,"Invoice of 35,469.62 exceeds purchase order PO-2026-4039 (27,850.00) by 7,619.62, outside the tolerance of 557.00.","Matched purchase order PO-2026-4039 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
@@ -194,6 +199,7 @@ fixed,MFG-INV-047:2.2,MFG-INV-047,B,2.2,PASS,FAIL,PASS,"Invoice of 1,094,412.00 
 fixed,MFG-INV-048:2.2,MFG-INV-048,B,2.2,PASS,FAIL,PASS,"Invoice of 102,084.58 exceeds purchase order PO-2026-4050 (1,332.00) by 100,752.58, outside the tolerance of 50.00.","Matched purchase order PO-2026-4050 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-049:2.2,MFG-INV-049,B,2.2,PASS,FAIL,PASS,"Invoice of 13,961,509.00 exceeds purchase order PO-2026-4044 (11,049,800.00) by 2,911,709.00, outside the tolerance of 220,996.00.","Matched purchase order PO-2026-4044 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-053:2.2,MFG-INV-053,B,2.2,PASS,FAIL,PASS,"Invoice of 148,478.00 exceeds purchase order PO-2026-4050 (1,332.00) by 147,146.00, outside the tolerance of 50.00.","Matched purchase order PO-2026-4050 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
+fixed,MFG-INV-054:2.2,MFG-INV-054,B,2.2,PASS,FAIL,PASS,"Invoice of 280,582.28 exceeds purchase order PO-2026-4039 (27,850.00) by 252,732.28, outside the tolerance of 557.00.","Matched purchase order PO-2026-4039 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-056:2.2,MFG-INV-056,B,2.2,PASS,FAIL,PASS,"Invoice of 1,941,184.00 exceeds purchase order PO-2026-4058 (121,236.00) by 1,819,948.00, outside the tolerance of 2,424.72.","Matched purchase order PO-2026-4058 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-063:2.2,MFG-INV-063,B,2.2,PASS,FAIL,PASS,"Invoice of 106,825.18 exceeds purchase order PO-2026-4040 (69,000.00) by 37,825.18, outside the tolerance of 1,380.00.","Matched purchase order PO-2026-4040 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-075:2.2,MFG-INV-075,B,2.2,PASS,FAIL,PASS,"Purchase order PO-2026-4057 is in INR, but the invoice is in RS..","Matched purchase order PO-2026-4057 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
@@ -201,6 +207,7 @@ fixed,MFG-INV-077:2.2,MFG-INV-077,B,2.2,PASS,FAIL,PASS,"Invoice of 1,538,395.85 
 fixed,MFG-INV-081:2.2,MFG-INV-081,B,2.2,PASS,FAIL,PASS,"Invoice of 177,067.00 exceeds purchase order PO-2026-4049 (82,800.00) by 94,267.00, outside the tolerance of 1,656.00.","Matched purchase order PO-2026-4049 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,MFG-INV-083:2.2,MFG-INV-083,B,2.2,PASS,FAIL,PASS,"Invoice of 159,835.00 exceeds purchase order PO-2026-4040 (69,000.00) by 90,835.00, outside the tolerance of 1,380.00.","Matched purchase order PO-2026-4040 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,SVC-INV-022:2.2,SVC-INV-022,C,2.2,PASS,FAIL,PASS,"Invoice of 1,849,447.00 exceeds purchase order LB/PO/0104 (14,140.00) by 1,835,307.00, outside the tolerance of 282.80.","Matched purchase order LB/PO/0104 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
+fixed,SVC-INV-051:2.2,SVC-INV-051,C,2.2,PASS,FAIL,PASS,"Invoice of 211,489.04 exceeds purchase order LB/PO/0112 (64,560.00) by 146,929.04, outside the tolerance of 1,291.20.","Matched purchase order LB/PO/0112 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,TECH-INV-008:2.2,TECH-INV-008,A,2.2,PASS,FAIL,PASS,"Invoice of 22,619.18 exceeds purchase order ZC-PO-260026 (19,560.00) by 3,059.18, outside the tolerance of 391.20.","Matched purchase order ZC-PO-260026 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,TECH-INV-012:2.2,TECH-INV-012,A,2.2,PASS,FAIL,PASS,"Invoice of 7,228,764.70 exceeds purchase order ZC-PO-260006 (103,510.00) by 7,125,254.70, outside the tolerance of 2,070.20.","Matched purchase order ZC-PO-260006 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,TECH-INV-018:2.2,TECH-INV-018,A,2.2,PASS,FAIL,PASS,"Invoice of 9,222,843.00 exceeds purchase order ZC-PO-260025 (6,081,460.00) by 3,141,383.00, outside the tolerance of 121,629.20.","Matched purchase order ZC-PO-260025 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
@@ -210,22 +217,22 @@ fixed,TECH-INV-034:2.2,TECH-INV-034,A,2.2,PASS,FAIL,PASS,"Invoice of 11,163,397.
 fixed,TECH-INV-037:2.2,TECH-INV-037,A,2.2,PASS,FAIL,PASS,"Invoice of 353,365.00 exceeds purchase order ZC-PO-260029 (26,420.00) by 326,945.00, outside the tolerance of 528.40.","Matched purchase order ZC-PO-260029 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 fixed,TECH-INV-081:2.2,TECH-INV-081,A,2.2,FAIL,NOT_RUN,FAIL,,Purchase order ZC-PO-267306 was not found.
 fixed,MFG-INV-058:3.1,MFG-INV-058,B,3.1,PASS,FAIL,PASS,Byte-identical file already received; refused at ingest (sha256),No prior invoice matched
-fixed,MFG-INV-069:3.1,MFG-INV-069,B,3.1,FAIL,NOT_RUN,FAIL,,Same vendor and invoice number as 47dcdc26-d95a-4363-bbf9-48c8fb530de7 (MMT/2026-27/807)
-fixed,MFG-INV-075:3.1,MFG-INV-075,B,3.1,FAIL,NOT_RUN,FAIL,,Same vendor and invoice number as 45d308bb-044c-41dc-903e-e28ed5d1fd50 (MMT/2026-27/805)
-fixed,MFG-INV-081:3.1,MFG-INV-081,B,3.1,FAIL,NOT_RUN,FAIL,,Same vendor and invoice number as 9d248242-ff9a-4067-8a3e-0f42f1062e5b (BFC/00596/2026-27)
-fixed,MFG-INV-083:3.1,MFG-INV-083,B,3.1,FAIL,NOT_RUN,FAIL,,Same vendor and invoice number as 9e91f841-cb17-4028-aed4-cbd33bae9aa2 (AIC/2026-27/0167)
+fixed,MFG-INV-069:3.1,MFG-INV-069,B,3.1,FAIL,NOT_RUN,FAIL,,Same vendor and invoice number as df6d454f-31a9-4c9e-b2c7-e76935496010 (MMT/2026-27/807)
+fixed,MFG-INV-075:3.1,MFG-INV-075,B,3.1,FAIL,NOT_RUN,FAIL,,Same vendor and invoice number as 0e5ac33e-4f79-4ba5-b057-ace397913483 (MMT/2026-27/805)
+fixed,MFG-INV-081:3.1,MFG-INV-081,B,3.1,FAIL,NOT_RUN,FAIL,,Same vendor and invoice number as 2a4f68db-6606-4cc0-9a34-8eaf6d2e1921 (BFC/00596/2026-27)
+fixed,MFG-INV-083:3.1,MFG-INV-083,B,3.1,FAIL,NOT_RUN,FAIL,,Same vendor and invoice number as d62d4106-a4ae-414f-a4bc-333390c85cf9 (AIC/2026-27/0167)
 fixed,SVC-INV-002:3.1,SVC-INV-002,C,3.1,PASS,FAIL,PASS,Byte-identical file already received; refused at ingest (sha256),No prior invoice matched
-fixed,SVC-INV-076:3.1,SVC-INV-076,C,3.1,FAIL,NOT_RUN,FAIL,,Same vendor and invoice number as fef9b61c-43a4-44df-bae6-4c5c7303f48b (VCC/0335)
-fixed,TECH-INV-072:3.1,TECH-INV-072,A,3.1,FAIL,NOT_RUN,FAIL,,Same vendor and invoice number as 46691898-3c7a-48a0-a5e2-5828a832174d (CH/2026-27/0549)
-fixed,MFG-INV-022:3.2,MFG-INV-022,B,3.2,FAIL,NOT_RUN,FAIL,,"Invalid check character: expected 'T', found '0'. Invoice states 24DBOCA6353A1Z0; Greenline Logistics Pvt Ltd is registered as 24DBOCA6353A1ZT"
+fixed,SVC-INV-076:3.1,SVC-INV-076,C,3.1,FAIL,NOT_RUN,FAIL,,Same vendor and invoice number as 62602166-1941-4361-b3d5-4414a325bc79 (VCC/0335)
+fixed,TECH-INV-072:3.1,TECH-INV-072,A,3.1,FAIL,NOT_RUN,FAIL,,Same vendor and invoice number as fa48b37e-1881-4b44-af90-263d935d5253 (CH/2026-27/0549)
+fixed,MFG-INV-022:3.2,MFG-INV-022,B,3.2,FAIL,NOT_RUN,FAIL,,"Invalid check character: expected 'T', found 'O'. Invoice states 24DBOCA6353A1ZO; Greenline Logistics Pvt Ltd is registered as 24DBOCA6353A1ZT"
 fixed,MFG-INV-063:3.2,MFG-INV-063,B,3.2,FAIL,NOT_RUN,FAIL,,Valid checksum. Invoice states 24NEOCN4760X1ZQ; Apex Industrial Components Pvt Ltd is registered as 24ITCCR9797D1ZQ
 fixed,SVC-INV-019:3.2,SVC-INV-019,C,3.2,FAIL,NOT_RUN,FAIL,,Valid checksum. Invoice states 06DGMCT1440V1Z7; Talkpoint PR Advisory Pvt Ltd is registered as 06VIPCC7334T1ZP
 fixed,SVC-INV-022:3.2,SVC-INV-022,C,3.2,FAIL,NOT_RUN,FAIL,,"Invalid check character: expected 'X', found '4'. Invoice states 27RXOPC4192W1Z4; Printwell Offset Works is registered as 27RXOPC4192W1ZX"
+fixed,TECH-INV-006:3.2,TECH-INV-006,A,3.2,FAIL,NOT_RUN,FAIL,,Invalid length: 14 (must be 15). Invoice states 29PECCX8529RZO; Kestrel Cyber Assurance Pvt Ltd is registered as 29PECCX8526R1ZO
 fixed,SVC-INV-059:3.3,SVC-INV-059,C,3.3,FAIL,NOT_RUN,FAIL,,Invoice date: 2026-09-05
 fixed,TECH-INV-012:3.3,TECH-INV-012,A,3.3,FAIL,NOT_RUN,FAIL,,Invoice date: 2026-10-01
 fixed,TECH-INV-020:3.3,TECH-INV-020,A,3.3,FAIL,NOT_RUN,FAIL,,Invoice date: 2026-10-18
 fixed,TECH-INV-023:3.3,TECH-INV-023,A,3.3,FAIL,NOT_RUN,FAIL,,Invoice date: 2026-10-01
-fixed,MFG-INV-039:4.2,MFG-INV-039,B,4.2,FAIL,NOT_RUN,FAIL,,"Line 1 (Spindle bearing set): 10 x 51,224.00 = 512,239.98, but the invoice states 501,995.20"
 fixed,SVC-INV-003:4.2,SVC-INV-003,C,4.2,FAIL,NOT_RUN,FAIL,,"Line sum: 286322.00, Subtotal: 286272.00, Diff: 50.00"
 fixed,SVC-INV-023:4.2,SVC-INV-023,C,4.2,FAIL,NOT_RUN,FAIL,,"Line sum: 113508.00, Subtotal: 114508.00, Diff: 1000.00"
 fixed,MFG-INV-055:4.3,MFG-INV-055,B,4.3,FAIL,NOT_RUN,FAIL,,Billed at 861.30 an hour; the authorization is 957.00
@@ -241,6 +248,7 @@ newly-failing,SVC-INV-091:1.2,SVC-INV-091,C,1.2,N_A,PASS,FAIL,Customer: Lumora B
 newly-failing,SVC-INV-097:1.2,SVC-INV-097,C,1.2,N_A,PASS,FAIL,Customer: Lumora Brandcraft LLP,Customer: None
 newly-failing,SVC-INV-100:1.2,SVC-INV-100,C,1.2,N_A,PASS,FAIL,Customer: Lumora Brandcraft LLP,Customer: None
 newly-failing,TECH-INV-096:1.2,TECH-INV-096,A,1.2,N_A,PASS,FAIL,Customer: Zentrix Cloudworks Private Limited,Customer: None
+newly-failing,MFG-INV-024:1.4,MFG-INV-024,B,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
 newly-failing,MFG-INV-084:1.4,MFG-INV-084,B,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
 newly-failing,MFG-INV-085:1.4,MFG-INV-085,B,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
 newly-failing,MFG-INV-086:1.4,MFG-INV-086,B,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
@@ -256,6 +264,7 @@ newly-failing,MFG-INV-095:1.4,MFG-INV-095,B,1.4,N_A,NOT_RUN,FAIL,,No work author
 newly-failing,MFG-INV-096:1.4,MFG-INV-096,B,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
 newly-failing,MFG-INV-098:1.4,MFG-INV-098,B,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
 newly-failing,MFG-INV-099:1.4,MFG-INV-099,B,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
+newly-failing,SVC-INV-025:1.4,SVC-INV-025,C,1.4,FAIL,NOT_RUN,PASS,,No work authorization quoted on the invoice (work authorization form attached)
 newly-failing,SVC-INV-085:1.4,SVC-INV-085,C,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
 newly-failing,SVC-INV-086:1.4,SVC-INV-086,C,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
 newly-failing,SVC-INV-087:1.4,SVC-INV-087,C,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
@@ -284,22 +293,21 @@ newly-failing,TECH-INV-095:1.4,TECH-INV-095,A,1.4,N_A,NOT_RUN,FAIL,,No work auth
 newly-failing,TECH-INV-096:1.4,TECH-INV-096,A,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
 newly-failing,TECH-INV-098:1.4,TECH-INV-098,A,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
 newly-failing,TECH-INV-099:1.4,TECH-INV-099,A,1.4,N_A,NOT_RUN,FAIL,,No work authorization quoted on the invoice
-newly-failing,TECH-INV-030:3.2,TECH-INV-030,A,3.2,PASS,NOT_RUN,FAIL,,"Position 14 must be 'Z', found '2'. Invoice states 06DQHCL22148126; Redwood Analytics Labs Pvt Ltd is registered as 06DQHCL2214B1Z6"
-newly-failing,TECH-INV-034:3.2,TECH-INV-034,A,3.2,PASS,NOT_RUN,FAIL,,Invalid length: 14 (must be 15). Invoice states 27UHVFN1303Z12; Nimbus Nine Software LLP is registered as 27UHVFN1303Z1Z9
+newly-failing,TECH-INV-034:3.2,TECH-INV-034,A,3.2,PASS,NOT_RUN,FAIL,,Invalid length: 14 (must be 15). Invoice states 27UHVFN1303Z1Z; Nimbus Nine Software LLP is registered as 27UHVFN1303Z1Z9
+newly-failing,MFG-INV-058:4.1,MFG-INV-058,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_DISCREPANCY,,"Total: 13465974.88, Expected: 13457383.88, Diff: 8591.00"
 newly-failing,MFG-INV-015:4.2,MFG-INV-015,B,4.2,PASS,NOT_RUN,FAIL,,"Line sum: 22867699.13, Subtotal: 22865166.13, Diff: 2533.00"
-newly-failing,MFG-INV-017:4.2,MFG-INV-017,B,4.2,PASS,NOT_RUN,FAIL,,"Line 2 (HDPE granules injection grade (25kg bag)): 2 x 2,721.00 = 5,441.90, but the invoice states 4,897.80"
-newly-failing,MFG-INV-019:4.2,MFG-INV-019,B,4.2,PASS,NOT_RUN,FAIL,,"Line 1 (Freight - Vadodara to Ludhiana, 20ft): 2 x 44,747.00 = 89,493.95, but the invoice states 85,019.30"
-newly-failing,MFG-INV-025:4.2,MFG-INV-025,B,4.2,PASS,NOT_RUN,FAIL,,"Line 2 (Bearing
-housing
-SNL 512): 15 x 2,820.00 = 42,299.95, but the invoice states 40,185.00"
+newly-failing,MFG-INV-017:4.2,MFG-INV-017,B,4.2,PASS,NOT_RUN,FAIL,,"Line 2 (HDPE granules injection grade (25kg bag)): 2 x 2,721.00 = 5,442.00, but the invoice states 4,897.80"
+newly-failing,MFG-INV-019:4.2,MFG-INV-019,B,4.2,PASS,NOT_RUN,FAIL,,"Line 1 (Freight - Vadodara to Ludhiana, 20ft): 2 x 44,747.00 = 89,494.00, but the invoice states 85,019.30"
 newly-failing,MFG-INV-027:4.2,MFG-INV-027,B,4.2,PASS,NOT_RUN,FAIL,,"Line sum: 2375932.60, Subtotal: 2372385.60, Diff: 3547.00"
-newly-failing,MFG-INV-029:4.2,MFG-INV-029,B,4.2,PASS,NOT_RUN,FAIL,,"Line 1 (Masterbatch black 40% (25kg)): 20 x 4,521.00 = 90,420.00, but the invoice states 81,378.00"
-newly-failing,MFG-INV-035:4.2,MFG-INV-035,B,4.2,PASS,NOT_RUN,FAIL,,"Line 2 (HR coil IS 2062 E250, 3.0mm): 15 x 55,713.00 = 835,695.00, but the invoice states 818,981.10"
+newly-failing,MFG-INV-029:4.2,MFG-INV-029,B,4.2,PASS,NOT_RUN,FAIL,,"Line 1 (Masterbatch black 40% (25kg)): 20 x 4,521.00 = 90,419.90, but the invoice states 81,378.00"
+newly-failing,MFG-INV-033:4.2,MFG-INV-033,B,4.2,PASS,NOT_RUN,FAIL,,"Line sum: 7903516.50, Subtotal: 8130166.50, Diff: 226650.00"
+newly-failing,MFG-INV-035:4.2,MFG-INV-035,B,4.2,PASS,NOT_RUN,FAIL,,"Line sum: 4723451.06, Subtotal: 4718237.06, Diff: 5214.00"
 newly-failing,MFG-INV-042:4.2,MFG-INV-042,B,4.2,PASS,NOT_RUN,FAIL,,"Line sum: 30059.00, Subtotal: 27850.00, Diff: 2209.00"
 newly-failing,MFG-INV-044:4.2,MFG-INV-044,B,4.2,PASS,NOT_RUN,FAIL,,"Line 1 (Hex bolt M12x50, 8.8, zinc (box of 100)): 50 x 1,656.00 = 82,800.00, but the invoice states 74,520.00"
 newly-failing,MFG-INV-045:4.2,MFG-INV-045,B,4.2,PASS,NOT_RUN,FAIL,,"Line sum: 5565391.22, Subtotal: 5563323.22, Diff: 2068.00"
 newly-failing,MFG-INV-046:4.2,MFG-INV-046,B,4.2,PASS,NOT_RUN,FAIL,,"Line sum: 704390.18, Subtotal: 702189.18, Diff: 2201.00"
 newly-failing,MFG-INV-047:4.2,MFG-INV-047,B,4.2,PASS,NOT_RUN,FAIL,,"Line 1 (HDPE granules injection grade (25kg bag)): 20 x 2,664.00 = 53,280.00, but the invoice states 47,952.00"
+newly-failing,MFG-INV-048:4.2,MFG-INV-048,B,4.2,PASS,NOT_RUN,FAIL,,"Line 1 (Spring washer M12 (box of 500)): 2 x 666.00 = 1,331.98, but the invoice states 1,305.36"
 newly-failing,MFG-INV-049:4.2,MFG-INV-049,B,4.2,PASS,NOT_RUN,FAIL,,"Line 2 (MS round bar 25mm): 15 x 57,925.00 = 868,874.90, but the invoice states 781,987.50"
 newly-failing,MFG-INV-053:4.2,MFG-INV-053,B,4.2,PASS,NOT_RUN,FAIL,,"Line sum: 129468.88, Subtotal: 121322.88, Diff: 8146.00"
 newly-failing,MFG-INV-058:4.2,MFG-INV-058,B,4.2,PASS,NOT_RUN,FAIL,,"Line sum: 11411843.12, Subtotal: 11403252.12, Diff: 8591.00"
@@ -307,19 +315,23 @@ newly-failing,SVC-INV-002:4.2,SVC-INV-002,C,4.2,PASS,NOT_RUN,FAIL,,"Line sum: 24
 newly-failing,TECH-INV-008:4.2,TECH-INV-008,A,4.2,PASS,NOT_RUN,FAIL,,"Line 1 (USB-C
 docking
 station): 2 x 9,780.00 = 19,560.00, but the invoice states 19,168.80"
-newly-failing,TECH-INV-018:4.2,TECH-INV-018,A,4.2,PASS,NOT_RUN,FAIL,,"Line 1 (Rack server, 2U, dual Xeon, 256GB RAM): 20 x 304,073.00 = 6,081,459.95, but the invoice states 5,777,387.00"
+newly-failing,TECH-INV-018:4.2,TECH-INV-018,A,4.2,PASS,NOT_RUN,FAIL,,"Line 1 (Rack
+server, 2U,
+dual Xeon,
+256GB RAM): 20 x 304,073.00 = 6,081,460.00, but the invoice states 5,777,387.00"
+newly-failing,TECH-INV-037:4.2,TECH-INV-037,A,4.2,PASS,NOT_RUN,FAIL,,"Line 2 (Meridian Storage 1TB block - monthly): 1 x 4,438.00 = 4,437.98, but the invoice states 4,349.24"
 newly-failing,TECH-INV-055:4.2,TECH-INV-055,A,4.2,PASS,NOT_RUN,FAIL,,"Line sum: 152859.00, Subtotal: 146298.00, Diff: 6561.00"
 newly-failing,MFG-INV-015:4.4,MFG-INV-015,B,4.4,PASS,NOT_RUN,FAIL,,"Tax: 3910399.35, Expected: 3911288.48 (per line at 18%), Diff: 889.13"
 newly-failing,MFG-INV-018:4.4,MFG-INV-018,B,4.4,N_A,NOT_RUN,FAIL,,"Tax: 130777.74, Expected: 72654.30 (10% of 726543.00), Diff: 58123.44"
-newly-failing,MFG-INV-027:4.4,MFG-INV-027,B,4.4,PASS,NOT_RUN,FAIL,,"Tax: 406316.40, Expected: 407562.35 (per line at 18%), Diff: 1245.95"
-newly-failing,MFG-INV-035:4.4,MFG-INV-035,B,4.4,PASS,NOT_RUN,FAIL,,"Tax: 833235.54, Expected: 834174.06 (per line at 18%), Diff: 938.52"
+newly-failing,MFG-INV-027:4.4,MFG-INV-027,B,4.4,PASS,NOT_RUN,FAIL,,"Tax: 406316.40, Expected: 406922.93 (per line at 18%), Diff: 606.53"
+newly-failing,MFG-INV-033:4.4,MFG-INV-033,B,4.4,PASS,NOT_RUN,FAIL,,"Tax: 1463429.97, Expected: 1422632.97 (per line at 18%), Diff: 40797.00"
+newly-failing,MFG-INV-035:4.4,MFG-INV-035,B,4.4,PASS,NOT_RUN,FAIL,,"Tax: 833235.54, Expected: 834155.29 (per line at 18%), Diff: 919.75"
 newly-failing,MFG-INV-042:4.4,MFG-INV-042,B,4.4,PASS,NOT_RUN,FAIL,,"Tax: 5410.62, Expected: 6237.40 (per line at 18%), Diff: 826.78"
 newly-failing,MFG-INV-045:4.4,MFG-INV-045,B,4.4,PASS,NOT_RUN,FAIL,,"Tax: 1001770.42, Expected: 1002515.04 (per line at 18%), Diff: 744.62"
 newly-failing,MFG-INV-046:4.4,MFG-INV-046,B,4.4,PASS,NOT_RUN,FAIL,,"Tax: 126790.23, Expected: 127583.83 (per line at 18%), Diff: 793.60"
 newly-failing,MFG-INV-053:4.4,MFG-INV-053,B,4.4,PASS,NOT_RUN,FAIL,,"Tax: 22649.25, Expected: 25636.28 (per line at 18%), Diff: 2987.03"
-newly-failing,MFG-INV-058:4.4,MFG-INV-058,B,4.4,PASS,NOT_RUN,FAIL,,"Tax: 2054131.76, Expected: 2057225.69 (per line at 18%), Diff: 3093.93"
 newly-failing,SVC-INV-003:4.4,SVC-INV-003,C,4.4,PASS,NOT_RUN,FAIL,,"Tax: 51528.96, Expected: 51537.96 (per line at 18%), Diff: 9.00"
-newly-failing,SVC-INV-023:4.4,SVC-INV-023,C,4.4,PASS,NOT_RUN,FAIL,,"Tax: 20611.44, Expected: 20431.44 (per line at 18%), Diff: 180.00"
+newly-failing,SVC-INV-023:4.4,SVC-INV-023,C,4.4,PASS,NOT_RUN,FAIL,,"Tax: 20611.44, Expected: 20253.01 (per line at 18%), Diff: 358.43"
 newly-failing,TECH-INV-019:4.4,TECH-INV-019,A,4.4,N_A,NOT_RUN,FAIL,,"Tax: 193978.63, Expected: 107765.90 (10% of 1077659.04), Diff: 86212.73"
 newly-failing,TECH-INV-055:4.4,TECH-INV-055,A,4.4,PASS,NOT_RUN,FAIL,,"Tax: 27514.62, Expected: 29929.54 (per line at 18%), Diff: 2414.92"
 newly-scored,MFG-INV-058:1.1,MFG-INV-058,B,1.1,PASS,NOT_RUN,PASS,,Extracted invoice MMT/2026-27/820
@@ -356,7 +368,6 @@ newly-scored,SVC-INV-020:1.4,SVC-INV-020,C,1.4,PASS,NOT_RUN,PASS,,Work authoriza
 newly-scored,SVC-INV-021:1.4,SVC-INV-021,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-059 is active for this supplier
 newly-scored,SVC-INV-023:1.4,SVC-INV-023,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-046 is active for this supplier
 newly-scored,SVC-INV-024:1.4,SVC-INV-024,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-067 is active for this supplier
-newly-scored,SVC-INV-025:1.4,SVC-INV-025,C,1.4,FAIL,NOT_RUN,FAIL,,Work authorization WA-C-2026-044 is expired
 newly-scored,SVC-INV-028:1.4,SVC-INV-028,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-066 is active for this supplier
 newly-scored,SVC-INV-029:1.4,SVC-INV-029,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-066 is active for this supplier
 newly-scored,SVC-INV-032:1.4,SVC-INV-032,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-038 is active for this supplier
@@ -380,7 +391,7 @@ newly-scored,SVC-INV-053:1.4,SVC-INV-053,C,1.4,PASS,NOT_RUN,PASS,,Work authoriza
 newly-scored,SVC-INV-054:1.4,SVC-INV-054,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-045 is active for this supplier
 newly-scored,SVC-INV-056:1.4,SVC-INV-056,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-043 is active for this supplier
 newly-scored,SVC-INV-057:1.4,SVC-INV-057,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-065 is active for this supplier
-newly-scored,SVC-INV-058:1.4,SVC-INV-058,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-061 is active for this supplier
+newly-scored,SVC-INV-058:1.4,SVC-INV-058,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-063 is active for this supplier
 newly-scored,SVC-INV-059:1.4,SVC-INV-059,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-041 is active for this supplier
 newly-scored,SVC-INV-062:1.4,SVC-INV-062,C,1.4,FAIL,NOT_RUN,FAIL,,No work authorization quoted on the invoice
 newly-scored,SVC-INV-063:1.4,SVC-INV-063,C,1.4,PASS,NOT_RUN,PASS,,Work authorization WA-C-2026-071 is active for this supplier
@@ -430,9 +441,9 @@ newly-scored,TECH-INV-072:1.4,TECH-INV-072,A,1.4,PASS,NOT_RUN,PASS,,Work authori
 newly-scored,MFG-INV-058:1.5,MFG-INV-058,B,1.5,PASS,NOT_RUN,PASS,,Found 1 invoice(s)
 newly-scored,SVC-INV-002:1.5,SVC-INV-002,C,1.5,PASS,NOT_RUN,PASS,,Found 1 invoice(s)
 newly-scored,TECH-INV-077:1.5,TECH-INV-077,A,1.5,PASS,NOT_RUN,PASS,,Found 1 invoice(s)
+newly-scored,MFG-INV-007:2.1,MFG-INV-007,B,2.1,PASS,NOT_RUN,PASS,,Found 15 line item(s)
 newly-scored,MFG-INV-016:2.1,MFG-INV-016,B,2.1,PASS,PASS,NOT_RUN,Found 2 line item(s),
 newly-scored,MFG-INV-023:2.1,MFG-INV-023,B,2.1,PASS,NOT_RUN,PASS,,Found 15 line item(s)
-newly-scored,MFG-INV-033:2.1,MFG-INV-033,B,2.1,PASS,PASS,NOT_RUN,Found 10 line item(s),
 newly-scored,MFG-INV-046:2.1,MFG-INV-046,B,2.1,PASS,NOT_RUN,PASS,,Found 15 line item(s)
 newly-scored,MFG-INV-058:2.1,MFG-INV-058,B,2.1,PASS,NOT_RUN,PASS,,Found 15 line item(s)
 newly-scored,MFG-INV-069:2.1,MFG-INV-069,B,2.1,PASS,NOT_RUN,PASS,,Found 13 line item(s)
@@ -455,7 +466,6 @@ newly-scored,SVC-INV-070:2.1,SVC-INV-070,C,2.1,FAIL,FAIL,NOT_RUN,Found 0 line it
 newly-scored,SVC-INV-082:2.1,SVC-INV-082,C,2.1,PASS,PASS,NOT_RUN,Found 1 line item(s),
 newly-scored,TECH-INV-003:2.1,TECH-INV-003,A,2.1,PASS,PASS,NOT_RUN,Found 3 line item(s),
 newly-scored,TECH-INV-005:2.1,TECH-INV-005,A,2.1,PASS,PASS,NOT_RUN,Found 1 line item(s),
-newly-scored,TECH-INV-006:2.1,TECH-INV-006,A,2.1,PASS,PASS,NOT_RUN,Found 3 line item(s),
 newly-scored,TECH-INV-007:2.1,TECH-INV-007,A,2.1,PASS,PASS,NOT_RUN,Found 2 line item(s),
 newly-scored,TECH-INV-010:2.1,TECH-INV-010,A,2.1,PASS,PASS,NOT_RUN,Found 1 line item(s),
 newly-scored,TECH-INV-014:2.1,TECH-INV-014,A,2.1,PASS,PASS,NOT_RUN,Found 3 line item(s),
@@ -466,6 +476,7 @@ newly-scored,TECH-INV-051:2.1,TECH-INV-051,A,2.1,PASS,PASS,NOT_RUN,Found 4 line 
 newly-scored,TECH-INV-078:2.1,TECH-INV-078,A,2.1,PASS,PASS,NOT_RUN,Found 1 line item(s),
 newly-scored,TECH-INV-081:2.1,TECH-INV-081,A,2.1,PASS,NOT_RUN,PASS,,Found 8 line item(s)
 newly-scored,MFG-INV-016:2.2,MFG-INV-016,B,2.2,PASS,PASS,NOT_RUN,"Matched purchase order PO-2026-4063: 72,732.00 against 105,000.00 (105,000.00 remaining).",
+newly-scored,MFG-INV-032:2.2,MFG-INV-032,B,2.2,PASS,NOT_RUN,PASS,,"Matched purchase order PO-2026-4040 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 newly-scored,MFG-INV-034:2.2,MFG-INV-034,B,2.2,PASS,NOT_RUN,PASS,,"Matched purchase order PO-2026-4044 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 newly-scored,MFG-INV-046:2.2,MFG-INV-046,B,2.2,PASS,NOT_RUN,PASS,,"Matched purchase order PO-2026-4065 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 newly-scored,MFG-INV-058:2.2,MFG-INV-058,B,2.2,PASS,NOT_RUN,PASS,,"Matched purchase order PO-2026-4058 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
@@ -479,7 +490,10 @@ newly-scored,TECH-INV-005:2.2,TECH-INV-005,A,2.2,FAIL,FAIL,NOT_RUN,"Purchase ord
 newly-scored,TECH-INV-007:2.2,TECH-INV-007,A,2.2,FAIL,FAIL,NOT_RUN,"Purchase order ZC-PO-260023 is cancelled, not open for invoicing.",
 newly-scored,TECH-INV-010:2.2,TECH-INV-010,A,2.2,FAIL,FAIL,NOT_RUN,"Purchase order ZC-PO-260021 belongs to 'Redwood Analytics Labs Pvt Ltd', but the invoice is from 'Pixelforge UX Studio LLP'.",
 newly-scored,TECH-INV-011:2.2,TECH-INV-011,A,2.2,PASS,NOT_RUN,PASS,,"Matched purchase order ZC-PO-260002 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
+newly-scored,TECH-INV-033:2.2,TECH-INV-033,A,2.2,PASS,NOT_RUN,PASS,,"Matched purchase order ZC-PO-260007 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
+newly-scored,TECH-INV-036:2.2,TECH-INV-036,A,2.2,PASS,NOT_RUN,PASS,,"Matched purchase order ZC-PO-260006 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 newly-scored,TECH-INV-051:2.2,TECH-INV-051,A,2.2,PASS,PASS,NOT_RUN,"Matched purchase order ZC-PO-260035: 74,614.00 against 514,080.00 (514,080.00 remaining).",
+newly-scored,TECH-INV-069:2.2,TECH-INV-069,A,2.2,PASS,NOT_RUN,PASS,,"Matched purchase order ZC-PO-260007 on quantity and unit price. The order commits to one item, so the invoice total was not compared against it."
 newly-scored,MFG-INV-005:3.1,MFG-INV-005,B,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,MFG-INV-006:3.1,MFG-INV-006,B,3.1,PASS,PASS,NOT_RUN,No prior invoice matched,
 newly-scored,MFG-INV-015:3.1,MFG-INV-015,B,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
@@ -492,6 +506,7 @@ newly-scored,MFG-INV-022:3.1,MFG-INV-022,B,3.1,PASS,NOT_RUN,PASS,,No prior invoi
 newly-scored,MFG-INV-025:3.1,MFG-INV-025,B,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,MFG-INV-027:3.1,MFG-INV-027,B,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,MFG-INV-029:3.1,MFG-INV-029,B,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
+newly-scored,MFG-INV-033:3.1,MFG-INV-033,B,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,MFG-INV-034:3.1,MFG-INV-034,B,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,MFG-INV-035:3.1,MFG-INV-035,B,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,MFG-INV-039:3.1,MFG-INV-039,B,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
@@ -527,6 +542,7 @@ newly-scored,SVC-INV-059:3.1,SVC-INV-059,C,3.1,PASS,NOT_RUN,PASS,,No prior invoi
 newly-scored,SVC-INV-062:3.1,SVC-INV-062,C,3.1,PASS,PASS,NOT_RUN,No prior invoice matched,
 newly-scored,SVC-INV-063:3.1,SVC-INV-063,C,3.1,PASS,PASS,NOT_RUN,No prior invoice matched,
 newly-scored,TECH-INV-001:3.1,TECH-INV-001,A,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
+newly-scored,TECH-INV-006:3.1,TECH-INV-006,A,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,TECH-INV-008:3.1,TECH-INV-008,A,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,TECH-INV-011:3.1,TECH-INV-011,A,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,TECH-INV-012:3.1,TECH-INV-012,A,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
@@ -537,7 +553,6 @@ newly-scored,TECH-INV-019:3.1,TECH-INV-019,A,3.1,PASS,NOT_RUN,PASS,,No prior inv
 newly-scored,TECH-INV-020:3.1,TECH-INV-020,A,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,TECH-INV-023:3.1,TECH-INV-023,A,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,TECH-INV-025:3.1,TECH-INV-025,A,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
-newly-scored,TECH-INV-030:3.1,TECH-INV-030,A,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,TECH-INV-034:3.1,TECH-INV-034,A,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,TECH-INV-037:3.1,TECH-INV-037,A,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
 newly-scored,TECH-INV-038:3.1,TECH-INV-038,A,3.1,PASS,NOT_RUN,PASS,,No prior invoice matched
@@ -558,6 +573,7 @@ newly-scored,MFG-INV-020:3.2,MFG-INV-020,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum
 newly-scored,MFG-INV-025:3.2,MFG-INV-025,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Apex Industrial Components Pvt Ltd
 newly-scored,MFG-INV-027:3.2,MFG-INV-027,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Marudhar Machine Tools Pvt Ltd
 newly-scored,MFG-INV-029:3.2,MFG-INV-029,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Kalinga Polymers Ltd
+newly-scored,MFG-INV-033:3.2,MFG-INV-033,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Surya Electricals & Automation Pvt Ltd
 newly-scored,MFG-INV-034:3.2,MFG-INV-034,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Shakti Steel & Alloys Ltd
 newly-scored,MFG-INV-035:3.2,MFG-INV-035,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Shakti Steel & Alloys Ltd
 newly-scored,MFG-INV-039:3.2,MFG-INV-039,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Marudhar Machine Tools Pvt Ltd
@@ -575,7 +591,7 @@ newly-scored,MFG-INV-058:3.2,MFG-INV-058,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum
 newly-scored,MFG-INV-064:3.2,MFG-INV-064,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Precision Weld Fabricators
 newly-scored,MFG-INV-069:3.2,MFG-INV-069,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Marudhar Machine Tools Pvt Ltd
 newly-scored,MFG-INV-075:3.2,MFG-INV-075,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Marudhar Machine Tools Pvt Ltd
-newly-scored,MFG-INV-077:3.2,MFG-INV-077,B,3.2,FAIL,NOT_RUN,FAIL,,"Invalid check character: expected 'T', found 'O'. Invoice states 24DBOCA6353A1ZO; Greenline Logistics Pvt Ltd is registered as 24DBOCA6353A1ZT"
+newly-scored,MFG-INV-077:3.2,MFG-INV-077,B,3.2,FAIL,NOT_RUN,FAIL,,"Invalid check character: expected 'T', found '0'. Invoice states 24DBOCA6353A1Z0; Greenline Logistics Pvt Ltd is registered as 24DBOCA6353A1ZT"
 newly-scored,MFG-INV-081:3.2,MFG-INV-081,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Bharat Fasteners Corporation
 newly-scored,MFG-INV-083:3.2,MFG-INV-083,B,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Apex Industrial Components Pvt Ltd
 newly-scored,SVC-INV-002:3.2,SVC-INV-002,C,3.2,PASS,NOT_RUN,PASS,,Valid checksum. Matches the tax ID recorded for Signalbox Media Buying Pvt Ltd
@@ -619,6 +635,7 @@ newly-scored,MFG-INV-022:3.3,MFG-INV-022,B,3.3,PASS,NOT_RUN,PASS,,Invoice date: 
 newly-scored,MFG-INV-025:3.3,MFG-INV-025,B,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-08-01
 newly-scored,MFG-INV-027:3.3,MFG-INV-027,B,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-04-26
 newly-scored,MFG-INV-029:3.3,MFG-INV-029,B,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-04-17
+newly-scored,MFG-INV-033:3.3,MFG-INV-033,B,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-08-08
 newly-scored,MFG-INV-034:3.3,MFG-INV-034,B,3.3,FAIL,NOT_RUN,FAIL,,Invoice date: 2026-11-02
 newly-scored,MFG-INV-035:3.3,MFG-INV-035,B,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-06-04
 newly-scored,MFG-INV-039:3.3,MFG-INV-039,B,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-06-20
@@ -662,6 +679,7 @@ newly-scored,SVC-INV-063:3.3,SVC-INV-063,C,3.3,PASS,PASS,NOT_RUN,Invoice date: 2
 newly-scored,SVC-INV-072:3.3,SVC-INV-072,C,3.3,PASS,PASS,NOT_RUN,Invoice date: 2026-08-01,
 newly-scored,SVC-INV-076:3.3,SVC-INV-076,C,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-04-15
 newly-scored,TECH-INV-001:3.3,TECH-INV-001,A,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-08-17
+newly-scored,TECH-INV-006:3.3,TECH-INV-006,A,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-08-24
 newly-scored,TECH-INV-008:3.3,TECH-INV-008,A,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-07-01
 newly-scored,TECH-INV-011:3.3,TECH-INV-011,A,3.3,FAIL,NOT_RUN,FAIL,,Invoice date: 2026-10-01
 newly-scored,TECH-INV-014:3.3,TECH-INV-014,A,3.3,PASS,PASS,NOT_RUN,Invoice date: 2026-08-23,
@@ -669,7 +687,6 @@ newly-scored,TECH-INV-016:3.3,TECH-INV-016,A,3.3,PASS,PASS,NOT_RUN,Invoice date:
 newly-scored,TECH-INV-018:3.3,TECH-INV-018,A,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-08-23
 newly-scored,TECH-INV-019:3.3,TECH-INV-019,A,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-04-25
 newly-scored,TECH-INV-025:3.3,TECH-INV-025,A,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-05-17
-newly-scored,TECH-INV-030:3.3,TECH-INV-030,A,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-06-19
 newly-scored,TECH-INV-034:3.3,TECH-INV-034,A,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-08-11
 newly-scored,TECH-INV-037:3.3,TECH-INV-037,A,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-05-19
 newly-scored,TECH-INV-038:3.3,TECH-INV-038,A,3.3,PASS,NOT_RUN,PASS,,Invoice date: 2026-08-24
@@ -689,6 +706,7 @@ newly-scored,MFG-INV-020:4.1,MFG-INV-020,B,4.1,INFORMATIONAL_DISCREPANCY,NOT_RUN
 newly-scored,MFG-INV-025:4.1,MFG-INV-025,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 159835.0, Expected: 159835.00, Diff: 0.00"
 newly-scored,MFG-INV-027:4.1,MFG-INV-027,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 2663630.0, Expected: 2663630.00, Diff: 0.00"
 newly-scored,MFG-INV-029:4.1,MFG-INV-029,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 184630.47, Expected: 184630.47, Diff: 0.00"
+newly-scored,MFG-INV-033:4.1,MFG-INV-033,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 9593596.0, Expected: 9593596.00, Diff: 0.00"
 newly-scored,MFG-INV-035:4.1,MFG-INV-035,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 5462321.86, Expected: 5462321.86, Diff: 0.00"
 newly-scored,MFG-INV-039:4.1,MFG-INV-039,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 2618790.58, Expected: 2618790.58, Diff: 0.00"
 newly-scored,MFG-INV-042:4.1,MFG-INV-042,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 35469.62, Expected: 35469.62, Diff: 0.00"
@@ -701,7 +719,6 @@ newly-scored,MFG-INV-049:4.1,MFG-INV-049,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFOR
 newly-scored,MFG-INV-053:4.1,MFG-INV-053,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 148478.0, Expected: 148478.00, Diff: 0.00"
 newly-scored,MFG-INV-055:4.1,MFG-INV-055,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 54882.04, Expected: 54882.04, Diff: 0.00"
 newly-scored,MFG-INV-056:4.1,MFG-INV-056,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 1941184.0, Expected: 1941184.00, Diff: 0.00"
-newly-scored,MFG-INV-058:4.1,MFG-INV-058,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 13465974.88, Expected: 13465974.88, Diff: 0.00"
 newly-scored,MFG-INV-064:4.1,MFG-INV-064,B,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 94842.0, Expected: 94842.00, Diff: 0.00"
 newly-scored,SVC-INV-002:4.1,SVC-INV-002,C,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 258292.0, Expected: 258292.00, Diff: 0.00"
 newly-scored,SVC-INV-003:4.1,SVC-INV-003,C,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 337800.96, Expected: 337800.96, Diff: 0.00"
@@ -723,7 +740,7 @@ newly-scored,TECH-INV-042:4.1,TECH-INV-042,A,4.1,INFORMATIONAL_MATCH,NOT_RUN,INF
 newly-scored,TECH-INV-043:4.1,TECH-INV-043,A,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 874584.0, Expected: 874584.00, Diff: 0.00"
 newly-scored,TECH-INV-055:4.1,TECH-INV-055,A,4.1,INFORMATIONAL_MATCH,NOT_RUN,INFORMATIONAL_MATCH,,"Total: 180374.0, Expected: 180374.00, Diff: 0.00"
 newly-scored,TECH-INV-056:4.1,TECH-INV-056,A,4.1,INFORMATIONAL_DISCREPANCY,NOT_RUN,INFORMATIONAL_DISCREPANCY,,"Total: 311141.0, Expected: 301141.00, Diff: 10000.00"
-newly-scored,MFG-INV-048:4.2,MFG-INV-048,B,4.2,PASS,NOT_RUN,PASS,,"Line sum: 86512.36, Subtotal: 86512.36, Diff: 0.00"
+newly-scored,MFG-INV-025:4.2,MFG-INV-025,B,4.2,PASS,NOT_RUN,PASS,,"Line sum: 139642.72, Subtotal: 139642.72, Diff: 0.00"
 newly-scored,MFG-INV-055:4.2,MFG-INV-055,B,4.2,PASS,NOT_RUN,PASS,,"Line sum: 46510.20, Subtotal: 46510.20, Diff: 0.00"
 newly-scored,MFG-INV-056:4.2,MFG-INV-056,B,4.2,PASS,NOT_RUN,PASS,,"Line sum: 1645071.00, Subtotal: 1645071.00, Diff: 0.00"
 newly-scored,MFG-INV-064:4.2,MFG-INV-064,B,4.2,PASS,NOT_RUN,PASS,,"Line sum: 84680.00, Subtotal: 84680.00, Diff: 0.00"
@@ -734,7 +751,6 @@ newly-scored,SVC-INV-042:4.2,SVC-INV-042,C,4.2,PASS,NOT_RUN,PASS,,"Line sum: 655
 newly-scored,SVC-INV-043:4.2,SVC-INV-043,C,4.2,PASS,NOT_RUN,PASS,,"Line sum: 96320.00, Subtotal: 96320.00, Diff: 0.00"
 newly-scored,SVC-INV-054:4.2,SVC-INV-054,C,4.2,PASS,NOT_RUN,PASS,,"Line sum: 297206.00, Subtotal: 297206.00, Diff: 0.00"
 newly-scored,TECH-INV-001:4.2,TECH-INV-001,A,4.2,PASS,NOT_RUN,PASS,,"Line sum: 687096.00, Subtotal: 687096.00, Diff: 0.00"
-newly-scored,TECH-INV-037:4.2,TECH-INV-037,A,4.2,PASS,NOT_RUN,PASS,,"Line sum: 299462.20, Subtotal: 299462.20, Diff: 0.00"
 newly-scored,TECH-INV-038:4.2,TECH-INV-038,A,4.2,PASS,NOT_RUN,PASS,,"Line sum: 81032.00, Subtotal: 81032.00, Diff: 0.00"
 newly-scored,TECH-INV-042:4.2,TECH-INV-042,A,4.2,PASS,NOT_RUN,PASS,,"Line sum: 146298.00, Subtotal: 146298.00, Diff: 0.00"
 newly-scored,TECH-INV-043:4.2,TECH-INV-043,A,4.2,PASS,NOT_RUN,PASS,,"Line sum: 741173.00, Subtotal: 741173.00, Diff: 0.00"
@@ -764,6 +780,7 @@ newly-scored,MFG-INV-048:4.4,MFG-INV-048,B,4.4,PASS,NOT_RUN,PASS,,"Tax: 15572.22
 newly-scored,MFG-INV-049:4.4,MFG-INV-049,B,4.4,PASS,NOT_RUN,PASS,,"Tax: 2129721.75, Expected: 2129721.75 (per line at 18%), Diff: 0.00"
 newly-scored,MFG-INV-055:4.4,MFG-INV-055,B,4.4,PASS,NOT_RUN,PASS,,"Tax: 8371.84, Expected: 8371.84 (per line at 18%), Diff: 0.00"
 newly-scored,MFG-INV-056:4.4,MFG-INV-056,B,4.4,PASS,NOT_RUN,PASS,,"Tax: 296112.78, Expected: 296112.78 (per line at 18%), Diff: 0.00"
+newly-scored,MFG-INV-058:4.4,MFG-INV-058,B,4.4,PASS,NOT_RUN,PASS,,"Tax: 2054131.76, Expected: 2054131.76 (per line at 18%), Diff: 0.00"
 newly-scored,MFG-INV-064:4.4,MFG-INV-064,B,4.4,PASS,NOT_RUN,PASS,,"Tax: 10161.60, Expected: 10161.60 (per line at 12%), Diff: 0.00"
 newly-scored,SVC-INV-002:4.4,SVC-INV-002,C,4.4,FAIL,NOT_RUN,FAIL,,"Tax: 12299.60, Expected: 49635.99 (per line at 18%), Diff: 37336.39"
 newly-scored,SVC-INV-009:4.4,SVC-INV-009,C,4.4,PASS,NOT_RUN,PASS,,"Tax: 116127.00, Expected: 116127.00 (per line at 18%), Diff: 0.00"
@@ -781,12 +798,11 @@ newly-scored,TECH-INV-042:4.4,TECH-INV-042,A,4.4,PASS,NOT_RUN,PASS,,"Tax: 26333.
 newly-scored,TECH-INV-043:4.4,TECH-INV-043,A,4.4,PASS,NOT_RUN,PASS,,"Tax: 133411.14, Expected: 133411.14 (per line at 18%), Diff: 0.00"
 newly-scored,TECH-INV-056:4.4,TECH-INV-056,A,4.4,PASS,NOT_RUN,PASS,,"Tax: 45936.72, Expected: 45936.72 (per line at 18%), Diff: 0.00"
 no-longer-scored,TECH-INV-087:1.2,TECH-INV-087,A,1.2,N_A,FAIL,PASS,Customer: None,Customer: Zentrix Cloudworks Private Limited
+no-longer-scored,SVC-INV-099:1.3,SVC-INV-099,C,1.3,N_A,FAIL,PASS,"Tax ID: False, Date: False, Vendor: False","Tax ID: True, Date: True, Vendor: True"
 no-longer-scored,SVC-INV-066:2.1,SVC-INV-066,C,2.1,FAIL,PASS,NOT_RUN,Found 1 line item(s),
 no-longer-scored,TECH-INV-028:2.1,TECH-INV-028,A,2.1,FAIL,PASS,NOT_RUN,Found 1 line item(s),
 no-longer-scored,TECH-INV-060:2.1,TECH-INV-060,A,2.1,FAIL,PASS,NOT_RUN,Found 2 line item(s),
 no-longer-scored,MFG-INV-020:2.2,MFG-INV-020,B,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-B-2026-035 was not found.,
-no-longer-scored,MFG-INV-033:2.2,MFG-INV-033,B,2.2,PASS,FAIL,NOT_RUN,"Invoice of 9,593,596.00 exceeds purchase order PO-2026-4071 (2,587,400.00) by 7,006,196.00, outside the tolerance of 51,748.00.",
-no-longer-scored,MFG-INV-054:2.2,MFG-INV-054,B,2.2,PASS,FAIL,NOT_RUN,"Invoice of 280,582.28 exceeds purchase order PO-2026-4039 (27,850.00) by 252,732.28, outside the tolerance of 557.00.",
 no-longer-scored,MFG-INV-055:2.2,MFG-INV-055,B,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-B-2026-029 was not found.,
 no-longer-scored,MFG-INV-064:2.2,MFG-INV-064,B,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-B-2026-034 was not found.,
 no-longer-scored,MFG-INV-090:2.2,MFG-INV-090,B,2.2,N_A,FAIL,NOT_RUN,Purchase order SEA/2026-27/0560 was not found.,
@@ -803,7 +819,6 @@ no-longer-scored,SVC-INV-030:2.2,SVC-INV-030,C,2.2,PASS,FAIL,NOT_RUN,"Invoice of
 no-longer-scored,SVC-INV-037:2.2,SVC-INV-037,C,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-C-2026-056 was not found.,
 no-longer-scored,SVC-INV-042:2.2,SVC-INV-042,C,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-C-2026-069 was not found.,
 no-longer-scored,SVC-INV-043:2.2,SVC-INV-043,C,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-C-2026-061 was not found.,
-no-longer-scored,SVC-INV-051:2.2,SVC-INV-051,C,2.2,PASS,FAIL,NOT_RUN,"Invoice of 211,489.04 exceeds purchase order LB/PO/0112 (64,560.00) by 146,929.04, outside the tolerance of 1,291.20.",
 no-longer-scored,SVC-INV-052:2.2,SVC-INV-052,C,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-C-2026-041 was not found.,
 no-longer-scored,SVC-INV-054:2.2,SVC-INV-054,C,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-C-2026-045 was not found.,
 no-longer-scored,SVC-INV-064:2.2,SVC-INV-064,C,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-C-2026-056 was not found.,
@@ -821,7 +836,6 @@ no-longer-scored,TECH-INV-020:2.2,TECH-INV-020,A,2.2,N_A,FAIL,NOT_RUN,Purchase o
 no-longer-scored,TECH-INV-021:2.2,TECH-INV-021,A,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-A-2026-015 was not found.,
 no-longer-scored,TECH-INV-025:2.2,TECH-INV-025,A,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-A-2026-009 was not found.,
 no-longer-scored,TECH-INV-028:2.2,TECH-INV-028,A,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-A-2026-028 was not found.,
-no-longer-scored,TECH-INV-030:2.2,TECH-INV-030,A,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-A-2026-021 was not found.,
 no-longer-scored,TECH-INV-038:2.2,TECH-INV-038,A,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-A-2026-011 was not found.,
 no-longer-scored,TECH-INV-040:2.2,TECH-INV-040,A,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-A-2026-965 was not found.,
 no-longer-scored,TECH-INV-042:2.2,TECH-INV-042,A,2.2,N_A,FAIL,NOT_RUN,Purchase order WA-A-2026-014 was not found.,
