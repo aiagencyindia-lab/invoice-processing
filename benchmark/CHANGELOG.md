@@ -664,3 +664,33 @@ several hundred.
   `test_a_rounding_error_below_our_own_precision_is_not_caught`.
 
 **Result.** 1594 passed.
+
+---
+
+## 2026-09-05 — Final run: the calculation fixes measured on the whole corpus
+
+300 invoices at `d3d07fc`, no errors. The first run where the extractor is
+asked for `line_discount_pct` and `has_discount`, so the first that measures
+the discount fix rather than replaying around it.
+
+The calculation checks land where the replay said they would, and further:
+4.2 goes 59.3% → 94.4% with its false positives 20 → 0, and 4.4 76.0% → 96.1%
+with 12 → 1. Six checks now have no false positives at all (1.1, 1.2, 1.3, 2.1,
+3.3, 4.1) and five reach 100%.
+
+**Regressions are 3, from 8.** All three are the extractor rewriting the
+document, and none can be reached by a validation change: on `MFG-INV-002` and
+`TECH-INV-024` it returned the receiving tenant's own name and registration for
+an invoice addressed elsewhere, and on `TECH-INV-087` it supplied a supplier
+tax ID the document does not carry. Checks 1.2 and 1.3 then passed them
+correctly, on evidence that was wrong before it arrived.
+
+**The trade recorded in P11 held.** `MFG-INV-039`'s wrong line discount came
+back, as predicted, once the discount could be read: 4.2's recall is 40% here
+against 0% at baseline, and its remaining misses are the two `TAX_ROUNDING`
+faults of four rupees in a quarter of a million, deliberately given up.
+
+**What is left is extraction, not validation.** Line accuracy fell 1.5 points
+and tax accuracy 1.4 while every validation check improved; the three
+regressions and 4.4's single false positive are all the extractor. That is the
+ceiling on the touchless rate now, and the next work.
