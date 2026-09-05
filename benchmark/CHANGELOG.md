@@ -694,3 +694,40 @@ faults of four rupees in a quarter of a million, deliberately given up.
 and tax accuracy 1.4 while every validation check improved; the three
 regressions and 4.4's single false positive are all the extractor. That is the
 ceiling on the touchless rate now, and the next work.
+
+---
+
+## 2026-09-06 — The whole corpus on production infrastructure
+
+300 invoices through production Cloud SQL and GCS on the deployed code
+(`f49b71d`), no errors, on the `bench-` tenants. The pilot's queue was not
+involved: the harness keeps processing local so the documents are handled by
+the code under test rather than by the deployed worker.
+
+**Against the frozen baseline it reproduces the local result.** Decision
+accuracy 85.0% → 97.7%, touchless 0% → 14.7%, wrongly rejected 45 → 4, and
+check 4.3 reaches 100%. Every check lands within a point or two of the local
+run.
+
+**Against the local run of the same code, 296 of 300 decisions are identical**
+and 291 of 300 rejection reasons. None of the four differences is the
+infrastructure:
+
+* `MFG-INV-020` and `MFG-INV-064` are the *same* GSTIN read two ways — `24O`
+  against `240`, a letter O against a digit zero — and the two runs disagree in
+  opposite directions on the two invoices. The vendor-master comparison is
+  doing its job in both; what differs is what it was given.
+* `MFG-INV-046` drifted further: a different supplier's tax ID entirely, and a
+  taxable total 57,799 out.
+* `MFG-INV-042` decided differently with **no extraction drift at all** — the
+  one difference this run cannot attribute to the model's reading, and the only
+  one worth investigating as a possible order-dependence in duplicate
+  detection.
+
+**Extraction differs on 49 of 300 documents** between two runs of identical
+code on identical files. That is the finding this exercise keeps returning: the
+ceiling on every number here is what the extractor reads, not what the checks
+decide.
+
+Cleanup follows; the bench tenants' rows and objects are removed and their
+audit events kept.
