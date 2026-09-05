@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from invoice_processing import paths, po_matching
+from invoice_processing import paths, po_matching, vendor_master
 from invoice_processing.po_matching import (
     CURRENCY_MISMATCH,
     EXCEEDS_REMAINING,
@@ -578,3 +578,103 @@ class TestWhatThePurchaseOrderCommitsTo:
         assert (
             self._match(po, self._invoice()).outcome == po_matching.OVER_BILLED
         )
+
+
+SERVICE_PO = {
+    "po_number": "PO-1",
+    "vendor_name": "Cloudhaven Infra Services Pvt Ltd",
+    "total_amount": 90420.0,
+    "currency": "INR",
+    "status": "open",
+    "amount_basis": "ex_tax",
+    "approved_quantity": 40,
+    "approved_unit_price": 2537.0,
+}
+
+# Billed at a different rate, and for more hours, than the order states.
+SERVICE_INVOICE = {
+    "po_number": "PO-1",
+    "vendor_name": "Cloudhaven Infra Services Pvt Ltd",
+    "currency": "INR",
+    "invoice_total_ex_tax": 99246.0,
+    "invoice_total_inc_tax": 117110.28,
+    "line_items": [
+        {
+            "description": "Managed cloud operations",
+            "quantity": 42,
+            "unit": "hour",
+            "unit_price": 2363.0,
+        }
+    ],
+}
+
+
+class TestWhatTheOrderGoverns:
+    """A purchase order governs different things for goods and for services.
+
+    For goods it is quantity and price. For a service supplier the rate is set
+    by the work authorization -- step 4.3 checks the invoice against the
+    authorized rate and hours -- and the order is the budget that work is drawn
+    against. Checking its unit price here rejected eight legitimate service
+    invoices in the benchmark corpus, every one billing a rate its own
+    authorization allowed.
+    """
+
+    PO = SERVICE_PO
+    INVOICE = SERVICE_INVOICE
+
+    def _vendors(self, kind):
+        return vendor_master.VendorMaster(
+            records=[
+                {
+                    "name": "Cloudhaven Infra Services Pvt Ltd",
+                    "tax_id": "29ZOICE4828P1ZD",
+                    "kind": kind,
+                }
+            ]
+        )
+
+    def test_a_service_order_does_not_price_the_work(self):
+        result = po_matching.match_invoice_to_po(
+            self.INVOICE, Orders(self.PO), vendors=self._vendors("service")
+        )
+        assert result.outcome == po_matching.MATCHED
+
+    def test_a_goods_order_still_prices_it(self):
+        result = po_matching.match_invoice_to_po(
+            self.INVOICE, Orders(self.PO), vendors=self._vendors("goods")
+        )
+        assert result.outcome == po_matching.QUANTITY_EXCEEDED
+
+    def test_a_supplier_nobody_listed_keeps_the_stricter_reading(self):
+        """An invoice from someone not on the supplier list is not the place to
+        relax a control."""
+        stranger = {**SERVICE_INVOICE, "vendor_name": "Someone Else Pvt Ltd"}
+        result = po_matching.match_invoice_to_po(
+            stranger, Orders(self.PO), vendors=self._vendors("service")
+        )
+        assert result.outcome == po_matching.VENDOR_MISMATCH
+
+    def test_a_listed_service_supplier_is_the_only_relaxation(self):
+        """Same invoice, same order, and the only difference is what the
+        supplier list says this supplier sells."""
+        goods = po_matching.match_invoice_to_po(
+            self.INVOICE, Orders(self.PO), vendors=self._vendors("goods")
+        )
+        services = po_matching.match_invoice_to_po(
+            self.INVOICE, Orders(self.PO), vendors=self._vendors("service")
+        )
+        assert goods.outcome == po_matching.QUANTITY_EXCEEDED
+        assert services.outcome == po_matching.MATCHED
+
+    def test_no_supplier_list_keeps_the_stricter_reading(self):
+        result = po_matching.match_invoice_to_po(self.INVOICE, Orders(self.PO))
+        assert result.outcome == po_matching.QUANTITY_EXCEEDED
+
+    def test_a_service_order_still_checks_the_supplier_and_its_status(self):
+        """Relaxing the price check is not relaxing the order."""
+        closed = {**self.PO, "status": "cancelled"}
+        result = po_matching.match_invoice_to_po(
+            self.INVOICE, Orders(closed), vendors=self._vendors("service")
+        )
+        assert result.outcome == po_matching.PO_CLOSED

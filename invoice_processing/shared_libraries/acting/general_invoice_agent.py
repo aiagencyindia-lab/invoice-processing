@@ -1820,6 +1820,10 @@ class Phase2ValidatorAgent(BaseAgent):
                 tolerance_abs=config.get(
                     "po_tolerance_abs", po_matching.DEFAULT_TOLERANCE_ABS
                 ),
+                # So the match knows whether this supplier delivers goods, and
+                # therefore whether the order's quantity and price are the
+                # controls or the work authorization's are.
+                vendors=_load_vendors(),
             )
             entry = po_matching.to_validation(match)
             if not entry["passed"]:

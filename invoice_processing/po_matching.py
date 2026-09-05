@@ -251,12 +251,18 @@ def match_invoice_to_po(
     required: bool = True,
     tolerance_pct: float = DEFAULT_TOLERANCE_PCT,
     tolerance_abs: float = DEFAULT_TOLERANCE_ABS,
+    vendors=None,
 ) -> MatchResult:
     """Match one invoice against its purchase order.
 
     `required` reflects whether this tenant demands a PO on every invoice. When
     it does not, an invoice without one is simply not a PO invoice and passes
     -- a missing PO is only a failure where a PO was expected.
+
+    `vendors` is the tenant's supplier list, used only to answer whether this
+    supplier delivers goods. What a purchase order governs depends on the
+    answer: for goods it is quantity and price, and for services it is a budget
+    the work authorization prices. See the quantity check below.
     """
     po_number = normalize_po_number(invoice.get("po_number"))
     # Normalised for lookup, but every message quotes what the vendor actually
@@ -356,13 +362,32 @@ def match_invoice_to_po(
             reason=f"Purchase order {shown} is {po.status}, not open for invoicing.",
         )
 
-    # Quantity and unit price, where the export states them. A total within
-    # tolerance can still be the wrong goods at the wrong price -- twice the
-    # quantity at half the price reconciles perfectly.
+    # Quantity and unit price, where the export states them and where they are
+    # this order's business.
+    #
+    # For goods they are: a total within tolerance can still be the wrong goods
+    # at the wrong price, since twice the quantity at half the price reconciles
+    # perfectly. For services they are not. A service supplier's rate is set by
+    # the work authorization, which step 4.3 checks against the authorized rate
+    # and the authorized hours; the purchase order is the budget the work is
+    # drawn against, and its unit price is one line of an estimate rather than
+    # an agreed price list. Checking it here rejected eight legitimate service
+    # invoices in the benchmark corpus, every one of them for billing a rate
+    # its work authorization allowed.
+    #
+    # Unknown suppliers keep the stricter reading: an invoice from someone not
+    # on the supplier list is not the place to relax a control.
+    supplies_goods = True
+    if vendors is not None and len(vendors):
+        vendor = vendors.find(invoice.get("vendor_name"))
+        if vendor is not None and vendor.kind == "service":
+            supplies_goods = False
+
     first_line = (invoice.get("line_items") or [{}])[0]
     quantity = _as_float(first_line.get("quantity"))
     if (
-        po.approved_quantity is not None
+        supplies_goods
+        and po.approved_quantity is not None
         and quantity is not None
         and quantity > po.approved_quantity
     ):
@@ -381,7 +406,8 @@ def match_invoice_to_po(
 
     unit_price = _as_float(first_line.get("unit_price"))
     if (
-        po.approved_unit_price is not None
+        supplies_goods
+        and po.approved_unit_price is not None
         and unit_price is not None
         and abs(unit_price - po.approved_unit_price) > 0.01
     ):

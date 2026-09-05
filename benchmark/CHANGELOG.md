@@ -493,3 +493,42 @@ prompt, and it is the most serious single finding in the run.
 timeout, so its extraction failed and 1.1 and 1.3 report it. That is the trade
 P0 makes — a failed invoice instead of a hung worker — and it cost exactly one
 invoice out of 300.
+
+---
+
+## 2026-09-05 — P10: what a purchase order governs depends on what it buys
+
+**Problem.** Eight of the 15 regressions in the final AFTER run were check 2.2
+rejecting service invoices — "Invoice prices this at 2,363.00; purchase order
+approved 2,815.00" — and every one was expected to pass. Two more (3.1 and 3.2
+on the same invoices) were those eight cascading.
+
+**Root cause.** The quantity and unit-price checks added in P5 are goods
+controls. A service supplier's rate is set by its work authorization, which
+step 4.3 already checks against the authorized rate and the authorized hours;
+the purchase order is the budget the work is drawn against, and its unit price
+is one line of an estimate rather than an agreed price list. Applying the goods
+rule to services rejects an invoice for billing a rate its own authorization
+allows — and 4.3 says so on the same invoice, which is the tell.
+
+**Fix.** `match_invoice_to_po` takes the tenant's supplier list, the same way
+`match_invoice_to_wa` already does, and skips the quantity and price
+comparisons for a supplier the list marks as supplying services. Everything
+else about the order is still checked for them: the supplier, the customer, the
+currency, the status, the validity window. An unknown supplier keeps the
+stricter reading — an invoice from someone not on the list is not the place to
+relax a control.
+
+**Files.** `po_matching.py`, `shared_libraries/acting/general_invoice_agent.py`.
+
+**Tests.** `tests/test_po_matching.py::TestWhatTheOrderGoverns` (6), including
+one that runs the same invoice against the same order twice and changes only
+what the supplier list says the supplier sells.
+
+**Measured before re-running.** Replayed over the AFTER run's own extractions:
+21 invoices flip 2.2 from FAIL to PASS, and the checks they now reach for the
+first time follow — 19 reach 3.1 and 3.3, 18 reach 3.2, 13 reach each of 4.1,
+4.2 and 4.3. Six of those newly-reached checks fail, which is the point: they
+are being asked for the first time.
+
+**Result.** 1581 passed. Reverting the goods/service gate fails two named tests.
