@@ -47,7 +47,7 @@ cd frontend && API_ORIGIN=http://127.0.0.1:8000 npm run dev
 ```
 
 Open http://localhost:3000. The header shows a dev-mode chip: authentication is
-disabled and every request runs as an administrator of `bench-A`.
+disabled and every request runs as an administrator of `bench-a`.
 
 **`INVOICE_REFERENCE_DATE=2026-09-03` matters.** The dataset's future-dated
 invoices are future-dated relative to that day. Without it, check 3.3 measures
