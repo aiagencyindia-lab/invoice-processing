@@ -731,3 +731,32 @@ decide.
 
 Cleanup follows; the bench tenants' rows and objects are removed and their
 audit events kept.
+
+---
+
+## 2026-09-06 — Cleanup, and why the first two attempts did nothing
+
+The production corpus is removed: 3,575 rows and 273 stored objects across the
+three `bench-` tenants, verified afterwards by querying the database and the
+bucket directly rather than trusting the script's own report. The pilot is
+untouched — 13 documents, 13 invoices, 23 invoice lines, 106 findings.
+
+Two failures on the way, both worth recording.
+
+**Deleting a row at a time is indistinguishable from a hang.** The first run sat
+for twenty minutes with three seconds of CPU and no output, and I reported it as
+"slow but progressing". It was not: nothing had committed, because ~900 ORM
+deletes per tenant over an IAM tunnel take a quarter of an hour and the
+transaction commits only at the end. Timing a single delete — 0.9 seconds —
+is what settled it. One statement per table replaced them.
+
+**A bulk delete does not cascade.** The batched version then failed on
+`invoice_lines_invoice_id_fkey`: deleting a row at a time let SQLAlchemy's
+relationships work the order out, and one statement per table does not. Children
+are now deleted before parents, and `invoice_lines` and `corrections` are named
+explicitly rather than assumed absent — `bench-b` alone held 436 invoice lines
+that the earlier version never counted.
+
+The claim I made in between — that it was working and only invisible — was
+wrong, and the check that disproved it was the same one that has caught every
+other mistake here: read the state, not the report.

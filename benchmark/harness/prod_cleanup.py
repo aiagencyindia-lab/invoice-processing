@@ -71,12 +71,14 @@ def main(argv=None) -> int:
             "No database configured. Run this under `railway run --service api`."
         )
 
-    from sqlalchemy import select
+    from sqlalchemy import delete, func, select
 
     from invoice_processing.db.models import (
+        Correction,
         Document,
         Finding,
         Invoice,
+        InvoiceLine,
         PipelineRun,
         Tenant,
     )
@@ -94,47 +96,57 @@ def main(argv=None) -> int:
 
     bucket_name = os.getenv("GCS_BUCKET", "")
     total = 0
+    # One statement per table, not one per row. Deleting ~900 rows a row at a
+    # time over an IAM tunnel takes a quarter of an hour per tenant and commits
+    # nothing until it finishes, so it is indistinguishable from a hang.
+    # Children before parents. Deleting a row at a time let SQLAlchemy's
+    # relationships work this order out; one statement per table does not, and
+    # `invoice_lines` holds a foreign key into `invoices` that refuses.
+    models = (
+        ("invoice_lines", InvoiceLine),
+        ("findings", Finding),
+        ("corrections", Correction),
+        ("pipeline_runs", PipelineRun),
+        ("invoices", Invoice),
+        ("documents", Document),
+    )
     for tenant_id in tenant_ids:
         with tenant_session(tenant_id) as session:
-            documents = session.scalars(
-                select(Document).where(Document.tenant_id == tenant_id)
-            ).all()
-            invoices = session.scalars(
-                select(Invoice).where(Invoice.tenant_id == tenant_id)
-            ).all()
-            findings = session.scalars(
-                select(Finding).where(Finding.tenant_id == tenant_id)
-            ).all()
-            runs = session.scalars(
-                select(PipelineRun).where(PipelineRun.tenant_id == tenant_id)
-            ).all()
-            print(
-                f"{tenant_id}: {len(documents)} documents, {len(invoices)} invoices, "
-                f"{len(findings)} findings, {len(runs)} pipeline runs",
-                flush=True,
-            )
-            total += len(documents) + len(invoices) + len(findings) + len(runs)
+            counts = {
+                name: session.scalar(
+                    select(func.count())
+                    .select_from(model)
+                    .where(model.tenant_id == tenant_id)
+                )
+                for name, model in models
+            }
+            keys = [
+                d
+                for (d,) in session.execute(
+                    select(Document.storage_key).where(
+                        Document.tenant_id == tenant_id
+                    )
+                )
+            ]
+            print(f"{tenant_id}: {counts}", flush=True)
+            total += sum(counts.values())
 
             if args.apply:
-                for row in (*findings, *runs, *invoices, *documents):
-                    session.delete(row)
+                for name, model in models:
+                    session.execute(
+                        delete(model).where(model.tenant_id == tenant_id)
+                    )
+                    print(f"  deleted {counts[name]} {name}", flush=True)
 
         if args.apply and bucket_name and not args.rows_only:
             from google.cloud import storage
 
-            print(f"  listing objects under t/{tenant_id}/ ...", flush=True)
             client = storage.Client()
             bucket = client.bucket(bucket_name)
-            # Listed first, then deleted, so the count is known before the
-            # deleting starts and a slow bucket looks slow rather than hung.
-            keys = [
-                b.name
-                for b in client.list_blobs(bucket, prefix=f"t/{tenant_id}/")
-            ]
-            print(f"  {len(keys)} objects to remove", flush=True)
+            print(f"  removing {len(keys)} stored objects", flush=True)
             for n, key in enumerate(keys, 1):
-                bucket.blob(key).delete()
-                if n % 5 == 0 or n == len(keys):
+                bucket.blob(f"t/{tenant_id}/{key}").delete()
+                if n % 25 == 0 or n == len(keys):
                     print(f"    {n}/{len(keys)}", flush=True)
 
     for extra in args.prefix:
