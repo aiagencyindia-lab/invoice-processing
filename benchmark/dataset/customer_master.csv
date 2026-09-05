@@ -1,0 +1,4 @@
+company_id,code,legal_name,industry,address,city,pin,state,pan,gstin,email
+A,TECH,Zentrix Cloudworks Private Limited,Technology / Software,"4th Floor, Prism Tech Park, Outer Ring Road, Bellandur",Bengaluru,560103,29,AAFCZ4821L,29AAFCZ4821L1ZS,ap@zentrixcloudworks.example
+B,MFG,Ferrovane Industries Private Limited,Manufacturing / Industrial,"Plot 112, GIDC Industrial Estate Phase II, Makarpura",Vadodara,390010,24,AAECF9034M,24AAECF9034M1ZE,accounts.payable@ferrovane.example
+C,SVC,Lumora Brandcraft LLP,Professional Services / Marketing,"2nd Floor, Orbit Corporate Centre, Andheri East",Mumbai,400059,27,AAMFL2760R,27AAMFL2760R1ZJ,finance@lumorabrandcraft.example

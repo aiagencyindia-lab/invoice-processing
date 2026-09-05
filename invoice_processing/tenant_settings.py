@@ -36,6 +36,21 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     "po_tolerance_abs": (int, float),
     "high_value_threshold": (int, float),
     "rules_binding": bool,
+    # The tax identifier suppliers in this country carry. Settable because it
+    # is a property of where the customer buys, not of the product: a single
+    # master-data value meant every tenant validated Australian ABNs, so an
+    # Indian GSTIN was rejected for being the wrong length -- the right verdict
+    # for the wrong reason, and the same verdict for the valid ones.
+    "tax_id_format": str,
+    # The tax registrations this organisation is invoiced under. A name can be
+    # typed; a registration is issued, so where both are known both must agree.
+    "organization_tax_ids": list,
+    "require_tax_breakup": bool,
+    # Statutory rate per classification code, where the rate depends on what
+    # was sold rather than on who sold it.
+    "tax_rates_by_hsn": dict,
+    "tax_rate_tolerance": (int, float),
+    "tax_rate_tolerance_pct": (int, float),
 }
 
 # Settings the validation engine knows nothing about, with their defaults.
@@ -85,6 +100,38 @@ DESCRIPTIONS: dict[str, str] = {
         "still evaluated and what it would have changed is recorded against "
         "the invoice -- so you can read a month of real cases before a rule "
         "is allowed to alter one."
+    ),
+    "tax_id_format": (
+        "The tax registration your suppliers carry: ABN in Australia, GSTIN "
+        "in India. It decides which checksum verifies a supplier's tax ID, so "
+        "setting the wrong one rejects perfectly valid invoices."
+    ),
+    "organization_tax_ids": (
+        "Your own tax registrations. When an invoice states who it is billed "
+        "to by registration number, it must be one of these -- a name can be "
+        "typed, a registration is issued."
+    ),
+    "tax_rates_by_hsn": (
+        "Statutory tax rate for each classification code your suppliers use "
+        "(HSN/SAC in India), as a fraction: 0.18 for 18%. Without it every "
+        "line on an invoice is checked against one rate, which cannot catch a "
+        "12% line taxed at 18%."
+    ),
+    "tax_rate_tolerance": (
+        "How far an invoice's stated tax may differ from the calculated "
+        "amount before it is rejected. Per-line rounding makes a difference "
+        "of a rupee or two normal."
+    ),
+    "tax_rate_tolerance_pct": (
+        "The same allowance as a share of the tax due, for invoices large "
+        "enough that a fixed amount is meaningless. 0.002 is a fifth of a "
+        "percent. The larger of the two applies."
+    ),
+    "require_tax_breakup": (
+        "Require every invoice to be a tax invoice: a supplier registration "
+        "and tax stated. Turn it on where you can only claim input tax "
+        "against a proper tax invoice; leave it off where suppliers "
+        "legitimately bill without tax."
     ),
 }
 
@@ -143,6 +190,8 @@ def validate(payload: dict) -> dict:
                     "examine."
                 )
             cleaned[key] = sorted(wanted)
+        elif key == "organization_tax_ids":
+            cleaned[key] = [str(t).strip() for t in value if str(t).strip()]
         elif key == "organization_names":
             names = [str(n).strip() for n in value if str(n).strip()]
             if not names:
@@ -151,10 +200,40 @@ def validate(payload: dict) -> dict:
                     "invoice will be rejected as addressed to someone else."
                 )
             cleaned[key] = names
+        elif key == "tax_id_format":
+            from .tax_ids import supported_formats  # noqa: PLC0415
+
+            wanted = str(value).strip().upper()
+            if wanted not in supported_formats():
+                raise SettingsError(
+                    f"No validator for tax ID format {value!r}. "
+                    f"Available: {', '.join(supported_formats())}. "
+                    "Choosing an unknown format would leave supplier tax IDs "
+                    "unchecked without saying so."
+                )
+            cleaned[key] = wanted
+        elif key == "tax_rates_by_hsn":
+            rates = {}
+            for code, rate in value.items():
+                try:
+                    rates[str(code).strip()] = float(rate)
+                except (TypeError, ValueError):
+                    raise SettingsError(
+                        f"Tax rate for {code!r} must be a number, e.g. 0.18 "
+                        "for 18%."
+                    ) from None
+                if not 0 <= rates[str(code).strip()] <= 1:
+                    raise SettingsError(
+                        f"Tax rate for {code!r} must be a fraction between 0 "
+                        "and 1, e.g. 0.18 for 18%."
+                    )
+            cleaned[key] = rates
         elif key in (
             "po_tolerance_pct",
             "po_tolerance_abs",
             "high_value_threshold",
+            "tax_rate_tolerance",
+            "tax_rate_tolerance_pct",
         ):
             if value < 0:
                 raise SettingsError(f"{key} cannot be negative.")
@@ -285,5 +364,12 @@ def apply_to_pipeline(tenant_id: str, store=None) -> dict:
     # Purchase orders are per-tenant: one shared file would let a customer see
     # and overwrite another's supplier commitments.
     config["purchase_order_file"] = str(paths.purchase_order_file(tenant_id))
+    # Reference data the checks compare against, scoped the same way and for
+    # the same reason: these name a customer's suppliers and the work they
+    # have authorised.
+    config["vendor_master_file"] = str(paths.vendor_master_file(tenant_id))
+    config["work_authorization_file"] = str(
+        paths.work_authorization_file(tenant_id)
+    )
     agent._config_store["CONFIG"] = config
     return config

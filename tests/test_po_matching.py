@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from invoice_processing import paths, po_matching
+from invoice_processing import paths, po_matching, vendor_master
 from invoice_processing.po_matching import (
     CURRENCY_MISMATCH,
     EXCEEDS_REMAINING,
@@ -392,3 +392,289 @@ class TestPipelineWiring:
 
     def test_the_matcher_satisfies_the_source_protocol(self):
         assert isinstance(Orders(po()), po_matching.PurchaseOrders)
+
+
+class TestVendorNormalisationIsWordwise:
+    """Legal suffixes used to be stripped as bare substrings anywhere in the
+    name, which is invisible while both sides are mangled the same way and
+    dangerous the moment a vendor master is indexed by the result."""
+
+    def test_a_suffix_inside_a_word_survives(self):
+        assert po_matching.normalize_vendor("Coca Cola Company") == "COCA COLA"
+        assert (
+            po_matching.normalize_vendor("Quantar DevOps Consulting Pvt Ltd")
+            == "QUANTAR DEVOPS CONSULTING PVT"
+        )
+
+    def test_two_different_suppliers_do_not_collapse_together(self):
+        """The failure that matters: one supplier's invoice checked against
+        another's purchase order or tax ID."""
+        assert po_matching.normalize_vendor(
+            "Corp Solutions"
+        ) != po_matching.normalize_vendor("Solutions")
+
+    def test_the_same_company_written_two_ways_still_matches(self):
+        assert po_matching.normalize_vendor(
+            "Cloudhaven Infra Services Pvt Ltd"
+        ) == po_matching.normalize_vendor(
+            "Cloudhaven Infra Services Private Limited"
+        )
+
+    def test_a_private_limited_is_not_its_llp_namesake(self):
+        """Different legal entities, and after suffix-stripping the legal form
+        is the only thing left telling them apart."""
+        assert po_matching.normalize_vendor(
+            "Lumora Brandcraft Pvt Ltd"
+        ) != po_matching.normalize_vendor("Lumora Brandcraft LLP")
+
+
+class TestTheExtendedPurchaseOrder:
+    """An ERP that exports more than a number, a supplier and a total gets more
+    checked. One that exports the old three fields gets exactly the old match,
+    which is what makes this safe to deploy to an existing tenant."""
+
+    def _po(self, **overrides):
+        return {
+            "po_number": "PO-1",
+            "vendor_name": "Apex Industrial Components Pvt Ltd",
+            "total_amount": 100000.0,
+            "currency": "INR",
+            "status": "open",
+            **overrides,
+        }
+
+    def _invoice(self, **overrides):
+        return {
+            "po_number": "PO-1",
+            "vendor_name": "Apex Industrial Components Pvt Ltd",
+            "customer_name": "Ferrovane Industries Private Limited",
+            "currency": "INR",
+            "invoice_date": "2026-05-25",
+            "invoice_total_ex_tax": 100000.0,
+            "invoice_total_inc_tax": 118000.0,
+            "line_items": [
+                {
+                    "description": "Bearings",
+                    "quantity": 20,
+                    "unit_price": 5000.0,
+                }
+            ],
+            **overrides,
+        }
+
+    def _match(self, po, invoice):
+        return po_matching.match_invoice_to_po(invoice, Orders(po))
+
+    def test_the_old_record_shape_still_matches(self):
+        result = self._match(
+            self._po(), self._invoice(invoice_total_inc_tax=100000.0)
+        )
+        assert result.outcome == po_matching.MATCHED
+
+    def test_a_purchase_order_stated_net_of_tax_is_compared_net_of_tax(self):
+        """The one that mattered most in the benchmark: comparing a tax-
+        inclusive invoice against a net purchase order makes every correctly
+        taxed invoice look like 18% over-billing."""
+        po = self._po(amount_basis="ex_tax")
+        assert self._match(po, self._invoice()).outcome == po_matching.MATCHED
+
+    def test_another_customers_purchase_order_fails(self):
+        po = self._po(customer_name="Zentrix Cloudworks Private Limited")
+        result = self._match(po, self._invoice(invoice_total_inc_tax=100000.0))
+        assert result.outcome == po_matching.OTHER_CUSTOMER
+
+    def test_an_invoice_outside_the_validity_window_fails(self):
+        po = self._po(valid_from="2026-06-01", valid_to="2027-03-31")
+        result = self._match(po, self._invoice(invoice_total_inc_tax=100000.0))
+        assert result.outcome == po_matching.OUTSIDE_VALIDITY
+
+    def test_more_than_the_quantity_ordered_fails(self):
+        po = self._po(amount_basis="ex_tax", approved_quantity=10)
+        result = self._match(po, self._invoice())
+        assert result.outcome == po_matching.QUANTITY_EXCEEDED
+
+    def test_a_different_unit_price_fails(self):
+        """Twice the quantity at half the price reconciles perfectly against
+        the total, and is not what was ordered."""
+        po = self._po(amount_basis="ex_tax", approved_unit_price=4000.0)
+        result = self._match(po, self._invoice())
+        assert result.outcome == po_matching.PRICE_MISMATCH
+
+    def test_fields_the_export_omits_are_not_checked(self):
+        po = self._po(amount_basis="ex_tax")
+        result = self._match(
+            po, self._invoice(invoice_date="2030-01-01", customer_name="Anyone")
+        )
+        assert result.outcome == po_matching.MATCHED
+
+
+class TestWhatThePurchaseOrderCommitsTo:
+    """An order for 20 bearings is not a ceiling on the invoice that bills
+    them alongside a dozen other things. Comparing the invoice total against
+    one item's value rejected 19 legitimate invoices in the benchmark corpus,
+    every one of which the dataset expects to pass."""
+
+    def _po(self, **overrides):
+        return {
+            "po_number": "PO-1",
+            "vendor_name": "Apex Industrial Components Pvt Ltd",
+            "total_amount": 90420.0,
+            "currency": "INR",
+            "status": "open",
+            "amount_basis": "ex_tax",
+            **overrides,
+        }
+
+    def _invoice(self, **overrides):
+        return {
+            "po_number": "PO-1",
+            "vendor_name": "Apex Industrial Components Pvt Ltd",
+            "currency": "INR",
+            # Three lines; the order covers one of them.
+            "invoice_total_ex_tax": 156466.50,
+            "invoice_total_inc_tax": 184630.47,
+            "line_items": [
+                {
+                    "description": "Bearings",
+                    "quantity": 20,
+                    "unit_price": 4521.0,
+                },
+                {
+                    "description": "Granules",
+                    "quantity": 12,
+                    "unit_price": 2873.0,
+                },
+                {
+                    "description": "Masterbatch",
+                    "quantity": 10,
+                    "unit_price": 4275.0,
+                },
+            ],
+            **overrides,
+        }
+
+    def _match(self, po, invoice):
+        return po_matching.match_invoice_to_po(invoice, Orders(po))
+
+    def test_an_order_for_one_item_does_not_cap_the_invoice(self):
+        po = self._po(approved_quantity=20, approved_unit_price=4521.0)
+        result = self._match(po, self._invoice())
+        assert result.outcome == po_matching.MATCHED
+        assert "one item" in result.reason
+
+    def test_that_item_is_still_governed(self):
+        """Not a free pass: the quantity and price it does commit to are
+        checked, and they are what over-billing looks like on an order of this
+        shape."""
+        po = self._po(approved_quantity=10, approved_unit_price=4521.0)
+        assert (
+            self._match(po, self._invoice()).outcome
+            == po_matching.QUANTITY_EXCEEDED
+        )
+
+    def test_an_order_with_no_line_detail_still_caps_the_invoice(self):
+        """The case this check was written for, and it is unchanged."""
+        po = self._po(total_amount=100000.0)
+        assert (
+            self._match(po, self._invoice()).outcome == po_matching.OVER_BILLED
+        )
+
+
+SERVICE_PO = {
+    "po_number": "PO-1",
+    "vendor_name": "Cloudhaven Infra Services Pvt Ltd",
+    "total_amount": 90420.0,
+    "currency": "INR",
+    "status": "open",
+    "amount_basis": "ex_tax",
+    "approved_quantity": 40,
+    "approved_unit_price": 2537.0,
+}
+
+# Billed at a different rate, and for more hours, than the order states.
+SERVICE_INVOICE = {
+    "po_number": "PO-1",
+    "vendor_name": "Cloudhaven Infra Services Pvt Ltd",
+    "currency": "INR",
+    "invoice_total_ex_tax": 99246.0,
+    "invoice_total_inc_tax": 117110.28,
+    "line_items": [
+        {
+            "description": "Managed cloud operations",
+            "quantity": 42,
+            "unit": "hour",
+            "unit_price": 2363.0,
+        }
+    ],
+}
+
+
+class TestWhatTheOrderGoverns:
+    """A purchase order governs different things for goods and for services.
+
+    For goods it is quantity and price. For a service supplier the rate is set
+    by the work authorization -- step 4.3 checks the invoice against the
+    authorized rate and hours -- and the order is the budget that work is drawn
+    against. Checking its unit price here rejected eight legitimate service
+    invoices in the benchmark corpus, every one billing a rate its own
+    authorization allowed.
+    """
+
+    PO = SERVICE_PO
+    INVOICE = SERVICE_INVOICE
+
+    def _vendors(self, kind):
+        return vendor_master.VendorMaster(
+            records=[
+                {
+                    "name": "Cloudhaven Infra Services Pvt Ltd",
+                    "tax_id": "29ZOICE4828P1ZD",
+                    "kind": kind,
+                }
+            ]
+        )
+
+    def test_a_service_order_does_not_price_the_work(self):
+        result = po_matching.match_invoice_to_po(
+            self.INVOICE, Orders(self.PO), vendors=self._vendors("service")
+        )
+        assert result.outcome == po_matching.MATCHED
+
+    def test_a_goods_order_still_prices_it(self):
+        result = po_matching.match_invoice_to_po(
+            self.INVOICE, Orders(self.PO), vendors=self._vendors("goods")
+        )
+        assert result.outcome == po_matching.QUANTITY_EXCEEDED
+
+    def test_a_supplier_nobody_listed_keeps_the_stricter_reading(self):
+        """An invoice from someone not on the supplier list is not the place to
+        relax a control."""
+        stranger = {**SERVICE_INVOICE, "vendor_name": "Someone Else Pvt Ltd"}
+        result = po_matching.match_invoice_to_po(
+            stranger, Orders(self.PO), vendors=self._vendors("service")
+        )
+        assert result.outcome == po_matching.VENDOR_MISMATCH
+
+    def test_a_listed_service_supplier_is_the_only_relaxation(self):
+        """Same invoice, same order, and the only difference is what the
+        supplier list says this supplier sells."""
+        goods = po_matching.match_invoice_to_po(
+            self.INVOICE, Orders(self.PO), vendors=self._vendors("goods")
+        )
+        services = po_matching.match_invoice_to_po(
+            self.INVOICE, Orders(self.PO), vendors=self._vendors("service")
+        )
+        assert goods.outcome == po_matching.QUANTITY_EXCEEDED
+        assert services.outcome == po_matching.MATCHED
+
+    def test_no_supplier_list_keeps_the_stricter_reading(self):
+        result = po_matching.match_invoice_to_po(self.INVOICE, Orders(self.PO))
+        assert result.outcome == po_matching.QUANTITY_EXCEEDED
+
+    def test_a_service_order_still_checks_the_supplier_and_its_status(self):
+        """Relaxing the price check is not relaxing the order."""
+        closed = {**self.PO, "status": "cancelled"}
+        result = po_matching.match_invoice_to_po(
+            self.INVOICE, Orders(closed), vendors=self._vendors("service")
+        )
+        assert result.outcome == po_matching.PO_CLOSED

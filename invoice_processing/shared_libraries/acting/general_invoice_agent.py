@@ -66,7 +66,15 @@ except ImportError:
 # ============================================================================
 
 try:
-    from ... import confidence, duplicates, po_matching, tax_ids
+    from ... import (
+        confidence,
+        duplicates,
+        po_matching,
+        tax_ids,
+        vendor_master,
+        wa_matching,
+    )
+    from ...llm_guard import CallBudget, guarded_generate
     from ...paths import (
         AGENT_ROOT,
         ITEM_CODE_CACHE_PATH,
@@ -88,7 +96,15 @@ except ImportError:  # executed as a script: no parent package context
         if (p / "invoice_processing").is_dir()
     )
     _sys.path.insert(0, str(_repo_root))
-    from invoice_processing import confidence, duplicates, po_matching, tax_ids
+    from invoice_processing import (
+        confidence,
+        duplicates,
+        po_matching,
+        tax_ids,
+        vendor_master,
+        wa_matching,
+    )
+    from invoice_processing.llm_guard import CallBudget, guarded_generate
     from invoice_processing.paths import (
         AGENT_ROOT,
         ITEM_CODE_CACHE_PATH,
@@ -130,6 +146,290 @@ def _generation_config(**overrides) -> "GenerationConfig":
     params: dict[str, Any] = {"temperature": 0, "seed": _GENERATION_SEED}
     params.update(overrides)
     return GenerationConfig(**params)
+
+
+# How long one Vertex call may take before the caller stops waiting. The SDK
+# offers no timeout of its own, so without this a stalled request holds the
+# worker until its queue lease expires, gets redelivered, stalls again, and
+# after three attempts dead-letters an invoice nobody ever rejected. 180s is
+# roughly three times the slowest healthy extraction observed.
+VERTEX_TIMEOUT_SECONDS = float(os.getenv("VERTEX_TIMEOUT_SECONDS", "180"))
+
+
+def _generate(model, contents):
+    """Every Vertex call in this pipeline. See invoice_processing/llm_guard.py.
+
+    A per-call budget rather than a per-case one: this pipeline makes about
+    four calls per invoice and its ceiling is the phase structure, not a
+    counter. What it needs is that no single call can hang.
+    """
+    return guarded_generate(
+        model,
+        contents,
+        CallBudget(
+            timeout_seconds=VERTEX_TIMEOUT_SECONDS,
+            deadline_seconds=VERTEX_TIMEOUT_SECONDS * 3,
+        ),
+    )
+
+
+# Work types, and the words that mean them. Matched as whole words: "pm" as a
+# bare substring made "Development" preventative maintenance, and a work type
+# on the exempt list is a work type that needs no authorization -- so a
+# software invoice exempted itself from the check by spelling.
+_WORK_TYPE_KEYWORDS = (
+    (
+        "PREVENTATIVE",
+        ("preventative", "preventive", "pm", "scheduled", "maintenance"),
+    ),
+    ("CLEANING", ("cleaning", "clean", "janitorial")),
+    (
+        "EMERGENCY",
+        ("emergency", "urgent", "after hours", "callout", "call-out"),
+    ),
+)
+
+
+def determine_work_type(invoice: dict) -> str:
+    """What kind of work this invoice bills for, from its line descriptions."""
+    words = set()
+    phrases = []
+    for line in invoice.get("line_items") or []:
+        text = (line.get("description") or "").lower()
+        phrases.append(text)
+        words.update(
+            "".join(ch if ch.isalnum() else " " for ch in text).split()
+        )
+    joined = " ".join(phrases)
+    for work_type, keywords in _WORK_TYPE_KEYWORDS:
+        for keyword in keywords:
+            hit = keyword in joined if " " in keyword else keyword in words
+            if hit:
+                return work_type
+    return "REPAIRS"
+
+
+def _line_discount(
+    line: dict, quantity: float, unit_price: float
+) -> tuple[float, bool]:
+    """What this line's discount takes off, and whether we could read it.
+
+    Invoices print the discount column as a percentage far more often than as
+    an amount, and the extractor returns whichever it sees -- so a value below
+    one is a rate rather than a sum of money. A discount that is shown but not
+    readable returns False, and the caller lets the line pass: an unreadable
+    column is our problem and not the supplier's.
+    """
+    rate = line.get("line_discount_pct")
+    amount = line.get("line_discount")
+    if rate is None and amount is not None and 0 < float(amount) < 1:
+        # "10%" read as 0.1. A real discount of under one unit of currency is
+        # not worth the false rejections the other reading causes.
+        rate, amount = float(amount), None
+    discount = 0.0
+    if rate is not None:
+        discount += quantity * unit_price * float(rate)
+    if amount is not None:
+        discount += float(amount)
+    if rate is None and amount is None and line.get("has_discount"):
+        return 0.0, False
+    return discount, True
+
+
+def _charges_and_lines(invoice: dict) -> tuple[list[dict], list[dict]]:
+    """The invoice's line items and its other charges, each counted once.
+
+    Freight, packing and travel are printed outside the line table, and the
+    extractor frequently returns them in both places -- as a line *and* as an
+    other-charge, sometimes describing the charge only as "Other Charges" so
+    the two descriptions do not even match. Counting both makes the lines
+    overshoot the subtotal and the expected tax overshoot by the charge's tax:
+    on one invoice by 455.94, which is 2,533.00 of packing at 18% to the cent.
+
+    The test is arithmetic rather than textual, because the arithmetic is what
+    went wrong: a charge is a duplicate when dropping it brings the line sum
+    back to the subtotal the invoice prints. Where the sums do not say so, both
+    are kept -- two things costing the same are not the same thing.
+    """
+    lines = list(invoice.get("line_items") or [])
+    charges = list(invoice.get("other_charges") or [])
+    if not charges or not lines:
+        return lines, charges
+
+    printed_base = invoice.get("subtotal")
+    if printed_base is None:
+        printed_base = invoice.get("invoice_total_ex_tax")
+    if printed_base is None:
+        return lines, charges
+
+    line_sum = sum((line.get("amount_ex_tax") or 0) for line in lines)
+    overshoot = line_sum - printed_base
+    if overshoot <= 0.01:
+        return lines, charges
+
+    kept, dropped = [], 0.0
+    remaining = list(charges)
+    for line in lines:
+        amount = line.get("amount_ex_tax")
+        twin = next(
+            (
+                c
+                for c in remaining
+                if amount is not None
+                and c.get("amount") is not None
+                and abs(float(c["amount"]) - float(amount)) <= 0.01
+            ),
+            None,
+        )
+        if (
+            twin is not None
+            and dropped + float(twin["amount"]) <= overshoot + 0.01
+        ):
+            remaining.remove(twin)
+            dropped += float(twin["amount"])
+            continue
+        kept.append(line)
+    # Only if removing them actually reconciles the lines with the subtotal.
+    if abs(dropped - overshoot) <= 0.01:
+        return kept, charges
+    return lines, charges
+
+
+def _stated_tax_total(invoice: dict) -> float:
+    """The tax the invoice charges, however it chooses to present it.
+
+    A single total where there is one; the sum of the components where the
+    jurisdiction splits them and the document states no total. Reading only
+    `tax_amount` made every component-split invoice look as though it charged
+    no tax at all.
+    """
+    total = invoice.get("tax_amount")
+    if total is not None:
+        return total
+    components = [
+        invoice.get(key) or 0
+        for key in ("cgst_amount", "sgst_amount", "igst_amount")
+    ]
+    return sum(components)
+
+
+def _statutory_rate(line: dict, config: dict, currency: str) -> float:
+    """The rate this line should carry.
+
+    Its classification code first (the tenant's own table), then the rate the
+    invoice itself states, then the country default. A tenant with no table
+    keeps exactly the behaviour they have: one rate for the whole invoice.
+    """
+    by_code = config.get("tax_rates_by_hsn") or {}
+    code = str(line.get("hsn_sac") or "").strip()
+    while code and by_code:
+        if code in by_code:
+            return float(by_code[code])
+        code = code[:-1]  # a code table may be keyed by prefix
+    stated = line.get("tax_rate")
+    if stated is not None:
+        return float(stated)
+    return (config.get("tax_rates_by_currency") or {}).get(
+        currency, config.get("default_tax_rate", 0.10)
+    )
+
+
+def _expected_tax(invoice: dict, config: dict) -> tuple[float, str] | None:
+    """Tax due on this invoice, line by line. None when nothing says how.
+
+    Returns the amount and a description of how it was arrived at, because a
+    tax rejection an AP clerk cannot check by hand is a rejection they have to
+    take on trust.
+    """
+    lines, charges = _charges_and_lines(invoice)
+    priced = [
+        line
+        for line in lines
+        if line.get("amount_ex_tax") is not None
+        and (line.get("hsn_sac") or line.get("tax_rate") is not None)
+    ]
+    if not priced:
+        return None
+
+    currency = str(invoice.get("currency") or "").upper()
+
+    # An invoice-level discount reduces what is taxable, and it is not
+    # attributed to any one line -- so each line is taxed on its share of the
+    # taxable amount rather than on its printed value. Taxing the printed
+    # values instead overstates the tax by the whole discount, which reads as
+    # the supplier undercharging when they did nothing of the kind.
+    # What the invoice says is taxable, preferring the figures it prints over
+    # one derived from them. `invoice_total_ex_tax` is where an extractor's
+    # arithmetic errors land -- on one invoice it came back holding the packing
+    # charge as well, so the charge was taxed twice and the expected tax
+    # overshot by 455.94, exactly 2,533.00 at 18%. Subtotal minus discount is
+    # printed on the document and cannot drift that way.
+    subtotal = invoice.get("subtotal")
+    taxable = invoice.get("invoice_total_ex_tax")
+    if subtotal is not None:
+        taxable = subtotal - (invoice.get("discount") or 0)
+    share = 1.0
+    if subtotal and taxable is not None and subtotal > 0:
+        share = taxable / subtotal
+
+    total = 0.0
+    rates = set()
+    for line in lines:
+        base = line.get("amount_ex_tax")
+        if base is None:
+            continue
+        rate = _statutory_rate(line, config, currency)
+        rates.add(rate)
+        total += base * share * rate
+    for charge in charges:
+        amount = charge.get("amount")
+        if amount is None:
+            continue
+        rate = charge.get("tax_rate")
+        if rate is None:
+            rate = max(rates) if rates else 0.0
+        total += amount * float(rate)
+    how = ", ".join(f"{r:.0%}" for r in sorted(rates)) or "no rate"
+    return round(total, 2), how
+
+
+def _components_consistent(invoice: dict) -> str:
+    """Are the tax components consistent with where the supply happened?
+
+    Within a state the tax splits in two equal halves; across a state line it
+    is charged as one. Getting this wrong is a real filing error that a single
+    tax total hides completely. Returns an empty string when consistent, or
+    what is wrong.
+    """
+    cgst = invoice.get("cgst_amount")
+    sgst = invoice.get("sgst_amount")
+    igst = invoice.get("igst_amount")
+    if cgst is None and sgst is None and igst is None:
+        return ""
+
+    place = str(invoice.get("place_of_supply") or "")
+    supplier = tax_ids.normalize(invoice.get("vendor_tax_id"))
+    place_code = "".join(ch for ch in place if ch.isdigit())[:2]
+    supplier_code = supplier[:2] if supplier[:2].isdigit() else ""
+    if not place_code or not supplier_code:
+        return ""
+
+    intra_state = place_code == supplier_code
+    cgst, sgst, igst = cgst or 0, sgst or 0, igst or 0
+    if intra_state:
+        if igst:
+            return (
+                f"IGST charged on a supply within state {place_code}, where "
+                "CGST and SGST apply"
+            )
+        if abs(cgst - sgst) > 0.02:
+            return f"CGST {cgst:,.2f} and SGST {sgst:,.2f} differ"
+    elif cgst or sgst:
+        return (
+            f"CGST/SGST charged on a supply from state {supplier_code} to "
+            f"{place_code}, where IGST applies"
+        )
+    return ""
 
 
 @lru_cache(maxsize=32)
@@ -241,13 +541,31 @@ _FALLBACK_CONFIG = {
     # billing (retainers, subscriptions) is not rejected.
     "duplicate_check_enabled": True,
     "duplicate_check_type": "none",  # "none", "file", "database", "api"
+    # Statutory rate per classification code (HSN/SAC and its equivalents),
+    # for jurisdictions where the rate is a property of what was sold rather
+    # than of the invoice. Empty means one rate per currency, as before.
+    "tax_rates_by_hsn": {},
     # Tolerances
     "balance_tolerance": 0.02,
     "line_sum_tolerance": 1.00,
+    # Tax reconciliation used to borrow `balance_tolerance`, which is two
+    # cents: a per-line rounding rule that is normal in some jurisdictions
+    # exceeded it on almost every invoice.
+    "tax_rate_tolerance": 1.00,
+    # And the same allowance as a share of the tax due, for invoices where a
+    # fixed amount is meaningless.
+    "tax_rate_tolerance_pct": 0.002,
     "hours_tolerance": 0.5,
     # Tax ID validation
     "validate_tax_id_checksum": True,
-    "tax_id_format": "ABN",  # "ABN", "VAT", "EIN", "NONE"
+    "tax_id_format": "ABN",  # "ABN", "GSTIN", "NONE"
+    # Our own tax registrations, checked against the invoice's bill-to when it
+    # states one. Empty means the name check stands alone, as before.
+    "organization_tax_ids": [],
+    # Off: an invoice with no tax on it is not automatically wrong. Where input
+    # tax can only be claimed against a proper tax invoice, turning this on
+    # makes step 1.3 say so.
+    "require_tax_breakup": False,
 }
 
 
@@ -305,12 +623,42 @@ MODEL_PRICING = {
 # ============================================================================
 
 
+# What a submission can turn out to be. The classifier used to answer one
+# question -- "does this look like an invoice?" -- so a receipt, a quotation, a
+# proforma or a credit note with an invoice-shaped header was extracted and
+# validated as an invoice, and step 1.1 reported success on a document that is
+# not a payable at all. Naming the kinds is what lets 1.1 and 1.3 disagree with
+# each other: a Bill of Supply *is* a real document from a real supplier, it is
+# simply not a tax invoice.
+TAX_INVOICE = "tax_invoice"
+NON_TAX_INVOICE = "invoice"  # an invoice with no tax stated: bill of supply etc
+NON_PAYABLE_TYPES = frozenset(
+    {
+        "receipt",
+        "quotation",
+        "proforma_invoice",
+        "credit_note",
+        "purchase_order",
+        "delivery_challan",
+        "statement",
+        "unreadable",
+    }
+)
+DOCUMENT_TYPES = (
+    TAX_INVOICE,
+    NON_TAX_INVOICE,
+    *sorted(NON_PAYABLE_TYPES),
+    "other",
+)
+
+
 class DocumentContent(BaseModel):
     """Identifies document types present in a file"""
 
     has_invoice: bool = False
     has_work_authorization: bool = False
     invoice_count: int = 0
+    document_type: str = ""
     reasoning: str = ""
 
 
@@ -319,11 +667,35 @@ class InvoiceLineItem(BaseModel):
 
     description: str
     quantity: float | None = None
+    unit: str | None = None
     unit_price: float | None = None
     amount_ex_tax: float | None = None
     tax_code: str | None = "TAX"
     tax_amount: float | None = None
     amount_inc_tax: float | None = None
+    # The classification code that decides the statutory rate for this line
+    # (HSN/SAC in India, and the same idea elsewhere). Without it a multi-rate
+    # invoice can only be checked against one blended rate, which is not a
+    # check at all.
+    hsn_sac: str | None = None
+    tax_rate: float | None = None  # 0.18 for 18%
+    # Invoices print the discount column as a percentage more often than as an
+    # amount, so both are captured rather than one being inferred from the
+    # other -- reading "10%" as ten rupees rejected five real invoices.
+    line_discount: float | None = None  # a sum of money
+    line_discount_pct: float | None = None  # 0.10 for 10%
+    has_discount: bool | None = None
+
+
+class OtherCharge(BaseModel):
+    """Freight, insurance, a delivery fee: taxable, and outside the line table.
+
+    They belong to the total but not to the line items, so an invoice carrying
+    them reconciles only if they are read separately."""
+
+    description: str | None = None
+    amount: float | None = None
+    tax_rate: float | None = None
 
 
 class TaxBreakdownLine(BaseModel):
@@ -372,6 +744,34 @@ class InvoiceExtraction(BaseModel):
     bank_code: str | None = None  # BSB / sort code / routing number
     bank_iban: str | None = None
     tax_breakdown: list[TaxBreakdownLine] | None = []
+
+    # --- Added for the India GST pack -------------------------------------
+    #
+    # Every one of these is optional and defaults to None, so an invoice from a
+    # jurisdiction that does not print them reaches the checks exactly as it
+    # did before. What they buy: a reconciliation that accounts for discounts,
+    # freight and rounding rather than assuming they are absent; a tax check
+    # that can compare against statutory rates per line instead of one blended
+    # rate; and a work-authorization check that can look up the reference the
+    # invoice quotes rather than requiring the form to be attached.
+    document_type: str | None = None
+    customer_tax_id: str | None = None
+    work_authorization_reference: str | None = None
+    project: str | None = None
+    service_period_start: str | None = None
+    service_period_end: str | None = None
+    place_of_supply: str | None = None
+    subtotal: float | None = None  # before discount, as printed
+    discount: float | None = None
+    other_charges: list[OtherCharge] | None = []
+    round_off: float | None = None
+    # Tax components where the jurisdiction splits them (CGST/SGST within a
+    # state, IGST across states). Their consistency with the place of supply is
+    # a check of its own: charging IGST on a local supply is a real error that
+    # a single tax total hides completely.
+    cgst_amount: float | None = None
+    sgst_amount: float | None = None
+    igst_amount: float | None = None
 
 
 class WorkAuthorizationExtraction(BaseModel):
@@ -452,7 +852,7 @@ def extract_pdf_with_gemini(pdf_path: Path) -> str:
 Return the text exactly as it appears, preserving numbers, dates, amounts, and structure.
 Do not summarize - extract complete text content."""
 
-    response = model.generate_content([pdf_part, prompt])
+    response = _generate(model, [pdf_part, prompt])
 
     if _gcp_config.API_CALL_DELAY_SECONDS > 0:
         time.sleep(_gcp_config.API_CALL_DELAY_SECONDS)
@@ -562,7 +962,7 @@ def call_gemini(
     model = _model_for(model_name, 0)
 
     start_time = time.time()
-    response = model.generate_content(prompt)
+    response = _generate(model, prompt)
     latency_ms = (time.time() - start_time) * 1000
 
     # Update metrics
@@ -605,7 +1005,7 @@ def call_gemini_with_pdf(
     pdf_part = Part.from_data(mime_type="application/pdf", data=pdf_data)
 
     start_time = time.time()
-    response = model.generate_content([pdf_part, prompt])
+    response = _generate(model, [pdf_part, prompt])
     latency_ms = (time.time() - start_time) * 1000
 
     # Update metrics
@@ -631,11 +1031,54 @@ def call_gemini_with_pdf(
     return response.text, latency_ms
 
 
+# The formats invoices actually print. Every one here was found on a real or
+# synthetic supplier document; an unparseable date is not a small problem,
+# because step 3.3 then emits no verdict at all and a future-dated invoice
+# passes unremarked because nobody looked.
+_DATE_FORMATS = (
+    "%d/%m/%Y",
+    "%Y-%m-%d",
+    "%d-%m-%Y",
+    "%Y/%m/%d",
+    "%m/%d/%Y",
+    "%d-%b-%Y",  # 09-Aug-2026
+    "%d.%m.%Y",  # 09.08.2026
+    "%d %B %Y",  # 09 August 2026
+    "%d %b %Y",  # 09 Aug 2026
+    "%b %d, %Y",  # Aug 09, 2026
+)
+
+
+def _reference_date() -> date:
+    """The day "is this invoice dated in the future?" is asked against.
+
+    Normally today. `INVOICE_REFERENCE_DATE` pins it, so a corpus with a stated
+    reference date -- an evaluation set, a regression fixture, a replay of last
+    month's queue -- gives the same answer whenever it is run.
+
+    Deliberately an environment variable and not a tenant setting: a customer
+    who could move the clock could accept invoices dated into next year, which
+    is the fraud this check exists to stop. An unreadable value falls back to
+    today rather than refusing to process: a typo must not stop the queue, and
+    must not quietly accept future dates either.
+    """
+    raw = os.getenv("INVOICE_REFERENCE_DATE", "").strip()
+    if raw:
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").date()
+        except ValueError:
+            print(
+                f"  Warning: INVOICE_REFERENCE_DATE={raw!r} is not YYYY-MM-DD;"
+                " using today."
+            )
+    return date.today()
+
+
 def parse_date(date_str: str | None) -> date | None:
     """Parse date string in various formats"""
     if not date_str:
         return None
-    for fmt in ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%m/%d/%Y"]:
+    for fmt in _DATE_FORMATS:
         try:
             return datetime.strptime(date_str, fmt).date()
         except ValueError:
@@ -698,7 +1141,7 @@ class ClassifierAgent(BaseAgent):
         print(" [1/9] Classifier Agent: Starting...")
 
         files_info = {}
-        summary = {"invoice_count": 0, "waf_count": 0}
+        summary = {"invoice_count": 0, "waf_count": 0, "document_type": ""}
         invoice_sources = []
         waf_sources = []
 
@@ -722,6 +1165,14 @@ class ClassifierAgent(BaseAgent):
                     )
                     summary["invoice_count"] += doc_info.invoice_count
 
+                # The submission's kind is the kind of the document being
+                # billed. A work authorization alongside an invoice does not
+                # change what is being paid.
+                if not summary["document_type"] or doc_info.has_invoice:
+                    summary["document_type"] = (
+                        doc_info.document_type or summary["document_type"]
+                    )
+
                 if doc_info.has_work_authorization:
                     waf_sources.append(
                         {
@@ -737,6 +1188,7 @@ class ClassifierAgent(BaseAgent):
                     "extraction_method": method,
                     "has_invoice": doc_info.has_invoice,
                     "has_waf": doc_info.has_work_authorization,
+                    "document_type": doc_info.document_type,
                 }
 
             elif file_path.suffix.lower() == ".json":
@@ -779,11 +1231,33 @@ WORK AUTHORIZATION INDICATORS:
 - Authorized hours
 - Technician signatures
 
+DOCUMENT TYPE -- what the document says it is, not what it resembles. Its own
+title is the strongest evidence, and a disclaimer such as "this is not a tax
+invoice" settles it:
+- "tax_invoice": a tax invoice -- titled as one, with a supplier tax
+  registration and tax stated or itemised.
+- "invoice": billed as an invoice but with no tax registration or no tax
+  charged, including a Bill of Supply or a composition-scheme invoice.
+- "receipt": records a payment already made.
+- "quotation": an offer or estimate, often "valid for N days".
+- "proforma_invoice": titled proforma; a request for payment in advance, not a
+  tax invoice.
+- "credit_note": reverses an earlier invoice.
+- "purchase_order": the buyer's own order document.
+- "delivery_challan": a delivery or dispatch note, usually without prices.
+- "statement": a statement of account listing several invoices.
+- "unreadable": nothing legible could be recovered from the page.
+- "other": none of the above.
+
+invoice_count: how many DISTINCT invoices this file contains -- count distinct
+invoice numbers, not pages. Several pages of one invoice is 1.
+
 Return ONLY this JSON:
 {{
   "has_invoice": true/false,
   "has_work_authorization": true/false,
   "invoice_count": 0-N,
+  "document_type": "one of the values above",
   "reasoning": "brief explanation"
 }}"""
 
@@ -794,16 +1268,50 @@ Return ONLY this JSON:
             return result
         except Exception as e:
             print(f"    Warning: Document analysis failed: {e}")
-            # Fallback to keyword detection
-            content_lower = content.lower()
-            return DocumentContent(
-                has_invoice="invoice" in content_lower
-                and "total" in content_lower,
-                has_work_authorization="work authorization" in content_lower
-                or "waf" in content_lower,
-                invoice_count=1 if "invoice" in content_lower else 0,
-                reasoning="Keyword fallback",
-            )
+            return self._classify_by_keyword(content)
+
+    # Titles, most specific first: "proforma invoice" and "tax invoice" both
+    # contain "invoice", so the order is the logic.
+    _TITLE_MARKERS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("proforma invoice", "proforma_invoice"),
+        ("pro forma invoice", "proforma_invoice"),
+        ("credit note", "credit_note"),
+        ("delivery challan", "delivery_challan"),
+        ("delivery note", "delivery_challan"),
+        ("purchase order", "purchase_order"),
+        ("quotation", "quotation"),
+        ("quote no", "quotation"),
+        ("statement of account", "statement"),
+        ("bill of supply", NON_TAX_INVOICE),
+        ("tax invoice", TAX_INVOICE),
+        ("receipt", "receipt"),
+        ("invoice", NON_TAX_INVOICE),
+    )
+
+    def _classify_by_keyword(self, content: str) -> DocumentContent:
+        """What can be told from the text when the model call fails.
+
+        It used to answer "invoice" for anything containing the word, which
+        made a quotation a payable. Reading the title instead is barely more
+        code and is right about the documents that matter.
+        """
+        lowered = content.lower()
+        document_type = next(
+            (kind for marker, kind in self._TITLE_MARKERS if marker in lowered),
+            "unreadable" if not lowered.strip() else "other",
+        )
+        if document_type == NON_TAX_INVOICE and "gstin" in lowered:
+            document_type = TAX_INVOICE
+        return DocumentContent(
+            has_invoice=document_type in (TAX_INVOICE, NON_TAX_INVOICE),
+            has_work_authorization="work authorization" in lowered
+            or "waf" in lowered,
+            invoice_count=1
+            if document_type in (TAX_INVOICE, NON_TAX_INVOICE)
+            else 0,
+            document_type=document_type,
+            reasoning="Keyword fallback",
+        )
 
 
 # ============================================================================
@@ -902,6 +1410,13 @@ class ExtractorAgent(BaseAgent):
                 "waf_count": classification.get("summary", {}).get(
                     "waf_count", 0
                 ),
+                # What the classifier decided this submission is. Checks 1.1
+                # and 1.3 read it: whether a document is payable at all, and
+                # whether it is a tax invoice, are different questions and a
+                # single "looks like an invoice" boolean answered neither.
+                "document_type": classification.get("summary", {}).get(
+                    "document_type", ""
+                ),
             },
             input_refs=["01_classification.json"],
         )
@@ -932,6 +1447,26 @@ Return ONLY valid JSON with these fields:
   "bank_account_number": "string or null",
   "bank_code": "string or null (BSB, sort code or routing number)",
   "bank_iban": "string or null",
+  "document_type": "string or null (what the document calls itself, e.g. 'Tax Invoice', 'Bill of Supply')",
+  "customer_tax_id": "string or null (the tax registration of the party billed)",
+  "work_authorization_reference": "string or null (work authorization / work order / WA reference quoted on the invoice)",
+  "project": "string or null",
+  "service_period_start": "YYYY-MM-DD or null",
+  "service_period_end": "YYYY-MM-DD or null",
+  "place_of_supply": "string or null (as printed, e.g. '29-Karnataka')",
+  "subtotal": decimal or null (the stated sub total, before any discount),
+  "discount": decimal or null (an invoice-level discount, as a positive number),
+  "round_off": decimal or null (a rounding adjustment; negative if it reduces the total),
+  "cgst_amount": decimal or null,
+  "sgst_amount": decimal or null,
+  "igst_amount": decimal or null,
+  "other_charges": [
+    {
+      "description": "string or null (freight, insurance, packing)",
+      "amount": decimal or null,
+      "tax_rate": decimal or null (0.18 for 18%)
+    }
+  ],
   "tax_breakdown": [
     {
       "rate": decimal or null (0.10 for 10%),
@@ -944,10 +1479,16 @@ Return ONLY valid JSON with these fields:
     {
       "description": "string",
       "quantity": decimal or null,
+      "unit": "string or null (hour, nos, box, kg)",
       "unit_price": decimal or null,
       "amount_ex_tax": decimal,
       "tax_code": "TAX/GST/NA",
-      "tax_amount": decimal or null
+      "tax_amount": decimal or null,
+      "hsn_sac": "string or null (HSN or SAC classification code)",
+      "tax_rate": decimal or null (0.18 for an 18% line),
+      "line_discount": decimal or null (a discount shown as an AMOUNT of money, positive),
+      "line_discount_pct": decimal or null (a discount shown as a PERCENTAGE, as a fraction: 0.10 for 10%),
+      "has_discount": true/false (does this line show any discount at all, in either form?)
     }
   ]
 }
@@ -963,8 +1504,28 @@ Bank details: report only what appears on this invoice. They are compared
 against the vendor's records to detect payment-redirection fraud, so a value
 inferred rather than read defeats the control.
 
+Discounts: the discount column is a percentage on most layouts and an amount
+on some. Put a percentage in line_discount_pct and an amount in line_discount,
+never the same number in both, and set has_discount whenever the line shows one
+-- a discount we can see but cannot quantify must not read as no discount.
+
+other_charges: freight, packing, insurance and similar, as printed outside the
+line-item table. Do not also repeat them as line items: the same charge in both
+places is counted twice.
+
 tax_breakdown: one entry per distinct tax rate shown. Leave empty if the
-invoice states a single tax amount with no rate breakdown."""
+invoice states a single tax amount with no rate breakdown.
+
+Tax components: where the invoice splits its tax into separate components
+(CGST and SGST within a state, IGST across states, or an equivalent split
+elsewhere), report each. Leave them null where the invoice states one tax
+amount. tax_amount stays the total of the tax charged either way.
+
+Percentages as decimals: an 18% line is 0.18.
+
+Null means "the invoice does not state it". Do not compute a field from the
+others -- a subtotal you calculated hides the discrepancy a later check exists
+to find."""
 
         result, _ = call_gemini_with_pdf(
             pdf_path, prompt, _gcp_config.GEMINI_PRO_MODEL, InvoiceExtraction
@@ -1075,8 +1636,29 @@ class Phase1ValidatorAgent(BaseAgent):
         invoice = extraction.get("invoice", {})
         validations = []
 
-        # Step 1.1: Extraction Success
-        if extraction.get("extraction_failed"):
+        # Step 1.1: Extraction Success.
+        #
+        # "Could this be read?" and "is this a payable document?" were one
+        # question, answered by whether the extractor returned anything. A
+        # receipt, a quotation or a delivery note with an invoice-shaped header
+        # extracted perfectly and passed -- and then went on to be validated,
+        # and possibly paid, as an invoice.
+        document_type = str(extraction.get("document_type") or "").lower()
+        if document_type in NON_PAYABLE_TYPES:
+            validations.append(
+                {
+                    "step": "1.1",
+                    "rule": "Invoice extraction must succeed",
+                    "passed": False,
+                    "evidence": (
+                        f"Document is a {document_type.replace('_', ' ')}, "
+                        "not an invoice"
+                    ),
+                    "outcome": document_type,
+                    "rejection_template": "Document is not a valid Tax Invoice",
+                }
+            )
+        elif extraction.get("extraction_failed"):
             validations.append(
                 {
                     "step": "1.1",
@@ -1111,12 +1693,50 @@ class Phase1ValidatorAgent(BaseAgent):
             else True
         )
 
+        # A name can be typed; a tax registration is issued. Where the customer
+        # has told us theirs and the invoice states one, they must agree --
+        # otherwise an invoice addressed to a similarly-named company passes on
+        # the strength of a substring.
+        our_tax_ids = {
+            tax_ids.normalize(t)
+            for t in (_get_config().get("organization_tax_ids") or [])
+            if tax_ids.normalize(t)
+        }
+        stated_customer_id = tax_ids.normalize(invoice.get("customer_tax_id"))
+        evidence = f"Customer: {invoice.get('customer_name')}"
+        if our_tax_ids and stated_customer_id:
+            if stated_customer_id in our_tax_ids:
+                evidence += f", tax ID {invoice.get('customer_tax_id')} matches"
+            else:
+                # Only when the identifier we read is well-formed. On a scanned
+                # invoice the extractor read 24AAECF9034MIZE where the document
+                # says 24AAECF9034M1ZE -- a 1 read as an I -- and an exact
+                # comparison then rejected the invoice for being addressed to
+                # someone else. That is a rejection caused by our own reading,
+                # and the checksum is what tells the two apart: a misread
+                # identifier fails it, and one that passes and still differs
+                # really is another company's.
+                readable, reason = tax_ids.validate(
+                    stated_customer_id, _get_config().get("tax_id_format")
+                )
+                if readable:
+                    customer_match = False
+                    evidence += (
+                        f", tax ID {invoice.get('customer_tax_id')} is not one "
+                        "of this organisation's"
+                    )
+                else:
+                    evidence += (
+                        f", tax ID {invoice.get('customer_tax_id')} could not "
+                        f"be read ({reason}); the name alone was checked"
+                    )
+
         validations.append(
             {
                 "step": "1.2",
                 "rule": "Invoice addressed to organization",
                 "passed": customer_match,
-                "evidence": f"Customer: {invoice.get('customer_name')}",
+                "evidence": evidence,
                 "rejection_template": None
                 if customer_match
                 else "Invoice addressed to different company",
@@ -1131,35 +1751,92 @@ class Phase1ValidatorAgent(BaseAgent):
             and invoice.get("vendor_name") != "UNKNOWN"
         )
         tax_compliant = has_tax_id and has_date and has_vendor
+        evidence = (
+            f"Tax ID: {has_tax_id}, Date: {has_date}, Vendor: {has_vendor}"
+        )
+
+        # A Bill of Supply is a real document from a real supplier with a real
+        # date -- and it is not a tax invoice, so no input tax can be claimed
+        # against it. The presence of three fields cannot tell the difference;
+        # the document's own kind and whether it states any tax can. Gated,
+        # because plenty of jurisdictions and plenty of suppliers legitimately
+        # invoice with no tax at all.
+        if (
+            _get_config().get("require_tax_breakup")
+            and document_type == NON_TAX_INVOICE
+        ):
+            tax_compliant = False
+            evidence += ", billed without a tax registration"
 
         validations.append(
             {
                 "step": "1.3",
                 "rule": "Tax compliance (tax ID, date, vendor)",
                 "passed": tax_compliant,
-                "evidence": f"Tax ID: {has_tax_id}, Date: {has_date}, Vendor: {has_vendor}",
+                "evidence": evidence,
                 "rejection_template": None
                 if tax_compliant
                 else "Document is not a Tax Invoice",
             }
         )
 
-        # Step 1.4: Work Authorization Check
+        # Step 1.4: Work Authorization Check.
+        #
+        # Two ways an authorisation can be established, because customers work
+        # both ways. Where the tenant has loaded what they authorised, the
+        # invoice's quoted reference is looked up against it -- which is what
+        # most invoices carry, and what the form-counting path could never see.
+        # Where they have not, the check is what it was: is a form attached?
         if _get_config().get("require_work_authorization"):
-            work_type = self._determine_work_type(invoice)
-            exempt_types = _get_config().get("waf_exempt_work_types", [])
-            waf_required = work_type not in exempt_types
+            authorizations = _load_work_authorizations()
+            match = wa_matching.match_invoice_to_wa(
+                invoice, authorizations, vendors=_load_vendors()
+            )
             has_waf = (extraction.get("waf_count") or 0) > 0
 
-            if waf_required:
+            if match.outcome == wa_matching.NOT_APPLICABLE:
+                # Nothing to check, and nothing to record: a verdict on a
+                # question that does not arise is noise in the audit trail.
+                pass
+            elif match.outcome == wa_matching.NOT_CONFIGURED:
+                work_type = self._determine_work_type(invoice)
+                exempt_types = [
+                    t.upper()
+                    for t in _get_config().get("waf_exempt_work_types", [])
+                ]
+                if work_type not in exempt_types:
+                    validations.append(
+                        {
+                            "step": "1.4",
+                            "rule": "Work authorization required",
+                            "passed": has_waf,
+                            "evidence": f"WAF required for {work_type}, WAF present: {has_waf}",
+                            "rejection_template": None
+                            if has_waf
+                            else "Missing Work Authorization Form",
+                        }
+                    )
+            else:
+                # An attached form still satisfies the check: a tenant who
+                # sends the paperwork should not be told it is missing because
+                # they have also started loading a master.
+                passed = match.ok or has_waf
                 validations.append(
                     {
                         "step": "1.4",
-                        "rule": "Work authorization required",
-                        "passed": has_waf,
-                        "evidence": f"WAF required for {work_type}, WAF present: {has_waf}",
+                        "rule": "Work authorization valid for this supplier",
+                        "passed": passed,
+                        "evidence": (
+                            match.evidence
+                            + (
+                                " (work authorization form attached)"
+                                if has_waf and not match.ok
+                                else ""
+                            )
+                        ),
+                        "outcome": match.outcome,
                         "rejection_template": None
-                        if has_waf
+                        if passed
                         else "Missing Work Authorization Form",
                     }
                 )
@@ -1203,27 +1880,7 @@ class Phase1ValidatorAgent(BaseAgent):
 
     def _determine_work_type(self, invoice: dict) -> str:
         """Determine work type from invoice content"""
-        descriptions = " ".join(
-            [
-                (line.get("description") or "").lower()
-                for line in (invoice.get("line_items") or [])
-            ]
-        )
-
-        if any(
-            kw in descriptions
-            for kw in ["preventative", "pm", "scheduled", "maintenance"]
-        ):
-            return "PREVENTATIVE"
-        if any(
-            kw in descriptions for kw in ["cleaning", "clean", "janitorial"]
-        ):
-            return "CLEANING"
-        if any(
-            kw in descriptions for kw in ["emergency", "urgent", "after hours"]
-        ):
-            return "EMERGENCY"
-        return "REPAIRS"
+        return determine_work_type(invoice)
 
 
 # ============================================================================
@@ -1276,6 +1933,10 @@ class Phase2ValidatorAgent(BaseAgent):
                 tolerance_abs=config.get(
                     "po_tolerance_abs", po_matching.DEFAULT_TOLERANCE_ABS
                 ),
+                # So the match knows whether this supplier delivers goods, and
+                # therefore whether the order's quantity and price are the
+                # controls or the work authorization's are.
+                vendors=_load_vendors(),
             )
             entry = po_matching.to_validation(match)
             if not entry["passed"]:
@@ -1365,6 +2026,31 @@ def _load_purchase_orders() -> "_PurchaseOrderFile":
     return _PurchaseOrderFile()
 
 
+def _load_vendors() -> "vendor_master.VendorMaster":
+    """This tenant's supplier list, injected through config by the worker."""
+    return vendor_master.VendorMaster(_get_config().get("vendor_master_file"))
+
+
+def _load_work_authorizations() -> "wa_matching.WorkAuthorizations":
+    """What this tenant has authorised, injected through config by the worker."""
+    return wa_matching.WorkAuthorizations(
+        _get_config().get("work_authorization_file")
+    )
+
+
+def _labour_keywords() -> tuple[str, ...]:
+    """Words that mean an hour of somebody's time, from master data."""
+    try:
+        from ..master_data_loader import load_master_data  # noqa: PLC0415
+
+        keywords = (
+            load_master_data().data.get("labour_detection", {}).get("keywords")
+        )
+    except Exception:  # pragma: no cover - master data is optional
+        keywords = None
+    return tuple(keywords or ("labour", "labor", "technician", "hours"))
+
+
 def _load_seen_invoices(exclude_case_id: str = "") -> list:
     """Previously processed invoices, read from the case output directory.
 
@@ -1431,24 +2117,41 @@ class Phase3ValidatorAgent(BaseAgent):
                 print(f"   Duplicate check: {entry['evidence']}")
             validations.append(entry)
 
-        # Step 3.2: Tax ID Validation
+        # Step 3.2: Tax ID Validation.
+        #
+        # Two questions, and the checksum only answers the first. "Is this
+        # identifier well-formed?" is arithmetic; "is it *this supplier's*?"
+        # needs a vendor master, and it is the question that catches an invoice
+        # carrying somebody else's registration -- structurally perfect, and
+        # not theirs. Where no master is loaded the check is the checksum
+        # alone, exactly as before: a tenant who has not listed their suppliers
+        # must not have every invoice rejected as coming from an unknown one.
         tax_validation = invoice.get("_tax_id_validation", {})
-        if tax_validation:
+        match = vendor_master.check_vendor_tax_id(invoice, _load_vendors())
+        if tax_validation or not match.matched:
+            checksum_ok = (
+                tax_validation.get("valid", True) if tax_validation else True
+            )
+            passed = checksum_ok and match.matched
+            evidence = tax_validation.get("reason", "Checksum not run")
+            if match.outcome != vendor_master.NOT_CONFIGURED:
+                evidence = f"{evidence}. {match.evidence}"
             validations.append(
                 {
                     "step": "3.2",
-                    "rule": "Valid tax ID checksum",
-                    "passed": tax_validation.get("valid", True),
-                    "evidence": tax_validation.get("reason", "Not validated"),
+                    "rule": "Tax ID valid and registered to this supplier",
+                    "passed": passed,
+                    "evidence": evidence,
+                    "outcome": match.outcome,
                     "rejection_template": None
-                    if tax_validation.get("valid")
+                    if passed
                     else "Vendor tax ID invalid",
                 }
             )
 
         # Step 3.3: Future Date Check
         invoice_date = parse_date(invoice.get("invoice_date"))
-        today = date.today()
+        today = _reference_date()
 
         if invoice_date:
             is_future = invoice_date > today
@@ -1513,9 +2216,25 @@ class Phase4ValidatorAgent(BaseAgent):
         stated_tax = invoice.get("tax_amount")
         total_inc = invoice.get("invoice_total_inc_tax") or 0
         total_ex = invoice.get("invoice_total_ex_tax") or 0
-        tax = stated_tax or 0
+        tax = _stated_tax_total(invoice)
 
-        expected_total = total_ex + tax
+        # Subtotal minus discount, plus tax, plus anything charged outside the
+        # line table, plus the rounding the invoice applies to itself. Each
+        # term is absent on most invoices and defaults to zero, so this is
+        # `ex + tax` for a document that states none of them -- and correct for
+        # one that does. Reading only `ex + tax` meant a discount, a freight
+        # charge or a round-off line each looked like an arithmetic error.
+        subtotal = invoice.get("subtotal")
+        base = subtotal if subtotal is not None else total_ex
+        _, charges = _charges_and_lines(invoice)
+        other_charges = sum((charge.get("amount") or 0) for charge in charges)
+        expected_total = (
+            base
+            - (invoice.get("discount") or 0)
+            + tax
+            + other_charges
+            + (invoice.get("round_off") or 0)
+        )
         balance = abs(total_inc - expected_total)
         tolerance = _get_config().get("balance_tolerance", 0.02)
 
@@ -1533,110 +2252,192 @@ class Phase4ValidatorAgent(BaseAgent):
                 # The reader is told when the tax was assumed rather than
                 # read: a check that quietly supplies a number it never saw
                 # is the kind of thing this system exists not to do.
-                "evidence": f"Total: {total_inc}, Expected: {expected_total}, Diff: {balance:.2f}"
-                + ("" if stated_tax is not None else " (no tax amount stated)"),
+                "evidence": f"Total: {total_inc}, Expected: {expected_total:.2f}, Diff: {balance:.2f}"
+                + (
+                    ""
+                    if stated_tax is not None or tax
+                    else " (no tax amount stated)"
+                ),
             }
         )
 
-        # Step 4.2: Line Sum Validation
-        line_total = sum(
-            (item.get("amount_ex_tax") or 0)
-            for item in (invoice.get("line_items") or [])
+        # Step 4.2: Line Sum Validation.
+        #
+        # Two arithmetic claims, not one. The lines must add up to the
+        # subtotal, and each line must be the product it says it is: a
+        # quantity changed without its total, or a line discount applied
+        # wrongly, leaves the subtotal untouched and is invisible to a sum.
+        # A charge the extractor also returned as a line is not a second
+        # charge: counting both makes the lines overshoot a subtotal that never
+        # included it.
+        lines, _ = _charges_and_lines(invoice)
+        line_total = sum((item.get("amount_ex_tax") or 0) for item in lines)
+        stated_subtotal = (
+            invoice.get("subtotal")
+            if invoice.get("subtotal") is not None
+            else total_ex
         )
-        line_diff = abs(line_total - total_ex)
+        line_diff = abs(line_total - (stated_subtotal or 0))
         line_tolerance = _get_config().get("line_sum_tolerance", 1.00)
+        evidence = (
+            f"Line sum: {line_total:.2f}, Subtotal: {stated_subtotal or 0:.2f}, "
+            f"Diff: {line_diff:.2f}"
+        )
+        reconciles = line_diff <= line_tolerance
+
+        if reconciles:
+            for index, item in enumerate(lines, 1):
+                quantity = item.get("quantity")
+                unit_price = item.get("unit_price")
+                stated = item.get("amount_ex_tax")
+                if quantity is None or unit_price is None or stated is None:
+                    continue
+                discount, quantifiable = _line_discount(
+                    item, quantity, unit_price
+                )
+                if not quantifiable:
+                    # The line shows a discount and we could not read how much.
+                    # Rejecting here rejects the supplier for our own reading,
+                    # which is what the tax-ID comparison already learned.
+                    continue
+                computed = quantity * unit_price - discount
+                if abs(computed - stated) > line_tolerance:
+                    reconciles = False
+                    evidence = (
+                        f"Line {index} ({item.get('description') or 'unnamed'}): "
+                        f"{quantity:g} x {unit_price:,.2f} = {computed:,.2f}, "
+                        f"but the invoice states {stated:,.2f}"
+                    )
+                    break
 
         validations.append(
             {
                 "step": "4.2",
-                "rule": "Sum of lines = Subtotal",
-                "passed": line_diff <= line_tolerance,
-                "evidence": f"Line sum: {line_total:.2f}, Subtotal: {total_ex:.2f}, Diff: {line_diff:.2f}",
+                "rule": "Sum of lines = Subtotal, and each line adds up",
+                "passed": reconciles,
+                "evidence": evidence,
                 "rejection_template": None
-                if line_diff <= line_tolerance
+                if reconciles
                 else "Invoice amounts do not reconcile",
             }
         )
 
-        # Step 4.3: WAF Hours Check (conditional)
+        # Step 4.3: is the invoice inside what was authorised?
         #
-        # Gated on `require_work_authorization`, as declared by this step's
-        # `enabled_when_config` in invoice_master_data.yaml and by rules book
-        # Step 4.3. The gate was previously declared in both specs but not
-        # honoured in code, so an organization that does not require work
-        # authorization still had invoices rejected for lacking it.
+        # Gated on `require_work_authorization`, as this step's
+        # `enabled_when_config` in invoice_master_data.yaml declares -- the
+        # gate was previously specified and not honoured, so an organization
+        # that does not require work authorization still had invoices rejected
+        # for lacking one.
+        #
+        # Where the tenant has loaded what they authorised, "inside it" means
+        # all four of hours, rate, project and period. Billing 200 hours
+        # against 40, and billing 40 hours at twice the agreed rate, cost the
+        # same and are different conversations with the supplier, so the
+        # evidence names which one happened.
         if _get_config().get("require_work_authorization"):
-            work_type = self._determine_work_type(invoice)
-            exempt_types = [
-                t.upper()
-                for t in _get_config().get("waf_exempt_work_types", [])
-            ]
-            waf_required = work_type not in exempt_types
-
-            invoice_hours = self._calculate_labour_hours(invoice)
-            waf_hours = waf.get("authorized_hours", 0) if waf else 0
-            hours_tolerance = _get_config().get("hours_tolerance", 0.5)
-
-            if waf and waf_hours and waf_hours > 0:
-                # WAF present with authorized hours — check limits
-                hours_valid = invoice_hours <= waf_hours + hours_tolerance
+            match = wa_matching.match_invoice_to_wa(
+                invoice, _load_work_authorizations(), vendors=_load_vendors()
+            )
+            if match.outcome == wa_matching.MATCHED:
+                result = wa_matching.hours_check(
+                    invoice,
+                    match.authorization,
+                    hours_tolerance=_get_config().get("hours_tolerance", 0.5),
+                    labour_keywords=_labour_keywords(),
+                )
                 validations.append(
                     {
                         "step": "4.3",
-                        "rule": "Labour hours within authorization",
-                        "passed": hours_valid,
-                        "evidence": f"Invoice: {invoice_hours}h, Authorized: {waf_hours}h, Work type: {work_type}",
+                        "rule": "Invoice within its work authorization",
+                        "passed": result.ok,
+                        "evidence": result.evidence,
+                        "outcome": result.outcome,
+                        "details": result.details,
                         "rejection_template": None
-                        if hours_valid
+                        if result.ok
                         else "Invoice does not match work authorization",
                     }
                 )
-            elif (
-                waf_required
-                and invoice_hours > 0
-                and (not waf or not waf_hours)
-            ):
-                # Non-exempt work type has labour hours but no WAF authorization
-                validations.append(
-                    {
-                        "step": "4.3",
-                        "rule": "Labour hours within authorization",
-                        "passed": False,
-                        "evidence": (
-                            f"Invoice: {invoice_hours}h, Work type: {work_type} (non-exempt), "
-                            f"WAF authorized hours: {waf_hours} — no authorization for billed labour"
-                        ),
-                        "rejection_template": "Invoice does not match work authorization",
-                    }
-                )
+            elif match.outcome == wa_matching.NOT_CONFIGURED:
+                self._legacy_hours_check(invoice, waf, validations)
+            # Any other outcome means step 1.4 has already rejected this
+            # invoice for the missing or wrong authorisation, and repeating
+            # itself in the findings helps nobody.
 
-        # Step 4.4: Tax Rate Verification
+        # Step 4.4: Tax Rate Verification.
+        #
+        # Per line where the invoice classifies its lines, because one blended
+        # rate cannot check a multi-rate invoice: a 12% line taxed at 18% and
+        # an 18% line taxed at 12% cancel out perfectly in the total. Where the
+        # lines carry no classification this is the single-rate comparison it
+        # always was.
         currency = str(invoice.get("currency") or "").upper()
         config = _get_config()
-        tax_rate = (config.get("tax_rates_by_currency") or {}).get(
-            currency, config.get("default_tax_rate", 0.10)
+        # Absolute, or a share of the tax due, whichever is larger. A fixed
+        # rupee or two is the right allowance on a small invoice and an
+        # impossible one on a large: per-line rounding and the apportionment of
+        # an invoice-level discount across twelve lines put a two-million-rupee
+        # tax figure several hundred out, which is 0.07% and not a discrepancy
+        # anyone would investigate. The faults this check exists to catch --
+        # the wrong rate, the wrong base, tax on an exempt line -- are whole
+        # percentage points wide.
+        per_line = _expected_tax(invoice, config)
+
+        if per_line is not None:
+            expected_tax, how = per_line
+            evidence_rate = f"per line at {how}"
+        else:
+            tax_rate = (config.get("tax_rates_by_currency") or {}).get(
+                currency, config.get("default_tax_rate", 0.10)
+            )
+            expected_tax = round(total_ex * tax_rate, 2)
+            evidence_rate = f"{tax_rate:.0%} of {total_ex:.2f}"
+
+        # Absolute, or a share of the tax due, whichever is larger. A fixed
+        # rupee or two is the right allowance on a small invoice and an
+        # impossible one on a large: per-line rounding and the apportionment of
+        # an invoice-level discount across twelve lines put a two-million-rupee
+        # tax figure several hundred out, which is 0.07% and not a discrepancy
+        # anyone would investigate. The faults this check exists to catch --
+        # the wrong rate, the wrong base, tax on an exempt line -- are whole
+        # percentage points wide.
+        tax_tolerance = max(
+            config.get("tax_rate_tolerance", tolerance),
+            abs(expected_tax) * config.get("tax_rate_tolerance_pct", 0.002),
         )
-        expected_tax = round(total_ex * tax_rate, 2)
         tax_diff = abs(tax - expected_tax)
-        tax_valid = tax_diff <= tolerance
+        tax_valid = tax_diff <= tax_tolerance
+        evidence = (
+            f"Tax: {tax:.2f}, Expected: {expected_tax:.2f} "
+            f"({evidence_rate}), Diff: {tax_diff:.2f}"
+        )
+
+        # The components have to agree with where the supply happened, even
+        # when the total is right: charging the wrong kind of tax is a filing
+        # error the customer carries, not the supplier.
+        inconsistent = _components_consistent(invoice)
+        if tax_valid and inconsistent:
+            tax_valid = False
+            evidence = f"{evidence}. {inconsistent}"
 
         validations.append(
             {
                 "step": "4.4",
-                "rule": "Tax amount matches configured rate",
+                "rule": "Tax amount matches the statutory rate",
                 "passed": tax_valid,
-                "evidence": (
-                    f"Tax: {tax:.2f}, Expected: {expected_tax:.2f} "
-                    f"({tax_rate:.0%} of {total_ex:.2f}), Diff: {tax_diff:.2f}"
-                ),
+                "evidence": evidence,
                 "rejection_template": None
                 if tax_valid
                 else "Invoice tax amount incorrect",
             }
         )
 
-        # Determine decision. Informational steps record evidence but never
-        # reject -- see Step 4.1.
+        return self._finish_phase4(output_folder, validations)
+
+    def _finish_phase4(self, output_folder: Path, validations: list) -> dict:
+        """Settle the phase and write it. Informational steps record evidence
+        but never reject -- see Step 4.1."""
         failed = _settle(validations)
         decision = "REJECT" if failed else "ACCEPT"
 
@@ -1656,29 +2457,54 @@ class Phase4ValidatorAgent(BaseAgent):
         print(f"   Phase 4: {decision}")
         return output
 
+    def _legacy_hours_check(self, invoice: dict, waf: dict, validations: list):
+        """The form-based path, for a tenant with no authorization master.
+
+        Unchanged behaviour: hours read off an attached Work Authorization
+        Form, with the work-type exemption deciding whether one was needed.
+        """
+        work_type = self._determine_work_type(invoice)
+        exempt_types = [
+            t.upper() for t in _get_config().get("waf_exempt_work_types", [])
+        ]
+        waf_required = work_type not in exempt_types
+
+        invoice_hours = self._calculate_labour_hours(invoice)
+        waf_hours = waf.get("authorized_hours", 0) if waf else 0
+        hours_tolerance = _get_config().get("hours_tolerance", 0.5)
+
+        if waf and waf_hours and waf_hours > 0:
+            # WAF present with authorized hours — check limits
+            hours_valid = invoice_hours <= waf_hours + hours_tolerance
+            validations.append(
+                {
+                    "step": "4.3",
+                    "rule": "Labour hours within authorization",
+                    "passed": hours_valid,
+                    "evidence": f"Invoice: {invoice_hours}h, Authorized: {waf_hours}h, Work type: {work_type}",
+                    "rejection_template": None
+                    if hours_valid
+                    else "Invoice does not match work authorization",
+                }
+            )
+        elif waf_required and invoice_hours > 0 and (not waf or not waf_hours):
+            # Non-exempt work type has labour hours but no WAF authorization
+            validations.append(
+                {
+                    "step": "4.3",
+                    "rule": "Labour hours within authorization",
+                    "passed": False,
+                    "evidence": (
+                        f"Invoice: {invoice_hours}h, Work type: {work_type} (non-exempt), "
+                        f"WAF authorized hours: {waf_hours} — no authorization for billed labour"
+                    ),
+                    "rejection_template": "Invoice does not match work authorization",
+                }
+            )
+
     def _determine_work_type(self, invoice: dict) -> str:
         """Determine work type from invoice line item descriptions."""
-        descriptions = " ".join(
-            [
-                (line.get("description") or "").lower()
-                for line in (invoice.get("line_items") or [])
-            ]
-        )
-
-        if any(
-            kw in descriptions
-            for kw in ["preventative", "pm", "scheduled", "maintenance"]
-        ):
-            return "PREVENTATIVE"
-        if any(
-            kw in descriptions for kw in ["cleaning", "clean", "janitorial"]
-        ):
-            return "CLEANING"
-        if any(
-            kw in descriptions for kw in ["emergency", "urgent", "after hours"]
-        ):
-            return "EMERGENCY"
-        return "REPAIRS"
+        return determine_work_type(invoice)
 
     def _calculate_labour_hours(self, invoice: dict) -> float:
         """Calculate total labour hours from invoice"""

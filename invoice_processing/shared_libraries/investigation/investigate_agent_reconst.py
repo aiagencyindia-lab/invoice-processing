@@ -38,11 +38,8 @@ import json
 import os
 import re
 import sys
-import time
 import traceback
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -365,125 +362,35 @@ else:
 # ============================================================================
 #
 # The critic used to call model.generate_content() directly from 11 sites with
-# no timeout and no retry. The Vertex SDK's generate_content takes no timeout
-# parameter, so a stalled request blocks forever -- observed twice at 15-25
-# minutes with the process otherwise healthy. A retry helper existed
-# (_call_llm_with_retry) but nothing ever called it.
-#
-# Every critic LLM call now goes through guarded_generate, which supplies:
-#   * a hard wall-clock timeout per call,
-#   * retry with exponential backoff for infrastructure errors,
-#   * a per-case budget on both call count and elapsed time.
+# no timeout and no retry, so a stalled request blocked forever -- observed
+# twice at 15-25 minutes with the process otherwise healthy. The guard that
+# fixed it now lives in invoice_processing/llm_guard.py, because the acting
+# pipeline had the identical hang and a second copy would drift from this one.
+# Re-exported here so every existing caller and test keeps its import.
 
-
-class LlmBudgetExceeded(RuntimeError):
-    """The per-case LLM call budget or deadline was exhausted."""
-
-
-class LlmCallTimeout(RuntimeError):
-    """A single LLM call exceeded its wall-clock timeout."""
-
-
-DEFAULT_LLM_TIMEOUT_SECONDS = float(
-    os.getenv("CRITIC_LLM_TIMEOUT_SECONDS", "120")
-)
-DEFAULT_MAX_LLM_CALLS = int(os.getenv("CRITIC_MAX_LLM_CALLS", "30"))
-DEFAULT_CASE_DEADLINE_SECONDS = float(
-    os.getenv("CRITIC_CASE_DEADLINE_SECONDS", "600")
-)
-
-# Worker threads exist only so a caller can stop waiting on a stalled request.
-# The abandoned call keeps running until the SDK gives up -- it cannot be
-# killed -- so the pool is bounded to stop leaked calls accumulating.
-_LLM_EXECUTOR = ThreadPoolExecutor(
-    max_workers=4, thread_name_prefix="critic-llm"
-)
-
-
-@dataclass
-class CallBudget:
-    """Per-case ceiling on LLM calls and wall-clock time."""
-
-    max_calls: int = DEFAULT_MAX_LLM_CALLS
-    deadline_seconds: float = DEFAULT_CASE_DEADLINE_SECONDS
-    timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
-    calls_made: int = 0
-    started_at: float = field(default_factory=time.monotonic)
-
-    def remaining_seconds(self) -> float:
-        return self.deadline_seconds - (time.monotonic() - self.started_at)
-
-    def check(self) -> None:
-        """Raise if this case has already used its allowance."""
-        if self.calls_made >= self.max_calls:
-            raise LlmBudgetExceeded(
-                f"LLM call budget exhausted ({self.calls_made}/{self.max_calls} "
-                f"calls). The critic stopped rather than continuing to spend."
-            )
-        if self.remaining_seconds() <= 0:
-            raise LlmBudgetExceeded(
-                f"Case deadline of {self.deadline_seconds:.0f}s exceeded after "
-                f"{self.calls_made} calls. The critic stopped."
-            )
-
-
-def guarded_generate(model, prompt, budget: "CallBudget | None" = None):
-    """Call generate_content with a hard timeout, retry and budget.
-
-    Returns the model response. Raises LlmCallTimeout or LlmBudgetExceeded
-    rather than blocking indefinitely.
-    """
-    budget = budget or CallBudget()
-    budget.check()
-
-    timeout = min(budget.timeout_seconds, max(budget.remaining_seconds(), 1.0))
-    last_error: Exception | None = None
-
-    for attempt in range(_GUARD_MAX_ATTEMPTS):
-        budget.calls_made += 1
-        future = _LLM_EXECUTOR.submit(model.generate_content, prompt)
-        try:
-            return future.result(timeout=timeout)
-        except FuturesTimeout:
-            future.cancel()
-            last_error = LlmCallTimeout(
-                f"LLM call exceeded {timeout:.0f}s and was abandoned"
-            )
-            print(f"      LLM call timed out after {timeout:.0f}s")
-        except Exception as exc:  # classified below, not swallowed
-            last_error = exc
-            message = str(exc)
-            if not any(
-                pattern.lower() in message.lower()
-                for pattern in _INFRASTRUCTURE_ERROR_PATTERNS
-            ):
-                raise  # A real error: surface it instead of retrying blindly.
-            print(f"      LLM infrastructure error: {message[:80]}")
-
-        if attempt < _GUARD_MAX_ATTEMPTS - 1:
-            delay = _GUARD_BASE_DELAY * (2**attempt)
-            if budget.remaining_seconds() <= delay:
-                break
-            print(f"      Retrying in {delay:.1f}s...")
-            time.sleep(delay)
-
-    raise last_error if last_error else LlmCallTimeout("LLM call failed")
-
-
-_GUARD_MAX_ATTEMPTS = 3
-_GUARD_BASE_DELAY = 1.0
-_INFRASTRUCTURE_ERROR_PATTERNS = (
-    "503",
-    "UNAVAILABLE",
-    "timeout",
-    "connection",
-    "failed to connect",
-    "DeadlineExceeded",
-    "ServiceUnavailable",
-    "DEADLINE_EXCEEDED",
-    "429",
-    "RESOURCE_EXHAUSTED",
-)
+# The try/except is the same pattern the rest of this file's imports use: run
+# as a script there is no parent package, and a bare relative import fails
+# before argparse is reached (tests/test_dual_import_modes.py).
+try:
+    from ...llm_guard import (  # noqa: I001 -- re-export
+        CallBudget,
+        DEFAULT_CASE_DEADLINE_SECONDS,
+        DEFAULT_LLM_TIMEOUT_SECONDS,
+        DEFAULT_MAX_LLM_CALLS,
+        LlmBudgetExceeded,
+        LlmCallTimeout,
+        guarded_generate,
+    )
+except ImportError:  # executed as a script
+    from invoice_processing.llm_guard import (  # noqa: I001, F401
+        CallBudget,
+        DEFAULT_CASE_DEADLINE_SECONDS,
+        DEFAULT_LLM_TIMEOUT_SECONDS,
+        DEFAULT_MAX_LLM_CALLS,
+        LlmBudgetExceeded,
+        LlmCallTimeout,
+        guarded_generate,
+    )
 
 
 # ============================================================================

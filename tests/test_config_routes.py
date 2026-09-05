@@ -521,3 +521,56 @@ class TestHighValueThresholdIsSettable:
         )
 
         assert response.status_code == 403
+
+
+class TestTheCountrySettings:
+    """The India GST pack is configuration, not a fork: which tax registration
+    suppliers carry, which rate applies to what, and how far a stated tax may
+    drift. Every one of them is refused by name when it is wrong, because a
+    setting that fails silently is a control nobody knows is off."""
+
+    def test_a_tax_id_format_with_no_validator_is_refused(self):
+        with pytest.raises(tenant_settings.SettingsError) as raised:
+            tenant_settings.validate({"tax_id_format": "VAT"})
+        assert "GSTIN" in str(raised.value)  # it names what is available
+
+    def test_a_registered_format_is_accepted_and_normalised(self):
+        cleaned = tenant_settings.validate({"tax_id_format": "gstin"})
+        assert cleaned["tax_id_format"] == "GSTIN"
+
+    def test_a_rate_table_is_accepted(self):
+        cleaned = tenant_settings.validate(
+            {"tax_rates_by_hsn": {"998315": 0.18, "4911": 0.12}}
+        )
+        assert cleaned["tax_rates_by_hsn"] == {"998315": 0.18, "4911": 0.12}
+
+    def test_a_rate_stated_as_a_percentage_is_refused(self):
+        """18 is not a rate; 0.18 is. Accepting it would tax every line a
+        hundred times over and reject the entire ledger."""
+        with pytest.raises(tenant_settings.SettingsError):
+            tenant_settings.validate({"tax_rates_by_hsn": {"998315": 18}})
+
+    def test_a_rate_that_is_not_a_number_is_refused(self):
+        with pytest.raises(tenant_settings.SettingsError):
+            tenant_settings.validate(
+                {"tax_rates_by_hsn": {"998315": "eighteen"}}
+            )
+
+    def test_our_own_registrations_are_trimmed(self):
+        cleaned = tenant_settings.validate(
+            {"organization_tax_ids": [" 29AAFCZ4821L1ZS ", ""]}
+        )
+        assert cleaned["organization_tax_ids"] == ["29AAFCZ4821L1ZS"]
+
+    def test_the_ui_is_told_how_to_render_each_one(self, env):
+        """The settings screen builds its inputs from these types. A string
+        field typed as a number is a field an administrator cannot set."""
+        fields = {
+            f["key"]: f["type"]
+            for f in env["client"]().get("/api/settings").json()["fields"]
+        }
+        assert fields["tax_id_format"] == "str"
+        assert fields["tax_rates_by_hsn"] == "dict"
+        assert fields["organization_tax_ids"] == "list"
+        assert fields["require_tax_breakup"] == "bool"
+        assert fields["tax_rate_tolerance"] == "number"

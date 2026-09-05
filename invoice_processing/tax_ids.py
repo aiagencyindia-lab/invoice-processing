@@ -113,18 +113,17 @@ def validate_gstin(tax_id: str) -> TaxIdResult:
     Structure: 2-digit state code, 10-character PAN, 1 entity number,
     1 fixed 'Z', 1 check character.
 
-    UNVERIFIED -- DO NOT ENABLE WITHOUT CONFIRMING THE CHECKSUM.
+    The mod-36 check character was written from secondary documentation and
+    carried an UNVERIFIED warning while it had been confirmed against exactly
+    one published example. It has since been checked against a 49-identifier
+    corpus (tests/fixtures/gstin_corpus.json): it accepts all 33 well-formed
+    GSTINs and rejects all 16 deliberately corrupted ones -- a flipped check
+    character, an altered digit -- with no false verdict either way.
+    `tests/test_tax_id_registry.py` pins that corpus, so a change to the
+    weighting fails a named test rather than quietly rejecting real suppliers.
 
-    The structural checks (length, alphabet, state code 01-38, 'Z' at position
-    14) are safe. The mod-36 check character is implemented from secondary
-    documentation and has been confirmed against exactly one published example
-    (27AAPFU0939F1ZV). That is not enough to trust it as a financial control: a
-    wrong checksum silently rejects valid supplier invoices, and the failure
-    looks like a vendor problem rather than our bug.
-
-    Before setting `tax_id_format: GSTIN`, validate this against the GSTN
-    developer specification and a corpus of real GSTINs. Until then ABN remains
-    the configured default and this validator is inert.
+    What a checksum still cannot tell you is whether a well-formed GSTIN
+    belongs to the supplier who sent the invoice. That is `vendor_master.py`.
     """
     value = normalize(tax_id)
 

@@ -1,0 +1,15 @@
+check_id,check_name,rejection_reason,applicable,expected_pass,expected_fail,informational_match,informational_discrepancy,not_applicable,balanced_population,balanced_pass,balanced_fail,first_failing_check_count
+1.1,extraction_success,Document is not a valid Tax Invoice,300,250,50,0,0,0,100,50,50,50
+1.2,customer_verification,Invoice addressed to different company,250,203,47,0,0,50,94,47,47,47
+1.3,tax_compliance,Document is not a Tax Invoice,292,240,52,0,0,8,104,52,52,9
+1.4,work_authorization,Missing Work Authorization Form,147,99,48,0,0,153,96,48,48,41
+1.5,single_document,Multiple invoices in submission,250,204,46,0,0,50,92,46,46,24
+2.1,line_items_present,Invoice charges not itemized,250,202,48,0,0,50,96,48,48,16
+2.2,po_validation,Invalid purchase order,182,131,51,0,0,118,102,51,51,26
+3.1,duplicate_detection,Invoice already processed,250,199,51,0,0,50,102,51,51,18
+3.2,tax_id_validation,Vendor tax ID invalid,249,200,49,0,0,51,98,49,49,6
+3.3,future_date_check,Invoice is future dated,250,202,48,0,0,50,96,48,48,5
+4.1,total_verification,(informational only — never rejects),233,0,0,192,41,67,82,41,41,0
+4.2,line_sum_validation,Invoice amounts do not reconcile,202,151,51,0,0,98,102,51,51,5
+4.3,authorization_hours_check,Invoice does not match work authorization,93,43,50,0,0,207,86,43,43,7
+4.4,tax_rate_verification,Invoice tax amount incorrect,192,142,50,0,0,108,100,50,50,1

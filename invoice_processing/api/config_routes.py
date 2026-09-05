@@ -25,7 +25,14 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .. import checks, po_matching, tenant_settings
+from .. import (
+    checks,
+    master_files,
+    po_matching,
+    tenant_settings,
+    vendor_master,
+    wa_matching,
+)
 from .auth import Principal, current_principal, require_role
 
 router = APIRouter()
@@ -37,6 +44,14 @@ class SettingsUpdate(BaseModel):
 
 class PurchaseOrderUpdate(BaseModel):
     purchase_orders: list[dict[str, Any]]
+
+
+class VendorUpdate(BaseModel):
+    vendors: list[dict[str, Any]]
+
+
+class WorkAuthorizationUpdate(BaseModel):
+    work_authorizations: list[dict[str, Any]]
 
 
 # ---------------------------------------------------------------------------
@@ -277,4 +292,209 @@ def replace_purchase_orders(
     return {
         "count": len(records),
         "message": f"Loaded {len(records)} purchase orders.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Vendors
+# ---------------------------------------------------------------------------
+#
+# Step 3.2 used to verify a supplier tax ID's checksum and stop there, which
+# leaves the fraud case untouched: an invoice quoting somebody else's
+# registration is arithmetically perfect. Comparing it against the supplier
+# list is what closes that, and the list has to come from the customer.
+
+
+@router.get("/api/vendors")
+def list_vendors(
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+) -> dict:
+    """Suppliers this tenant has registered, and the tax ID each is known by.
+
+    An empty list is reported explicitly: it is the answer to "why is nobody's
+    tax ID being matched?", and check 3.2 then runs as a checksum alone.
+    """
+    from .. import paths  # noqa: PLC0415
+
+    path = paths.vendor_master_file(principal.tenant_id)
+    records = master_files.read_records(path, vendor_master.RECORD_KEY)
+    vendors = [vendor_master.Vendor.from_dict(r) for r in records]
+    return {
+        "vendors": [
+            {"name": v.name, "tax_id": v.tax_id, "kind": v.kind}
+            for v in vendors
+        ],
+        "count": len(vendors),
+        "source": path.name,
+    }
+
+
+@router.put("/api/vendors")
+def replace_vendors(
+    request: VendorUpdate,
+    principal: Annotated[Principal, Depends(require_role("admin"))],
+) -> dict:
+    """Replace the supplier list wholesale.
+
+    Validated in full before anything is written: a half-loaded master is worse
+    than an empty one, because the suppliers that failed to load come back as
+    "not in the vendor master" and their invoices are rejected as if the tax ID
+    were forged.
+    """
+    seen: set[str] = set()
+    for index, record in enumerate(request.vendors):
+        if not isinstance(record, dict):
+            raise HTTPException(
+                status_code=400, detail=f"Entry {index + 1} is not an object."
+            )
+        name = str(record.get("name") or "").strip()
+        if not name:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Entry {index + 1} has no supplier name.",
+            )
+        if not str(record.get("tax_id") or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{name} has no tax ID. Without one there is nothing to "
+                    "compare an invoice against, and check 3.2 would report a "
+                    "match it never made."
+                ),
+            )
+        key = po_matching.normalize_vendor(name)
+        if key in seen:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{name} appears twice. The check would use whichever "
+                    "loaded last."
+                ),
+            )
+        seen.add(key)
+
+    from .. import paths  # noqa: PLC0415
+
+    master_files.write_records(
+        paths.vendor_master_file(principal.tenant_id),
+        vendor_master.RECORD_KEY,
+        request.vendors,
+    )
+
+    from . import service  # noqa: PLC0415
+
+    service.get_audit().emit(
+        principal.context(), "vendors_replaced", {"count": len(request.vendors)}
+    )
+    return {
+        "count": len(request.vendors),
+        "message": f"Loaded {len(request.vendors)} suppliers.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Work authorizations
+# ---------------------------------------------------------------------------
+#
+# Checks 1.4 and 4.3 used to require the authorization *form* to be attached to
+# the submission. Most invoices instead quote a reference, and the authorization
+# itself sits in the customer's records -- so without this the checks could
+# only ever fail.
+
+
+@router.get("/api/work-authorizations")
+def list_work_authorizations(
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+) -> dict:
+    """What this tenant has authorised: who may bill what, at what rate."""
+    from .. import paths  # noqa: PLC0415
+
+    path = paths.work_authorization_file(principal.tenant_id)
+    records = master_files.read_records(path, wa_matching.RECORD_KEY)
+    out = []
+    for record in records:
+        authorization = wa_matching.WorkAuthorization.from_dict(record)
+        out.append(
+            {
+                "reference": record.get("reference")
+                or record.get("work_authorization_id"),
+                "vendor_name": authorization.vendor_name,
+                "project": authorization.project,
+                "approved_hours": authorization.approved_hours,
+                "hourly_rate": authorization.hourly_rate,
+                "period_start": authorization.period_start,
+                "period_end": authorization.period_end,
+                "status": authorization.status,
+                "active": authorization.active,
+            }
+        )
+    return {
+        "work_authorizations": out,
+        "count": len(out),
+        "source": path.name,
+    }
+
+
+@router.put("/api/work-authorizations")
+def replace_work_authorizations(
+    request: WorkAuthorizationUpdate,
+    principal: Annotated[Principal, Depends(require_role("admin"))],
+) -> dict:
+    """Replace the authorization set wholesale.
+
+    Validated before anything is written. An authorization that loaded without
+    its supplier would match any supplier quoting the reference, which is the
+    single thing this check exists to prevent.
+    """
+    seen: set[str] = set()
+    for index, record in enumerate(request.work_authorizations):
+        if not isinstance(record, dict):
+            raise HTTPException(
+                status_code=400, detail=f"Entry {index + 1} is not an object."
+            )
+        reference = wa_matching.normalize_reference(
+            record.get("reference") or record.get("work_authorization_id")
+        )
+        if not reference:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Entry {index + 1} has no work authorization reference.",
+            )
+        if reference in seen:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Work authorization {record.get('reference')!r} appears "
+                    "twice. The check would use whichever loaded last."
+                ),
+            )
+        seen.add(reference)
+        if not str(record.get("vendor_name") or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Work authorization {record.get('reference')!r} has no "
+                    "supplier. Without one it would authorise anybody who "
+                    "quotes the reference."
+                ),
+            )
+
+    from .. import paths  # noqa: PLC0415
+
+    master_files.write_records(
+        paths.work_authorization_file(principal.tenant_id),
+        wa_matching.RECORD_KEY,
+        request.work_authorizations,
+    )
+
+    from . import service  # noqa: PLC0415
+
+    service.get_audit().emit(
+        principal.context(),
+        "work_authorizations_replaced",
+        {"count": len(request.work_authorizations)},
+    )
+    return {
+        "count": len(request.work_authorizations),
+        "message": f"Loaded {len(request.work_authorizations)} work authorizations.",
     }

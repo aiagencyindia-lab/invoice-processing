@@ -11,6 +11,9 @@ property: an unrecognised format must report that nothing was checked, not
 "valid".
 """
 
+import json
+from pathlib import Path
+
 import pytest
 
 from invoice_processing import tax_ids
@@ -167,3 +170,38 @@ class TestConfigDriven:
         """`tax_id_format` in the YAML picks the validator."""
         configured = DEFAULT_CONFIG["tax_id_format"]
         assert configured in tax_ids.supported_formats()
+
+
+class TestGstinAgainstACorpus:
+    """The GSTIN checksum carried an UNVERIFIED warning: it had been confirmed
+    against one published example, which is not enough to reject a supplier's
+    invoice on. This is the corpus that removed the warning."""
+
+    @staticmethod
+    def _corpus():
+        path = Path(__file__).parent / "fixtures" / "gstin_corpus.json"
+        return json.loads(path.read_text(encoding="utf-8"))["identifiers"]
+
+    def test_it_accepts_every_well_formed_identifier(self):
+        wrong = [
+            entry["gstin"]
+            for entry in self._corpus()
+            if entry["valid"]
+            and not tax_ids.validate(entry["gstin"], "GSTIN")[0]
+        ]
+        assert not wrong, f"valid GSTINs rejected: {wrong}"
+
+    def test_it_rejects_every_corrupted_one(self):
+        """A checksum that accepts a flipped check character is decoration."""
+        missed = [
+            entry["gstin"]
+            for entry in self._corpus()
+            if not entry["valid"]
+            and tax_ids.validate(entry["gstin"], "GSTIN")[0]
+        ]
+        assert not missed, f"corrupted GSTINs accepted: {missed}"
+
+    def test_the_corpus_is_big_enough_to_mean_something(self):
+        corpus = self._corpus()
+        assert sum(1 for e in corpus if e["valid"]) >= 30
+        assert sum(1 for e in corpus if not e["valid"]) >= 15

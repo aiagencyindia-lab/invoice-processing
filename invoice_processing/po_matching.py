@@ -36,6 +36,10 @@ from typing import Any, Protocol, runtime_checkable
 NO_PO_ON_INVOICE = "no_po_on_invoice"
 PO_NOT_FOUND = "po_not_found"
 VENDOR_MISMATCH = "vendor_mismatch"
+OTHER_CUSTOMER = "other_customer"
+OUTSIDE_VALIDITY = "outside_validity"
+QUANTITY_EXCEEDED = "quantity_exceeded"
+PRICE_MISMATCH = "price_mismatch"
 CURRENCY_MISMATCH = "currency_mismatch"
 PO_CLOSED = "po_closed"
 OVER_BILLED = "over_billed"
@@ -46,6 +50,10 @@ BLOCKING = {
     NO_PO_ON_INVOICE,
     PO_NOT_FOUND,
     VENDOR_MISMATCH,
+    OTHER_CUSTOMER,
+    OUTSIDE_VALIDITY,
+    QUANTITY_EXCEEDED,
+    PRICE_MISMATCH,
     CURRENCY_MISMATCH,
     PO_CLOSED,
     OVER_BILLED,
@@ -74,6 +82,20 @@ class PurchaseOrder:
     # over-billing across several invoices is invisible.
     amount_invoiced: float = 0.0
 
+    # Everything below is optional, and each is checked only when the export
+    # carries it. An ERP that exports a number, a supplier and a total gets
+    # exactly the match it got before; one that exports more gets more checked.
+    customer_name: str = ""
+    valid_from: str = ""
+    valid_to: str = ""
+    approved_quantity: float | None = None
+    approved_unit_price: float | None = None
+    hsn_sac: str = ""
+    # Whether `total_amount` includes tax. The invoice is compared on the same
+    # basis: a PO stated net of tax against an invoice total including it makes
+    # every correctly-taxed invoice look like over-billing.
+    amount_basis: str = "inc_tax"
+
     @property
     def remaining(self) -> float:
         return self.total_amount - self.amount_invoiced
@@ -87,6 +109,13 @@ class PurchaseOrder:
             currency=str(data.get("currency") or "AUD").upper(),
             status=str(data.get("status") or "open").lower(),
             amount_invoiced=_as_float(data.get("amount_invoiced")) or 0.0,
+            customer_name=str(data.get("customer_name") or ""),
+            valid_from=str(data.get("valid_from") or ""),
+            valid_to=str(data.get("valid_to") or ""),
+            approved_quantity=_as_float(data.get("approved_quantity")),
+            approved_unit_price=_as_float(data.get("approved_unit_price")),
+            hsn_sac=str(data.get("hsn_sac") or ""),
+            amount_basis=str(data.get("amount_basis") or "inc_tax").lower(),
         )
 
 
@@ -133,28 +162,64 @@ def normalize_po_number(value: Any) -> str:
     return "".join(ch for ch in str(value).upper() if ch.isalnum())
 
 
+# Legal forms, as whole words. Each maps to what it collapses to, so that
+# "Pvt Ltd" and "Private Limited" -- the same company written two ways on the
+# purchase order and the invoice -- reach the same key.
+_LEGAL_FORMS = {
+    "PTY": "",
+    "PROPRIETARY": "",
+    "LIMITED": "",
+    "LTD": "",
+    "PRIVATE": "PVT",
+    "PVT": "PVT",
+    "INCORPORATED": "",
+    "INC": "",
+    "LLC": "",
+    "LLP": "LLP",
+    "PLC": "",
+    "GMBH": "",
+    "CORPORATION": "",
+    "CORP": "",
+    "COMPANY": "",
+    "CO": "",
+}
+
+
 def normalize_vendor(value: Any) -> str:
-    """Drop the legal suffixes that differ between the PO and the invoice."""
+    """Drop the legal suffixes that differ between the PO and the invoice.
+
+    Whole words, and only where they trail the name. This used to be a
+    substring replacement over the whole string, which turned "Coca Cola
+    Company" into "CA LA MPANY" and "Consulting" into "NSULTING" -- harmless
+    while both sides were mangled identically, and not harmless at all once a
+    vendor master is indexed by this key, where two different suppliers
+    collapsing to the same string means one supplier's invoice is checked
+    against another's tax ID.
+
+    "Pvt" and "Private" survive as one token rather than being dropped: an
+    Indian private limited company and its LLP namesake are different legal
+    entities, and this is the only thing distinguishing them.
+    """
     if value is None:
         return ""
-    text = str(value).upper()
-    for suffix in (
-        "PTY LTD",
-        "PTY. LTD.",
-        "PROPRIETARY LIMITED",
-        "LIMITED",
-        "LTD",
-        "INCORPORATED",
-        "INC",
-        "LLC",
-        "PLC",
-        "GMBH",
-        "CORPORATION",
-        "CORP",
-        "CO",
-    ):
-        text = text.replace(suffix, " ")
-    return " ".join("".join(ch if ch.isalnum() else " " for ch in text).split())
+    words = "".join(
+        ch if ch.isalnum() else " " for ch in str(value).upper()
+    ).split()
+    while words and words[-1] in _LEGAL_FORMS:
+        replacement = _LEGAL_FORMS[words.pop()]
+        if replacement:
+            words.append(replacement)
+            break
+    return " ".join(words)
+
+
+def _as_date(value: Any):
+    """Dates on a purchase order, in whatever format the export wrote them."""
+    from .shared_libraries.acting.general_invoice_agent import (  # noqa: PLC0415
+        parse_date,
+    )
+
+    return parse_date(str(value)) if value else None
 
 
 def _as_float(value: Any) -> float | None:
@@ -186,12 +251,18 @@ def match_invoice_to_po(
     required: bool = True,
     tolerance_pct: float = DEFAULT_TOLERANCE_PCT,
     tolerance_abs: float = DEFAULT_TOLERANCE_ABS,
+    vendors=None,
 ) -> MatchResult:
     """Match one invoice against its purchase order.
 
     `required` reflects whether this tenant demands a PO on every invoice. When
     it does not, an invoice without one is simply not a PO invoice and passes
     -- a missing PO is only a failure where a PO was expected.
+
+    `vendors` is the tenant's supplier list, used only to answer whether this
+    supplier delivers goods. What a purchase order governs depends on the
+    answer: for goods it is quantity and price, and for services it is a budget
+    the work authorization prices. See the quantity check below.
     """
     po_number = normalize_po_number(invoice.get("po_number"))
     # Normalised for lookup, but every message quotes what the vendor actually
@@ -240,6 +311,39 @@ def match_invoice_to_po(
             },
         )
 
+    # The customer, where the export names one. A purchase order raised by
+    # another company in the group is not this company's commitment.
+    invoice_customer = normalize_vendor(invoice.get("customer_name"))
+    po_customer = normalize_vendor(po.customer_name)
+    if invoice_customer and po_customer and invoice_customer != po_customer:
+        return MatchResult(
+            outcome=OTHER_CUSTOMER,
+            po_number=po_number,
+            reason=(
+                f"Purchase order {shown} was raised by {po.customer_name!r}, "
+                f"not {invoice.get('customer_name')!r}."
+            ),
+            details={
+                "po_customer": po.customer_name,
+                "invoice_customer": invoice.get("customer_name"),
+            },
+        )
+
+    invoice_date = _as_date(invoice.get("invoice_date"))
+    valid_from, valid_to = _as_date(po.valid_from), _as_date(po.valid_to)
+    if invoice_date and (
+        (valid_from and invoice_date < valid_from)
+        or (valid_to and invoice_date > valid_to)
+    ):
+        return MatchResult(
+            outcome=OUTSIDE_VALIDITY,
+            po_number=po_number,
+            reason=(
+                f"Invoice dated {invoice.get('invoice_date')} falls outside "
+                f"purchase order {shown} ({po.valid_from} to {po.valid_to})."
+            ),
+        )
+
     invoice_currency = str(invoice.get("currency") or "").upper()
     if invoice_currency and invoice_currency != po.currency:
         return MatchResult(
@@ -258,7 +362,105 @@ def match_invoice_to_po(
             reason=f"Purchase order {shown} is {po.status}, not open for invoicing.",
         )
 
-    amount = _as_float(invoice.get("invoice_total_inc_tax"))
+    # Quantity and unit price, where the export states them and where they are
+    # this order's business.
+    #
+    # For goods they are: a total within tolerance can still be the wrong goods
+    # at the wrong price, since twice the quantity at half the price reconciles
+    # perfectly. For services they are not. A service supplier's rate is set by
+    # the work authorization, which step 4.3 checks against the authorized rate
+    # and the authorized hours; the purchase order is the budget the work is
+    # drawn against, and its unit price is one line of an estimate rather than
+    # an agreed price list. Checking it here rejected eight legitimate service
+    # invoices in the benchmark corpus, every one of them for billing a rate
+    # its work authorization allowed.
+    #
+    # Unknown suppliers keep the stricter reading: an invoice from someone not
+    # on the supplier list is not the place to relax a control.
+    supplies_goods = True
+    if vendors is not None and len(vendors):
+        vendor = vendors.find(invoice.get("vendor_name"))
+        if vendor is not None and vendor.kind == "service":
+            supplies_goods = False
+
+    first_line = (invoice.get("line_items") or [{}])[0]
+    quantity = _as_float(first_line.get("quantity"))
+    if (
+        supplies_goods
+        and po.approved_quantity is not None
+        and quantity is not None
+        and quantity > po.approved_quantity
+    ):
+        return MatchResult(
+            outcome=QUANTITY_EXCEEDED,
+            po_number=po_number,
+            reason=(
+                f"Invoice bills {quantity:g} against {po.approved_quantity:g} "
+                f"ordered on purchase order {shown}."
+            ),
+            details={
+                "invoiced_quantity": quantity,
+                "approved_quantity": po.approved_quantity,
+            },
+        )
+
+    unit_price = _as_float(first_line.get("unit_price"))
+    if (
+        supplies_goods
+        and po.approved_unit_price is not None
+        and unit_price is not None
+        and abs(unit_price - po.approved_unit_price) > 0.01
+    ):
+        return MatchResult(
+            outcome=PRICE_MISMATCH,
+            po_number=po_number,
+            reason=(
+                f"Invoice prices this at {unit_price:,.2f}; purchase order "
+                f"{shown} approved {po.approved_unit_price:,.2f}."
+            ),
+            details={
+                "invoiced_unit_price": unit_price,
+                "approved_unit_price": po.approved_unit_price,
+            },
+        )
+
+    # What the order actually commits to decides what the amount is compared
+    # against.
+    #
+    # An order stating an approved quantity and unit price is a commitment for
+    # *that item*. The invoice quoting it routinely covers a dozen other lines
+    # the order says nothing about, so measuring the whole invoice against one
+    # item's value rejects every legitimate multi-line invoice -- 19 of them in
+    # the benchmark corpus, every one expected to pass. The quantity and price
+    # checks above are the controls for an order of that shape, and they have
+    # already run.
+    #
+    # Where the order states a value and no line detail, it is a commitment for
+    # the order as a whole and the invoice total is exactly the right
+    # comparison. That is the case this check was written for and it is
+    # unchanged.
+    if po.approved_quantity is not None and po.approved_unit_price is not None:
+        return MatchResult(
+            outcome=MATCHED,
+            po_number=po_number,
+            reason=(
+                f"Matched purchase order {shown} on quantity and unit price. "
+                "The order commits to one item, so the invoice total was not "
+                "compared against it."
+            ),
+            details={
+                "approved_quantity": po.approved_quantity,
+                "approved_unit_price": po.approved_unit_price,
+            },
+        )
+
+    # On the basis the purchase order states. A PO held net of tax compared
+    # against a tax-inclusive invoice total makes every correctly-taxed invoice
+    # look like over-billing -- 18% of it, every time.
+    if po.amount_basis == "ex_tax":
+        amount = _as_float(invoice.get("invoice_total_ex_tax"))
+    else:
+        amount = _as_float(invoice.get("invoice_total_inc_tax"))
     if amount is None:
         return MatchResult(
             outcome=MATCHED,
@@ -352,6 +554,10 @@ _REJECTION_TEMPLATES = {
     NO_PO_ON_INVOICE: "Purchase order number required",
     PO_NOT_FOUND: "Purchase order not recognised",
     VENDOR_MISMATCH: "Purchase order belongs to a different supplier",
+    OTHER_CUSTOMER: "Purchase order belongs to a different customer",
+    OUTSIDE_VALIDITY: "Purchase order was not valid on the invoice date",
+    QUANTITY_EXCEEDED: "Invoice exceeds the quantity ordered",
+    PRICE_MISMATCH: "Invoice unit price differs from the purchase order",
     CURRENCY_MISMATCH: "Purchase order currency mismatch",
     PO_CLOSED: "Purchase order is closed",
     OVER_BILLED: "Invoice exceeds purchase order value",
