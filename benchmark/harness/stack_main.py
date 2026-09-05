@@ -44,21 +44,58 @@ def parse_args(argv=None):
     p.add_argument(
         "--seed-only", action="store_true", help="bootstrap the tenant and stop"
     )
+    p.add_argument(
+        "--production",
+        action="store_true",
+        help=(
+            "use the database and bucket named by the environment instead of a "
+            "scratch one; run it under `railway run` so that environment is the "
+            "deployed service's own"
+        ),
+    )
     return p.parse_args(argv)
 
 
-def configure_environment(root: Path) -> None:
+def configure_environment(root: Path, *, production: bool = False) -> None:
+    """Point this process at its stores.
+
+    Locally that is a scratch SQLite file and a scratch directory. With
+    `production` it is whatever database and bucket the ambient environment
+    names -- the point of that mode being to exercise Cloud SQL and GCS rather
+    than SQLite and local files.
+
+    Two things are forced even in production mode. The queue stays local, so
+    the documents this process ingests are processed by *this* code rather than
+    picked up by the deployed worker running something else; and the data
+    directory stays local, because it holds the rulebook and the tenant's
+    reference files this run needs to read.
+    """
     data = root / "data"
     data.mkdir(parents=True, exist_ok=True)
-    os.environ["DATABASE_URL"] = f"sqlite:///{root / 'app.db'}"
     os.environ["INVOICE_DATA_DIR"] = str(data)
-    for key in (
-        "CLOUD_SQL_INSTANCE",
-        "GCS_BUCKET",
-        "PUBSUB_TOPIC",
-        "PUBSUB_SUBSCRIPTION",
-    ):
-        os.environ.pop(key, None)
+    if production:
+        if not (
+            os.getenv("CLOUD_SQL_INSTANCE") or os.getenv("DATABASE_URL")
+        ) or not os.getenv("GCS_BUCKET"):
+            raise SystemExit(
+                "Production mode needs CLOUD_SQL_INSTANCE (or DATABASE_URL) "
+                "and GCS_BUCKET in the environment. Run it under `railway run "
+                "--service api -- ...` so the service's own configuration is "
+                "what gets exercised."
+            )
+        # Never the deployed worker's queue: it runs the code that is deployed,
+        # which is not the code under test, and it belongs to the pilot.
+        for key in ("PUBSUB_TOPIC", "PUBSUB_SUBSCRIPTION"):
+            os.environ.pop(key, None)
+    else:
+        os.environ["DATABASE_URL"] = f"sqlite:///{root / 'app.db'}"
+        for key in (
+            "CLOUD_SQL_INSTANCE",
+            "GCS_BUCKET",
+            "PUBSUB_TOPIC",
+            "PUBSUB_SUBSCRIPTION",
+        ):
+            os.environ.pop(key, None)
     # The dataset's expectations are computed relative to this date.
     os.environ.setdefault("INVOICE_REFERENCE_DATE", "2026-09-03")
     # Configuration the engine needs to start; never item_code_cache.json,
@@ -93,7 +130,7 @@ def main(argv=None) -> int:
     root = out / "stacks" / company
     if args.fresh and root.exists():
         shutil.rmtree(root)
-    configure_environment(root)
+    configure_environment(root, production=args.production)
 
     # --- everything below may import the product ---------------------------
     from invoice_processing import paths, tenant_settings
@@ -110,7 +147,9 @@ def main(argv=None) -> int:
 
     from . import collect
 
-    tenant_id = f"bench-{company}"
+    # Every tenant this harness creates is named so that anyone reading the
+    # production database can tell at a glance which rows are synthetic.
+    tenant_id = f"bench-{company.lower()}"
     profile = load_profile(args.profile, company)
 
     upgrade_to_head()

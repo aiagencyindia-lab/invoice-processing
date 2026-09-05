@@ -28,7 +28,7 @@ ROOT=benchmark/runs/manual/stacks/A
 
 # API
 DATABASE_URL="sqlite:///$PWD/$ROOT/app.db" INVOICE_DATA_DIR="$PWD/$ROOT/data" \
-  INVOICE_REFERENCE_DATE=2026-09-03 AUTH_DISABLED=1 ENV=local AUTH_DEV_TENANT=bench-A \
+  INVOICE_REFERENCE_DATE=2026-09-03 AUTH_DISABLED=1 ENV=local AUTH_DEV_TENANT=bench-a \
   CLOUD_SQL_INSTANCE= GCS_BUCKET= PUBSUB_TOPIC= \
   ./.venv/bin/python -u -m uvicorn invoice_processing.api.service:app --port 8000
 ```
@@ -54,7 +54,7 @@ invoices are future-dated relative to that day. Without it, check 3.3 measures
 today's date and five invoices that should be rejected are accepted.
 
 For company B or C, repeat with `--company B` / `--company C` and the matching
-`AUTH_DEV_TENANT=bench-B` / `bench-C`.
+`AUTH_DEV_TENANT=bench-b` / `bench-c`.
 
 ## 2. Run one test
 
