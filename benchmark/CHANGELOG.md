@@ -787,3 +787,50 @@ the bucket holds 13 objects, all the pilot's.
 
 A silent delete of zero rows is exactly the failure this codebase keeps
 warning about, and it took reading `rls.py` rather than the error to see it.
+
+---
+
+## 2026-09-24 — Extraction: what the model gets wrong, and what the scorer did
+
+Diffing every extraction in the AFTER run against what each document prints
+sorted the "extraction errors" into five causes. Two were not extraction at all.
+
+**Fixed in the product:**
+
+* **Fields mixed across invoices.** 46 submissions bundle two or three invoices
+  into one PDF, and the extractor took fields from more than one: `MFG-INV-002`
+  prints Lumora Brandcraft as the bill-to on page 1 and Ferrovane on page 2's
+  second invoice, and came back as Ferrovane. This was the "hallucinated
+  customer" of the previous entries. It is also why check 2.1 caught so few
+  un-itemized invoices: a first invoice with no line table borrowed the second
+  one's lines. The prompt now says to extract the first invoice only and never
+  to combine fields across invoices.
+* **Look-alike characters in identifiers.** Six clean, text-layer invoices came
+  back with Greek capitals indistinguishable from Latin ones — Tau, Rho, Alpha
+  for a printed `TPA`. A look-alike is a different character, so the number
+  matches nothing and a resubmission passes the duplicate check.
+  `extraction_cleanup.py` folds them in identifier fields only; prose is left
+  alone, and every repair is recorded on the extraction as `_repairs`.
+* **A charge repeated as a line item.** 15 invoices. The reconciliation checks
+  already tolerated it; the workbench and the exports did not. Removed once, at
+  extraction, using the same arithmetic test the checks use.
+
+**Fixed in the scorer, which had been grading the wrong thing:**
+
+* **The taxable total.** The prompt did not say whether "total excluding tax"
+  includes freight; the extractor mostly assumed it did, and the scorer compared
+  against the dataset's `taxable_amount`, which does not. 19 of the 28
+  clean-document "errors" were exactly taxable amount plus other charges. The
+  prompt now defines it (before tax, after discount, including other charges)
+  and the scorer compares against that. **Both runs were re-scored from their
+  raw records**: the field reads 94.0% at baseline and 87.6% after, where both
+  had read about 77%. That movement is the measurement becoming accurate, not
+  the extractor improving.
+
+**Not fixed, deliberately:** misreads on image-only scans, such as `O` read as
+`0` in a GSTIN. A structural repair would also "repair" the planted faults,
+such as `8` changed to `B`, that check 3.2 exists to catch. On a scan with no
+text layer there is no way to tell a misread from a forgery, and pretending
+otherwise weakens the control.
+
+**Tests:** `tests/test_extraction_cleanup.py` (10). Reverting the fixes fails 5.

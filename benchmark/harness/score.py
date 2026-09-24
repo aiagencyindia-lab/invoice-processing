@@ -416,7 +416,12 @@ HEADER_FIELDS = (
     ("customer_tax_id", "customer_gstin", "ident"),
 )
 TOTAL_FIELDS = (
-    ("invoice_total_ex_tax", "taxable_amount", "amount"),
+    # Everything before tax: the taxable amount after discount, plus other
+    # charges such as freight. The scorer first compared this against
+    # `taxable_amount` alone, which leaves freight out -- so an extractor that
+    # read "total before tax" correctly was marked wrong on every invoice that
+    # carried a freight line: 19 of the 28 clean-document "errors".
+    ("invoice_total_ex_tax", "_total_before_tax", "amount"),
     ("tax_amount", "tax_amount", "amount"),
     ("invoice_total_inc_tax", "stated_total", "amount"),
     ("cgst_amount", "cgst", "amount"),
@@ -461,7 +466,11 @@ def extraction_metrics(records: dict[str, dict]) -> tuple[dict, list[dict]]:
                 }
             )
             continue
-        sub = gt["as_submitted"]
+        sub = dict(gt["as_submitted"])
+        sub["_total_before_tax"] = str(
+            (normalize.amount(sub.get("taxable_amount")) or 0)
+            + (normalize.amount(sub.get("other_charges_total")) or 0)
+        )
         doc = {
             "invoice_id": invoice_id,
             "company_id": rec["company_id"],

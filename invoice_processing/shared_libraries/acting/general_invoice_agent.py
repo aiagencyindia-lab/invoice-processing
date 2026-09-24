@@ -69,6 +69,7 @@ try:
     from ... import (
         confidence,
         duplicates,
+        extraction_cleanup,
         po_matching,
         tax_ids,
         vendor_master,
@@ -99,6 +100,7 @@ except ImportError:  # executed as a script: no parent package context
     from invoice_processing import (
         confidence,
         duplicates,
+        extraction_cleanup,
         po_matching,
         tax_ids,
         vendor_master,
@@ -1343,6 +1345,12 @@ class ExtractorAgent(BaseAgent):
             source = invoice_sources[0]
             try:
                 invoice_data = self._extract_invoice(Path(source["full_path"]))
+                # Mechanical repairs before anything reads the extraction:
+                # look-alike Greek letters in identifiers, and charges the
+                # model repeated as line items. See extraction_cleanup.py.
+                invoice_data = extraction_cleanup.clean(
+                    invoice_data, charges_and_lines=_charges_and_lines
+                )
 
                 # Validate tax ID if configured
                 if _get_config().get(
@@ -1428,12 +1436,20 @@ class ExtractorAgent(BaseAgent):
         """Extract structured invoice data from PDF"""
         prompt = """Extract structured data from this invoice PDF.
 
+ONE INVOICE ONLY. This file may contain more than one invoice -- several
+invoices scanned or merged into one PDF, each with its own invoice number,
+bill-to block and line table. Extract the FIRST invoice only: the one that
+begins on the first page. Every field, including every line item and every
+total, must come from that one invoice. Never combine a header from one
+invoice with lines or totals from another, and never add a later invoice's
+line items to the first invoice's.
+
 Return ONLY valid JSON with these fields:
 {
   "invoice_number": "string",
   "invoice_date": "YYYY-MM-DD",
   "invoice_total_inc_tax": decimal,
-  "invoice_total_ex_tax": decimal,
+  "invoice_total_ex_tax": decimal (the total BEFORE tax: after any invoice-level discount, and INCLUDING other charges such as freight or packing),
   "tax_amount": decimal,
   "vendor_tax_id": "string (tax ID/ABN)",
   "vendor_name": "string",
