@@ -75,7 +75,7 @@ try:
         vendor_master,
         wa_matching,
     )
-    from ...llm_guard import CallBudget, guarded_generate
+    from ...llm_guard import CallBudget, LlmUnavailable, guarded_generate
     from ...paths import (
         AGENT_ROOT,
         ITEM_CODE_CACHE_PATH,
@@ -106,7 +106,11 @@ except ImportError:  # executed as a script: no parent package context
         vendor_master,
         wa_matching,
     )
-    from invoice_processing.llm_guard import CallBudget, guarded_generate
+    from invoice_processing.llm_guard import (
+        CallBudget,
+        LlmUnavailable,
+        guarded_generate,
+    )
     from invoice_processing.paths import (
         AGENT_ROOT,
         ITEM_CODE_CACHE_PATH,
@@ -870,6 +874,8 @@ def extract_pdf_with_fallback(pdf_path: Path) -> tuple[str, str]:
             content = extract_pdf_with_gemini(pdf_path)
             if content and len(content.strip()) > _MIN_PDF_CONTENT_LENGTH:
                 return content, "gemini"
+        except LlmUnavailable:
+            raise  # the service, not the document: see llm_guard
         except Exception as e:
             print(f"    Gemini extraction failed: {e}, using pdfplumber...")
 
@@ -1268,6 +1274,8 @@ Return ONLY this JSON:
                 prompt, _gcp_config.GEMINI_FLASH_MODEL, DocumentContent
             )
             return result
+        except LlmUnavailable:
+            raise  # the service, not the document: see llm_guard
         except Exception as e:
             print(f"    Warning: Document analysis failed: {e}")
             return self._classify_by_keyword(content)
@@ -1386,6 +1394,8 @@ class ExtractorAgent(BaseAgent):
                         else ""
                     )
                 )
+            except LlmUnavailable:
+                raise  # the service, not the document: see llm_guard
             except Exception as e:
                 extraction_failed = True
                 extraction_error = str(e)
@@ -1403,6 +1413,8 @@ class ExtractorAgent(BaseAgent):
                 print(
                     f"   Extracted WAF: {waf_data.get('authorized_hours', 0)} hours"
                 )
+            except LlmUnavailable:
+                raise  # the service, not the document: see llm_guard
             except Exception as e:
                 print(f"   WAF extraction failed: {e}")
 
@@ -2770,6 +2782,8 @@ Return ONLY a JSON object in this exact format:
                     codes.append("OTHER")
             return codes
 
+        except LlmUnavailable:
+            raise  # the service, not the document: see llm_guard
         except Exception as e:
             print(
                 f"    Warning: LLM item classification failed ({e}), using fallback"

@@ -834,3 +834,44 @@ text layer there is no way to tell a misread from a forgery, and pretending
 otherwise weakens the control.
 
 **Tests:** `tests/test_extraction_cleanup.py` (10). Reverting the fixes fails 5.
+
+## 2026-09-24 — A model that is down decided 300 invoices
+
+**Problem.** The first run at `85776e0` finished in 158 s, not ~1.5 h, exited 0,
+and scored 85.0% decision accuracy with 0% touchless: every invoice rejected as
+"Document is not a valid Tax Invoice". Billing had been switched off on the GCP
+project; Vertex answered every call with a 403. The same project backs
+production, where the Cloud SQL instance was suspended too.
+
+**Root cause.** Two, one in each place.
+
+- *Product.* Every Vertex call is wrapped in a document-level fallback --
+  pdfplumber for text, a keyword classifier for the document type, an empty
+  extraction for the invoice. Each caught `Exception`, so a refusal that had
+  nothing to do with the document was handled as an unreadable document, and
+  the keyword guess was then validated and rejected. In production that is a
+  false rejection reason sent to a real supplier.
+- *Harness.* `run.py` checked only that the stack processes exited 0. Nothing
+  asked whether the model had answered once.
+
+**Fix.** `llm_guard.guarded_generate` raises `LlmUnavailable` for an account
+refusal (billing, 401/403, API not enabled) without retrying, and for a service
+error that outlives its retries. A timeout stays `LlmCallTimeout` -- one slow
+scan is the document's doing and keeps its fallback. The five fallbacks in the
+acting pipeline re-raise `LlmUnavailable`, so `process_invoice` returns ERROR
+and the worker retries the document instead of deciding it. `run.py` now makes
+one real call through the same guard before starting any stack (exit 2, nothing
+run), and exits 1 after scoring if any invoice has no decision.
+
+**Files.** `invoice_processing/llm_guard.py`,
+`invoice_processing/shared_libraries/acting/general_invoice_agent.py`,
+`benchmark/harness/run.py`.
+
+**Tests.** `tests/test_llm_unavailable.py`: the guard's four outcomes; the real
+pipeline on `case_001` with a billing 403 returns ERROR after one call and
+writes no decision (it returned REJECT before the fix); a failed preflight
+starts no stack. The live preflight against the suspended project fails in ~5 s
+with the 403.
+
+**Result.** No benchmark numbers: the run is discarded, and a valid one waits
+on billing.
