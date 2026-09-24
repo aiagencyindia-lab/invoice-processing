@@ -694,3 +694,96 @@ faults of four rupees in a quarter of a million, deliberately given up.
 and tax accuracy 1.4 while every validation check improved; the three
 regressions and 4.4's single false positive are all the extractor. That is the
 ceiling on the touchless rate now, and the next work.
+
+---
+
+## 2026-09-06 — The whole corpus on production infrastructure
+
+300 invoices through production Cloud SQL and GCS on the deployed code
+(`f49b71d`), no errors, on the `bench-` tenants. The pilot's queue was not
+involved: the harness keeps processing local so the documents are handled by
+the code under test rather than by the deployed worker.
+
+**Against the frozen baseline it reproduces the local result.** Decision
+accuracy 85.0% → 97.7%, touchless 0% → 14.7%, wrongly rejected 45 → 4, and
+check 4.3 reaches 100%. Every check lands within a point or two of the local
+run.
+
+**Against the local run of the same code, 296 of 300 decisions are identical**
+and 291 of 300 rejection reasons. None of the four differences is the
+infrastructure:
+
+* `MFG-INV-020` and `MFG-INV-064` are the *same* GSTIN read two ways — `24O`
+  against `240`, a letter O against a digit zero — and the two runs disagree in
+  opposite directions on the two invoices. The vendor-master comparison is
+  doing its job in both; what differs is what it was given.
+* `MFG-INV-046` drifted further: a different supplier's tax ID entirely, and a
+  taxable total 57,799 out.
+* `MFG-INV-042` decided differently with **no extraction drift at all** — the
+  one difference this run cannot attribute to the model's reading, and the only
+  one worth investigating as a possible order-dependence in duplicate
+  detection.
+
+**Extraction differs on 49 of 300 documents** between two runs of identical
+code on identical files. That is the finding this exercise keeps returning: the
+ceiling on every number here is what the extractor reads, not what the checks
+decide.
+
+Cleanup follows; the bench tenants' rows and objects are removed and their
+audit events kept.
+
+---
+
+## 2026-09-06 — Cleanup, and why the first two attempts did nothing
+
+The production corpus is removed: 3,575 rows and 273 stored objects across the
+three `bench-` tenants, verified afterwards by querying the database and the
+bucket directly rather than trusting the script's own report. The pilot is
+untouched — 13 documents, 13 invoices, 23 invoice lines, 106 findings.
+
+Two failures on the way, both worth recording.
+
+**Deleting a row at a time is indistinguishable from a hang.** The first run sat
+for twenty minutes with three seconds of CPU and no output, and I reported it as
+"slow but progressing". It was not: nothing had committed, because ~900 ORM
+deletes per tenant over an IAM tunnel take a quarter of an hour and the
+transaction commits only at the end. Timing a single delete — 0.9 seconds —
+is what settled it. One statement per table replaced them.
+
+**A bulk delete does not cascade.** The batched version then failed on
+`invoice_lines_invoice_id_fkey`: deleting a row at a time let SQLAlchemy's
+relationships work the order out, and one statement per table does not. Children
+are now deleted before parents, and `invoice_lines` and `corrections` are named
+explicitly rather than assumed absent — `bench-b` alone held 436 invoice lines
+that the earlier version never counted.
+
+The claim I made in between — that it was working and only invisible — was
+wrong, and the check that disproved it was the same one that has caught every
+other mistake here: read the state, not the report.
+
+---
+
+## 2026-09-06 — The bench tenant rows stay, and the database says why
+
+Asked to remove the three `bench-` tenants as well, the answer turned out to be
+no, for a reason worth keeping.
+
+`audit_events` carries a foreign key to `tenants.id`, so a tenant row cannot go
+while its events exist. And its events cannot go at all: the table has SELECT
+and INSERT policies and no others, under FORCE ROW LEVEL SECURITY, so a DELETE
+matches zero rows and reports success. The append-only trail is enforced by
+Postgres, not by the convention this script had been observing — `db/rls.py`
+says so in its docstring, and the database proved it by quietly deleting
+nothing.
+
+Removing the rows would mean dropping that policy on a production database to
+tidy up three empty ones. `--remove-tenants` now refuses and explains, which is
+more useful than the foreign-key traceback it produced first.
+
+**Final production state:** the pilot has its 13 documents, 13 invoices and 64
+audit events; the bench tenants hold no documents, invoices, lines, findings or
+runs, and keep 659 audit events between them recording what the benchmark did;
+the bucket holds 13 objects, all the pilot's.
+
+A silent delete of zero rows is exactly the failure this codebase keeps
+warning about, and it took reading `rls.py` rather than the error to see it.
