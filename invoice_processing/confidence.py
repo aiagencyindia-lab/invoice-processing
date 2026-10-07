@@ -34,7 +34,10 @@ master, which is post-pilot).
 
 from __future__ import annotations
 
+import io
 import re
+import shutil
+import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -76,6 +79,14 @@ GROUNDED_FIELDS = (
 # `tax_breakdown` is a list and is checked arithmetically instead.
 
 _AMOUNT_TOLERANCE = 0.02
+
+# Read by OCR, the vendor's tax ID is compared with O/0 and I/1 treated as one
+# character: tesseract reads a GSTIN's trailing O as a zero, and three clean
+# scans stayed in review for it. Only the tax ID, because its checksum and the
+# vendor master catch any such swap on their own (check 3.2). An invoice
+# number has no backstop -- duplicate detection does not fold O into 0 -- and
+# a bank code is what payment redirection changes.
+OCR_IDENTIFIER_FIELDS = ("vendor_tax_id",)
 
 _MONTHS = (
     ("jan", "january"),
@@ -202,6 +213,47 @@ def extract_page_text(pdf_path: Path) -> list[str]:
         return []
 
 
+# Pages are rendered at print resolution: tesseract's accuracy on these
+# invoices fell off sharply below ~250 dpi.
+_OCR_DPI = 300
+_OCR_TIMEOUT_SECONDS = 60
+
+
+def ocr_page_text(pdf_path: Path) -> list[str]:
+    """Per-page text read by OCR, for a scan with no text layer.
+
+    For grounding only: it is an independent reading of the page, which is
+    what lets a scanned invoice's fields be checked at all (11 of the 45 clean
+    benchmark invoices are scans, and every one went to review). Never used to
+    repair an extracted value -- tesseract confuses O and 0 exactly as the
+    extractor does. Empty, and the invoice stays in review, when tesseract is
+    not installed or fails.
+    """
+    tesseract = shutil.which("tesseract")
+    if not tesseract:
+        return []
+    try:
+        import pypdfium2  # noqa: PLC0415 - a pdfplumber dependency
+
+        pages = []
+        for page in pypdfium2.PdfDocument(str(pdf_path)):
+            image = io.BytesIO()
+            page.render(scale=_OCR_DPI / 72).to_pil().convert("L").save(
+                image, "PNG"
+            )
+            done = subprocess.run(
+                [tesseract, "stdin", "stdout", "--psm", "6"],
+                input=image.getvalue(),
+                capture_output=True,
+                timeout=_OCR_TIMEOUT_SECONDS,
+                check=True,
+            )
+            pages.append(done.stdout.decode("utf-8", errors="replace"))
+        return pages
+    except Exception:
+        return []
+
+
 # A page printed from a browser carries a header and footer -- a timestamp, the
 # source URL, "1/1" -- even when the page itself is a single image. That is
 # text, so "does this PDF have any text?" answers yes and every field is then
@@ -222,7 +274,9 @@ def has_readable_text(pages: list[str]) -> bool:
     )
 
 
-def locate(value: Any, pages: list[str]) -> tuple[bool | None, int | None]:
+def locate(
+    value: Any, pages: list[str], *, misread: bool = False
+) -> tuple[bool | None, int | None]:
     """Find a value in the document text.
 
     Returns (grounded, page_number). `grounded` is None when there is no text
@@ -242,10 +296,13 @@ def locate(value: Any, pages: list[str]) -> tuple[bool | None, int | None]:
     # of something longer: a substring search found the placeholder 0.00 inside
     # 10.00 and a truncated GSTIN inside the printed one, confirming values the
     # page never states.
+    def char(ch: str) -> str:
+        return _MISREAD.get(ch, re.escape(ch)) if misread else re.escape(ch)
+
     patterns = [
         re.compile(
             _NOT_AFTER_TOKEN
-            + _ANY_SEPARATOR.join(map(re.escape, option))
+            + _ANY_SEPARATOR.join(map(char, option))
             + _NOT_BEFORE_TOKEN
         )
         for option in {_compact(o) for o in options} - {""}
@@ -263,6 +320,8 @@ def locate(value: Any, pages: list[str]) -> tuple[bool | None, int | None]:
 _NOT_AFTER_TOKEN = r"(?<![0-9a-z])(?<![0-9][.,])"
 _NOT_BEFORE_TOKEN = r"(?![0-9a-z])(?![.,][0-9])"
 _ANY_SEPARATOR = r"[^0-9a-z]{0,3}"
+# What OCR reads one character as another, for identifiers read by OCR only.
+_MISREAD = dict.fromkeys("o0", "[o0]") | dict.fromkeys("i1l", "[i1l]")
 
 
 def _compact(text: str) -> str:
@@ -325,6 +384,26 @@ def _locate_by_segments(
         if all(segment in haystack for segment in segments):
             return True, index
     return False, None
+
+
+_IFSC = re.compile(r"[A-Z]{4}0[A-Z0-9]{6}")
+
+
+def _locate_ifsc_read_by_ocr(
+    value: Any, pages: list[str]
+) -> tuple[bool, int | None]:
+    """An Indian bank code whose fixed zero tesseract read as the letter O.
+
+    An IFSC is four letters, a zero, and six characters -- the fifth is zero by
+    definition, and tesseract reads it as O ("KCBLO706240"), which kept seven
+    clean scans in review. Only that position is tolerated: a changed bank
+    code, the payment-redirection fraud this field is grounded against, would
+    have to differ somewhere else, where nothing is.
+    """
+    code = str(value or "").strip().upper()
+    if not _IFSC.fullmatch(code):
+        return False, None
+    return locate(code[:4] + "O" + code[5:], pages)
 
 
 def _locate_tax_by_components(
@@ -574,6 +653,11 @@ def build_evidence(invoice: dict, pdf_path: Path | None) -> dict[str, dict]:
     artifact, alongside the existing `_tax_id_validation` convention.
     """
     pages = extract_page_text(pdf_path) if pdf_path else []
+    read_by = "text layer"
+    if pdf_path and not has_readable_text(pages):
+        scanned = ocr_page_text(pdf_path)
+        if has_readable_text(scanned):
+            pages, read_by = scanned, "ocr"
     checks = arithmetic_checks(invoice)
 
     # Arithmetic verdicts are invoice-wide; attach the relevant ones per field.
@@ -595,13 +679,19 @@ def build_evidence(invoice: dict, pdf_path: Path | None) -> dict[str, dict]:
         # a value is not low-confidence extraction of one.
         if value is None or str(value).strip() == "":
             continue
-        grounded, page = locate(value, pages)
+        grounded, page = locate(
+            value,
+            pages,
+            misread=read_by == "ocr" and name in OCR_IDENTIFIER_FIELDS,
+        )
         if name == "tax_amount" and grounded is False:
             grounded, page = _locate_tax_by_components(invoice, value, pages)
         if name == "invoice_total_ex_tax" and grounded is False:
             grounded, page = _locate_taxable_by_parts(invoice, value, pages)
         if name == "vendor_address" and grounded is False:
             grounded, page = _locate_by_segments(value, pages)
+        if name == "bank_code" and grounded is False and read_by == "ocr":
+            grounded, page = _locate_ifsc_read_by_ocr(value, pages)
         arithmetic_ok = relevant.get(name)
         evidence[name] = FieldEvidence(
             value=value,
@@ -625,7 +715,8 @@ def build_evidence(invoice: dict, pdf_path: Path | None) -> dict[str, dict]:
         default=LOW,
     )
     evidence["_summary"] = {
-        "has_text_layer": has_readable_text(pages),
+        "has_text_layer": read_by == "text layer" and has_readable_text(pages),
+        "read_by": read_by if has_readable_text(pages) else None,
         "arithmetic": checks,
         "min_confidence": min(field_floor, MEDIUM)
         if contradictions

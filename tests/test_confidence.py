@@ -566,3 +566,77 @@ class TestAValueMustStandOnItsOwn:
         assert locate(1341792.0, self.PAGE)[0] is True  # Indian grouping
         assert locate("51824753556", self.PAGE)[0] is True  # spaced
         assert locate("24YVBFK3734K1ZQ", self.PAGE)[0] is True
+
+
+# A scan, as tesseract reads it: the GSTIN's trailing letter O and the IFSC's
+# fixed zero both come back as the other character.
+OCR_PAGES = [
+    "Kestrel Cyber Assurance Pvt Ltd TAX INVOICE GSTIN: 29PECCX8526R1Z0 "
+    "Invoice No. KCA-2608-376 Invoice Date 12-08-2026 IFSC: KCBLO706240 "
+    "A/c No.: 165340523820 Grand Total 15,83,315.00 " + "Sub Total " * 20
+]
+
+
+class TestAScanIsReadByOcr:
+    """11 of 45 clean benchmark invoices are scans, and every one went to
+    review: there was no text to ground anything against."""
+
+    def _evidence(self, monkeypatch, invoice):
+        monkeypatch.setattr(confidence, "extract_page_text", lambda _p: [])
+        monkeypatch.setattr(confidence, "ocr_page_text", lambda _p: OCR_PAGES)
+        return build_evidence(invoice, Path("scan.pdf"))
+
+    def test_fields_are_grounded_against_the_ocr_text(self, monkeypatch):
+        evidence = self._evidence(
+            monkeypatch,
+            {
+                "invoice_number": "KCA-2608-376",
+                "invoice_total_inc_tax": 1583315.0,
+            },
+        )
+        assert evidence["_summary"]["read_by"] == "ocr"
+        assert evidence["_summary"]["has_text_layer"] is False
+        assert evidence["invoice_number"]["grounded"] is True
+
+    def test_the_tax_id_tolerates_ocr_reading_o_as_zero(self, monkeypatch):
+        """Safe for the GSTIN only: its checksum and the vendor master catch a
+        swapped character on their own (check 3.2)."""
+        evidence = self._evidence(
+            monkeypatch, {"vendor_tax_id": "29PECCX8526R1ZO"}
+        )
+        assert evidence["vendor_tax_id"]["grounded"] is True
+
+    def test_an_invoice_number_does_not(self, monkeypatch):
+        """Duplicate detection does not fold O into 0, so a tolerated misread
+        here could let a resubmission post untouched."""
+        evidence = self._evidence(
+            monkeypatch, {"invoice_number": "KCA-26O8-376"}
+        )
+        assert evidence["invoice_number"]["grounded"] is False
+
+    def test_an_ifsc_tolerates_o_only_in_its_fixed_zero(self, monkeypatch):
+        assert (
+            self._evidence(monkeypatch, {"bank_code": "KCBL0706240"})[
+                "bank_code"
+            ]["grounded"]
+            is True
+        )
+        assert (
+            self._evidence(monkeypatch, {"bank_code": "KCBL0706249"})[
+                "bank_code"
+            ]["grounded"]
+            is False
+        )
+
+    def test_no_tesseract_means_no_ocr_and_review(self, monkeypatch):
+        monkeypatch.setattr(confidence.shutil, "which", lambda _name: None)
+        assert confidence.ocr_page_text(Path("scan.pdf")) == []
+
+    @pytest.mark.skipif(
+        not confidence.shutil.which("tesseract"),
+        reason="tesseract not installed",
+    )
+    def test_tesseract_reads_a_real_page(self):
+        pages = confidence.ocr_page_text(_pdf("case_005"))
+        assert locate("INV-00005", pages)[0] is True
+        assert locate("51824753556", pages)[0] is True

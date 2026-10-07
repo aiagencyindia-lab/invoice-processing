@@ -16,6 +16,13 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Tesseract reads scanned invoices so their fields can be grounded against
+# the page (invoice_processing/confidence.py, ocr_page_text). Without it a scan
+# still processes; it just always goes to review.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+
 # Dependencies first: they change far less often than the source, so an edit
 # to a handler does not reinstall the ADK and Vertex stack.
 COPY pyproject.toml uv.lock ./

@@ -1187,3 +1187,51 @@ bank code. Replayed over the run at `9f8c923`, routing is unchanged -- 31 of
 45 clean invoices posted untouched. The OCR side (not in the product) loses
 groundings where tesseract runs tokens together or reads 0 as O; that is
 for the OCR work, which will need O/0 and I/1 tolerance on identifiers.
+
+## 2026-10-07 — Scans are grounded by OCR
+
+**Problem.** Every clean scan went to review: 11 of the 45 clean invoices, the
+whole of what was left after the text-layer fixes. With no text layer there was
+nothing to ground a field against.
+
+**Fix.** `confidence.ocr_page_text`: when a PDF has no readable text layer, its
+pages are rendered at 300 dpi with pypdfium2 (already installed with
+pdfplumber) and read by tesseract through `subprocess` -- no new Python
+dependency. Grounding then runs against that text. Two tolerances, each where
+something else catches a misuse:
+
+- the vendor GSTIN may differ by O/0 or I/1 (tesseract reads the trailing O as
+  a zero) -- its checksum and the vendor master catch a swapped character on
+  their own (3.2);
+- an IFSC may have O in its fifth position, which is zero by definition, so
+  that tolerance cannot hide a changed bank code.
+
+Invoice and PO numbers get none: duplicate detection does not fold O into 0,
+and a prototype that tolerated them confirmed 24 wrong identifiers across three
+runs. OCR text is never used to repair a value, only to ground it. No
+tesseract, or a failure, leaves the page empty and the invoice in review --
+today's behaviour. The Dockerfile installs `tesseract-ocr`.
+
+**Tests.** `TestAScanIsReadByOcr` in `tests/test_confidence.py`: OCR text is
+used and reported (`read_by: "ocr"`); the GSTIN tolerance applies and the
+invoice-number one does not; the IFSC rule accepts only the fifth position; no
+tesseract means no OCR; and a real tesseract read of `case_005`, skipped where
+tesseract is absent.
+
+**Result (replayed, ~4 minutes for 85 scans, median 1.8 s per document).**
+
+| | run at `9f8c923` | run at `ecb9bbd` |
+|---|---|---|
+| Posted untouched (of 45 clean), before | 31 | 18 at the run's own code |
+| **Posted untouched, today** | **39 (86.7%)** | **39 (86.7%)** |
+| Posted untouched wrongly | 1 -- MFG-INV-039, the dataset error | 1 -- the same |
+| Decision accuracy | 98.3% | 97.7% |
+
+The 0.6-point accuracy gap between the two runs is extraction variance, each
+case checked: two scanned GSTINs misread worse, a scan classified unreadable,
+and `currency: "Rs."` on TECH-INV-037, which the PO check rejected as a
+currency mismatch -- a real gap (currency is not normalised), noted for
+its own fix.
+
+**The prompt fix `1a1f705`, measured by the run at `ecb9bbd`:** `po_number`
+extraction 220 of 220, up from 98.7%.
