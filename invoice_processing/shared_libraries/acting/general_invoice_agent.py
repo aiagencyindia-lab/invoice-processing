@@ -325,6 +325,43 @@ def _charge_printed_as_line(
     ]
 
 
+# Units that price a whole job rather than a counted thing. "1 lot" of
+# "Professional services" is a total with a line drawn round it.
+_LUMP_SUM_UNITS = {"lot", "lots", "ls", "l/s", "lump sum", "lumpsum", "job"}
+
+
+def _itemized(invoice: dict) -> tuple[bool, str]:
+    """Whether the charges are broken down, and what the reader is shown.
+
+    Counting lines was not enough. A lump sum arrives as one line -- "1 lot,
+    Professional services, 2,81,160" (MV-018) -- and a document with no table
+    arrives as one line the extractor wrote from the prose ("Charges for the
+    period as per engagement letter"), with no quantity and no price. Both
+    passed. A breakdown needs at least one line that states what was bought and
+    at what rate, and a single line of one lot is not one.
+    """
+    lines, _ = _charges_and_lines(invoice)
+    priced = [
+        line
+        for line in lines
+        if line.get("quantity") is not None
+        and line.get("unit_price") is not None
+    ]
+    if not priced:
+        return False, (
+            f"Found {len(lines)} line item(s), none with a quantity and a rate"
+        )
+    if len(lines) == 1:
+        line = lines[0]
+        unit = str(line.get("unit") or "").strip().lower().rstrip(".")
+        if unit in _LUMP_SUM_UNITS and float(line["quantity"]) == 1:
+            return False, (
+                f"A single lump-sum line: 1 {unit}, "
+                f"{line.get('description') or 'undescribed'}"
+            )
+    return True, f"Found {len(lines)} line item(s)"
+
+
 def _stated_tax_total(invoice: dict) -> float:
     """The tax the invoice charges, however it chooses to present it.
 
@@ -1957,15 +1994,15 @@ class Phase2ValidatorAgent(BaseAgent):
         validations = []
 
         # Step 2.1: Line Items Present
-        line_count = len(invoice.get("line_items") or [])
+        itemized, evidence = _itemized(invoice)
         validations.append(
             {
                 "step": "2.1",
-                "rule": "Invoice has line items",
-                "passed": line_count > 0,
-                "evidence": f"Found {line_count} line item(s)",
+                "rule": "Invoice charges are itemized",
+                "passed": itemized,
+                "evidence": evidence,
                 "rejection_template": None
-                if line_count > 0
+                if itemized
                 else "Invoice charges not itemized",
             }
         )

@@ -998,3 +998,30 @@ dataset says is printed; none moves away from it. Two decisions change, both
 toward the dataset: `MFG-INV-064` is no longer rejected for its own misread,
 and `MFG-INV-020` passes 3.2 on to the 4.2 fault it actually carries. The
 other four are rejected earlier for real faults.
+
+## 2026-10-07 — MV-018: a lump sum is not a breakdown
+
+**Problem.** `TECH-INV-025` (manual verification MV-018) was accepted. Its only
+line is "Professional services, 998513, 1 lot, 2,81,160.00" -- the dataset's
+NOT_ITEMIZED_LUMPSUM fault.
+
+**Root cause.** Check 2.1 passed any invoice with at least one line. A lump sum
+is one line. So is a document with no table at all: the extractor writes one
+line from the prose ("Charges for the period as per engagement letter") with
+no quantity and no price.
+
+**Fix.** `_itemized`: a breakdown needs at least one line with a quantity and a
+unit price, and a single line of one lot (or `ls`, `job`, `lump sum`) is not
+one. Every planted lump sum in both stored runs is exactly that shape; no
+clean invoice is. Lines are counted after `_charges_and_lines`, so a charge
+returned as a line does not make a lump sum look itemized.
+
+**Tests.** `tests/test_itemization.py`: a lot of professional services, a
+prose line, and no lines fail; one priced line of goods, hours at a rate, and a
+lot among other lines pass.
+
+**Result (both stored runs).** The 179 invoices expected to pass 2.1 all still
+pass. Planted itemization faults caught: 26 -> 35 of 44 locally, 27 -> 36 of
+44 in production. Still missed: the "total only" layout, where the extractor
+invents a plausible priced line that no structural test can tell from a real
+one.
