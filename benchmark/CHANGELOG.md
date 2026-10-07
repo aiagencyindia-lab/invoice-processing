@@ -911,3 +911,59 @@ production extractions. No planted line-sum fault stops failing. The rest are
 rejected earlier for their planted faults. `SVC-INV-025` loses an accidental
 4.2 failure: its planted line-discount fault was never extracted, and it was
 failing on the travel line instead. 4.2 is not reached there.
+
+## 2026-10-07 — The touchless gap: what the target measures, and four false alarms
+
+**Problem.** Touchless was 15.3% against a 40% target.
+
+**What the number is.** Touchless is ACCEPT / 300, and the corpus holds 45
+clean invoices of 300 -- so 15.0% is its ceiling, and 15.3% is already there
+(four of the 46 accepts are wrong accepts). The 40% target cannot be met on
+this corpus, by construction. The real gap sits inside the accepts: **42 of 46
+were routed to a human** (`accepted but routed to review`). Only 4 posted with
+no one touching them.
+
+**Root cause.** Of 38 accepted invoices whose artifacts the run kept, 11 are
+scans with no text layer (review is the honest answer there). The rest were
+flagged by `confidence.py` checking a GST invoice against an Australian
+template, and disagreeing with the checks that had just passed it:
+
+- Dates printed with the month as a word (`13-May-2026`) matched none of the
+  numeric renderings, so `invoice_date` and `due_date` were "not on the page".
+- A GST invoice prints CGST and SGST and often no tax total, so `tax_amount`
+  was never found.
+- `line_maths_consistent` ignored line discounts; 4.2 counts them.
+- `totals_reconcile` ignored the round-off line; 4.1 counts it.
+
+And one real hole, found by measuring the fix: `lines_sum_to_subtotal` and
+`line_maths_consistent` were computed and never used for routing. A wrongly
+accepted invoice (`MFG-INV-039`, lines 116,806 over the subtotal) had been sent
+to review only by the date false alarm; fixing the dates alone posted it.
+
+**Fix.** Month-name renderings for dates; a tax total grounded when its printed
+components are found and add up to it; line maths uses 4.2's `_line_discount`,
+moved into `confidence.line_discount` so there is one definition; totals count
+the round-off; any failed arithmetic check caps the invoice at MEDIUM and names
+itself in `fields_needing_review`, so it routes to review.
+
+**Files.** `invoice_processing/confidence.py`,
+`invoice_processing/shared_libraries/acting/general_invoice_agent.py`.
+
+**Tests.** `tests/test_confidence.py`: `TestWhatGstInvoicesPrint` (five, each
+failing before) and `TestArithmeticThatContradictsItselfIsReviewed` (a
+self-contradicting invoice with every field grounded routes to review; a
+consistent one still posts).
+
+**Result (evidence recomputed over stored extractions and the PDFs).**
+
+| | Before | After |
+|---|---|---|
+| Clean accepts posted untouched, local run | 4 of 36 | **16 of 36** |
+| Clean accepts posted untouched, production run | 4 of 36 | **16 of 36** |
+| Wrong accepts posted untouched | 0 | **0** |
+
+Still routed to review on clean invoices: 11 scans, ~4 where the lines include
+a charge the confidence check does not net out, a few `vendor_address`
+renderings, single fields elsewhere. Touchless as the report defines it does
+not move -- it counts decisions, not routing -- so the report needs a
+"posted untouched" line for this to show.

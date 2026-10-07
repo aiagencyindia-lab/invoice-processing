@@ -16,6 +16,7 @@ and free.
 """
 
 import json
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -357,3 +358,114 @@ class TestAPageThatIsReallyAnImage:
         """Unknown is not permission to auto-approve."""
         assert confidence.score(None, True) < confidence.HIGH
         assert confidence.score(None, None) < confidence.HIGH
+
+
+# What an Indian GST invoice prints, from the benchmark corpus (MFG-INV-042):
+# the month as a word, CGST and SGST with no tax total, a round-off line.
+GST_PAGES = [
+    "Apex Industrial Components Pvt Ltd TAX INVOICE GSTIN: 24ITCCR9797D1ZQ "
+    "Invoice No. AIC/2026-27/0175 Invoice Date 13-May-2026 Due Date "
+    "28-May-2026 Taper roller bearing 50 nos 557.00 2% 27,293.00 Sub Total "
+    "27,293.00 CGST 2,456.37 SGST 2,456.37 Round Off 0.26 GRAND TOTAL "
+    "32,206.00 Amount in words: Rupees Thirty Two Thousand Two Hundred Six"
+]
+
+
+class TestWhatGstInvoicesPrint:
+    """Four shapes the benchmark's clean invoices print and the module flagged.
+
+    Each one sent a correct invoice to review: 34 of 38 accepted invoices were
+    routed to a human, and only 4 posted untouched.
+    """
+
+    def test_a_month_written_as_a_word_is_found(self):
+        assert locate("2026-05-13", GST_PAGES)[0] is True
+        assert locate("2026-05-28", GST_PAGES)[0] is True
+
+    def test_a_tax_total_is_grounded_through_its_printed_components(self):
+        invoice = {
+            "tax_amount": 4912.74,
+            "cgst_amount": 2456.37,
+            "sgst_amount": 2456.37,
+        }
+        evidence = confidence.build_evidence(invoice, None)
+        assert evidence["tax_amount"]["grounded"] is None  # no pages given
+        assert confidence._locate_tax_by_components(
+            invoice, 4912.74, GST_PAGES
+        ) == (True, 1)
+
+    def test_components_that_do_not_add_up_ground_nothing(self):
+        invoice = {"cgst_amount": 2456.37, "sgst_amount": 2456.37}
+        assert confidence._locate_tax_by_components(
+            invoice, 5000.00, GST_PAGES
+        ) == (False, None)
+
+    def test_a_line_discount_is_part_of_the_line_maths(self):
+        checks = arithmetic_checks(
+            {
+                "line_items": [
+                    {
+                        "quantity": 50,
+                        "unit_price": 557.0,
+                        "line_discount_pct": 0.02,
+                        "amount_ex_tax": 27293.0,
+                    }
+                ]
+            }
+        )
+        assert checks["line_maths_consistent"] is True
+
+    def test_the_round_off_is_part_of_the_total(self):
+        checks = arithmetic_checks(
+            {
+                "invoice_total_ex_tax": 27293.00,
+                "tax_amount": 4912.74,
+                "round_off": 0.26,
+                "invoice_total_inc_tax": 32206.00,
+            }
+        )
+        assert checks["totals_reconcile"] is True
+
+
+class TestArithmeticThatContradictsItselfIsReviewed:
+    """Line checks were computed and never used for routing. MFG-INV-039 --
+    lines 116,806 over the subtotal, wrongly accepted -- had only been sent to
+    review by a date false alarm; fixing the dates would have posted it."""
+
+    def test_lines_that_overshoot_the_subtotal_route_to_review(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            confidence, "extract_page_text", lambda _p: GST_PAGES
+        )
+        invoice = {
+            "invoice_number": "AIC/2026-27/0175",
+            "invoice_total_ex_tax": 27293.00,
+            "line_items": [
+                {"amount_ex_tax": 27293.00},
+                {"amount_ex_tax": 500.0},
+            ],
+        }
+        evidence = build_evidence(invoice, Path("printed.pdf"))
+        # Every field is on the page; only the arithmetic objects.
+        assert all(
+            evidence[name]["confidence"] == HIGH
+            for name in ("invoice_number", "invoice_total_ex_tax")
+        )
+        assert evidence["_summary"]["fields_needing_review"] == [
+            "arithmetic: lines_sum_to_subtotal"
+        ]
+        assert routing_decision(evidence) == "REVIEW"
+
+    def test_consistent_lines_still_post(self, monkeypatch):
+        monkeypatch.setattr(
+            confidence, "extract_page_text", lambda _p: GST_PAGES
+        )
+        invoice = {
+            "invoice_number": "AIC/2026-27/0175",
+            "invoice_total_ex_tax": 27293.00,
+            "line_items": [{"amount_ex_tax": 27293.00}],
+        }
+        assert (
+            routing_decision(build_evidence(invoice, Path("p.pdf"))) == "AUTO"
+        )

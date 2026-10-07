@@ -215,31 +215,9 @@ def determine_work_type(invoice: dict) -> str:
     return "REPAIRS"
 
 
-def _line_discount(
-    line: dict, quantity: float, unit_price: float
-) -> tuple[float, bool]:
-    """What this line's discount takes off, and whether we could read it.
-
-    Invoices print the discount column as a percentage far more often than as
-    an amount, and the extractor returns whichever it sees -- so a value below
-    one is a rate rather than a sum of money. A discount that is shown but not
-    readable returns False, and the caller lets the line pass: an unreadable
-    column is our problem and not the supplier's.
-    """
-    rate = line.get("line_discount_pct")
-    amount = line.get("line_discount")
-    if rate is None and amount is not None and 0 < float(amount) < 1:
-        # "10%" read as 0.1. A real discount of under one unit of currency is
-        # not worth the false rejections the other reading causes.
-        rate, amount = float(amount), None
-    discount = 0.0
-    if rate is not None:
-        discount += quantity * unit_price * float(rate)
-    if amount is not None:
-        discount += float(amount)
-    if rate is None and amount is None and line.get("has_discount"):
-        return 0.0, False
-    return discount, True
+# One definition, shared with the confidence module's line arithmetic: two
+# copies would disagree the way the confidence and 4.2 checks once did.
+_line_discount = confidence.line_discount
 
 
 def _charges_and_lines(invoice: dict) -> tuple[list[dict], list[dict]]:

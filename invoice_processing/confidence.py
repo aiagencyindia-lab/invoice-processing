@@ -77,6 +77,21 @@ GROUNDED_FIELDS = (
 
 _AMOUNT_TOLERANCE = 0.02
 
+_MONTHS = (
+    ("jan", "january"),
+    ("feb", "february"),
+    ("mar", "march"),
+    ("apr", "april"),
+    ("may", "may"),
+    ("jun", "june"),
+    ("jul", "july"),
+    ("aug", "august"),
+    ("sep", "september"),
+    ("oct", "october"),
+    ("nov", "november"),
+    ("dec", "december"),
+)
+
 
 @dataclass
 class FieldEvidence:
@@ -136,6 +151,20 @@ def _candidates(value: Any) -> list[str]:
                 f"{int(day)}/{int(month)}/{year}",
             }
         )
+        # Indian invoices print the month as a word -- "13-May-2026",
+        # "13 May 2026" -- and none of the numeric renderings above match, so
+        # every correct date was flagged. A fixed table, not strftime: %b
+        # follows the process locale.
+        short, full = _MONTHS[int(month) - 1]
+        for name in (short, full):
+            out.update(
+                {
+                    f"{day}-{name}-{year}",
+                    f"{day} {name} {year}",
+                    f"{int(day)} {name} {year}",
+                    f"{name} {int(day)}, {year}",
+                }
+            )
 
     # Tax IDs and reference numbers are often spaced or hyphenated.
     compact = re.sub(r"[\s\-]", "", raw)
@@ -228,9 +257,62 @@ def _compact(text: str) -> str:
     return "".join(ch for ch in str(text) if ch.isalnum())
 
 
+def _locate_tax_by_components(
+    invoice: dict, total: Any, pages: list[str]
+) -> tuple[bool, int | None]:
+    """A tax total the page never prints, grounded through the parts it does.
+
+    A GST invoice prints CGST and SGST (or IGST) and often no total-tax line,
+    so the extracted total is found nowhere and was flagged on every such
+    invoice. It is grounded when every component is on the page and they add
+    up to it -- a stronger claim than finding the total would have been.
+    """
+    parts = [
+        invoice.get(key)
+        for key in ("cgst_amount", "sgst_amount", "igst_amount")
+        if invoice.get(key)
+    ]
+    total = _as_number(total)
+    if not parts or total is None:
+        return False, None
+    if abs(sum(_as_number(p) or 0 for p in parts) - total) > _AMOUNT_TOLERANCE:
+        return False, None
+    found = [locate(part, pages) for part in parts]
+    if all(grounded for grounded, _ in found):
+        return True, found[0][1]
+    return False, None
+
+
 # ---------------------------------------------------------------------------
 # Arithmetic
 # ---------------------------------------------------------------------------
+
+
+def line_discount(
+    line: dict, quantity: float, unit_price: float
+) -> tuple[float, bool]:
+    """What this line's discount takes off, and whether we could read it.
+
+    Invoices print the discount column as a percentage far more often than as
+    an amount, and the extractor returns whichever it sees -- so a value below
+    one is a rate rather than a sum of money. A discount that is shown but not
+    readable returns False, and the caller lets the line pass: an unreadable
+    column is our problem and not the supplier's.
+    """
+    rate = line.get("line_discount_pct")
+    amount = line.get("line_discount")
+    if rate is None and amount is not None and 0 < float(amount) < 1:
+        # "10%" read as 0.1. A real discount of under one unit of currency is
+        # not worth the false rejections the other reading causes.
+        rate, amount = float(amount), None
+    discount = 0.0
+    if rate is not None:
+        discount += quantity * unit_price * float(rate)
+    if amount is not None:
+        discount += float(amount)
+    if rate is None and amount is None and line.get("has_discount"):
+        return 0.0, False
+    return discount, True
 
 
 def arithmetic_checks(invoice: dict) -> dict[str, bool]:
@@ -242,7 +324,12 @@ def arithmetic_checks(invoice: dict) -> dict[str, bool]:
     inc = _as_number(invoice.get("invoice_total_inc_tax"))
 
     if None not in (ex, tax, inc):
-        checks["totals_reconcile"] = abs((ex + tax) - inc) <= _AMOUNT_TOLERANCE
+        # The round-off line is printed and charged; leaving it out flagged
+        # every invoice rounded to whole rupees, which check 4.1 already counts.
+        round_off = _as_number(invoice.get("round_off")) or 0
+        checks["totals_reconcile"] = (
+            abs((ex + tax + round_off) - inc) <= _AMOUNT_TOLERANCE
+        )
 
     lines = invoice.get("line_items") or []
     if lines and ex is not None:
@@ -256,7 +343,12 @@ def arithmetic_checks(invoice: dict) -> dict[str, bool]:
             price = _as_number(line.get("unit_price"))
             amount = _as_number(line.get("amount_ex_tax"))
             if None not in (qty, price, amount):
-                consistent &= abs(qty * price - amount) <= _AMOUNT_TOLERANCE
+                discount, readable = line_discount(line, qty, price)
+                if readable:
+                    consistent &= (
+                        abs(qty * price - discount - amount)
+                        <= _AMOUNT_TOLERANCE
+                    )
         checks["line_maths_consistent"] = consistent
 
     # The per-rate breakdown was extracted and then never used. It is the one
@@ -324,6 +416,8 @@ def build_evidence(invoice: dict, pdf_path: Path | None) -> dict[str, dict]:
         if value is None or str(value).strip() == "":
             continue
         grounded, page = locate(value, pages)
+        if name == "tax_amount" and grounded is False:
+            grounded, page = _locate_tax_by_components(invoice, value, pages)
         arithmetic_ok = relevant.get(name)
         evidence[name] = FieldEvidence(
             value=value,
@@ -334,22 +428,32 @@ def build_evidence(invoice: dict, pdf_path: Path | None) -> dict[str, dict]:
             confidence=score(grounded, arithmetic_ok),
         ).to_dict()
 
+    # An invoice whose own arithmetic contradicts itself is not trustworthy
+    # however well each field is grounded. Lines that overshoot the subtotal
+    # were computed and then ignored, so a wrongly accepted invoice whose lines
+    # were 116,806 over posted with no human -- it had only ever been sent to
+    # review by a date false alarm.
+    contradictions = sorted(name for name, ok in checks.items() if ok is False)
+    field_floor = min(
+        (
+            e["confidence"]
+            for e in evidence.values()
+            if isinstance(e, dict) and "confidence" in e
+        ),
+        default=LOW,
+    )
     evidence["_summary"] = {
         "has_text_layer": has_readable_text(pages),
         "arithmetic": checks,
-        "min_confidence": min(
-            (
-                e["confidence"]
-                for e in evidence.values()
-                if isinstance(e, dict) and "confidence" in e
-            ),
-            default=LOW,
-        ),
+        "min_confidence": min(field_floor, MEDIUM)
+        if contradictions
+        else field_floor,
         "fields_needing_review": sorted(
             name
             for name, e in evidence.items()
             if isinstance(e, dict) and e.get("confidence", LOW) < HIGH
-        ),
+        )
+        + [f"arithmetic: {name}" for name in contradictions],
     }
     return evidence
 
