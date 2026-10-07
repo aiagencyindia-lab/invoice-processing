@@ -385,6 +385,18 @@ def match_invoice_to_po(
 
     first_line = (invoice.get("line_items") or [{}])[0]
     quantity = _as_float(first_line.get("quantity"))
+    unit_price = _as_float(first_line.get("unit_price"))
+    # What was actually compared, so the evidence says so. It used to read
+    # "matched on quantity and unit price" for every service invoice -- where
+    # neither is compared -- and for an invoice with no lines at all.
+    compared = [
+        name
+        for name, ours, theirs in (
+            ("quantity", quantity, po.approved_quantity),
+            ("unit price", unit_price, po.approved_unit_price),
+        )
+        if supplies_goods and ours is not None and theirs is not None
+    ]
     if (
         supplies_goods
         and po.approved_quantity is not None
@@ -404,7 +416,6 @@ def match_invoice_to_po(
             },
         )
 
-    unit_price = _as_float(first_line.get("unit_price"))
     if (
         supplies_goods
         and po.approved_unit_price is not None
@@ -440,13 +451,25 @@ def match_invoice_to_po(
     # comparison. That is the case this check was written for and it is
     # unchanged.
     if po.approved_quantity is not None and po.approved_unit_price is not None:
+        if not supplies_goods:
+            on = (
+                "as an open order for this supplier. A service is priced by "
+                "its work authorization (step 4.3), not by the order's unit "
+                "price, so neither quantity nor price was compared"
+            )
+        elif compared:
+            on = "on " + " and ".join(compared)
+        else:
+            on = (
+                "by reference only: the invoice states no quantity or unit "
+                "price to compare"
+            )
         return MatchResult(
             outcome=MATCHED,
             po_number=po_number,
             reason=(
-                f"Matched purchase order {shown} on quantity and unit price. "
-                "The order commits to one item, so the invoice total was not "
-                "compared against it."
+                f"Matched purchase order {shown} {on}. The order commits to "
+                "one item, so the invoice total was not compared against it."
             ),
             details={
                 "approved_quantity": po.approved_quantity,

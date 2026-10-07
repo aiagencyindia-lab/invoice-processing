@@ -1,6 +1,7 @@
 """Re-run the four validation phases over extractions already on disk.
 
     python -m benchmark.harness.replay --run baseline --profile after [--company A]
+        [--out NAME]
 
 A development tool, not a result. It answers "what would today's validation
 code decide about yesterday's extractions?" in seconds and with no model calls,
@@ -9,7 +10,13 @@ never extracted, so it never replaces the AFTER run -- the report it prints
 says so.
 
 Duplicate detection is replayed in submission order against the corpus built up
-so far, the same way the worker feeds it.
+so far, the same way the worker feeds it. Today's extraction cleanup and
+confidence routing are applied first, from the document's own text layer, so
+the replay is today's code end to end after the model call.
+
+`--out NAME` writes the replayed records as benchmark/runs/NAME, which
+`score` reads like any other run: the way to put a number on a validation fix
+without spending a model run.
 """
 
 from __future__ import annotations
@@ -34,6 +41,7 @@ def main(argv=None) -> int:
         "--profile", required=True, help="settings profile to replay under"
     )
     p.add_argument("--company", default=",".join(dataset.COMPANIES))
+    p.add_argument("--out", help="write the replayed records as this run")
     args = p.parse_args(argv)
 
     run_dir = dataset.REPO / "benchmark" / "runs" / args.run
@@ -43,9 +51,17 @@ def main(argv=None) -> int:
         ""  # nothing is stored; artifacts come from the jsonl
     )
 
+    from invoice_processing import confidence, extraction_cleanup
     from invoice_processing.shared_libraries.acting import (
         general_invoice_agent as agent,
     )
+
+    truth = dataset.ground_truth()
+    out_dir = (
+        dataset.REPO / "benchmark" / "runs" / args.out if args.out else None
+    )
+    if out_dir:
+        (out_dir / "raw").mkdir(parents=True, exist_ok=True)
 
     from . import collect
 
@@ -96,12 +112,23 @@ def main(argv=None) -> int:
         ]
         records.sort(key=lambda r: r["submission_seq"])
         corpus: list = []
+        replayed_records: list[dict] = []
 
         for rec in records:
             if rec["ingest_duplicate"] or not rec.get("extracted"):
+                replayed_records.append(rec)
                 continue
+            pdf = dataset.DATASET / truth[rec["invoice_id"]]["document_file"]
+            pages = confidence.extract_page_text(pdf)
+            invoice = extraction_cleanup.clean(
+                dict(rec["extracted"]),
+                charges_and_lines=agent._charges_and_lines,
+                pages=pages,
+            )
+            evidence = confidence.build_evidence(invoice, pdf)
+            invoice["_routing"] = confidence.routing_decision(evidence)
             extraction = {
-                "invoice": rec["extracted"],
+                "invoice": invoice,
                 "work_authorization": rec.get("work_authorization"),
                 "invoice_count": (rec["classification"] or {}).get(
                     "invoice_count"
@@ -142,11 +169,40 @@ def main(argv=None) -> int:
 
             from invoice_processing.duplicates import InvoiceKey
 
-            corpus.append(
-                InvoiceKey.from_invoice(rec["invoice_id"], rec["extracted"])
-            )
+            corpus.append(InvoiceKey.from_invoice(rec["invoice_id"], invoice))
 
             replayed = collect.findings(artifacts)
+            rejected = next(
+                (
+                    (number, artifacts[f"phase{number}"])
+                    for number in (1, 2, 3, 4)
+                    if (artifacts.get(f"phase{number}") or {}).get("decision")
+                    == "REJECT"
+                ),
+                None,
+            )
+            replayed_records.append(
+                {
+                    **rec,
+                    "extracted": {
+                        k: v for k, v in invoice.items() if k != "_evidence"
+                    },
+                    "findings": replayed,
+                    "final_decision": "REJECT" if rejected else "ACCEPT",
+                    "rejection_template": rejected[1].get("rejection_template")
+                    if rejected
+                    else None,
+                    "rejection_phase": rejected[0] if rejected else None,
+                    "first_failing_step": next(
+                        (
+                            f["step"]
+                            for f in replayed
+                            if f["passed"] is False and not f["informational"]
+                        ),
+                        None,
+                    ),
+                }
+            )
             before = {f["step"]: f["passed"] for f in rec["findings"]}
             after = {f["step"]: f["passed"] for f in replayed}
             for step in sorted(set(before) | set(after)):
@@ -155,13 +211,20 @@ def main(argv=None) -> int:
                         f"{step}: {before.get(step, 'absent')} -> {after.get(step, 'absent')}"
                     ] += 1
 
+        if out_dir:
+            (out_dir / "raw" / f"{company}.jsonl").write_text(
+                "".join(json.dumps(r) + "\n" for r in replayed_records),
+                encoding="utf-8",
+            )
+
     print(f"\nReplayed {args.run} under profile {args.profile}.")
     if not changed:
         print("No verdict changed.")
     for label, count in changed.most_common():
         print(f"  {count:4d}  {label}")
     print(
-        "\nThis is validation only, over the fields the recorded run extracted. "
+        "\nThis is today's code after the model call, over the fields the "
+        "recorded run extracted. "
         "Anything that depends on a newly extracted field will not appear here; "
         "only a full run can measure that."
     )

@@ -16,6 +16,7 @@ and free.
 """
 
 import json
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -357,3 +358,285 @@ class TestAPageThatIsReallyAnImage:
         """Unknown is not permission to auto-approve."""
         assert confidence.score(None, True) < confidence.HIGH
         assert confidence.score(None, None) < confidence.HIGH
+
+
+# What an Indian GST invoice prints, from the benchmark corpus (MFG-INV-042):
+# the month as a word, CGST and SGST with no tax total, a round-off line.
+GST_PAGES = [
+    "Apex Industrial Components Pvt Ltd TAX INVOICE GSTIN: 24ITCCR9797D1ZQ "
+    "Invoice No. AIC/2026-27/0175 Invoice Date 13-May-2026 Due Date "
+    "28-May-2026 Taper roller bearing 50 nos 557.00 2% 27,293.00 Sub Total "
+    "27,293.00 CGST 2,456.37 SGST 2,456.37 Round Off 0.26 GRAND TOTAL "
+    "32,206.00 Amount in words: Rupees Thirty Two Thousand Two Hundred Six"
+]
+
+
+class TestWhatGstInvoicesPrint:
+    """Four shapes the benchmark's clean invoices print and the module flagged.
+
+    Each one sent a correct invoice to review: 34 of 38 accepted invoices were
+    routed to a human, and only 4 posted untouched.
+    """
+
+    def test_a_month_written_as_a_word_is_found(self):
+        assert locate("2026-05-13", GST_PAGES)[0] is True
+        assert locate("2026-05-28", GST_PAGES)[0] is True
+
+    def test_a_tax_total_is_grounded_through_its_printed_components(self):
+        invoice = {
+            "tax_amount": 4912.74,
+            "cgst_amount": 2456.37,
+            "sgst_amount": 2456.37,
+        }
+        evidence = confidence.build_evidence(invoice, None)
+        assert evidence["tax_amount"]["grounded"] is None  # no pages given
+        assert confidence._locate_tax_by_components(
+            invoice, 4912.74, GST_PAGES
+        ) == (True, 1)
+
+    def test_components_that_do_not_add_up_ground_nothing(self):
+        invoice = {"cgst_amount": 2456.37, "sgst_amount": 2456.37}
+        assert confidence._locate_tax_by_components(
+            invoice, 5000.00, GST_PAGES
+        ) == (False, None)
+
+    def test_a_line_discount_is_part_of_the_line_maths(self):
+        checks = arithmetic_checks(
+            {
+                "line_items": [
+                    {
+                        "quantity": 50,
+                        "unit_price": 557.0,
+                        "line_discount_pct": 0.02,
+                        "amount_ex_tax": 27293.0,
+                    }
+                ]
+            }
+        )
+        assert checks["line_maths_consistent"] is True
+
+    def test_the_round_off_is_part_of_the_total(self):
+        checks = arithmetic_checks(
+            {
+                "invoice_total_ex_tax": 27293.00,
+                "tax_amount": 4912.74,
+                "round_off": 0.26,
+                "invoice_total_inc_tax": 32206.00,
+            }
+        )
+        assert checks["totals_reconcile"] is True
+
+
+class TestArithmeticThatContradictsItselfIsReviewed:
+    """Line checks were computed and never used for routing: an invoice whose
+    lines disagree with its own subtotal posted untouched if every field
+    happened to be grounded."""
+
+    def test_lines_that_overshoot_the_subtotal_route_to_review(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            confidence, "extract_page_text", lambda _p: GST_PAGES
+        )
+        invoice = {
+            "invoice_number": "AIC/2026-27/0175",
+            "invoice_total_ex_tax": 27293.00,
+            "line_items": [
+                {"amount_ex_tax": 27293.00},
+                {"amount_ex_tax": 500.0},
+            ],
+        }
+        evidence = build_evidence(invoice, Path("printed.pdf"))
+        # Every field is on the page; only the arithmetic objects.
+        assert all(
+            evidence[name]["confidence"] == HIGH
+            for name in ("invoice_number", "invoice_total_ex_tax")
+        )
+        assert evidence["_summary"]["fields_needing_review"] == [
+            "arithmetic: lines_sum_to_subtotal"
+        ]
+        assert routing_decision(evidence) == "REVIEW"
+
+    def test_consistent_lines_still_post(self, monkeypatch):
+        monkeypatch.setattr(
+            confidence, "extract_page_text", lambda _p: GST_PAGES
+        )
+        invoice = {
+            "invoice_number": "AIC/2026-27/0175",
+            "invoice_total_ex_tax": 27293.00,
+            "line_items": [{"amount_ex_tax": 27293.00}],
+        }
+        assert (
+            routing_decision(build_evidence(invoice, Path("p.pdf"))) == "AUTO"
+        )
+
+
+class TestWhatStillSentCleanInvoicesToReview:
+    """After 7934744, 11 clean text-layer invoices still went to a human.
+    Each of these failed on a correct value."""
+
+    def test_a_zero_padded_day_after_the_month_name(self):
+        assert locate(
+            "2026-04-01", [GST_PAGES[0] + " Invoice Date Apr 01, 2026"]
+        )[0]
+
+    def test_an_address_split_by_a_logo_on_the_same_row(self):
+        """The page read "Ludhiana 668868, BF" / "Punjab": the logo's letters
+        sat between the two lines of the address."""
+        pages = [
+            "Bharat Fasteners Corporation TAX INVOICE "
+            "369, Industrial Area 22, Ludhiana 668868, BF Punjab "
+            + "GSTIN 03NSQPM1376V1ZF "
+            * 10
+        ]
+        grounded, _ = confidence._locate_by_segments(
+            "369, Industrial Area 22, Ludhiana 668868, Punjab", pages
+        )
+        assert grounded is True
+        assert confidence._locate_by_segments(
+            "369, Industrial Area 22, Amritsar 668868, Punjab", pages
+        ) == (False, None)
+
+    def test_a_taxable_total_grounded_through_subtotal_and_charges(self):
+        invoice = {
+            "subtotal": 27850.00,
+            "other_charges": [{"amount": 2209.00}],
+        }
+        page = [GST_PAGES[0] + " Sub Total 27,850.00 Other Charges 2,209.00"]
+        assert confidence._locate_taxable_by_parts(invoice, 30059.00, page) == (
+            True,
+            1,
+        )
+        assert confidence._locate_taxable_by_parts(invoice, 31000.00, page) == (
+            False,
+            None,
+        )
+
+    def test_lines_are_compared_with_the_printed_subtotal_not_the_taxable(
+        self,
+    ):
+        """MFG-INV-039: the lines equal the printed subtotal; the taxable
+        total is 116,806 less because of an invoice discount. Comparing lines
+        with the taxable total called that a contradiction."""
+        checks = arithmetic_checks(
+            {
+                "subtotal": 2336120.05,
+                "discount": 116806.00,
+                "invoice_total_ex_tax": 2219314.05,
+                "line_items": [
+                    {"amount_ex_tax": 2000000.00},
+                    {"amount_ex_tax": 336120.05},
+                ],
+            }
+        )
+        assert checks["lines_sum_to_subtotal"] is True
+
+    def test_a_charge_in_the_taxable_total_is_netted_out(self):
+        checks = arithmetic_checks(
+            {
+                "subtotal": 27850.00,
+                "invoice_total_ex_tax": 30059.00,
+                "other_charges": [{"amount": 2209.00}],
+                "line_items": [{"amount_ex_tax": 27850.00}],
+            }
+        )
+        assert checks["lines_sum_to_subtotal"] is True
+
+
+class TestAValueMustStandOnItsOwn:
+    """A substring search confirmed values the page never states: the 0.00
+    placeholder inside 10.00, and a truncated GSTIN inside the printed one.
+    Measured over 11,567 extracted fields in three stored runs, the token
+    boundary flipped only values like these."""
+
+    PAGE: ClassVar[list[str]] = [
+        GST_PAGES[0]
+        + " Discount 10.00 GSTIN: 24YVBFK3734K1ZQ IFSC DTBK0594444"
+        + " Grand Total 13,41,792.00 ABN 51 824 753 556"
+    ]
+
+    def test_a_number_inside_a_longer_number_is_not_found(self):
+        assert locate(0.0, self.PAGE)[0] is False
+
+    def test_a_truncated_identifier_is_not_found(self):
+        assert locate("24YVBFK3734K", self.PAGE)[0] is False
+        assert locate("DTBK059444", self.PAGE)[0] is False
+
+    def test_separators_still_do_not_matter(self):
+        assert locate(1341792.0, self.PAGE)[0] is True  # Indian grouping
+        assert locate("51824753556", self.PAGE)[0] is True  # spaced
+        assert locate("24YVBFK3734K1ZQ", self.PAGE)[0] is True
+
+
+# A scan, as tesseract reads it: the GSTIN's trailing letter O and the IFSC's
+# fixed zero both come back as the other character.
+OCR_PAGES = [
+    "Kestrel Cyber Assurance Pvt Ltd TAX INVOICE GSTIN: 29PECCX8526R1Z0 "
+    "Invoice No. KCA-2608-376 Invoice Date 12-08-2026 IFSC: KCBLO706240 "
+    "A/c No.: 165340523820 Grand Total 15,83,315.00 " + "Sub Total " * 20
+]
+
+
+class TestAScanIsReadByOcr:
+    """11 of 45 clean benchmark invoices are scans, and every one went to
+    review: there was no text to ground anything against."""
+
+    def _evidence(self, monkeypatch, invoice):
+        monkeypatch.setattr(confidence, "extract_page_text", lambda _p: [])
+        monkeypatch.setattr(confidence, "ocr_page_text", lambda _p: OCR_PAGES)
+        return build_evidence(invoice, Path("scan.pdf"))
+
+    def test_fields_are_grounded_against_the_ocr_text(self, monkeypatch):
+        evidence = self._evidence(
+            monkeypatch,
+            {
+                "invoice_number": "KCA-2608-376",
+                "invoice_total_inc_tax": 1583315.0,
+            },
+        )
+        assert evidence["_summary"]["read_by"] == "ocr"
+        assert evidence["_summary"]["has_text_layer"] is False
+        assert evidence["invoice_number"]["grounded"] is True
+
+    def test_the_tax_id_tolerates_ocr_reading_o_as_zero(self, monkeypatch):
+        """Safe for the GSTIN only: its checksum and the vendor master catch a
+        swapped character on their own (check 3.2)."""
+        evidence = self._evidence(
+            monkeypatch, {"vendor_tax_id": "29PECCX8526R1ZO"}
+        )
+        assert evidence["vendor_tax_id"]["grounded"] is True
+
+    def test_an_invoice_number_does_not(self, monkeypatch):
+        """Duplicate detection does not fold O into 0, so a tolerated misread
+        here could let a resubmission post untouched."""
+        evidence = self._evidence(
+            monkeypatch, {"invoice_number": "KCA-26O8-376"}
+        )
+        assert evidence["invoice_number"]["grounded"] is False
+
+    def test_an_ifsc_tolerates_o_only_in_its_fixed_zero(self, monkeypatch):
+        assert (
+            self._evidence(monkeypatch, {"bank_code": "KCBL0706240"})[
+                "bank_code"
+            ]["grounded"]
+            is True
+        )
+        assert (
+            self._evidence(monkeypatch, {"bank_code": "KCBL0706249"})[
+                "bank_code"
+            ]["grounded"]
+            is False
+        )
+
+    def test_no_tesseract_means_no_ocr_and_review(self, monkeypatch):
+        monkeypatch.setattr(confidence.shutil, "which", lambda _name: None)
+        assert confidence.ocr_page_text(Path("scan.pdf")) == []
+
+    @pytest.mark.skipif(
+        not confidence.shutil.which("tesseract"),
+        reason="tesseract not installed",
+    )
+    def test_tesseract_reads_a_real_page(self):
+        pages = confidence.ocr_page_text(_pdf("case_005"))
+        assert locate("INV-00005", pages)[0] is True
+        assert locate("51824753556", pages)[0] is True

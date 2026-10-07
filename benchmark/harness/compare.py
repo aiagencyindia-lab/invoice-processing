@@ -186,9 +186,11 @@ def main(argv=None) -> int:
         ("correct touchless rate", "correct_touchless_rate"),
         ("touchless accuracy", "touchless_accuracy"),
         ("decision accuracy", "decision_accuracy"),
+        ("posted untouched (of clean)", "posted_untouched_rate"),
     ):
+        # .get: a run scored before a metric existed has no value for it.
         lines.append(
-            f"| {label} | {_pct(bd[key])} | {_pct(ad[key])} | {_delta(bd[key], ad[key])} |"
+            f"| {label} | {_pct(bd.get(key))} | {_pct(ad.get(key))} | {_delta(bd.get(key), ad.get(key))} |"
         )
     for label, key in (
         ("correctly auto-approved", "correctly_auto_approved"),
@@ -199,6 +201,8 @@ def main(argv=None) -> int:
         ("rejection reason another real fault", "reason_family"),
         ("rejection reason wrong", "reason_wrong"),
         ("errors / no decision", "errors_or_no_decision"),
+        ("posted untouched", "posted_untouched"),
+        ("posted untouched wrongly", "posted_untouched_wrongly"),
     ):
         b_v, a_v = bd["counts"].get(key, 0), ad["counts"].get(key, 0)
         lines.append(f"| {label} | {b_v} | {a_v} | {a_v - b_v:+d} |")

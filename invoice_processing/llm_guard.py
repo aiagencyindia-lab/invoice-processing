@@ -41,6 +41,18 @@ class LlmCallTimeout(RuntimeError):
     """A single LLM call exceeded its wall-clock timeout."""
 
 
+class LlmUnavailable(RuntimeError):
+    """The model service refused or could not be reached -- not the document.
+
+    Billing switched off, a revoked credential, or an outage that outlasted the
+    retries. Callers with a fallback for a *document* the model could not read
+    must let this through: a keyword guess made because the account is
+    suspended rejected 300 of 300 benchmark invoices as "not a valid Tax
+    Invoice". Raised, it reaches `process_invoice` as ERROR, and the worker
+    retries the document later instead of deciding it.
+    """
+
+
 DEFAULT_LLM_TIMEOUT_SECONDS = float(
     os.getenv("CRITIC_LLM_TIMEOUT_SECONDS", "120")
 )
@@ -65,6 +77,20 @@ _INFRASTRUCTURE_ERROR_PATTERNS = (
     "429",
     "RESOURCE_EXHAUSTED",
 )
+# The account, not the request: retrying cannot help and no document caused it.
+_ACCOUNT_ERROR_PATTERNS = (
+    "billing",
+    "PERMISSION_DENIED",
+    "403",
+    "UNAUTHENTICATED",
+    "401",
+    "has not been used in project",
+)
+
+
+def _matches(message: str, patterns: tuple[str, ...]) -> bool:
+    lowered = message.lower()
+    return any(pattern.lower() in lowered for pattern in patterns)
 
 
 @dataclass
@@ -98,7 +124,8 @@ def guarded_generate(model, prompt, budget: CallBudget | None = None):
     """Call generate_content with a hard timeout, retry and budget.
 
     Returns the model response. Raises LlmCallTimeout or LlmBudgetExceeded
-    rather than blocking indefinitely.
+    rather than blocking indefinitely, and LlmUnavailable when the service
+    refused the account or stayed down through every retry.
     """
     budget = budget or CallBudget()
     budget.check()
@@ -120,10 +147,11 @@ def guarded_generate(model, prompt, budget: CallBudget | None = None):
         except Exception as exc:  # classified below, not swallowed
             last_error = exc
             message = str(exc)
-            if not any(
-                pattern.lower() in message.lower()
-                for pattern in _INFRASTRUCTURE_ERROR_PATTERNS
-            ):
+            if _matches(message, _ACCOUNT_ERROR_PATTERNS):
+                raise LlmUnavailable(
+                    f"Model service refused the call: {message[:300]}"
+                ) from exc
+            if not _matches(message, _INFRASTRUCTURE_ERROR_PATTERNS):
                 raise  # A real error: surface it instead of retrying blindly.
             print(f"      LLM infrastructure error: {message[:80]}")
 
@@ -134,4 +162,11 @@ def guarded_generate(model, prompt, budget: CallBudget | None = None):
             print(f"      Retrying in {delay:.1f}s...")
             time.sleep(delay)
 
+    # ponytail: a timeout stays LlmCallTimeout -- one slow scan is the document's
+    # doing and keeps its fallback; only a service error that outlived the
+    # retries is an outage.
+    if last_error is not None and not isinstance(last_error, LlmCallTimeout):
+        raise LlmUnavailable(
+            f"Model service unavailable after retries: {str(last_error)[:300]}"
+        ) from last_error
     raise last_error if last_error else LlmCallTimeout("LLM call failed")

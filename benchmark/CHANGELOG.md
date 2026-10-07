@@ -787,3 +787,478 @@ the bucket holds 13 objects, all the pilot's.
 
 A silent delete of zero rows is exactly the failure this codebase keeps
 warning about, and it took reading `rls.py` rather than the error to see it.
+
+---
+
+## 2026-09-24 — Extraction: what the model gets wrong, and what the scorer did
+
+Diffing every extraction in the AFTER run against what each document prints
+sorted the "extraction errors" into five causes. Two were not extraction at all.
+
+**Fixed in the product:**
+
+* **Fields mixed across invoices.** 46 submissions bundle two or three invoices
+  into one PDF, and the extractor took fields from more than one: `MFG-INV-002`
+  prints Lumora Brandcraft as the bill-to on page 1 and Ferrovane on page 2's
+  second invoice, and came back as Ferrovane. This was the "hallucinated
+  customer" of the previous entries. It is also why check 2.1 caught so few
+  un-itemized invoices: a first invoice with no line table borrowed the second
+  one's lines. The prompt now says to extract the first invoice only and never
+  to combine fields across invoices.
+* **Look-alike characters in identifiers.** Six clean, text-layer invoices came
+  back with Greek capitals indistinguishable from Latin ones — Tau, Rho, Alpha
+  for a printed `TPA`. A look-alike is a different character, so the number
+  matches nothing and a resubmission passes the duplicate check.
+  `extraction_cleanup.py` folds them in identifier fields only; prose is left
+  alone, and every repair is recorded on the extraction as `_repairs`.
+* **A charge repeated as a line item.** 15 invoices. The reconciliation checks
+  already tolerated it; the workbench and the exports did not. Removed once, at
+  extraction, using the same arithmetic test the checks use.
+
+**Fixed in the scorer, which had been grading the wrong thing:**
+
+* **The taxable total.** The prompt did not say whether "total excluding tax"
+  includes freight; the extractor mostly assumed it did, and the scorer compared
+  against the dataset's `taxable_amount`, which does not. 19 of the 28
+  clean-document "errors" were exactly taxable amount plus other charges. The
+  prompt now defines it (before tax, after discount, including other charges)
+  and the scorer compares against that. **Both runs were re-scored from their
+  raw records**: the field reads 94.0% at baseline and 87.6% after, where both
+  had read about 77%. That movement is the measurement becoming accurate, not
+  the extractor improving.
+
+**Not fixed, deliberately:** misreads on image-only scans, such as `O` read as
+`0` in a GSTIN. A structural repair would also "repair" the planted faults,
+such as `8` changed to `B`, that check 3.2 exists to catch. On a scan with no
+text layer there is no way to tell a misread from a forgery, and pretending
+otherwise weakens the control.
+
+**Tests:** `tests/test_extraction_cleanup.py` (10). Reverting the fixes fails 5.
+
+## 2026-09-24 — A model that is down decided 300 invoices
+
+**Problem.** The first run at `85776e0` finished in 158 s, not ~1.5 h, exited 0,
+and scored 85.0% decision accuracy with 0% touchless: every invoice rejected as
+"Document is not a valid Tax Invoice". Billing had been switched off on the GCP
+project; Vertex answered every call with a 403. The same project backs
+production, where the Cloud SQL instance was suspended too.
+
+**Root cause.** Two, one in each place.
+
+- *Product.* Every Vertex call is wrapped in a document-level fallback --
+  pdfplumber for text, a keyword classifier for the document type, an empty
+  extraction for the invoice. Each caught `Exception`, so a refusal that had
+  nothing to do with the document was handled as an unreadable document, and
+  the keyword guess was then validated and rejected. In production that is a
+  false rejection reason sent to a real supplier.
+- *Harness.* `run.py` checked only that the stack processes exited 0. Nothing
+  asked whether the model had answered once.
+
+**Fix.** `llm_guard.guarded_generate` raises `LlmUnavailable` for an account
+refusal (billing, 401/403, API not enabled) without retrying, and for a service
+error that outlives its retries. A timeout stays `LlmCallTimeout` -- one slow
+scan is the document's doing and keeps its fallback. The five fallbacks in the
+acting pipeline re-raise `LlmUnavailable`, so `process_invoice` returns ERROR
+and the worker retries the document instead of deciding it. `run.py` now makes
+one real call through the same guard before starting any stack (exit 2, nothing
+run), and exits 1 after scoring if any invoice has no decision.
+
+**Files.** `invoice_processing/llm_guard.py`,
+`invoice_processing/shared_libraries/acting/general_invoice_agent.py`,
+`benchmark/harness/run.py`.
+
+**Tests.** `tests/test_llm_unavailable.py`: the guard's four outcomes; the real
+pipeline on `case_001` with a billing 403 returns ERROR after one call and
+writes no decision (it returned REJECT before the fix); a failed preflight
+starts no stack. The live preflight against the suspended project fails in ~5 s
+with the 403.
+
+**Result.** No benchmark numbers: the run is discarded, and a valid one waits
+on billing.
+
+## 2026-10-07 — MFG-INV-042 was extraction drift after all, and 4.2 now absorbs it
+
+**Problem.** The production run rejected the clean invoice `MFG-INV-042` at
+4.2 (line sum 30,059 against a subtotal of 27,850) where the local run accepted
+it. The handoff recorded it as the one difference with "no extraction drift at
+all" and suspected order-dependence in duplicate detection.
+
+**Root cause.** Neither. Check 3.1 passed identically in both runs. The
+document prints packing (2,209) as line 2 of the item table *and* as "Other
+Charges" below a Sub Total that leaves it out. Both runs extracted both table
+lines; only the local run also returned the charge in `other_charges`, which is
+what lets `_charges_and_lines` recognise the repeat. The earlier comparison
+covered header fields, not `other_charges`, so it reported no drift.
+
+**Fix.** `_charges_and_lines` -- the one definition 4.1, 4.2, 4.4 and the
+extraction cleanup share -- now also handles a charge that arrives only as a
+line: when the lines equal the printed taxable total and exactly one line is
+the amount the printed subtotal leaves out, that line is moved to the charges.
+Two printed figures must agree, so a wrong subtotal (whose taxable total was
+computed from it) still fails 4.2.
+
+**Files.** `invoice_processing/shared_libraries/acting/general_invoice_agent.py`,
+`invoice_processing/extraction_cleanup.py`.
+
+**Tests.** `tests/test_extraction_cleanup.py::TestAChargeReturnedOnlyAsALine`:
+the MFG-INV-042 shape is repaired (fails without the fix); a short subtotal is
+not explained away; two candidate lines are left alone.
+
+**Result (replay, both stored runs, 600 extractions).** The rule fires on 14
+extractions, every one a real charge -- freight, transit insurance, packing,
+travel. One verdict changes: `MFG-INV-042` 4.1 and 4.2 False -> True on the
+production extractions. No planted line-sum fault stops failing. The rest are
+rejected earlier for their planted faults. `SVC-INV-025` loses an accidental
+4.2 failure: its planted line-discount fault was never extracted, and it was
+failing on the travel line instead. 4.2 is not reached there.
+
+## 2026-10-07 — The touchless gap: what the target measures, and four false alarms
+
+**Problem.** Touchless was 15.3% against a 40% target.
+
+**What the number is.** Touchless is ACCEPT / 300, and the corpus holds 45
+clean invoices of 300 -- so 15.0% is its ceiling, and 15.3% is already there
+(four of the 46 accepts are wrong accepts). The 40% target cannot be met on
+this corpus, by construction. The real gap sits inside the accepts: **42 of 46
+were routed to a human** (`accepted but routed to review`). Only 4 posted with
+no one touching them.
+
+**Root cause.** Of 38 accepted invoices whose artifacts the run kept, 11 are
+scans with no text layer (review is the honest answer there). The rest were
+flagged by `confidence.py` checking a GST invoice against an Australian
+template, and disagreeing with the checks that had just passed it:
+
+- Dates printed with the month as a word (`13-May-2026`) matched none of the
+  numeric renderings, so `invoice_date` and `due_date` were "not on the page".
+- A GST invoice prints CGST and SGST and often no tax total, so `tax_amount`
+  was never found.
+- `line_maths_consistent` ignored line discounts; 4.2 counts them.
+- `totals_reconcile` ignored the round-off line; 4.1 counts it.
+
+And one real hole, found by measuring the fix: `lines_sum_to_subtotal` and
+`line_maths_consistent` were computed and never used for routing. A wrongly
+accepted invoice (`MFG-INV-039`, lines 116,806 over the subtotal) had been sent
+to review only by the date false alarm; fixing the dates alone posted it.
+*[Corrected below, 2026-10-07: the 116,806 is MFG-INV-039's printed invoice
+discount, not an overshoot. The rule stands; this example was wrong.]*
+
+**Fix.** Month-name renderings for dates; a tax total grounded when its printed
+components are found and add up to it; line maths uses 4.2's `_line_discount`,
+moved into `confidence.line_discount` so there is one definition; totals count
+the round-off; any failed arithmetic check caps the invoice at MEDIUM and names
+itself in `fields_needing_review`, so it routes to review.
+
+**Files.** `invoice_processing/confidence.py`,
+`invoice_processing/shared_libraries/acting/general_invoice_agent.py`.
+
+**Tests.** `tests/test_confidence.py`: `TestWhatGstInvoicesPrint` (five, each
+failing before) and `TestArithmeticThatContradictsItselfIsReviewed` (a
+self-contradicting invoice with every field grounded routes to review; a
+consistent one still posts).
+
+**Result (evidence recomputed over stored extractions and the PDFs).**
+
+| | Before | After |
+|---|---|---|
+| Clean accepts posted untouched, local run | 4 of 36 | **16 of 36** |
+| Clean accepts posted untouched, production run | 4 of 36 | **16 of 36** |
+| Wrong accepts posted untouched | 0 | **0** |
+
+Still routed to review on clean invoices: 11 scans, ~4 where the lines include
+a charge the confidence check does not net out, a few `vendor_address`
+renderings, single fields elsewhere. Touchless as the report defines it does
+not move -- it counts decisions, not routing -- so the report needs a
+"posted untouched" line for this to show.
+
+## 2026-10-07 — MV-002: an identifier is read as the page prints it
+
+**Problem.** `MFG-INV-064`, a clean invoice, was rejected at 3.2: "Invalid
+check character ... Invoice states 240XMPF9713X1Z2". Found by the document
+review of the manual verification matrix (MV-002).
+
+**Root cause.** The page's text layer prints `24OXMPF9713X1Z2` -- the letter
+O -- which matches the vendor master and passes its checksum. The extractor
+returned a zero. `85776e0` left O/0 alone on purpose, because folding one into
+the other would also turn a forged tax ID into a valid one; that holds for a
+blind fold, but not for a page that prints the answer.
+
+**Fix.** `extraction_cleanup.read_as_printed`: when an identifier is not on the
+page and exactly one string on the page differs from it only by O/0 or I/1, the
+printed string is taken, with the value's own separators kept. Nothing is
+folded, so a forged ID printed on the page is taken as printed and 3.2 still
+sees it. Scans (no text layer) and ambiguous pages are left alone. The
+extractor passes the document's text layer into `clean`.
+
+**Tests.** `TestAnIdentifierIsReadAsPrinted` in `tests/test_extraction_cleanup.py`:
+the MV-002 shape, a printed forgery left alone, a scan left alone, two
+candidates left alone, separators kept, and the pipeline passing the text
+layer. All six fail without the fix.
+
+**Result (both stored runs, 600 extractions).** Six identifiers change, all
+vendor GSTINs (O/0 four times, I/1 twice), and all six now match what the
+dataset says is printed; none moves away from it. Two decisions change, both
+toward the dataset: `MFG-INV-064` is no longer rejected for its own misread,
+and `MFG-INV-020` passes 3.2 on to the 4.2 fault it actually carries. The
+other four are rejected earlier for real faults.
+
+## 2026-10-07 — MV-018: a lump sum is not a breakdown
+
+**Problem.** `TECH-INV-025` (manual verification MV-018) was accepted. Its only
+line is "Professional services, 998513, 1 lot, 2,81,160.00" -- the dataset's
+NOT_ITEMIZED_LUMPSUM fault.
+
+**Root cause.** Check 2.1 passed any invoice with at least one line. A lump sum
+is one line. So is a document with no table at all: the extractor writes one
+line from the prose ("Charges for the period as per engagement letter") with
+no quantity and no price.
+
+**Fix.** `_itemized`: a breakdown needs at least one line with a quantity and a
+unit price, and a single line of one lot (or `ls`, `job`, `lump sum`) is not
+one. Every planted lump sum in both stored runs is exactly that shape; no
+clean invoice is. Lines are counted after `_charges_and_lines`, so a charge
+returned as a line does not make a lump sum look itemized.
+
+**Tests.** `tests/test_itemization.py`: a lot of professional services, a
+prose line, and no lines fail; one priced line of goods, hours at a rate, and a
+lot among other lines pass.
+
+**Result (both stored runs).** The 179 invoices expected to pass 2.1 all still
+pass. Planted itemization faults caught: 26 -> 35 of 44 locally, 27 -> 36 of
+44 in production. Still missed: the "total only" layout, where the extractor
+invents a plausible priced line that no structural test can tell from a real
+one.
+
+## 2026-10-07 — MV-027, MV-035: a quotation is not a purchase order
+
+**Problem.** Two invoices (MV-027, MV-035) were rejected for "Purchase order
+Q-4179 not found" -- right decision, wrong reason. Neither prints a PO; "Q-4179"
+is the printed "Quotation Ref.". The real faults (a GSTIN, a line total) went
+unreported.
+
+**Root cause.** The extraction prompt described `po_number` as "purchase order
+/ work order reference" and named nothing it is not. Over both stored runs the
+extractor filled it from a quotation reference nine times (six local, three
+production) and from the work authorization reference once. Both MV rows are
+scans, so no text-layer check could have caught it; the fix had to be the
+prompt.
+
+**Fix.** `po_number` is the buyer's purchase order number only: a reference
+the invoice labels as a PO. A quotation, quote, estimate or proposal is the
+supplier's offer; a work order belongs in `work_authorization_reference`; with
+no PO printed the field is null. `require_purchase_order` is off in the
+benchmark profile, so a null PO skips 2.2 and the invoice reaches its real
+fault.
+
+**Tests.** `TestTheExtractionPrompt::test_a_quotation_or_work_order_is_not_a_purchase_order`.
+
+**Result (targeted re-extraction, 27 invoices, about $0.35).** The six
+invoices that had a quotation reference as their PO all came back null; 15 of
+15 invoices with a printed PO still read it, scans included; 5 of 5 with a
+work authorization and no PO still have none. Extraction is not deterministic,
+so this is a sample, not a measurement -- the next full run is.
+
+## 2026-10-07 — The PO match says what it compared
+
+**Problem.** The document review of the manual verification matrix found 2.2
+evidence that was false on three invoices it accepted correctly: "Matched
+purchase order ZC-PO-260018 on quantity and unit price" where the order is
+120 h at 4,557 and the invoice 288 h at 4,659 (MV-001), and the same sentence
+on MV-003 and on MV-020, which has no line items at all.
+
+**Root cause.** `match_invoice_to_po` skips the quantity and price comparison
+for a listed service supplier, on purpose -- the work authorization prices a
+service, step 4.3 -- and has nothing to compare when the invoice states no
+quantity or price. Both paths ended at the same message, written for goods
+that had been compared.
+
+**Fix.** The match records which of quantity and unit price it compared, and
+says so: "on quantity and unit price" when it compared them; "as an open order
+for this supplier ... neither quantity nor price was compared" for a service,
+naming step 4.3; "by reference only" when the invoice gives nothing to compare.
+No outcome changes.
+
+**Tests.** `tests/test_po_matching.py::TestTheMatchSaysWhatItCompared` (the
+service and no-lines cases fail without the fix; the goods case is the
+control).
+
+## 2026-10-07 — Measured: the run at `9f8c923`, and today's code replayed over it
+
+**The run.** 300 invoices, local, against GCP project `rasayan` (the old
+project's billing account is closed; see the 2026-09-24 outage entry). 87
+minutes, preflight passed, every invoice decided. It measures `9f8c923`: the
+bundled-invoice prompt fix and the outage guard.
+
+**Replay can now score.** `replay` applies today's extraction cleanup and
+confidence routing (from the document's own text layer) before the four
+validation phases, and `--out NAME` writes the replayed records as a run the
+scorer reads. Checked for faithfulness against this run before trusting it:
+291 of 300 decisions and reasons came out exactly as recorded, and the other
+nine are the 2.1 itemization fix, each moving to the dataset's expected
+reason.
+
+| | `after` (`d3d07fc`) | run at `9f8c923` | today (`bca701a`) replayed on it |
+|---|---|---|---|
+| Decision accuracy | 97.7% | 98.0% | **98.3%** |
+| Wrong accepts | 4 | 3 | **2** |
+| Wrong rejects | 3 | 3 | 3 |
+| Rejection reason exact | 214 | 218 | **227** |
+| Rejection reason wrong | 7 | 10 | **6** |
+| Accepted but routed to review | 42 | 41 | **25** |
+| Posted untouched (of 45 clean) | 4 (8.9%) | 4 (8.9%) | **19 (42.2%)** |
+| Posted untouched wrongly | 0 | 0 | **0** |
+
+Not in the replayed column: `1a1f705` (a quotation is not a PO) is a prompt
+change and only a full run can measure it.
+
+## 2026-10-07 — The last text-layer false alarms, and a correction
+
+**Problem.** With today's code replayed over the run at `9f8c923`, 25 accepted
+clean invoices still went to review: 11 scans and 11 text-layer invoices (the
+rest of the 25 are wrong accepts and duplicates).
+
+**Root cause.** Four more places where `confidence.py` disagreed with the page
+or with the checks:
+
+- `Apr 01, 2026` -- month name, then a zero-padded day -- was not a rendering.
+- The vendor address was "not on the page" because a logo block sits on the
+  same text row: the text layer reads `Ludhiana 668868, BF` / `Punjab`.
+- `lines_sum_to_subtotal` compared the lines with the *taxable total*, which
+  includes charges and is net of invoice discount. 4.2 compares with the
+  printed subtotal and nets charges out.
+- The taxable total is not printed on GST layouts that show Sub Total and
+  Other Charges separately.
+
+**Fix.** The zero-padded rendering; an address grounded segment by segment, by
+text rather than `locate` (which reads "Amritsar 668868" as the number 668868 --
+caught by the test); `charges_and_lines` moved into `confidence.py` and shared
+with 4.1/4.2/4.4 and cleanup, so the line-sum check uses the printed subtotal
+with charges netted, exactly as 4.2 does; a taxable total grounded when the
+subtotal, every charge and any discount are printed and add up to it.
+
+**Correction to the 2026-10-07 touchless entry.** It said MFG-INV-039 had
+"lines 116,806 over the subtotal". 116,806 is its printed invoice discount:
+the old check compared the lines (2,336,120.05) with the taxable total after
+discount (2,219,314.05). Against the printed subtotal they agree exactly. The
+rule that a failed arithmetic check routes to review stands; that example did
+not support it. With the comparison fixed, MFG-INV-039 posts untouched -- and
+it is the invoice whose planted fault is not printed (manual verification
+MV-036), so the scorer's one "posted untouched wrongly" is the dataset's error,
+not a missed fault.
+
+**Tests.** `TestWhatStillSentCleanInvoicesToReview` in
+`tests/test_confidence.py` (all five fail without the fix).
+
+**Result (today's code replayed over the run at `9f8c923`).**
+
+| | before this change | after |
+|---|---|---|
+| Accepted but routed to review | 25 | **12** |
+| Posted untouched (of 45 clean) | 19 (42.2%) | **31 (68.9%)** |
+| Posted untouched wrongly | 0 | 1 -- MFG-INV-039, the dataset error |
+| Decision accuracy | 98.3% | 98.3% |
+
+Every clean invoice with a text layer now posts untouched; the 11 left in
+review are all scans, and only OCR grounding moves them.
+
+## 2026-10-07 — Grounding requires a value to stand on its own
+
+**Problem.** Prototyping OCR grounding for scans (tesseract, local only, not
+in the product) asked whether grounding ever confirms a value the extractor
+got wrong. It did -- but through the matcher, not OCR: a 0.00 placeholder total
+was "found" inside 10.00, and the truncated GSTIN `24YVBFK3734K` inside the
+printed `24YVBFK3734K1ZQ`.
+
+**Root cause.** `confidence.locate` was a substring search, on the page as
+written and again with every separator removed. A value matched anywhere,
+including inside a longer number or identifier.
+
+**Fix.** One pattern per rendering: the value's letters and digits with up to
+three non-alphanumeric characters between them (so `51 824 753 556`,
+`13,41,792.00` and `Pvt. Ltd` still match), bounded so no letter or digit
+touches either end and no digit run continues it through a `.` or `,`.
+
+**Tests.** `TestAValueMustStandOnItsOwn` in `tests/test_confidence.py` (the two
+boundary cases fail without the fix; the separator case is the control).
+
+**Result.** Over 11,567 extracted fields in three stored runs, every change
+was grounded -> not grounded, and on text-layer documents every one was a
+false confirmation: 0.0 placeholder totals on non-documents and a truncated
+bank code. Replayed over the run at `9f8c923`, routing is unchanged -- 31 of
+45 clean invoices posted untouched. The OCR side (not in the product) loses
+groundings where tesseract runs tokens together or reads 0 as O; that is
+for the OCR work, which will need O/0 and I/1 tolerance on identifiers.
+
+## 2026-10-07 — Scans are grounded by OCR
+
+**Problem.** Every clean scan went to review: 11 of the 45 clean invoices, the
+whole of what was left after the text-layer fixes. With no text layer there was
+nothing to ground a field against.
+
+**Fix.** `confidence.ocr_page_text`: when a PDF has no readable text layer, its
+pages are rendered at 300 dpi with pypdfium2 (already installed with
+pdfplumber) and read by tesseract through `subprocess` -- no new Python
+dependency. Grounding then runs against that text. Two tolerances, each where
+something else catches a misuse:
+
+- the vendor GSTIN may differ by O/0 or I/1 (tesseract reads the trailing O as
+  a zero) -- its checksum and the vendor master catch a swapped character on
+  their own (3.2);
+- an IFSC may have O in its fifth position, which is zero by definition, so
+  that tolerance cannot hide a changed bank code.
+
+Invoice and PO numbers get none: duplicate detection does not fold O into 0,
+and a prototype that tolerated them confirmed 24 wrong identifiers across three
+runs. OCR text is never used to repair a value, only to ground it. No
+tesseract, or a failure, leaves the page empty and the invoice in review --
+today's behaviour. The Dockerfile installs `tesseract-ocr`.
+
+**Tests.** `TestAScanIsReadByOcr` in `tests/test_confidence.py`: OCR text is
+used and reported (`read_by: "ocr"`); the GSTIN tolerance applies and the
+invoice-number one does not; the IFSC rule accepts only the fifth position; no
+tesseract means no OCR; and a real tesseract read of `case_005`, skipped where
+tesseract is absent.
+
+**Result (replayed, ~4 minutes for 85 scans, median 1.8 s per document).**
+
+| | run at `9f8c923` | run at `ecb9bbd` |
+|---|---|---|
+| Posted untouched (of 45 clean), before | 31 | 18 at the run's own code |
+| **Posted untouched, today** | **39 (86.7%)** | **39 (86.7%)** |
+| Posted untouched wrongly | 1 -- MFG-INV-039, the dataset error | 1 -- the same |
+| Decision accuracy | 98.3% | 97.7% |
+
+The 0.6-point accuracy gap between the two runs is extraction variance, each
+case checked: two scanned GSTINs misread worse, a scan classified unreadable,
+and `currency: "Rs."` on TECH-INV-037, which the PO check rejected as a
+currency mismatch -- a real gap (currency is not normalised), noted for
+its own fix.
+
+**The prompt fix `1a1f705`, measured by the run at `ecb9bbd`:** `po_number`
+extraction 220 of 220, up from 98.7%.
+
+## 2026-10-07 — A currency is compared as an ISO code
+
+**Problem.** In the run at `ecb9bbd`, four invoices were rejected for
+"Purchase order currency mismatch": TECH-INV-037, which is clean, and three
+whose real faults the mismatch hid.
+
+**Root cause.** The extractor transcribes what is printed, and Indian invoices
+print "Rs." or "₹": 74 extractions across the stored runs carry `Rs.`, `Rs` or
+`₹`. The PO match compares the upper-cased string with the PO's `INR`. Tax
+rates by currency, exports, the Xero connector (`CurrencyCode`) and dashboard
+totals read the same field.
+
+**Fix.** `extraction_cleanup.normalize_currency`, applied in `clean` before
+anything reads or stores the extraction: printed rupee forms become `INR`,
+`A$`/`US$`/`€`/`£` their codes, a valid code is upper-cased, and a bare `$`
+(AUD or USD) or anything unrecognised is left for a reviewer. The repair is
+recorded on the extraction.
+
+**Tests.** `TestACurrencyAsPrinted` in `tests/test_extraction_cleanup.py`.
+
+**Result (today's code replayed over the run at `ecb9bbd`).** Exactly the four
+invoices change: TECH-INV-037 is accepted and posts untouched; TECH-INV-071 is
+rejected for exceeding the PO quantity, SVC-INV-067 for its work
+authorization and SVC-INV-084 as a duplicate -- each its planted fault. Decision
+accuracy 97.7% -> 98.0%, wrong rejects 4 -> 3, exact reasons 222 -> 224, posted
+untouched 39 -> 40 of 45.

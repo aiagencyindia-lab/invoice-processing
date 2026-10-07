@@ -678,3 +678,36 @@ class TestWhatTheOrderGoverns:
             self.INVOICE, Orders(closed), vendors=self._vendors("service")
         )
         assert result.outcome == po_matching.PO_CLOSED
+
+
+class TestTheMatchSaysWhatItCompared:
+    """Every service invoice and every invoice with no lines read "Matched
+    purchase order ... on quantity and unit price" -- MV-001, MV-003, MV-020
+    in the manual verification review, where the order was 40 h at 4,557 and
+    the invoice 288 h at 4,659. Right outcome, false evidence."""
+
+    _vendors = TestWhatTheOrderGoverns._vendors
+
+    def _reason(self, invoice, kind):
+        result = po_matching.match_invoice_to_po(
+            invoice, Orders(SERVICE_PO), vendors=self._vendors(kind)
+        )
+        assert result.outcome == po_matching.MATCHED
+        return result.reason
+
+    def test_a_service_says_the_work_authorization_prices_it(self):
+        reason = self._reason(SERVICE_INVOICE, "service")
+        assert "quantity and unit price" not in reason
+        assert "work authorization" in reason
+        assert "neither quantity nor price was compared" in reason
+
+    def test_goods_within_the_order_say_both_were_compared(self):
+        within = {
+            **SERVICE_INVOICE,
+            "line_items": [{"quantity": 40, "unit_price": 2537.0}],
+        }
+        assert "on quantity and unit price" in self._reason(within, "goods")
+
+    def test_an_invoice_with_no_lines_matched_by_reference_only(self):
+        reason = self._reason({**SERVICE_INVOICE, "line_items": []}, "goods")
+        assert "by reference only" in reason

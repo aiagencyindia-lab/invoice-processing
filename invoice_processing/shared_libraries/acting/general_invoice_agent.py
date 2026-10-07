@@ -69,12 +69,13 @@ try:
     from ... import (
         confidence,
         duplicates,
+        extraction_cleanup,
         po_matching,
         tax_ids,
         vendor_master,
         wa_matching,
     )
-    from ...llm_guard import CallBudget, guarded_generate
+    from ...llm_guard import CallBudget, LlmUnavailable, guarded_generate
     from ...paths import (
         AGENT_ROOT,
         ITEM_CODE_CACHE_PATH,
@@ -99,12 +100,17 @@ except ImportError:  # executed as a script: no parent package context
     from invoice_processing import (
         confidence,
         duplicates,
+        extraction_cleanup,
         po_matching,
         tax_ids,
         vendor_master,
         wa_matching,
     )
-    from invoice_processing.llm_guard import CallBudget, guarded_generate
+    from invoice_processing.llm_guard import (
+        CallBudget,
+        LlmUnavailable,
+        guarded_generate,
+    )
     from invoice_processing.paths import (
         AGENT_ROOT,
         ITEM_CODE_CACHE_PATH,
@@ -209,90 +215,52 @@ def determine_work_type(invoice: dict) -> str:
     return "REPAIRS"
 
 
-def _line_discount(
-    line: dict, quantity: float, unit_price: float
-) -> tuple[float, bool]:
-    """What this line's discount takes off, and whether we could read it.
+# One definition, shared with the confidence module's line arithmetic: two
+# copies would disagree the way the confidence and 4.2 checks once did.
+_line_discount = confidence.line_discount
 
-    Invoices print the discount column as a percentage far more often than as
-    an amount, and the extractor returns whichever it sees -- so a value below
-    one is a rate rather than a sum of money. A discount that is shown but not
-    readable returns False, and the caller lets the line pass: an unreadable
-    column is our problem and not the supplier's.
+
+# One definition, shared with the confidence module's line-sum check: it
+# compared lines with the taxable total and flagged every clean invoice that
+# prints a charge, while 4.2 netted the charge out.
+_charges_and_lines = confidence.charges_and_lines
+
+
+# Units that price a whole job rather than a counted thing. "1 lot" of
+# "Professional services" is a total with a line drawn round it.
+_LUMP_SUM_UNITS = {"lot", "lots", "ls", "l/s", "lump sum", "lumpsum", "job"}
+
+
+def _itemized(invoice: dict) -> tuple[bool, str]:
+    """Whether the charges are broken down, and what the reader is shown.
+
+    Counting lines was not enough. A lump sum arrives as one line -- "1 lot,
+    Professional services, 2,81,160" (MV-018) -- and a document with no table
+    arrives as one line the extractor wrote from the prose ("Charges for the
+    period as per engagement letter"), with no quantity and no price. Both
+    passed. A breakdown needs at least one line that states what was bought and
+    at what rate, and a single line of one lot is not one.
     """
-    rate = line.get("line_discount_pct")
-    amount = line.get("line_discount")
-    if rate is None and amount is not None and 0 < float(amount) < 1:
-        # "10%" read as 0.1. A real discount of under one unit of currency is
-        # not worth the false rejections the other reading causes.
-        rate, amount = float(amount), None
-    discount = 0.0
-    if rate is not None:
-        discount += quantity * unit_price * float(rate)
-    if amount is not None:
-        discount += float(amount)
-    if rate is None and amount is None and line.get("has_discount"):
-        return 0.0, False
-    return discount, True
-
-
-def _charges_and_lines(invoice: dict) -> tuple[list[dict], list[dict]]:
-    """The invoice's line items and its other charges, each counted once.
-
-    Freight, packing and travel are printed outside the line table, and the
-    extractor frequently returns them in both places -- as a line *and* as an
-    other-charge, sometimes describing the charge only as "Other Charges" so
-    the two descriptions do not even match. Counting both makes the lines
-    overshoot the subtotal and the expected tax overshoot by the charge's tax:
-    on one invoice by 455.94, which is 2,533.00 of packing at 18% to the cent.
-
-    The test is arithmetic rather than textual, because the arithmetic is what
-    went wrong: a charge is a duplicate when dropping it brings the line sum
-    back to the subtotal the invoice prints. Where the sums do not say so, both
-    are kept -- two things costing the same are not the same thing.
-    """
-    lines = list(invoice.get("line_items") or [])
-    charges = list(invoice.get("other_charges") or [])
-    if not charges or not lines:
-        return lines, charges
-
-    printed_base = invoice.get("subtotal")
-    if printed_base is None:
-        printed_base = invoice.get("invoice_total_ex_tax")
-    if printed_base is None:
-        return lines, charges
-
-    line_sum = sum((line.get("amount_ex_tax") or 0) for line in lines)
-    overshoot = line_sum - printed_base
-    if overshoot <= 0.01:
-        return lines, charges
-
-    kept, dropped = [], 0.0
-    remaining = list(charges)
-    for line in lines:
-        amount = line.get("amount_ex_tax")
-        twin = next(
-            (
-                c
-                for c in remaining
-                if amount is not None
-                and c.get("amount") is not None
-                and abs(float(c["amount"]) - float(amount)) <= 0.01
-            ),
-            None,
+    lines, _ = _charges_and_lines(invoice)
+    priced = [
+        line
+        for line in lines
+        if line.get("quantity") is not None
+        and line.get("unit_price") is not None
+    ]
+    if not priced:
+        return False, (
+            f"Found {len(lines)} line item(s), none with a quantity and a rate"
         )
-        if (
-            twin is not None
-            and dropped + float(twin["amount"]) <= overshoot + 0.01
-        ):
-            remaining.remove(twin)
-            dropped += float(twin["amount"])
-            continue
-        kept.append(line)
-    # Only if removing them actually reconciles the lines with the subtotal.
-    if abs(dropped - overshoot) <= 0.01:
-        return kept, charges
-    return lines, charges
+    if len(lines) == 1:
+        line = lines[0]
+        unit = str(line.get("unit") or "").strip().lower().rstrip(".")
+        if unit in _LUMP_SUM_UNITS and float(line["quantity"]) == 1:
+            return False, (
+                f"A single lump-sum line: 1 {unit}, "
+                f"{line.get('description') or 'undescribed'}"
+            )
+    return True, f"Found {len(lines)} line item(s)"
 
 
 def _stated_tax_total(invoice: dict) -> float:
@@ -868,6 +836,8 @@ def extract_pdf_with_fallback(pdf_path: Path) -> tuple[str, str]:
             content = extract_pdf_with_gemini(pdf_path)
             if content and len(content.strip()) > _MIN_PDF_CONTENT_LENGTH:
                 return content, "gemini"
+        except LlmUnavailable:
+            raise  # the service, not the document: see llm_guard
         except Exception as e:
             print(f"    Gemini extraction failed: {e}, using pdfplumber...")
 
@@ -1266,6 +1236,8 @@ Return ONLY this JSON:
                 prompt, _gcp_config.GEMINI_FLASH_MODEL, DocumentContent
             )
             return result
+        except LlmUnavailable:
+            raise  # the service, not the document: see llm_guard
         except Exception as e:
             print(f"    Warning: Document analysis failed: {e}")
             return self._classify_by_keyword(content)
@@ -1343,6 +1315,16 @@ class ExtractorAgent(BaseAgent):
             source = invoice_sources[0]
             try:
                 invoice_data = self._extract_invoice(Path(source["full_path"]))
+                # Mechanical repairs before anything reads the extraction:
+                # look-alike Greek letters in identifiers, and charges the
+                # model repeated as line items. See extraction_cleanup.py.
+                invoice_data = extraction_cleanup.clean(
+                    invoice_data,
+                    charges_and_lines=_charges_and_lines,
+                    pages=confidence.extract_page_text(
+                        Path(source["full_path"])
+                    ),
+                )
 
                 # Validate tax ID if configured
                 if _get_config().get(
@@ -1378,6 +1360,8 @@ class ExtractorAgent(BaseAgent):
                         else ""
                     )
                 )
+            except LlmUnavailable:
+                raise  # the service, not the document: see llm_guard
             except Exception as e:
                 extraction_failed = True
                 extraction_error = str(e)
@@ -1395,6 +1379,8 @@ class ExtractorAgent(BaseAgent):
                 print(
                     f"   Extracted WAF: {waf_data.get('authorized_hours', 0)} hours"
                 )
+            except LlmUnavailable:
+                raise  # the service, not the document: see llm_guard
             except Exception as e:
                 print(f"   WAF extraction failed: {e}")
 
@@ -1428,18 +1414,26 @@ class ExtractorAgent(BaseAgent):
         """Extract structured invoice data from PDF"""
         prompt = """Extract structured data from this invoice PDF.
 
+ONE INVOICE ONLY. This file may contain more than one invoice -- several
+invoices scanned or merged into one PDF, each with its own invoice number,
+bill-to block and line table. Extract the FIRST invoice only: the one that
+begins on the first page. Every field, including every line item and every
+total, must come from that one invoice. Never combine a header from one
+invoice with lines or totals from another, and never add a later invoice's
+line items to the first invoice's.
+
 Return ONLY valid JSON with these fields:
 {
   "invoice_number": "string",
   "invoice_date": "YYYY-MM-DD",
   "invoice_total_inc_tax": decimal,
-  "invoice_total_ex_tax": decimal,
+  "invoice_total_ex_tax": decimal (the total BEFORE tax: after any invoice-level discount, and INCLUDING other charges such as freight or packing),
   "tax_amount": decimal,
   "vendor_tax_id": "string (tax ID/ABN)",
   "vendor_name": "string",
   "customer_name": "string (who invoice is addressed to)",
   "currency": "AUD/USD/EUR/etc",
-  "po_number": "string or null (purchase order / work order reference)",
+  "po_number": "string or null (the buyer's PURCHASE ORDER number only -- see PO below)",
   "due_date": "YYYY-MM-DD or null",
   "payment_terms": "string or null (e.g. 'Net 30 days')",
   "vendor_address": "string or null",
@@ -1499,6 +1493,13 @@ Transcribe values exactly as printed; do not compute, correct or infer them. If
 the document's own arithmetic is wrong, report what it says -- a downstream
 check compares the stated figures against the expected ones, and silently
 correcting them hides the error.
+
+PO: only a reference the invoice labels as a purchase order -- "PO", "P.O.
+No.", "Purchase Order", "Order No.". A quotation, quote, estimate or proposal
+reference ("Quotation Ref. Q-4179") is the supplier's offer, not the buyer's
+order, and a work authorization or work order reference belongs in
+work_authorization_reference. If no purchase order is printed, po_number is
+null -- never fill it from another reference.
 
 Bank details: report only what appears on this invoice. They are compared
 against the vendor's records to detect payment-redirection fraud, so a value
@@ -1901,15 +1902,15 @@ class Phase2ValidatorAgent(BaseAgent):
         validations = []
 
         # Step 2.1: Line Items Present
-        line_count = len(invoice.get("line_items") or [])
+        itemized, evidence = _itemized(invoice)
         validations.append(
             {
                 "step": "2.1",
-                "rule": "Invoice has line items",
-                "passed": line_count > 0,
-                "evidence": f"Found {line_count} line item(s)",
+                "rule": "Invoice charges are itemized",
+                "passed": itemized,
+                "evidence": evidence,
                 "rejection_template": None
-                if line_count > 0
+                if itemized
                 else "Invoice charges not itemized",
             }
         )
@@ -2754,6 +2755,8 @@ Return ONLY a JSON object in this exact format:
                     codes.append("OTHER")
             return codes
 
+        except LlmUnavailable:
+            raise  # the service, not the document: see llm_guard
         except Exception as e:
             print(
                 f"    Warning: LLM item classification failed ({e}), using fallback"

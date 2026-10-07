@@ -208,6 +208,36 @@ class TestReasonMapping:
             assert mapping[reason] == reason
 
 
+class TestPostedUntouched:
+    """ACCEPT is not touchless: 42 of 46 accepts in the first after-run were
+    routed to a clerk. Posted untouched is ACCEPT *and* routed AUTO, scored
+    against the clean invoices, with wrong ones counted on their own."""
+
+    def _metrics(self):
+        def rec(decision, routing):
+            return {
+                "final_decision": decision,
+                "extracted": {"_routing": routing},
+            }
+
+        return score.decision_metrics(
+            {
+                "TECH-INV-049": rec("ACCEPT", "AUTO"),  # clean
+                "TECH-INV-045": rec("ACCEPT", "REVIEW"),  # clean
+                "TECH-INV-061": rec("ACCEPT", "AUTO"),  # faulty
+            }
+        )
+
+    def test_only_an_auto_routed_clean_accept_counts(self):
+        metrics = self._metrics()
+        assert metrics["counts"]["posted_untouched"] == 1
+        assert metrics["posted_untouched_rate"] == 0.5
+        assert metrics["accepted_but_routed_to_review"] == 1
+
+    def test_a_faulty_invoice_posted_untouched_is_counted_apart(self):
+        assert self._metrics()["counts"]["posted_untouched_wrongly"] == 1
+
+
 class TestTheMatrixIsIntact:
     def test_three_hundred_invoices_times_fourteen_checks(self):
         assert len(dataset.matrix()) == 4200
