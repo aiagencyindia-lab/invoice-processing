@@ -875,3 +875,39 @@ with the 403.
 
 **Result.** No benchmark numbers: the run is discarded, and a valid one waits
 on billing.
+
+## 2026-10-07 — MFG-INV-042 was extraction drift after all, and 4.2 now absorbs it
+
+**Problem.** The production run rejected the clean invoice `MFG-INV-042` at
+4.2 (line sum 30,059 against a subtotal of 27,850) where the local run accepted
+it. The handoff recorded it as the one difference with "no extraction drift at
+all" and suspected order-dependence in duplicate detection.
+
+**Root cause.** Neither. Check 3.1 passed identically in both runs. The
+document prints packing (2,209) as line 2 of the item table *and* as "Other
+Charges" below a Sub Total that leaves it out. Both runs extracted both table
+lines; only the local run also returned the charge in `other_charges`, which is
+what lets `_charges_and_lines` recognise the repeat. The earlier comparison
+covered header fields, not `other_charges`, so it reported no drift.
+
+**Fix.** `_charges_and_lines` -- the one definition 4.1, 4.2, 4.4 and the
+extraction cleanup share -- now also handles a charge that arrives only as a
+line: when the lines equal the printed taxable total and exactly one line is
+the amount the printed subtotal leaves out, that line is moved to the charges.
+Two printed figures must agree, so a wrong subtotal (whose taxable total was
+computed from it) still fails 4.2.
+
+**Files.** `invoice_processing/shared_libraries/acting/general_invoice_agent.py`,
+`invoice_processing/extraction_cleanup.py`.
+
+**Tests.** `tests/test_extraction_cleanup.py::TestAChargeReturnedOnlyAsALine`:
+the MFG-INV-042 shape is repaired (fails without the fix); a short subtotal is
+not explained away; two candidate lines are left alone.
+
+**Result (replay, both stored runs, 600 extractions).** The rule fires on 14
+extractions, every one a real charge -- freight, transit insurance, packing,
+travel. One verdict changes: `MFG-INV-042` 4.1 and 4.2 False -> True on the
+production extractions. No planted line-sum fault stops failing. The rest are
+rejected earlier for their planted faults. `SVC-INV-025` loses an accidental
+4.2 failure: its planted line-discount fault was never extracted, and it was
+failing on the travel line instead. 4.2 is not reached there.

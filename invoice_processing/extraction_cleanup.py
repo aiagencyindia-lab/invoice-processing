@@ -17,7 +17,8 @@ honestly unsure.
   table, and the extractor repeats them as line items often enough that every
   downstream reader -- the workbench, the exports, the reconciliation -- sees a
   line that is not on the document. Removed here once, rather than
-  compensated for in each reader.
+  compensated for in each reader. Where the extractor returns the charge only
+  as a table line, it is moved to the other charges by the same test.
 """
 
 from __future__ import annotations
@@ -103,13 +104,18 @@ def clean(invoice: dict, *, charges_and_lines=None) -> dict:
         if after != before:
             line["hsn_sac"] = after
 
-    if charges_and_lines is not None and invoice.get("other_charges"):
-        lines, _ = charges_and_lines(invoice)
+    if charges_and_lines is not None:
+        had_charges = bool(invoice.get("other_charges"))
+        lines, charges = charges_and_lines(invoice)
         dropped = len(invoice.get("line_items") or []) - len(lines)
         if dropped:
             invoice["line_items"] = lines
+            invoice["other_charges"] = charges
             repairs.append(
                 f"{dropped} line item(s) removed that repeated an other charge"
+                if had_charges
+                else f"{dropped} line item(s) moved to other charges: the "
+                "printed subtotal leaves them out"
             )
 
     if repairs:

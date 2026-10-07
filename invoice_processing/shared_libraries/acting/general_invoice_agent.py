@@ -256,9 +256,17 @@ def _charges_and_lines(invoice: dict) -> tuple[list[dict], list[dict]]:
     went wrong: a charge is a duplicate when dropping it brings the line sum
     back to the subtotal the invoice prints. Where the sums do not say so, both
     are kept -- two things costing the same are not the same thing.
+
+    The same charge can also arrive *only* as a line: the document prints it in
+    the item table and again below a subtotal that leaves it out, and the
+    extractor returns the table alone. When the lines then add up to the
+    taxable total the invoice prints, and exactly one line is the amount the
+    subtotal leaves out, that line is the charge (MFG-INV-042, packing 2,209).
     """
     lines = list(invoice.get("line_items") or [])
     charges = list(invoice.get("other_charges") or [])
+    if not charges and lines:
+        return _charge_printed_as_line(invoice, lines)
     if not charges or not lines:
         return lines, charges
 
@@ -299,6 +307,44 @@ def _charges_and_lines(invoice: dict) -> tuple[list[dict], list[dict]]:
     if abs(dropped - overshoot) <= 0.01:
         return kept, charges
     return lines, charges
+
+
+def _charge_printed_as_line(
+    invoice: dict, lines: list[dict]
+) -> tuple[list[dict], list[dict]]:
+    """The one line a printed subtotal leaves out, moved to the charges.
+
+    Two figures the invoice prints must agree before anything moves: the lines
+    overshoot the subtotal by exactly one line's amount, and they equal the
+    taxable total. A wrong subtotal satisfies the first only by coincidence and
+    the second not at all, so a line-sum fault still fails 4.2.
+    """
+    subtotal = invoice.get("subtotal")
+    taxable = invoice.get("invoice_total_ex_tax")
+    if subtotal is None or taxable is None:
+        return lines, []
+    line_sum = sum((line.get("amount_ex_tax") or 0) for line in lines)
+    overshoot = line_sum - subtotal
+    if overshoot <= 0.01 or abs(line_sum - taxable) > 0.01:
+        return lines, []
+    # ponytail: one line only; a subtotal leaving out two charges is not
+    # repaired -- add a subset search if the benchmark ever shows one.
+    matches = [
+        line
+        for line in lines
+        if line.get("amount_ex_tax") is not None
+        and abs(float(line["amount_ex_tax"]) - overshoot) <= 0.01
+    ]
+    if len(matches) != 1:
+        return lines, []
+    charge = matches[0]
+    return [line for line in lines if line is not charge], [
+        {
+            "description": charge.get("description"),
+            "amount": charge["amount_ex_tax"],
+            "tax_rate": charge.get("tax_rate"),
+        }
+    ]
 
 
 def _stated_tax_total(invoice: dict) -> float:

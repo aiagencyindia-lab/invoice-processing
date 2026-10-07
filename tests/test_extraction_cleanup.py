@@ -15,6 +15,8 @@ actually prints:
   lines of the third. That is a prompt problem, and the prompt now says so.
 """
 
+import json
+
 from invoice_processing import duplicates, extraction_cleanup
 from invoice_processing.shared_libraries.acting import general_invoice_agent
 from invoice_processing.shared_libraries.acting.general_invoice_agent import (
@@ -119,6 +121,69 @@ class TestAChargeRepeatedAsALine:
             invoice, charges_and_lines=_charges_and_lines
         )
         assert len(cleaned["line_items"]) == 2
+
+
+# MFG-INV-042 as production extracted it: packing printed as table line 2 and
+# again under "Other Charges", below a Sub Total that leaves it out -- and the
+# extractor returned the table alone. Check 4.2 rejected a clean invoice.
+CHARGE_ONLY_AS_A_LINE = {
+    "subtotal": 27850.00,
+    "invoice_total_ex_tax": 30059.00,
+    "other_charges": [],
+    "line_items": [
+        {
+            "description": "Taper roller bearing 30208",
+            "amount_ex_tax": 27850.00,
+        },
+        {
+            "description": "Packing charges",
+            "amount_ex_tax": 2209.00,
+            "tax_rate": 0.18,
+        },
+    ],
+}
+
+
+class TestAChargeReturnedOnlyAsALine:
+    def _clean(self, **changes):
+        invoice = json.loads(json.dumps({**CHARGE_ONLY_AS_A_LINE, **changes}))
+        return extraction_cleanup.clean(
+            invoice, charges_and_lines=_charges_and_lines
+        )
+
+    def test_the_line_the_subtotal_leaves_out_becomes_a_charge(self):
+        invoice = self._clean()
+        assert [line["description"] for line in invoice["line_items"]] == [
+            "Taper roller bearing 30208"
+        ]
+        assert invoice["other_charges"] == [
+            {
+                "description": "Packing charges",
+                "amount": 2209.00,
+                "tax_rate": 0.18,
+            }
+        ]
+        assert "printed subtotal leaves them out" in invoice["_repairs"][0]
+
+    def test_a_wrong_subtotal_is_not_explained_away(self):
+        """A line-sum fault: the subtotal is short by one line, but the taxable
+        total was computed from it too. The lines do not reach the taxable
+        total, so nothing moves and 4.2 still fails."""
+        invoice = self._clean(invoice_total_ex_tax=27850.00)
+        assert len(invoice["line_items"]) == 2
+        assert "_repairs" not in invoice
+
+    def test_two_lines_of_the_gap_are_ambiguous_and_left_alone(self):
+        lines = CHARGE_ONLY_AS_A_LINE["line_items"]
+        invoice = self._clean(
+            subtotal=27850.00 - 2209.00,
+            line_items=[
+                {**lines[0], "amount_ex_tax": 27850.00 - 2209.00},
+                {"description": "Seal kit", "amount_ex_tax": 2209.00},
+                lines[1],
+            ],
+        )
+        assert len(invoice["line_items"]) == 3
 
 
 class TestTheExtractionPrompt:
