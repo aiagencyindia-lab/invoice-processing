@@ -1054,3 +1054,27 @@ invoices that had a quotation reference as their PO all came back null; 15 of
 15 invoices with a printed PO still read it, scans included; 5 of 5 with a
 work authorization and no PO still have none. Extraction is not deterministic,
 so this is a sample, not a measurement -- the next full run is.
+
+## 2026-10-07 — The PO match says what it compared
+
+**Problem.** The document review of the manual verification matrix found 2.2
+evidence that was false on three invoices it accepted correctly: "Matched
+purchase order ZC-PO-260018 on quantity and unit price" where the order is
+120 h at 4,557 and the invoice 288 h at 4,659 (MV-001), and the same sentence
+on MV-003 and on MV-020, which has no line items at all.
+
+**Root cause.** `match_invoice_to_po` skips the quantity and price comparison
+for a listed service supplier, on purpose -- the work authorization prices a
+service, step 4.3 -- and has nothing to compare when the invoice states no
+quantity or price. Both paths ended at the same message, written for goods
+that had been compared.
+
+**Fix.** The match records which of quantity and unit price it compared, and
+says so: "on quantity and unit price" when it compared them; "as an open order
+for this supplier ... neither quantity nor price was compared" for a service,
+naming step 4.3; "by reference only" when the invoice gives nothing to compare.
+No outcome changes.
+
+**Tests.** `tests/test_po_matching.py::TestTheMatchSaysWhatItCompared` (the
+service and no-lines cases fail without the fix; the goods case is the
+control).
