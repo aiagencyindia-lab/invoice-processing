@@ -1078,3 +1078,32 @@ No outcome changes.
 **Tests.** `tests/test_po_matching.py::TestTheMatchSaysWhatItCompared` (the
 service and no-lines cases fail without the fix; the goods case is the
 control).
+
+## 2026-10-07 — Measured: the run at `9f8c923`, and today's code replayed over it
+
+**The run.** 300 invoices, local, against GCP project `rasayan` (the old
+project's billing account is closed; see the 2026-09-24 outage entry). 87
+minutes, preflight passed, every invoice decided. It measures `9f8c923`: the
+bundled-invoice prompt fix and the outage guard.
+
+**Replay can now score.** `replay` applies today's extraction cleanup and
+confidence routing (from the document's own text layer) before the four
+validation phases, and `--out NAME` writes the replayed records as a run the
+scorer reads. Checked for faithfulness against this run before trusting it:
+291 of 300 decisions and reasons came out exactly as recorded, and the other
+nine are the 2.1 itemization fix, each moving to the dataset's expected
+reason.
+
+| | `after` (`d3d07fc`) | run at `9f8c923` | today (`bca701a`) replayed on it |
+|---|---|---|---|
+| Decision accuracy | 97.7% | 98.0% | **98.3%** |
+| Wrong accepts | 4 | 3 | **2** |
+| Wrong rejects | 3 | 3 | 3 |
+| Rejection reason exact | 214 | 218 | **227** |
+| Rejection reason wrong | 7 | 10 | **6** |
+| Accepted but routed to review | 42 | 41 | **25** |
+| Posted untouched (of 45 clean) | 4 (8.9%) | 4 (8.9%) | **19 (42.2%)** |
+| Posted untouched wrongly | 0 | 0 | **0** |
+
+Not in the replayed column: `1a1f705` (a quotation is not a PO) is a prompt
+change and only a full run can measure it.
