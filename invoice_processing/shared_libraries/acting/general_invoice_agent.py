@@ -1532,7 +1532,7 @@ Return ONLY valid JSON with these fields:
   "vendor_name": "string",
   "customer_name": "string (who invoice is addressed to)",
   "currency": "AUD/USD/EUR/etc",
-  "po_number": "string or null (purchase order / work order reference)",
+  "po_number": "string or null (the buyer's PURCHASE ORDER number only -- see PO below)",
   "due_date": "YYYY-MM-DD or null",
   "payment_terms": "string or null (e.g. 'Net 30 days')",
   "vendor_address": "string or null",
@@ -1592,6 +1592,13 @@ Transcribe values exactly as printed; do not compute, correct or infer them. If
 the document's own arithmetic is wrong, report what it says -- a downstream
 check compares the stated figures against the expected ones, and silently
 correcting them hides the error.
+
+PO: only a reference the invoice labels as a purchase order -- "PO", "P.O.
+No.", "Purchase Order", "Order No.". A quotation, quote, estimate or proposal
+reference ("Quotation Ref. Q-4179") is the supplier's offer, not the buyer's
+order, and a work authorization or work order reference belongs in
+work_authorization_reference. If no purchase order is printed, po_number is
+null -- never fill it from another reference.
 
 Bank details: report only what appears on this invoice. They are compared
 against the vendor's records to detect payment-redirection fraud, so a value

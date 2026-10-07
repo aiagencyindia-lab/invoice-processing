@@ -1025,3 +1025,32 @@ pass. Planted itemization faults caught: 26 -> 35 of 44 locally, 27 -> 36 of
 44 in production. Still missed: the "total only" layout, where the extractor
 invents a plausible priced line that no structural test can tell from a real
 one.
+
+## 2026-10-07 — MV-027, MV-035: a quotation is not a purchase order
+
+**Problem.** Two invoices (MV-027, MV-035) were rejected for "Purchase order
+Q-4179 not found" -- right decision, wrong reason. Neither prints a PO; "Q-4179"
+is the printed "Quotation Ref.". The real faults (a GSTIN, a line total) went
+unreported.
+
+**Root cause.** The extraction prompt described `po_number` as "purchase order
+/ work order reference" and named nothing it is not. Over both stored runs the
+extractor filled it from a quotation reference nine times (six local, three
+production) and from the work authorization reference once. Both MV rows are
+scans, so no text-layer check could have caught it; the fix had to be the
+prompt.
+
+**Fix.** `po_number` is the buyer's purchase order number only: a reference
+the invoice labels as a PO. A quotation, quote, estimate or proposal is the
+supplier's offer; a work order belongs in `work_authorization_reference`; with
+no PO printed the field is null. `require_purchase_order` is off in the
+benchmark profile, so a null PO skips 2.2 and the invoice reaches its real
+fault.
+
+**Tests.** `TestTheExtractionPrompt::test_a_quotation_or_work_order_is_not_a_purchase_order`.
+
+**Result (targeted re-extraction, 27 invoices, about $0.35).** The six
+invoices that had a quotation reference as their PO all came back null; 15 of
+15 invoices with a printed PO still read it, scans included; 5 of 5 with a
+work authorization and no PO still have none. Extraction is not deterministic,
+so this is a sample, not a measurement -- the next full run is.

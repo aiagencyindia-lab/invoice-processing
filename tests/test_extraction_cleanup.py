@@ -239,7 +239,7 @@ class TestAnIdentifierIsReadAsPrinted:
 
 
 class TestTheExtractionPrompt:
-    """The prompt is part of the extraction logic, and these are the two
+    """The prompt is part of the extraction logic, and these are the
     sentences in it that were learned from measured failures."""
 
     def _prompt(self, monkeypatch):
@@ -265,3 +265,18 @@ class TestTheExtractionPrompt:
     def test_it_says_what_the_total_before_tax_includes(self, monkeypatch):
         prompt = self._prompt(monkeypatch)
         assert "INCLUDING other charges" in prompt
+
+    def test_a_quotation_or_work_order_is_not_a_purchase_order(
+        self, monkeypatch
+    ):
+        """MV-027, MV-035: "Quotation Ref. Q-4179" came back as po_number and
+        the invoice was rejected for an unknown PO it never quoted. Re-extracting
+        the six such invoices with this wording returned null for all six, and
+        fifteen printed POs were still read."""
+        prompt = self._prompt(monkeypatch)
+        assert "PURCHASE ORDER number only" in prompt
+        assert "quotation" in prompt.lower()
+        assert "never fill it from another reference" in prompt
+        assert (
+            "work order reference)" not in prompt.split('"po_number"')[1][:80]
+        )
