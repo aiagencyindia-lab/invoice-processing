@@ -358,6 +358,15 @@ def decision_metrics(records: dict[str, dict]) -> dict:
             ] += 1
             if routing == "REVIEW":
                 review += 1
+            # Accepted *and* routed AUTO: no human touched it. ACCEPT alone
+            # counts invoices a clerk still opened -- 42 of 46 in the first
+            # after-run -- and is capped at the corpus's 15% clean share.
+            elif routing == "AUTO":
+                c[
+                    "posted_untouched"
+                    if expected == "ACCEPT"
+                    else "posted_untouched_wrongly"
+                ] += 1
         elif actual == "REJECT":
             c["rejected"] += 1
             if expected == "REJECT":
@@ -399,6 +408,10 @@ def decision_metrics(records: dict[str, dict]) -> dict:
             c["correctly_auto_approved"] + c["correctly_rejected"], total
         ),
         "accepted_but_routed_to_review": review,
+        # Of the invoices that should be paid, the share paid with no human.
+        "posted_untouched_rate": _rate(
+            c["posted_untouched"], c["expected_ACCEPT"]
+        ),
         "first_failing_confusion": {
             f"{e}->{a}": n for (e, a), n in sorted(first_failing.items())
         },
@@ -665,6 +678,8 @@ def report_md(
         f"| touchless accuracy (correct ACCEPT / ACCEPT) | {_pct(decision['touchless_accuracy'])} |",
         f"| decision accuracy | {_pct(decision['decision_accuracy'])} |",
         f"| accepted but routed to review | {decision['accepted_but_routed_to_review']} |",
+        f"| posted untouched (clean, ACCEPT and routed AUTO / {c.get('expected_ACCEPT', 0)} clean) | {c.get('posted_untouched', 0)} ({_pct(decision.get('posted_untouched_rate'))}) |",
+        f"| posted untouched wrongly (faulty, ACCEPT and routed AUTO) | {c.get('posted_untouched_wrongly', 0)} |",
         "",
         "Reason match is scored on correctly rejected invoices: `strict` = the app's reason is the dataset's first-failing reason; `family` = it names another fault the dataset planted on that invoice; `wrong` = neither.",
         "",
