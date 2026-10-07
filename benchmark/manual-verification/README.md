@@ -57,3 +57,34 @@ useful thing this package can produce, and it is worth more unedited.
 `benchmark/baseline/current-validation-map.md` says what each check actually
 reads, which is usually enough to tell a wrong expectation from a wrong
 implementation.
+
+## A second opinion, and where to look first
+
+The three `Claude review` columns are **not** the manual result, which is still
+empty. They were written on 2026-10-07 by reading each PDF directly (the scans
+as images) against the dataset's planted faults and reference masters, not from
+the scorer's output. That makes them independent of the scripts but not of the
+model that wrote the scripts, which is the gap your column closes.
+
+- `expectation`: does the page actually show what the dataset says? (`holds`,
+  `doubtful`, `wrong`)
+- `after result`: was the after-run's decision and reason right for the page?
+  (`correct`, `correct-other-fault`, `wrong-reason`, `wrong`)
+
+The rows most worth your time, in order:
+
+| Row | Claude's view | Why look |
+|---|---|---|
+| MV-036 | dataset wrong, app right | The planted discount (1,184.15) is not on the page: line 2 prints `19,683.00 5% 18,698.85`, which is correct. The generator altered the discount *amount* on a layout that prints the *percentage*. SVC-INV-019 (MV-029) carries the same unprinted fault. |
+| MV-002 | app wrong | A clean invoice rejected for its GSTIN. The text layer prints `24OXMPF9713X1Z2` (the letter O), which matches the vendor master. The app read a zero. |
+| MV-018 | app wrong | One lump-sum line ("Professional services, 1 lot") accepted. 2.1 counted it as itemized. |
+| MV-041 | app wrong, known | Tax is 4.20 over on 2,50,751.58. Recorded in CHANGELOG as given up deliberately: smaller than legitimate per-line drift. |
+| MV-027, MV-035 | right decision, wrong reason | Rejected for "Purchase order not recognised", but the "PO" is the printed *Quotation Ref.* Neither invoice prints a PO. The real faults (GSTIN, line total) are visible. |
+| MV-010, MV-015, MV-016 | right, other real fault | Rejected at ingest as duplicates, which they are, before the row's own check could be the reason. |
+
+Smaller things the review noticed, which change no decision: the 2.2 evidence
+on service invoices says "matched on quantity and unit price" when the PO
+differs (MV-001, MV-003, MV-020); "billed without a tax registration" is shown
+on non-tax invoices that do print a GSTIN (MV-011, MV-012); and
+`extra_invoice_numbers` is empty in the dataset for MV-015 and MV-016 although
+the second invoice is printed.
