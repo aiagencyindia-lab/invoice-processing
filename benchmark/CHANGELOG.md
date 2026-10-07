@@ -967,3 +967,34 @@ a charge the confidence check does not net out, a few `vendor_address`
 renderings, single fields elsewhere. Touchless as the report defines it does
 not move -- it counts decisions, not routing -- so the report needs a
 "posted untouched" line for this to show.
+
+## 2026-10-07 — MV-002: an identifier is read as the page prints it
+
+**Problem.** `MFG-INV-064`, a clean invoice, was rejected at 3.2: "Invalid
+check character ... Invoice states 240XMPF9713X1Z2". Found by the document
+review of the manual verification matrix (MV-002).
+
+**Root cause.** The page's text layer prints `24OXMPF9713X1Z2` -- the letter
+O -- which matches the vendor master and passes its checksum. The extractor
+returned a zero. `85776e0` left O/0 alone on purpose, because folding one into
+the other would also turn a forged tax ID into a valid one; that holds for a
+blind fold, but not for a page that prints the answer.
+
+**Fix.** `extraction_cleanup.read_as_printed`: when an identifier is not on the
+page and exactly one string on the page differs from it only by O/0 or I/1, the
+printed string is taken, with the value's own separators kept. Nothing is
+folded, so a forged ID printed on the page is taken as printed and 3.2 still
+sees it. Scans (no text layer) and ambiguous pages are left alone. The
+extractor passes the document's text layer into `clean`.
+
+**Tests.** `TestAnIdentifierIsReadAsPrinted` in `tests/test_extraction_cleanup.py`:
+the MV-002 shape, a printed forgery left alone, a scan left alone, two
+candidates left alone, separators kept, and the pipeline passing the text
+layer. All six fail without the fix.
+
+**Result (both stored runs, 600 extractions).** Six identifiers change, all
+vendor GSTINs (O/0 four times, I/1 twice), and all six now match what the
+dataset says is printed; none moves away from it. Two decisions change, both
+toward the dataset: `MFG-INV-064` is no longer rejected for its own misread,
+and `MFG-INV-020` passes 3.2 on to the 4.2 fault it actually carries. The
+other four are rejected earlier for real faults.

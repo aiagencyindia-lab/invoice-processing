@@ -15,6 +15,7 @@ actually prints:
   lines of the third. That is a prompt problem, and the prompt now says so.
 """
 
+import inspect
 import json
 
 from invoice_processing import duplicates, extraction_cleanup
@@ -184,6 +185,57 @@ class TestAChargeReturnedOnlyAsALine:
             ],
         )
         assert len(invoice["line_items"]) == 3
+
+
+# MFG-INV-064 (manual verification MV-002): a clean invoice rejected at 3.2.
+# Its text layer prints the vendor's GSTIN with the letter O; the extractor
+# returned a zero, which fails the checksum.
+PRINTED_PAGE = [
+    "Precision Polymers TAX INVOICE GSTIN: 24OXMPF9713X1Z2 "
+    "Invoice No. PPL/2026-27/0412 Bill To Ferrovane Industries "
+    "GSTIN: 24AAECF9034M1ZE"
+]
+
+
+class TestAnIdentifierIsReadAsPrinted:
+    def test_a_letter_read_as_a_digit_takes_the_printed_spelling(self):
+        invoice = extraction_cleanup.clean(
+            {"vendor_tax_id": "240XMPF9713X1Z2"}, pages=PRINTED_PAGE
+        )
+        assert invoice["vendor_tax_id"] == "24OXMPF9713X1Z2"
+        assert "read as the page prints it" in invoice["_repairs"][0]
+
+    def test_a_forged_id_printed_on_the_page_stays_forged(self):
+        """Nothing is folded: a value the page prints is the page's word,
+        however wrong it is -- check 3.2 exists to see that."""
+        forged = ["GSTIN: 24ITCCR9797D1ZX"]
+        assert (
+            extraction_cleanup.read_as_printed("24ITCCR9797D1ZX", forged)
+            == "24ITCCR9797D1ZX"
+        )
+
+    def test_a_scan_is_left_alone(self):
+        assert (
+            extraction_cleanup.read_as_printed("240XMPF9713X1Z2", [])
+            == "240XMPF9713X1Z2"
+        )
+
+    def test_two_printed_candidates_are_ambiguous(self):
+        pages = ["24OXMPF9713X1Z2 and 24OXMPF97I3X1Z2"]
+        assert (
+            extraction_cleanup.read_as_printed("240XMPF9713X1Z2", pages)
+            == "240XMPF9713X1Z2"
+        )
+
+    def test_the_values_own_separators_are_kept(self):
+        assert (
+            extraction_cleanup.read_as_printed("PPL/2026-27/04I2", PRINTED_PAGE)
+            == "PPL/2026-27/0412"
+        )
+
+    def test_the_pipeline_passes_the_text_layer(self):
+        source = inspect.getsource(general_invoice_agent.ExtractorAgent.run)
+        assert "pages=confidence.extract_page_text" in source
 
 
 class TestTheExtractionPrompt:

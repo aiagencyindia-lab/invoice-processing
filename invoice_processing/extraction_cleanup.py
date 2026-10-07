@@ -13,6 +13,11 @@ honestly unsure.
   duplicate check misses a resubmission, and a purchase-order or
   work-authorization reference is "not found". Six clean, text-layer invoices
   in the benchmark came back this way.
+* **A letter read as a digit.** The extractor returns `240XMPF...` where the
+  page's text layer prints `24OXMPF...`. Where the page has a text layer, the
+  identifier is taken as printed -- see `read_as_printed`. Scans are left
+  alone: there is nothing printed to read, and folding O into 0 blindly would
+  turn a forged tax ID into a valid one.
 * **A charge returned twice.** Freight and packing are printed outside the line
   table, and the extractor repeats them as line items often enough that every
   downstream reader -- the workbench, the exports, the reconciliation -- sees a
@@ -22,6 +27,8 @@ honestly unsure.
 """
 
 from __future__ import annotations
+
+import re
 
 # Greek and Cyrillic capitals that are drawn identically to a Latin capital.
 # Only the unambiguous look-alikes: a character that merely resembles another
@@ -80,12 +87,51 @@ def fold_homoglyphs(value):
     return value.translate(_CONFUSABLES)
 
 
-def clean(invoice: dict, *, charges_and_lines=None) -> dict:
+# Characters a reader confuses, letter for digit. Only the pairs seen: the
+# extractor read GSTIN 24OXMPF... as 240XMPF... on a page whose text layer
+# prints the letter, and rejected a clean invoice for an invalid tax ID.
+# ponytail: O/0 and I/1 only; add S/5 or B/8 when an extraction shows one.
+_MISREAD = {"O": "[O0]", "0": "[O0]", "I": "[I1]", "1": "[I1]"}
+
+
+def _alnum(text: str) -> str:
+    return "".join(ch for ch in text if ch.isalnum())
+
+
+def read_as_printed(value, pages: list[str]):
+    """The page's own spelling of an identifier the extractor misread.
+
+    Not a repair: nothing is folded or guessed. When the value is not on the
+    page and exactly one string on the page differs from it only by O/0 or I/1,
+    the printed string is what the document says -- a forged ID printed on the
+    page is taken as printed, so check 3.2 still sees the forgery. Anything
+    else, including a scan with no text layer, leaves the value alone.
+    """
+    if not isinstance(value, str) or not pages:
+        return value
+    target = _alnum(value)
+    if not target:
+        return value
+    page = _alnum(" ".join(pages))
+    if target.upper() in page.upper():
+        return value
+    pattern = "".join(_MISREAD.get(ch.upper(), re.escape(ch)) for ch in target)
+    found = set(re.findall(pattern, page, flags=re.IGNORECASE))
+    if len(found) != 1:
+        return value
+    printed = iter(found.pop())
+    # Keep the value's own separators ("CH/2026-27/0569"); swap only the
+    # alphanumerics for the page's.
+    return "".join(next(printed) if ch.isalnum() else ch for ch in value)
+
+
+def clean(invoice: dict, *, charges_and_lines=None, pages=None) -> dict:
     """Apply every repair, returning the invoice and a note of what changed.
 
     `charges_and_lines` is the pipeline's own duplicate-charge test, passed in
     so there is exactly one definition of "the same charge read twice" -- the
-    one the reconciliation checks already use.
+    one the reconciliation checks already use. `pages` is the document's text
+    layer, when it has one.
     """
     repairs: list[str] = []
 
@@ -96,6 +142,12 @@ def clean(invoice: dict, *, charges_and_lines=None) -> dict:
             invoice[field] = after
             repairs.append(
                 f"{field}: look-alike characters replaced ({before!r} -> {after!r})"
+            )
+        printed = read_as_printed(after, pages or [])
+        if printed != after:
+            invoice[field] = printed
+            repairs.append(
+                f"{field}: read as the page prints it ({after!r} -> {printed!r})"
             )
 
     for line in invoice.get("line_items") or []:

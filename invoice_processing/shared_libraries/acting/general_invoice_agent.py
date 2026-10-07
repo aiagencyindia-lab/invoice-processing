@@ -1381,7 +1381,11 @@ class ExtractorAgent(BaseAgent):
                 # look-alike Greek letters in identifiers, and charges the
                 # model repeated as line items. See extraction_cleanup.py.
                 invoice_data = extraction_cleanup.clean(
-                    invoice_data, charges_and_lines=_charges_and_lines
+                    invoice_data,
+                    charges_and_lines=_charges_and_lines,
+                    pages=confidence.extract_page_text(
+                        Path(source["full_path"])
+                    ),
                 )
 
                 # Validate tax ID if configured
