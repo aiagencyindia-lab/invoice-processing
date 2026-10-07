@@ -1235,3 +1235,30 @@ its own fix.
 
 **The prompt fix `1a1f705`, measured by the run at `ecb9bbd`:** `po_number`
 extraction 220 of 220, up from 98.7%.
+
+## 2026-10-07 — A currency is compared as an ISO code
+
+**Problem.** In the run at `ecb9bbd`, four invoices were rejected for
+"Purchase order currency mismatch": TECH-INV-037, which is clean, and three
+whose real faults the mismatch hid.
+
+**Root cause.** The extractor transcribes what is printed, and Indian invoices
+print "Rs." or "₹": 74 extractions across the stored runs carry `Rs.`, `Rs` or
+`₹`. The PO match compares the upper-cased string with the PO's `INR`. Tax
+rates by currency, exports, the Xero connector (`CurrencyCode`) and dashboard
+totals read the same field.
+
+**Fix.** `extraction_cleanup.normalize_currency`, applied in `clean` before
+anything reads or stores the extraction: printed rupee forms become `INR`,
+`A$`/`US$`/`€`/`£` their codes, a valid code is upper-cased, and a bare `$`
+(AUD or USD) or anything unrecognised is left for a reviewer. The repair is
+recorded on the extraction.
+
+**Tests.** `TestACurrencyAsPrinted` in `tests/test_extraction_cleanup.py`.
+
+**Result (today's code replayed over the run at `ecb9bbd`).** Exactly the four
+invoices change: TECH-INV-037 is accepted and posts untouched; TECH-INV-071 is
+rejected for exceeding the PO quantity, SVC-INV-067 for its work
+authorization and SVC-INV-084 as a duplicate -- each its planted fault. Decision
+accuracy 97.7% -> 98.0%, wrong rejects 4 -> 3, exact reasons 222 -> 224, posted
+untouched 39 -> 40 of 45.

@@ -280,3 +280,21 @@ class TestTheExtractionPrompt:
         assert (
             "work order reference)" not in prompt.split('"po_number"')[1][:80]
         )
+
+
+class TestACurrencyAsPrinted:
+    """TECH-INV-037 was rejected for a purchase-order currency mismatch: the
+    extractor returned "Rs." -- what the page prints -- and the PO says INR."""
+
+    def test_printed_rupee_forms_become_inr(self):
+        for printed in ("Rs.", "Rs", "₹", "inr", "Rupees"):
+            assert extraction_cleanup.normalize_currency(printed) == "INR"
+
+    def test_a_bare_dollar_is_not_guessed(self):
+        """AUD or USD: a repair that is sometimes wrong is worse than none."""
+        assert extraction_cleanup.normalize_currency("$") == "$"
+
+    def test_the_repair_is_recorded_and_the_po_then_matches(self):
+        invoice = extraction_cleanup.clean({"currency": "Rs."})
+        assert invoice["currency"] == "INR"
+        assert "currency" in invoice["_repairs"][0]

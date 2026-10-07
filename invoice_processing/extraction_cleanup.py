@@ -18,6 +18,8 @@ honestly unsure.
   identifier is taken as printed -- see `read_as_printed`. Scans are left
   alone: there is nothing printed to read, and folding O into 0 blindly would
   turn a forged tax ID into a valid one.
+* **A currency as printed.** "Rs." and "₹" are what the page shows; every
+  reader compares ISO codes. See `normalize_currency`.
 * **A charge returned twice.** Freight and packing are printed outside the line
   table, and the extractor repeats them as line items often enough that every
   downstream reader -- the workbench, the exports, the reconciliation -- sees a
@@ -125,6 +127,40 @@ def read_as_printed(value, pages: list[str]):
     return "".join(next(printed) if ch.isalnum() else ch for ch in value)
 
 
+# How invoices print a currency, mapped to the ISO 4217 code every reader
+# compares against. "$" alone is left out: it is AUD or USD, and guessing
+# would be a repair that is sometimes wrong.
+_CURRENCY_CODES = {
+    "RS": "INR",
+    "RS.": "INR",
+    "INR": "INR",
+    "₹": "INR",
+    "RUPEES": "INR",
+    "A$": "AUD",
+    "AU$": "AUD",
+    "US$": "USD",
+    "€": "EUR",
+    "£": "GBP",
+}
+
+
+def normalize_currency(value):
+    """The ISO code for how the invoice printed its currency.
+
+    The extractor transcribes what is printed, so "Rs." came back as the
+    currency on 74 extractions across the stored runs, and the purchase-order
+    match rejected a clean invoice (TECH-INV-037) because "RS." is not "INR".
+    An already valid code is upper-cased; anything unrecognised is left as it
+    was, for a reviewer to see.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return value
+    printed = value.strip().upper()
+    if printed in _CURRENCY_CODES:
+        return _CURRENCY_CODES[printed]
+    return printed if len(printed) == 3 and printed.isalpha() else value
+
+
 def clean(invoice: dict, *, charges_and_lines=None, pages=None) -> dict:
     """Apply every repair, returning the invoice and a note of what changed.
 
@@ -149,6 +185,12 @@ def clean(invoice: dict, *, charges_and_lines=None, pages=None) -> dict:
             repairs.append(
                 f"{field}: read as the page prints it ({after!r} -> {printed!r})"
             )
+
+    before = invoice.get("currency")
+    after = normalize_currency(before)
+    if after != before:
+        invoice["currency"] = after
+        repairs.append(f"currency: {before!r} -> {after!r}")
 
     for line in invoice.get("line_items") or []:
         before = line.get("hsn_sac")
