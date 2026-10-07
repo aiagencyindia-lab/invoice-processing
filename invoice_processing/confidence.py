@@ -163,6 +163,7 @@ def _candidates(value: Any) -> list[str]:
                     f"{day} {name} {year}",
                     f"{int(day)} {name} {year}",
                     f"{name} {int(day)}, {year}",
+                    f"{name} {day}, {year}",
                 }
             )
 
@@ -257,6 +258,63 @@ def _compact(text: str) -> str:
     return "".join(ch for ch in str(text) if ch.isalnum())
 
 
+def _locate_taxable_by_parts(
+    invoice: dict, total: Any, pages: list[str]
+) -> tuple[bool, int | None]:
+    """A taxable total the page never prints, grounded through its parts.
+
+    GST layouts print "Sub Total" and "Other Charges" and no line for their
+    sum, so the extracted taxable total was found nowhere on five clean
+    invoices. It is grounded when the subtotal and every charge are on the page
+    and subtotal - discount + charges comes to it.
+    """
+    subtotal = invoice.get("subtotal")
+    total = _as_number(total)
+    if subtotal is None or total is None:
+        return False, None
+    charges = [c.get("amount") for c in invoice.get("other_charges") or []]
+    discount = invoice.get("discount") or 0
+    parts = [
+        subtotal,
+        *[c for c in charges if c],
+        *([discount] if discount else []),
+    ]
+    computed = (
+        (_as_number(subtotal) or 0)
+        - (_as_number(discount) or 0)
+        + sum(_as_number(c) or 0 for c in charges)
+    )
+    if abs(computed - total) > _AMOUNT_TOLERANCE:
+        return False, None
+    found = [locate(part, pages) for part in parts]
+    if all(grounded for grounded, _ in found):
+        return True, found[0][1]
+    return False, None
+
+
+def _locate_by_segments(
+    value: Any, pages: list[str]
+) -> tuple[bool, int | None]:
+    """An address grounded line by line.
+
+    An address wraps, and a logo or the other party's block can sit on the same
+    text row: the page read "Ludhiana 668868, BF" / "Punjab", with the logo's
+    letters between, so the whole string was never found although every part of
+    it is printed. Each comma-separated segment must be on the page.
+    """
+    segments = [_compact(s).lower() for s in str(value or "").split(",")]
+    segments = [s for s in segments if s]
+    if len(segments) < 2 or not has_readable_text(pages):
+        return False, None
+    # Text, not `locate`: it reads any string with digits as a number, so
+    # "Amritsar 668868" was found as 668868 alone.
+    for index, page in enumerate(pages, start=1):
+        haystack = _compact(page).lower()
+        if all(segment in haystack for segment in segments):
+            return True, index
+    return False, None
+
+
 def _locate_tax_by_components(
     invoice: dict, total: Any, pages: list[str]
 ) -> tuple[bool, int | None]:
@@ -315,6 +373,111 @@ def line_discount(
     return discount, True
 
 
+def charges_and_lines(invoice: dict) -> tuple[list[dict], list[dict]]:
+    """The invoice's line items and its other charges, each counted once.
+
+    Freight, packing and travel are printed outside the line table, and the
+    extractor frequently returns them in both places -- as a line *and* as an
+    other-charge, sometimes describing the charge only as "Other Charges" so
+    the two descriptions do not even match. Counting both makes the lines
+    overshoot the subtotal and the expected tax overshoot by the charge's tax:
+    on one invoice by 455.94, which is 2,533.00 of packing at 18% to the cent.
+
+    The test is arithmetic rather than textual, because the arithmetic is what
+    went wrong: a charge is a duplicate when dropping it brings the line sum
+    back to the subtotal the invoice prints. Where the sums do not say so, both
+    are kept -- two things costing the same are not the same thing.
+
+    The same charge can also arrive *only* as a line: the document prints it in
+    the item table and again below a subtotal that leaves it out, and the
+    extractor returns the table alone. When the lines then add up to the
+    taxable total the invoice prints, and exactly one line is the amount the
+    subtotal leaves out, that line is the charge (MFG-INV-042, packing 2,209).
+    """
+    lines = list(invoice.get("line_items") or [])
+    charges = list(invoice.get("other_charges") or [])
+    if not charges and lines:
+        return _charge_printed_as_line(invoice, lines)
+    if not charges or not lines:
+        return lines, charges
+
+    printed_base = invoice.get("subtotal")
+    if printed_base is None:
+        printed_base = invoice.get("invoice_total_ex_tax")
+    if printed_base is None:
+        return lines, charges
+
+    line_sum = sum((line.get("amount_ex_tax") or 0) for line in lines)
+    overshoot = line_sum - printed_base
+    if overshoot <= 0.01:
+        return lines, charges
+
+    kept, dropped = [], 0.0
+    remaining = list(charges)
+    for line in lines:
+        amount = line.get("amount_ex_tax")
+        twin = next(
+            (
+                c
+                for c in remaining
+                if amount is not None
+                and c.get("amount") is not None
+                and abs(float(c["amount"]) - float(amount)) <= 0.01
+            ),
+            None,
+        )
+        if (
+            twin is not None
+            and dropped + float(twin["amount"]) <= overshoot + 0.01
+        ):
+            remaining.remove(twin)
+            dropped += float(twin["amount"])
+            continue
+        kept.append(line)
+    # Only if removing them actually reconciles the lines with the subtotal.
+    if abs(dropped - overshoot) <= 0.01:
+        return kept, charges
+    return lines, charges
+
+
+def _charge_printed_as_line(
+    invoice: dict, lines: list[dict]
+) -> tuple[list[dict], list[dict]]:
+    """The one line a printed subtotal leaves out, moved to the charges.
+
+    Two figures the invoice prints must agree before anything moves: the lines
+    overshoot the subtotal by exactly one line's amount, and they equal the
+    taxable total. A wrong subtotal satisfies the first only by coincidence and
+    the second not at all, so a line-sum fault still fails 4.2.
+    """
+    subtotal = invoice.get("subtotal")
+    taxable = invoice.get("invoice_total_ex_tax")
+    if subtotal is None or taxable is None:
+        return lines, []
+    line_sum = sum((line.get("amount_ex_tax") or 0) for line in lines)
+    overshoot = line_sum - subtotal
+    if overshoot <= 0.01 or abs(line_sum - taxable) > 0.01:
+        return lines, []
+    # ponytail: one line only; a subtotal leaving out two charges is not
+    # repaired -- add a subset search if the benchmark ever shows one.
+    matches = [
+        line
+        for line in lines
+        if line.get("amount_ex_tax") is not None
+        and abs(float(line["amount_ex_tax"]) - overshoot) <= 0.01
+    ]
+    if len(matches) != 1:
+        return lines, []
+    charge = matches[0]
+    return [line for line in lines if line is not charge], [
+        {
+            "description": charge.get("description"),
+            "amount": charge["amount_ex_tax"],
+            "tax_rate": charge.get("tax_rate"),
+        }
+    ]
+
+
 def arithmetic_checks(invoice: dict) -> dict[str, bool]:
     """Cross-field consistency. These are the errors that cost money."""
     checks: dict[str, bool] = {}
@@ -331,10 +494,15 @@ def arithmetic_checks(invoice: dict) -> dict[str, bool]:
             abs((ex + tax + round_off) - inc) <= _AMOUNT_TOLERANCE
         )
 
-    lines = invoice.get("line_items") or []
-    if lines and ex is not None:
+    # Against the printed subtotal with charges netted out, as check 4.2 does.
+    # Against the taxable total, every clean invoice that prints a freight or
+    # packing charge failed: the charge is in that total and not in the lines.
+    lines, _ = charges_and_lines(invoice)
+    base = _as_number(invoice.get("subtotal"))
+    base = base if base is not None else ex
+    if lines and base is not None:
         line_sum = sum(_as_number(li.get("amount_ex_tax")) or 0 for li in lines)
-        checks["lines_sum_to_subtotal"] = abs(line_sum - ex) <= 1.00
+        checks["lines_sum_to_subtotal"] = abs(line_sum - base) <= 1.00
 
     if lines:
         consistent = True
@@ -418,6 +586,10 @@ def build_evidence(invoice: dict, pdf_path: Path | None) -> dict[str, dict]:
         grounded, page = locate(value, pages)
         if name == "tax_amount" and grounded is False:
             grounded, page = _locate_tax_by_components(invoice, value, pages)
+        if name == "invoice_total_ex_tax" and grounded is False:
+            grounded, page = _locate_taxable_by_parts(invoice, value, pages)
+        if name == "vendor_address" and grounded is False:
+            grounded, page = _locate_by_segments(value, pages)
         arithmetic_ok = relevant.get(name)
         evidence[name] = FieldEvidence(
             value=value,
@@ -429,10 +601,8 @@ def build_evidence(invoice: dict, pdf_path: Path | None) -> dict[str, dict]:
         ).to_dict()
 
     # An invoice whose own arithmetic contradicts itself is not trustworthy
-    # however well each field is grounded. Lines that overshoot the subtotal
-    # were computed and then ignored, so a wrongly accepted invoice whose lines
-    # were 116,806 over posted with no human -- it had only ever been sent to
-    # review by a date false alarm.
+    # however well each field is grounded. The line checks were computed and
+    # then ignored for routing; a contradiction now caps the invoice at review.
     contradictions = sorted(name for name, ok in checks.items() if ok is False)
     field_floor = min(
         (

@@ -428,9 +428,9 @@ class TestWhatGstInvoicesPrint:
 
 
 class TestArithmeticThatContradictsItselfIsReviewed:
-    """Line checks were computed and never used for routing. MFG-INV-039 --
-    lines 116,806 over the subtotal, wrongly accepted -- had only been sent to
-    review by a date false alarm; fixing the dates would have posted it."""
+    """Line checks were computed and never used for routing: an invoice whose
+    lines disagree with its own subtotal posted untouched if every field
+    happened to be grounded."""
 
     def test_lines_that_overshoot_the_subtotal_route_to_review(
         self, monkeypatch
@@ -469,3 +469,75 @@ class TestArithmeticThatContradictsItselfIsReviewed:
         assert (
             routing_decision(build_evidence(invoice, Path("p.pdf"))) == "AUTO"
         )
+
+
+class TestWhatStillSentCleanInvoicesToReview:
+    """After 7934744, 11 clean text-layer invoices still went to a human.
+    Each of these failed on a correct value."""
+
+    def test_a_zero_padded_day_after_the_month_name(self):
+        assert locate(
+            "2026-04-01", [GST_PAGES[0] + " Invoice Date Apr 01, 2026"]
+        )[0]
+
+    def test_an_address_split_by_a_logo_on_the_same_row(self):
+        """The page read "Ludhiana 668868, BF" / "Punjab": the logo's letters
+        sat between the two lines of the address."""
+        pages = [
+            "Bharat Fasteners Corporation TAX INVOICE "
+            "369, Industrial Area 22, Ludhiana 668868, BF Punjab "
+            + "GSTIN 03NSQPM1376V1ZF "
+            * 10
+        ]
+        grounded, _ = confidence._locate_by_segments(
+            "369, Industrial Area 22, Ludhiana 668868, Punjab", pages
+        )
+        assert grounded is True
+        assert confidence._locate_by_segments(
+            "369, Industrial Area 22, Amritsar 668868, Punjab", pages
+        ) == (False, None)
+
+    def test_a_taxable_total_grounded_through_subtotal_and_charges(self):
+        invoice = {
+            "subtotal": 27850.00,
+            "other_charges": [{"amount": 2209.00}],
+        }
+        page = [GST_PAGES[0] + " Sub Total 27,850.00 Other Charges 2,209.00"]
+        assert confidence._locate_taxable_by_parts(invoice, 30059.00, page) == (
+            True,
+            1,
+        )
+        assert confidence._locate_taxable_by_parts(invoice, 31000.00, page) == (
+            False,
+            None,
+        )
+
+    def test_lines_are_compared_with_the_printed_subtotal_not_the_taxable(
+        self,
+    ):
+        """MFG-INV-039: the lines equal the printed subtotal; the taxable
+        total is 116,806 less because of an invoice discount. Comparing lines
+        with the taxable total called that a contradiction."""
+        checks = arithmetic_checks(
+            {
+                "subtotal": 2336120.05,
+                "discount": 116806.00,
+                "invoice_total_ex_tax": 2219314.05,
+                "line_items": [
+                    {"amount_ex_tax": 2000000.00},
+                    {"amount_ex_tax": 336120.05},
+                ],
+            }
+        )
+        assert checks["lines_sum_to_subtotal"] is True
+
+    def test_a_charge_in_the_taxable_total_is_netted_out(self):
+        checks = arithmetic_checks(
+            {
+                "subtotal": 27850.00,
+                "invoice_total_ex_tax": 30059.00,
+                "other_charges": [{"amount": 2209.00}],
+                "line_items": [{"amount_ex_tax": 27850.00}],
+            }
+        )
+        assert checks["lines_sum_to_subtotal"] is True

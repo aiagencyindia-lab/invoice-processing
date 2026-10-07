@@ -939,6 +939,8 @@ And one real hole, found by measuring the fix: `lines_sum_to_subtotal` and
 `line_maths_consistent` were computed and never used for routing. A wrongly
 accepted invoice (`MFG-INV-039`, lines 116,806 over the subtotal) had been sent
 to review only by the date false alarm; fixing the dates alone posted it.
+*[Corrected below, 2026-10-07: the 116,806 is MFG-INV-039's printed invoice
+discount, not an overshoot. The rule stands; this example was wrong.]*
 
 **Fix.** Month-name renderings for dates; a tax total grounded when its printed
 components are found and add up to it; line maths uses 4.2's `_line_discount`,
@@ -1107,3 +1109,53 @@ reason.
 
 Not in the replayed column: `1a1f705` (a quotation is not a PO) is a prompt
 change and only a full run can measure it.
+
+## 2026-10-07 — The last text-layer false alarms, and a correction
+
+**Problem.** With today's code replayed over the run at `9f8c923`, 25 accepted
+clean invoices still went to review: 11 scans and 11 text-layer invoices (the
+rest of the 25 are wrong accepts and duplicates).
+
+**Root cause.** Four more places where `confidence.py` disagreed with the page
+or with the checks:
+
+- `Apr 01, 2026` -- month name, then a zero-padded day -- was not a rendering.
+- The vendor address was "not on the page" because a logo block sits on the
+  same text row: the text layer reads `Ludhiana 668868, BF` / `Punjab`.
+- `lines_sum_to_subtotal` compared the lines with the *taxable total*, which
+  includes charges and is net of invoice discount. 4.2 compares with the
+  printed subtotal and nets charges out.
+- The taxable total is not printed on GST layouts that show Sub Total and
+  Other Charges separately.
+
+**Fix.** The zero-padded rendering; an address grounded segment by segment, by
+text rather than `locate` (which reads "Amritsar 668868" as the number 668868 --
+caught by the test); `charges_and_lines` moved into `confidence.py` and shared
+with 4.1/4.2/4.4 and cleanup, so the line-sum check uses the printed subtotal
+with charges netted, exactly as 4.2 does; a taxable total grounded when the
+subtotal, every charge and any discount are printed and add up to it.
+
+**Correction to the 2026-10-07 touchless entry.** It said MFG-INV-039 had
+"lines 116,806 over the subtotal". 116,806 is its printed invoice discount:
+the old check compared the lines (2,336,120.05) with the taxable total after
+discount (2,219,314.05). Against the printed subtotal they agree exactly. The
+rule that a failed arithmetic check routes to review stands; that example did
+not support it. With the comparison fixed, MFG-INV-039 posts untouched -- and
+it is the invoice whose planted fault is not printed (manual verification
+MV-036), so the scorer's one "posted untouched wrongly" is the dataset's error,
+not a missed fault.
+
+**Tests.** `TestWhatStillSentCleanInvoicesToReview` in
+`tests/test_confidence.py` (all five fail without the fix).
+
+**Result (today's code replayed over the run at `9f8c923`).**
+
+| | before this change | after |
+|---|---|---|
+| Accepted but routed to review | 25 | **12** |
+| Posted untouched (of 45 clean) | 19 (42.2%) | **31 (68.9%)** |
+| Posted untouched wrongly | 0 | 1 -- MFG-INV-039, the dataset error |
+| Decision accuracy | 98.3% | 98.3% |
+
+Every clean invoice with a text layer now posts untouched; the 11 left in
+review are all scans, and only OCR grounding moves them.
