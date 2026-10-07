@@ -1159,3 +1159,31 @@ not a missed fault.
 
 Every clean invoice with a text layer now posts untouched; the 11 left in
 review are all scans, and only OCR grounding moves them.
+
+## 2026-10-07 — Grounding requires a value to stand on its own
+
+**Problem.** Prototyping OCR grounding for scans (tesseract, local only, not
+in the product) asked whether grounding ever confirms a value the extractor
+got wrong. It did -- but through the matcher, not OCR: a 0.00 placeholder total
+was "found" inside 10.00, and the truncated GSTIN `24YVBFK3734K` inside the
+printed `24YVBFK3734K1ZQ`.
+
+**Root cause.** `confidence.locate` was a substring search, on the page as
+written and again with every separator removed. A value matched anywhere,
+including inside a longer number or identifier.
+
+**Fix.** One pattern per rendering: the value's letters and digits with up to
+three non-alphanumeric characters between them (so `51 824 753 556`,
+`13,41,792.00` and `Pvt. Ltd` still match), bounded so no letter or digit
+touches either end and no digit run continues it through a `.` or `,`.
+
+**Tests.** `TestAValueMustStandOnItsOwn` in `tests/test_confidence.py` (the two
+boundary cases fail without the fix; the separator case is the control).
+
+**Result.** Over 11,567 extracted fields in three stored runs, every change
+was grounded -> not grounded, and on text-layer documents every one was a
+false confirmation: 0.0 placeholder totals on non-documents and a truncated
+bank code. Replayed over the run at `9f8c923`, routing is unchanged -- 31 of
+45 clean invoices posted untouched. The OCR side (not in the product) loses
+groundings where tesseract runs tokens together or reads 0 as O; that is
+for the OCR work, which will need O/0 and I/1 tolerance on identifiers.

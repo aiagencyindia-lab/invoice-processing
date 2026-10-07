@@ -541,3 +541,28 @@ class TestWhatStillSentCleanInvoicesToReview:
             }
         )
         assert checks["lines_sum_to_subtotal"] is True
+
+
+class TestAValueMustStandOnItsOwn:
+    """A substring search confirmed values the page never states: the 0.00
+    placeholder inside 10.00, and a truncated GSTIN inside the printed one.
+    Measured over 11,567 extracted fields in three stored runs, the token
+    boundary flipped only values like these."""
+
+    PAGE: ClassVar[list[str]] = [
+        GST_PAGES[0]
+        + " Discount 10.00 GSTIN: 24YVBFK3734K1ZQ IFSC DTBK0594444"
+        + " Grand Total 13,41,792.00 ABN 51 824 753 556"
+    ]
+
+    def test_a_number_inside_a_longer_number_is_not_found(self):
+        assert locate(0.0, self.PAGE)[0] is False
+
+    def test_a_truncated_identifier_is_not_found(self):
+        assert locate("24YVBFK3734K", self.PAGE)[0] is False
+        assert locate("DTBK059444", self.PAGE)[0] is False
+
+    def test_separators_still_do_not_matter(self):
+        assert locate(1341792.0, self.PAGE)[0] is True  # Indian grouping
+        assert locate("51824753556", self.PAGE)[0] is True  # spaced
+        assert locate("24YVBFK3734K1ZQ", self.PAGE)[0] is True

@@ -236,21 +236,33 @@ def locate(value: Any, pages: list[str]) -> tuple[bool | None, int | None]:
         return None, None
 
     # Separators differ between the extracted value and the page: an ABN stored
-    # as "51824753556" is printed "51 824 753 556". Matching only on the page as
-    # written would flag a correct value as ungrounded, which is exactly the
-    # false alarm that makes a confidence signal useless.
-    compact_options = {_compact(o) for o in options if _compact(o)}
+    # as "51824753556" is printed "51 824 753 556", and an Indian amount groups
+    # its digits "13,41,792.00". So anything that is not a letter or digit may
+    # sit between the characters. What may not happen is the value being part
+    # of something longer: a substring search found the placeholder 0.00 inside
+    # 10.00 and a truncated GSTIN inside the printed one, confirming values the
+    # page never states.
+    patterns = [
+        re.compile(
+            _NOT_AFTER_TOKEN
+            + _ANY_SEPARATOR.join(map(re.escape, option))
+            + _NOT_BEFORE_TOKEN
+        )
+        for option in {_compact(o) for o in options} - {""}
+    ]
 
     for index, page_text in enumerate(pages, start=1):
         haystack = _normalize_page(page_text)
-        if any(option and option in haystack for option in options):
-            return True, index
-        compact_haystack = _compact(haystack)
-        if compact_haystack and any(
-            option in compact_haystack for option in compact_options
-        ):
+        if any(pattern.search(haystack) for pattern in patterns):
             return True, index
     return False, None
+
+
+# A token boundary: no letter or digit against the value, and no digit run
+# continuing it through a decimal point or digit-group comma ("1" + "0.00").
+_NOT_AFTER_TOKEN = r"(?<![0-9a-z])(?<![0-9][.,])"
+_NOT_BEFORE_TOKEN = r"(?![0-9a-z])(?![.,][0-9])"
+_ANY_SEPARATOR = r"[^0-9a-z]{0,3}"
 
 
 def _compact(text: str) -> str:
