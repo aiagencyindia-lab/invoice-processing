@@ -34,6 +34,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -140,6 +141,11 @@ class Document(Base, TenantMixin, TimestampMixin):
     source_ref: Mapped[str | None] = mapped_column(
         String(1024)
     )  # .eml key, message id
+    # Who the email said it came from, for the sender-domain BEC signal. Both
+    # kept: Reply-To is where a reply would go, which is what a fraudster
+    # redirects; From is what the reviewer sees.
+    sender: Mapped[str | None] = mapped_column(String(320))
+    reply_to: Mapped[str | None] = mapped_column(String(320))
     malware_status: Mapped[str] = mapped_column(String(32), default="pending")
 
     invoices: Mapped[list[Invoice]] = relationship(back_populates="document")
@@ -333,6 +339,82 @@ class Correction(Base, TenantMixin, TimestampMixin):
     source: Mapped[str] = mapped_column(String(32), default="review")
 
 
+class Vendor(Base, TenantMixin, TimestampMixin):
+    """A supplier, with the bank details the tenant has verified for it.
+
+    The bank fields are written by exactly one path: approving a
+    `VendorBankChange`. The bulk import never touches them, so the only way a
+    payee account enters the system is through two people.
+    """
+
+    __tablename__ = "vendors"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "normalized_name", name="uq_vendors_name"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(512), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    tax_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), default="")
+    email_domain: Mapped[str | None] = mapped_column(String(255))
+    bank_account_name: Mapped[str | None] = mapped_column(String(255))
+    bank_account_number: Mapped[str | None] = mapped_column(String(64))
+    bank_code: Mapped[str | None] = mapped_column(String(64))
+    bank_iban: Mapped[str | None] = mapped_column(String(64))
+    bank_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    bank_verified_by: Mapped[str | None] = mapped_column(String(320))
+
+
+class VendorBankChange(Base, TenantMixin, TimestampMixin):
+    """A proposed change to a vendor's payee details, awaiting a second person.
+
+    Segregation of duties is enforced in the repository (`decided_by` must
+    differ from `proposed_by`), not merely recorded as it is for rules.
+    """
+
+    __tablename__ = "vendor_bank_changes"
+    # The database, not a Python pre-check, is what stops two containers both
+    # proposing a change for one vendor.
+    __table_args__ = (
+        Index(
+            "uq_vendor_bank_changes_pending",
+            "vendor_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    vendor_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("vendors.id"), nullable=False, index=True
+    )
+    proposed_account_name: Mapped[str | None] = mapped_column(String(255))
+    proposed_account_number: Mapped[str | None] = mapped_column(String(64))
+    proposed_code: Mapped[str | None] = mapped_column(String(64))
+    proposed_iban: Mapped[str | None] = mapped_column(String(64))
+    previous_account_name: Mapped[str | None] = mapped_column(String(255))
+    previous_account_number: Mapped[str | None] = mapped_column(String(64))
+    previous_code: Mapped[str | None] = mapped_column(String(64))
+    previous_iban: Mapped[str | None] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    source_case_id: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default=PENDING, index=True)
+    proposed_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(String(320))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_note: Mapped[str | None] = mapped_column(Text)
+
+
 class AuditEvent(Base, TenantMixin):
     """Append-only. No update or delete grant exists for this table."""
 
@@ -515,4 +597,6 @@ TENANT_TABLES = (
     "audit_events",
     "sheet_views",
     "export_jobs",
+    "vendors",
+    "vendor_bank_changes",
 )

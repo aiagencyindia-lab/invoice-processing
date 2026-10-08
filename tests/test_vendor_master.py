@@ -11,6 +11,7 @@ from every supplier as unknown.
 """
 
 import json
+from typing import ClassVar
 
 import pytest
 
@@ -176,3 +177,182 @@ class TestInThePipeline:
         assert step is not None
         assert step["passed"] is False
         assert step["outcome"] == vendor_master.UNKNOWN_VENDOR
+
+
+class TestVendorRecordCarriesBankDetails:
+    """The DB-backed master hands the pipeline the fields step 3.4 compares."""
+
+    def test_from_dict_reads_bank_and_email_fields(self):
+        v = vendor_master.Vendor.from_dict(
+            {
+                **ACME,
+                "email_domain": "Cloudhaven.example",
+                "bank_account_number": "901031925572",
+                "bank_code": "KCBL0230056",
+                "pending_change": True,
+            }
+        )
+        assert v.email_domain == "cloudhaven.example"
+        assert v.has_bank and v.pending_change
+
+    def test_missing_fields_default_to_none(self):
+        v = vendor_master.Vendor.from_dict(ACME)
+        assert v.bank_account_number is None and not v.has_bank
+
+
+class TestStep34HoldsForReview:
+    """A bank mismatch holds the invoice; it never rejects."""
+
+    VERIFIED: ClassVar[dict] = {
+        **ACME,
+        "bank_account_number": "901031925572",
+        "bank_code": "KCBL0230056",
+    }
+
+    def _run(self, monkeypatch, tmp_path, records, inv, config_extra=None):
+        monkeypatch.setattr(
+            general_invoice_agent, "_load_vendors", lambda: master(*records)
+        )
+        config = {
+            **general_invoice_agent.DEFAULT_CONFIG,
+            "duplicate_check_enabled": False,
+            **(config_extra or {}),
+        }
+        monkeypatch.setitem(
+            general_invoice_agent._config_store, "CONFIG", config
+        )
+        extraction = {
+            "invoice": {
+                **inv,
+                "_routing": "AUTO",
+                "_evidence": {"_summary": {"fields_needing_review": []}},
+            }
+        }
+        (tmp_path / "02_extraction.json").write_text(json.dumps(extraction))
+        out = Phase3ValidatorAgent().run(
+            tmp_path, extraction, {"decision": "CONTINUE"}
+        )
+        return out, extraction
+
+    def _step(self, out):
+        return next(v for v in out["validations"] if v["step"] == "3.4")
+
+    def test_mismatch_holds_and_does_not_reject(self, monkeypatch, tmp_path):
+        out, extraction = self._run(
+            monkeypatch,
+            tmp_path,
+            [self.VERIFIED],
+            invoice(
+                bank_account_number="476661095239",
+                bank_code="KCBL0230056",
+                bank_account_name=ACME["name"],
+            ),
+        )
+        assert out["decision"] == "CONTINUE"
+        step = self._step(out)
+        assert step["passed"] is False and step["informational"] is True
+        assert step["signals"] == ["bank_mismatch"]
+        assert extraction["invoice"]["_routing"] == "REVIEW"
+        assert (
+            "bank: bank_mismatch"
+            in extraction["invoice"]["_evidence"]["_summary"][
+                "fields_needing_review"
+            ]
+        )
+        saved = json.loads((tmp_path / "02_extraction.json").read_text())
+        assert saved["invoice"]["_routing"] == "REVIEW"
+
+    def test_match_passes_and_leaves_routing_alone(self, monkeypatch, tmp_path):
+        out, extraction = self._run(
+            monkeypatch,
+            tmp_path,
+            [self.VERIFIED],
+            invoice(
+                bank_account_number="901031925572",
+                bank_code="KCBL0230056",
+                bank_account_name=ACME["name"],
+            ),
+        )
+        assert self._step(out)["passed"] is True
+        assert extraction["invoice"]["_routing"] == "AUTO"
+
+    def test_no_bank_details_printed_adds_no_step(self, monkeypatch, tmp_path):
+        out, _ = self._run(monkeypatch, tmp_path, [self.VERIFIED], invoice())
+        assert all(v["step"] != "3.4" for v in out["validations"])
+
+    def test_unconfigured_master_adds_no_step(self, monkeypatch, tmp_path):
+        """No vendor list means no verified account to compare against."""
+        out, extraction = self._run(
+            monkeypatch,
+            tmp_path,
+            [],
+            invoice(
+                bank_account_number="476661095239",
+                bank_code="KCBL0230056",
+                bank_account_name=ACME["name"],
+            ),
+        )
+        assert all(v["step"] != "3.4" for v in out["validations"])
+        assert extraction["invoice"]["_routing"] == "AUTO"
+
+    def test_sender_domain_comes_from_config(self, monkeypatch, tmp_path):
+        out, _ = self._run(
+            monkeypatch,
+            tmp_path,
+            [{**self.VERIFIED, "email_domain": "cloudhaven.example"}],
+            invoice(
+                bank_account_number="901031925572",
+                bank_code="KCBL0230056",
+                bank_account_name=ACME["name"],
+            ),
+            config_extra={"document_sender": "billing@cloudhaven-pay.example"},
+        )
+        assert self._step(out)["signals"] == ["sender_domain_mismatch"]
+
+    def test_disabled_check_is_skipped(self, monkeypatch, tmp_path):
+        out, extraction = self._run(
+            monkeypatch,
+            tmp_path,
+            [self.VERIFIED],
+            invoice(
+                bank_account_number="1",
+                bank_code="X",
+                bank_account_name=ACME["name"],
+            ),
+            config_extra={"disabled_checks": ["3.4"]},
+        )
+        assert all(v["step"] != "3.4" for v in out["validations"])
+        assert extraction["invoice"]["_routing"] == "AUTO"
+
+
+class TestVendorsFromTheDatabase:
+    def test_load_vendors_prefers_injected_records(self, monkeypatch):
+        monkeypatch.setitem(
+            general_invoice_agent._config_store,
+            "CONFIG",
+            {
+                **general_invoice_agent.DEFAULT_CONFIG,
+                "vendor_master_records": [ACME],
+                "vendor_master_file": "/nonexistent.json",
+            },
+        )
+        assert (
+            general_invoice_agent._load_vendors().find(ACME["name"]) is not None
+        )
+
+    def test_empty_records_fall_back_to_the_file(self, monkeypatch, tmp_path):
+        path = tmp_path / "vendors.json"
+        path.write_text(json.dumps({"vendors": [OTHER]}))
+        monkeypatch.setitem(
+            general_invoice_agent._config_store,
+            "CONFIG",
+            {
+                **general_invoice_agent.DEFAULT_CONFIG,
+                "vendor_master_records": [],
+                "vendor_master_file": str(path),
+            },
+        )
+        assert (
+            general_invoice_agent._load_vendors().find(OTHER["name"])
+            is not None
+        )

@@ -51,6 +51,9 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     "tax_rates_by_hsn": dict,
     "tax_rate_tolerance": (int, float),
     "tax_rate_tolerance_pct": (int, float),
+    # How long after a bank change is approved an invoice paying to it still
+    # draws a review signal: fraud is most often caught in that window.
+    "bank_change_recent_days": (int, float),
 }
 
 # Settings the validation engine knows nothing about, with their defaults.
@@ -66,6 +69,11 @@ NON_ENGINE_DEFAULTS: dict[str, Any] = {
 # Shown alongside each field in the UI so an administrator can tell what a
 # setting does without reading the rulebook.
 DESCRIPTIONS: dict[str, str] = {
+    "bank_change_recent_days": (
+        "An invoice paid to bank details approved within this many days is "
+        "held for review. The window in which a fraudulent change is most "
+        "often caught."
+    ),
     "organization_names": (
         "Names your company is invoiced under. An invoice addressed to none of "
         "these is rejected as 'addressed to different company'."
@@ -234,6 +242,7 @@ def validate(payload: dict) -> dict:
             "high_value_threshold",
             "tax_rate_tolerance",
             "tax_rate_tolerance_pct",
+            "bank_change_recent_days",
         ):
             if value < 0:
                 raise SettingsError(f"{key} cannot be negative.")
@@ -368,6 +377,15 @@ def apply_to_pipeline(tenant_id: str, store=None) -> dict:
     # the same reason: these name a customer's suppliers and the work they
     # have authorised.
     config["vendor_master_file"] = str(paths.vendor_master_file(tenant_id))
+    # The database is the record of truth for vendors where there is one; the
+    # file stays as the single-process fallback. Empty records (a stack seeded
+    # by files, as the benchmark is) fall through to the file in _load_vendors.
+    from .api import service  # noqa: PLC0415
+
+    vendors = service.get_vendors()
+    config["vendor_master_records"] = (
+        vendors.load_records(tenant_id) if vendors else None
+    )
     config["work_authorization_file"] = str(
         paths.work_authorization_file(tenant_id)
     )

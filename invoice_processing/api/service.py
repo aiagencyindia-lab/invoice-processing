@@ -38,7 +38,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 
 from .. import case_projection, paths
 from ..adapters import (
@@ -126,6 +126,7 @@ _audit = None
 _corrections = None
 _claim_store = None
 _locks = None
+_vendors = None
 _rules = None
 _tenant_settings = None
 _claims_writer = None
@@ -277,37 +278,59 @@ def get_locks():
     # read as safety everywhere else. Postgres or nothing is the honest pair.
     """
     global _locks
-    if _locks is None and _database_configured() and _lock_table_exists():
+    if (
+        _locks is None
+        and _database_configured()
+        and _table_exists("record_locks", "editing")
+    ):
         from ..db.repositories import PgRecordLocks  # noqa: PLC0415
 
         _locks = PgRecordLocks()
     return _locks
 
 
-def _lock_table_exists() -> bool:
-    """Whether the schema this feature needs is actually there.
+def _table_exists(name: str, unprotected: str) -> bool:
+    """Whether the schema a feature needs is actually there.
 
     A database can be configured and unmigrated -- an in-memory one in a test,
     or a deployment with `RUN_MIGRATIONS=0`. Asking the database beats assuming
-    either way: assuming the table exists turns every edit into a 500, and
-    assuming it does not would disable locking on a real deployment. Said out
-    loud when it is missing, because silence is how the storage and RLS gaps in
-    this codebase's own audit stayed invisible.
+    either way: assuming the table exists turns every request into a 500, and
+    assuming it does not would disable the feature on a real deployment. Said
+    out loud when it is missing, because silence is how the storage and RLS gaps
+    in this codebase's own audit stayed invisible.
     """
     from sqlalchemy import inspect  # noqa: PLC0415
 
     from ..db.session import get_engine  # noqa: PLC0415
 
     try:
-        if inspect(get_engine()).has_table("record_locks"):
+        if inspect(get_engine()).has_table(name):
             return True
     except Exception:
-        logger.warning("Could not check for the record_locks table")
+        logger.warning("Could not check for the %s table", name)
         return False
     logger.warning(
-        "No record_locks table: editing is unprotected until migrations run"
+        "No %s table: %s is unprotected until migrations run", name, unprotected
     )
     return False
+
+
+def get_vendors():
+    """Suppliers and their verified bank details. `None` without the table.
+
+    Same reasoning as `get_locks`: a file would be private to one container,
+    and a bank-change approval the worker cannot see is no control at all.
+    """
+    global _vendors
+    if (
+        _vendors is None
+        and _database_configured()
+        and _table_exists("vendors", "vendor bank-detail control")
+    ):
+        from ..db.repositories import PgVendorRepository  # noqa: PLC0415
+
+        _vendors = PgVendorRepository()
+    return _vendors
 
 
 def get_queue():
@@ -602,6 +625,7 @@ def _findings(artifacts: dict) -> list[dict]:
                     "implemented": validation.get("implemented", True),
                     "evidence": validation.get("evidence"),
                     "rejection_template": validation.get("rejection_template"),
+                    "signals": validation.get("signals"),
                 }
             )
     # The rules that fired, so a corrected decision can say what corrected it.
@@ -1051,6 +1075,75 @@ def act(
     }
 
 
+class BankChangeFromInvoice(BaseModel):
+    reason: str = Field(default="", max_length=2000)
+
+
+@app.post("/api/invoices/{case_id}/bank-change", status_code=201)
+def propose_bank_change_from_invoice(
+    case_id: str,
+    request: BankChangeFromInvoice,
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+) -> dict:
+    """Raise a vendor bank change from the details printed on this invoice.
+
+    A reviewer holding an invoice on a bank signal has the new details in
+    front of them; retyping them on another page is where transcription errors
+    come from. Still only a proposal: a second person approves.
+    """
+    from . import vendor_routes  # noqa: PLC0415
+
+    repo = get_vendors()
+    if repo is None:
+        raise HTTPException(status_code=503, detail=vendor_routes.NEEDS_DB)
+    ctx = principal.context(case_id)
+    artifacts = get_cases().get_artifacts(ctx)
+    if not artifacts:
+        raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
+    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+    vendor = repo.find_by_name(
+        principal.tenant_id, invoice.get("vendor_name") or ""
+    )
+    if vendor is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{invoice.get('vendor_name') or 'This vendor'} is not in the "
+                "vendor master. Add it first."
+            ),
+        )
+    if not (invoice.get("bank_account_number") or invoice.get("bank_iban")):
+        raise HTTPException(
+            status_code=409,
+            detail="This invoice prints no bank details to propose.",
+        )
+    if not request.reason.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="A bank change needs a reason the approver can check.",
+        )
+    try:
+        proposal = vendor_routes.BankChangeProposal(
+            bank_account_name=invoice.get("bank_account_name"),
+            bank_account_number=invoice.get("bank_account_number"),
+            bank_code=invoice.get("bank_code"),
+            bank_iban=invoice.get("bank_iban"),
+            reason=request.reason,
+            source_case_id=case_id,
+        )
+    except ValidationError:
+        # Extracted text is untrusted length-wise; refuse rather than truncate
+        # a payee account.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "An extracted bank value is too long to propose; enter it "
+                "on the Vendors page."
+            ),
+        ) from None
+    return vendor_routes.propose_change(principal, vendor["id"], proposal)
+
+
 @app.get("/api/stats")
 def stats(principal: Annotated[Principal, Depends(current_principal)]) -> dict:
     """The numbers a pilot is judged on."""
@@ -1247,6 +1340,7 @@ from .rules import router as rules_router  # noqa: E402
 from .sheet import router as sheet_router  # noqa: E402
 from .signup import router as signup_router  # noqa: E402
 from .system import router as system_router  # noqa: E402
+from .vendor_routes import router as vendor_router  # noqa: E402
 
 app.include_router(ingest_router)
 app.include_router(system_router)
@@ -1255,6 +1349,7 @@ app.include_router(admin_router)
 app.include_router(signup_router)
 app.include_router(sheet_router)
 app.include_router(rules_router)
+app.include_router(vendor_router)
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -219,6 +219,7 @@ export type Finding = {
   implemented: boolean;
   evidence: string | null;
   rejection_template: string | null;
+  signals?: string[] | null;
 };
 
 export type Correction = {
@@ -311,6 +312,44 @@ export type PurchaseOrderList = {
   count: number;
   source: string;
 };
+
+export type Vendor = {
+  id: string;
+  name: string;
+  tax_id: string;
+  kind: string;
+  email_domain: string | null;
+  bank_status: "verified" | "unverified" | "pending";
+  bank_account_masked: string | null;
+  bank_account_name: string | null;
+  bank_code: string | null;
+  bank_verified_at: string | null;
+  bank_verified_by: string | null;
+  pending_change_id: string | null;
+};
+export type VendorList = { vendors: Vendor[]; count: number; source: string };
+export type BankChange = {
+  id: string;
+  vendor_id: string;
+  vendor_name: string;
+  status: "pending" | "approved" | "rejected";
+  reason: string;
+  source_case_id: string | null;
+  proposed_by: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_note: string | null;
+  created_at: string | null;
+  proposed_account_name: string | null;
+  proposed_account_number: string | null;
+  proposed_code: string | null;
+  proposed_iban: string | null;
+  previous_account_name: string | null;
+  previous_account_number: string | null;
+  previous_code: string | null;
+  previous_iban: string | null;
+};
+export type BankChangeList = { changes: BankChange[]; count: number };
 
 export type Tenant = {
   id: string;

@@ -107,13 +107,25 @@ class FsCaseRepository:
         return tenant_id == self.tenant_id
 
     def _case_dir(self, ctx: RunContext) -> Path:
-        return self.root / ctx.case_id
+        # A case id can arrive in a request body, where "/" and ".." are
+        # legal. Refuse anything that resolves outside the root so an id can
+        # never read or write another directory.
+        root = self.root.resolve()
+        case_dir = (root / ctx.case_id).resolve()
+        if not case_dir.is_relative_to(root) or case_dir == root:
+            raise ValueError(
+                f"Case id {ctx.case_id!r} is outside the case root"
+            )
+        return case_dir
 
     def get_artifacts(self, ctx: RunContext) -> dict[str, dict]:
         if not self.serves(ctx.tenant_id):
             return {}
         artifacts: dict[str, dict] = {}
-        case_dir = self._case_dir(ctx)
+        try:
+            case_dir = self._case_dir(ctx)
+        except ValueError:
+            return {}
         for key, filename in self.artifact_map.items():
             path = case_dir / filename
             if path.exists():

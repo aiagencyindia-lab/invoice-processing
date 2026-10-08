@@ -30,7 +30,6 @@ from .. import (
     master_files,
     po_matching,
     tenant_settings,
-    vendor_master,
     wa_matching,
 )
 from .auth import Principal, current_principal, require_role
@@ -44,10 +43,6 @@ class SettingsUpdate(BaseModel):
 
 class PurchaseOrderUpdate(BaseModel):
     purchase_orders: list[dict[str, Any]]
-
-
-class VendorUpdate(BaseModel):
-    vendors: list[dict[str, Any]]
 
 
 class WorkAuthorizationUpdate(BaseModel):
@@ -292,103 +287,6 @@ def replace_purchase_orders(
     return {
         "count": len(records),
         "message": f"Loaded {len(records)} purchase orders.",
-    }
-
-
-# ---------------------------------------------------------------------------
-# Vendors
-# ---------------------------------------------------------------------------
-#
-# Step 3.2 used to verify a supplier tax ID's checksum and stop there, which
-# leaves the fraud case untouched: an invoice quoting somebody else's
-# registration is arithmetically perfect. Comparing it against the supplier
-# list is what closes that, and the list has to come from the customer.
-
-
-@router.get("/api/vendors")
-def list_vendors(
-    principal: Annotated[Principal, Depends(require_role("clerk"))],
-) -> dict:
-    """Suppliers this tenant has registered, and the tax ID each is known by.
-
-    An empty list is reported explicitly: it is the answer to "why is nobody's
-    tax ID being matched?", and check 3.2 then runs as a checksum alone.
-    """
-    from .. import paths  # noqa: PLC0415
-
-    path = paths.vendor_master_file(principal.tenant_id)
-    records = master_files.read_records(path, vendor_master.RECORD_KEY)
-    vendors = [vendor_master.Vendor.from_dict(r) for r in records]
-    return {
-        "vendors": [
-            {"name": v.name, "tax_id": v.tax_id, "kind": v.kind}
-            for v in vendors
-        ],
-        "count": len(vendors),
-        "source": path.name,
-    }
-
-
-@router.put("/api/vendors")
-def replace_vendors(
-    request: VendorUpdate,
-    principal: Annotated[Principal, Depends(require_role("admin"))],
-) -> dict:
-    """Replace the supplier list wholesale.
-
-    Validated in full before anything is written: a half-loaded master is worse
-    than an empty one, because the suppliers that failed to load come back as
-    "not in the vendor master" and their invoices are rejected as if the tax ID
-    were forged.
-    """
-    seen: set[str] = set()
-    for index, record in enumerate(request.vendors):
-        if not isinstance(record, dict):
-            raise HTTPException(
-                status_code=400, detail=f"Entry {index + 1} is not an object."
-            )
-        name = str(record.get("name") or "").strip()
-        if not name:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Entry {index + 1} has no supplier name.",
-            )
-        if not str(record.get("tax_id") or "").strip():
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"{name} has no tax ID. Without one there is nothing to "
-                    "compare an invoice against, and check 3.2 would report a "
-                    "match it never made."
-                ),
-            )
-        key = po_matching.normalize_vendor(name)
-        if key in seen:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"{name} appears twice. The check would use whichever "
-                    "loaded last."
-                ),
-            )
-        seen.add(key)
-
-    from .. import paths  # noqa: PLC0415
-
-    master_files.write_records(
-        paths.vendor_master_file(principal.tenant_id),
-        vendor_master.RECORD_KEY,
-        request.vendors,
-    )
-
-    from . import service  # noqa: PLC0415
-
-    service.get_audit().emit(
-        principal.context(), "vendors_replaced", {"count": len(request.vendors)}
-    )
-    return {
-        "count": len(request.vendors),
-        "message": f"Loaded {len(request.vendors)} suppliers.",
     }
 
 

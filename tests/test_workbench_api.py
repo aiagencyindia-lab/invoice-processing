@@ -406,3 +406,20 @@ class TestAnEditRecordsWhatTheValueWas:
         assert event["event_type"] == "fields_corrected"
         assert event["before"]["values"]["currency"] == before_value
         assert event["payload"]["values"]["currency"] == "NZD"
+
+
+def test_findings_carry_validation_signals():
+    from invoice_processing.api.service import _findings  # noqa: PLC0415
+
+    artifacts = {
+        "phase3": {
+            "validations": [
+                {
+                    "step": "3.4",
+                    "passed": False,
+                    "signals": ["recent_bank_change"],
+                }
+            ]
+        }
+    }
+    assert _findings(artifacts)[0]["signals"] == ["recent_bank_change"]

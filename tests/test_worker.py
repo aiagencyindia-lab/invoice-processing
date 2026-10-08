@@ -492,6 +492,50 @@ class TestArtifactsAreStoredUnderTheKeysReadersUse:
         # The map is the one the readers use, not a second copy of it.
         assert _artifact_map() == dict(ARTIFACT_MAP)
 
+    def test_the_email_sender_reaches_the_pipeline_config(
+        self, tmp_path, monkeypatch
+    ):
+        """Reply-To wins: it is where a reply would go, which is what a
+        fraudster redirects."""
+        output = tmp_path / "case-2"
+        output.mkdir()
+        (output / "08_decision.json").write_text(
+            json.dumps({"final_decision": "REJECT"})
+        )
+        seen: dict = {}
+
+        class Sink:
+            def put_artifact(self, ctx, key, payload): ...
+
+            def get_artifacts(self, ctx):
+                return {}
+
+            def project_case(self, ctx, artifacts): ...
+
+        class Blobs:
+            def get(self, key):
+                return b"%PDF-1.4"
+
+        monkeypatch.setattr(gia, "get_output_folder", _folder(output))
+        monkeypatch.setattr(gia, "process_invoice", _rejects)
+        monkeypatch.setattr(
+            tenant_settings, "apply_to_pipeline", lambda t: seen
+        )
+        process_document(
+            RunContext(tenant_id="t", case_id="case-2"),
+            {
+                "id": "case-2",
+                "storage_key": "k",
+                "sha256": "s",
+                "source": "email",
+                "sender": "a@vendor.test",
+                "reply_to": "b@lookalike.test",
+            },
+            cases=Sink(),
+            blobs=Blobs(),
+        )
+        assert seen["document_sender"] == "b@lookalike.test"
+
     def test_a_dict_backed_repository_sees_the_logical_keys(
         self, tmp_path, monkeypatch
     ):

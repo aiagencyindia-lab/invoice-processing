@@ -33,13 +33,40 @@ class Vendor:
     name: str
     tax_id: str
     kind: str = ""  # "goods" or "service", where the tenant records it
+    # Verified payee details and the state of their dual-control queue. All
+    # optional: a file-backed master or a freshly imported vendor has none,
+    # and step 3.4 treats "none verified" as its own signal.
+    email_domain: str | None = None
+    bank_account_name: str | None = None
+    bank_account_number: str | None = None
+    bank_code: str | None = None
+    bank_iban: str | None = None
+    bank_verified_at: str | None = None
+    pending_change: bool = False
+    last_bank_change_at: str | None = None
+
+    @property
+    def has_bank(self) -> bool:
+        return bool(self.bank_account_number or self.bank_iban)
 
     @classmethod
     def from_dict(cls, data: dict) -> Vendor:
+        def text(key):
+            value = data.get(key)
+            return str(value).strip() if value not in (None, "") else None
+
         return cls(
             name=str(data.get("name") or ""),
             tax_id=str(data.get("tax_id") or ""),
             kind=str(data.get("kind") or "").lower(),
+            email_domain=(text("email_domain") or "").lower() or None,
+            bank_account_name=text("bank_account_name"),
+            bank_account_number=text("bank_account_number"),
+            bank_code=text("bank_code"),
+            bank_iban=text("bank_iban"),
+            bank_verified_at=text("bank_verified_at"),
+            pending_change=bool(data.get("pending_change")),
+            last_bank_change_at=text("last_bank_change_at"),
         )
 
 

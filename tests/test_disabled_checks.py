@@ -16,8 +16,8 @@ from invoice_processing.shared_libraries.acting import general_invoice_agent
 class TestTheCatalogue:
     def test_it_lists_every_step_the_pipeline_runs(self):
         ids = checks.known_ids()
-        assert {"1.1", "1.4", "2.2", "3.1", "4.3", "4.4"} <= ids
-        assert len(ids) == 14
+        assert {"1.1", "1.4", "2.2", "3.1", "3.4", "4.3", "4.4"} <= ids
+        assert len(ids) == 15
 
     def test_it_comes_from_the_rulebook_not_a_second_list(self):
         """A hand-kept copy drifts, and the screen then offers a switch for a

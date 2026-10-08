@@ -472,6 +472,7 @@ function InvoicesWorkbench() {
 
                 <LineItems items={detail.line_items} />
                 <Findings findings={detail.findings} />
+                <BankChangeShortcut detail={detail} me={me} onDone={say} />
                 <Corrections corrections={detail.corrections} />
               </>
             ) : (
@@ -633,6 +634,75 @@ function LineItems({ items }: { items: Record<string, unknown>[] }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+/** A bank signal on this invoice: offer to raise the vendor bank change from
+ *  the details already read, so nobody retypes an account number. */
+function BankChangeShortcut({
+  detail,
+  me,
+  onDone,
+}: {
+  detail: InvoiceDetail;
+  me: Me | null;
+  onDone: (m: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const bank = detail.findings.find((f) => f.step === "3.4" && f.passed === false);
+  if (!bank || !can(me, "clerk")) return null;
+  const pending =
+    bank.signals?.includes("recent_bank_change") &&
+    /awaiting approval/.test(bank.evidence ?? "");
+  if (pending) {
+    return (
+      <div className="muted" style={{ fontSize: 12.5 }}>
+        A bank change for this vendor is awaiting approval.{" "}
+        <a href="/vendors">Open vendors</a>
+      </div>
+    );
+  }
+  // Only a mismatch or an unverified vendor is cured by proposing these
+  // details; a recent change or a sender/domain signal is not.
+  if (!bank.signals?.some((s) => s === "bank_mismatch" || s === "bank_unverified")) {
+    return null;
+  }
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      <button
+        className="btn-secondary"
+        disabled={busy}
+        onClick={async () => {
+          // The approver needs to know how these were confirmed; a blank or
+          // cancelled prompt sends nothing.
+          const reason = window.prompt("How were these bank details confirmed with the vendor?");
+          if (!reason?.trim()) return;
+          setBusy(true);
+          setProblem(null);
+          try {
+            await api(`/api/invoices/${detail.case_id}/bank-change`, {
+              method: "POST",
+              body: JSON.stringify({ reason }),
+            });
+            onDone(
+              `Bank change proposed for ${detail.vendor ?? "this vendor"}. A second person must approve it on the Vendors page.`,
+            );
+          } catch (caught) {
+            setProblem(caught instanceof ApiError ? caught.friendly : String(caught));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        Propose these bank details for {detail.vendor ?? "this vendor"}
+      </button>
+      {problem ? (
+        <div role="alert" style={{ color: "var(--error)", fontSize: 12.5 }}>
+          {problem}
+        </div>
+      ) : null}
     </div>
   );
 }

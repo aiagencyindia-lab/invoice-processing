@@ -1262,3 +1262,67 @@ rejected for exceeding the PO quantity, SVC-INV-067 for its work
 authorization and SVC-INV-084 as a duplicate -- each its planted fault. Decision
 accuracy 97.7% -> 98.0%, wrong rejects 4 -> 3, exact reasons 222 -> 224, posted
 untouched 39 -> 40 of 45.
+
+## 2026-10-08 — Step 3.4: bank details against the vendor master
+
+**Problem.** The extractor has read the payee's account, bank code and IBAN
+since Phase 1 and the grounder checks they appear on the page, but nothing
+asked whether they are the *vendor's*. A changed account number is how a
+payment is redirected.
+
+**Root cause.** No comparison of the extracted bank fields against any record
+existed, and the vendor master carried no bank columns to compare with.
+
+**Fix.** Step 3.4 (`bank_check`) compares the invoice with the vendor's
+verified details and raises up to five signals -- `bank_mismatch`,
+`bank_unverified`, `payee_name_differs`, `recent_bank_change`,
+`sender_domain_mismatch` -- each of which holds the invoice for REVIEW and none
+of which rejects. The benchmark's `vendor_records` now carries the dataset's
+account, IFSC and billing domain (verified 2025-01-01, so the recent-change
+signal measures invoices, not the seeding). Benchmark documents are uploads, so
+`sender_domain_mismatch` cannot fire here.
+
+**Tests.** `tests/test_benchmark_dataset.py`; `tests/test_bank_check_planted.py`
+plants a changed account, then a changed IFSC, in the master against a real
+stored extraction (skips if the gitignored run is absent).
+
+**Result (today's code replayed over the run at `ecb9bbd`, `replay-bank-check`).**
+
+Inside the pipeline 3.4 only runs for an invoice that reached phase 3: 76
+passed, 1 held (TECH-INV-052), 223 never reached it, having been rejected at an
+earlier step. The dataset planted no bank faults, so the measure that matters is
+the same check run standalone over all 300 stored extractions:
+
+| 3.4 over all 300 extractions | count |
+|---|---|
+| passed | 241 |
+| held | 6 (2 `bank_mismatch`, 4 `payee_name_differs`) |
+| not compared (no extraction, or vendor not in the master) | 53 |
+
+Counting account and code alone gives 245 / 2 / 53; four more are held because
+the payee name printed on the invoice differs from the vendor name
+(`payee_name_differs`), which an account-and-code count does not see.
+
+- MFG-INV-011 (faulty): IFSC printed `DTBKO117671`, master `DTBK0117671`.
+- MFG-INV-003 (faulty): account printed with a stray leading digit, `1 974810581534`.
+  Both invoices are faulty for other planted faults; the bank values here are
+  OCR near-misses, not planted bank faults. They are held on purpose; no O/0
+  folding was added.
+- SVC-INV-045, SVC-INV-028 (faulty) and TECH-INV-070 (faulty): payee misread
+  by one letter ("Metia", "PIR", "Lt").
+- **TECH-INV-052 (clean): payee `Kestrel Cyber Assurance Pvt Lt` against vendor
+  `Kestrel Cyber Assurance Pvt Ltd`.** A measured cost: a clean invoice held for a
+  one-character truncation. It is also rejected at 3.2 (GSTIN misread), so no
+  decision changes today.
+
+Safety and cost, before (`replay-currency-on-ecb9bbd`) -> after:
+posted untouched 40 of 45 clean -> 40 of 45; posted untouched wrongly 1
+(MFG-INV-039, the dataset error) -> 1; decision accuracy 98.0% -> 98.0%; zero
+flips. Step 3.4 changes no benchmark decision because every held invoice was
+already rejected at an earlier step; its value is on faults the dataset did not
+plant, which the planted tests cover.
+
+**Declined.** O/0 folding on bank codes or accounts. A prototype that tolerated
+O/0 on identifiers confirmed 24 wrong values across three runs, and a changed
+bank code is exactly what this check exists to catch; OCR noise belongs in
+review.
