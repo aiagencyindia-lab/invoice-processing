@@ -272,6 +272,13 @@ validation_pipeline:
           field: "extraction.invoice.invoice_date"
           rejection_template: "Invoice is future dated"
 
+        - id: "3.4"
+          name: "Bank Details"
+          type: "bank_details_match_vendor"
+          field: "extraction.invoice.bank_account_number"
+          recent_days_from_config: "bank_change_recent_days"
+          informational_only: true
+
     - id: "phase4"
       name: "Calculation Validation"
       artifact: "06_phase4_validation.json"
@@ -469,6 +476,7 @@ config_defaults:
   duplicate_check_type: "none"
   tax_rates_by_hsn: {}
   balance_tolerance: 0.02
+  bank_change_recent_days: 30   # a bank change approved within this many days of an invoice is a review signal
   line_sum_tolerance: 1.00
   tax_rate_tolerance: 1.00
   tax_rate_tolerance_pct: 0.002

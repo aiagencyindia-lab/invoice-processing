@@ -67,6 +67,7 @@ except ImportError:
 
 try:
     from ... import (
+        bank_check,
         confidence,
         duplicates,
         extraction_cleanup,
@@ -98,6 +99,7 @@ except ImportError:  # executed as a script: no parent package context
     )
     _sys.path.insert(0, str(_repo_root))
     from invoice_processing import (
+        bank_check,
         confidence,
         duplicates,
         extraction_cleanup,
@@ -515,6 +517,7 @@ _FALLBACK_CONFIG = {
     "tax_rates_by_hsn": {},
     # Tolerances
     "balance_tolerance": 0.02,
+    "bank_change_recent_days": 30,
     "line_sum_tolerance": 1.00,
     # Tax reconciliation used to borrow `balance_tolerance`, which is two
     # cents: a per-line rounding rule that is normal in some jurisdictions
@@ -2028,8 +2031,18 @@ def _load_purchase_orders() -> "_PurchaseOrderFile":
 
 
 def _load_vendors() -> "vendor_master.VendorMaster":
-    """This tenant's supplier list, injected through config by the worker."""
-    return vendor_master.VendorMaster(_get_config().get("vendor_master_file"))
+    """This tenant's supplier list, injected through config by the worker.
+
+    Records come from the database where there is one (the API and the worker
+    are different containers, so a file written by one is invisible to the
+    other); the file path is the single-process fallback the benchmark and the
+    local stack still use.
+    """
+    config = _get_config()
+    records = config.get("vendor_master_records")
+    if records:
+        return vendor_master.VendorMaster(records=list(records))
+    return vendor_master.VendorMaster(config.get("vendor_master_file"))
 
 
 def _load_work_authorizations() -> "wa_matching.WorkAuthorizations":
@@ -2167,6 +2180,52 @@ class Phase3ValidatorAgent(BaseAgent):
                     else "Invoice is future dated",
                 }
             )
+
+        # Step 3.4: Bank details against the vendor's verified account. The
+        # payment-redirection control. Holds, never rejects -- see bank_check.
+        if "3.4" not in (_get_config().get("disabled_checks") or []):
+            # match.vendor is None for an unconfigured master and for an
+            # unknown vendor: there is no verified account to compare with.
+            result = bank_check.compare(
+                invoice,
+                match.vendor,
+                sender=_get_config().get("document_sender"),
+                reference_date=today,
+                recent_days=int(
+                    _get_config().get("bank_change_recent_days") or 30
+                ),
+            )
+            if result.compared:
+                validations.append(
+                    {
+                        "step": "3.4",
+                        "rule": "Bank details match the vendor's verified account",
+                        "passed": result.passed,
+                        "informational": True,
+                        "evidence": "; ".join(result.evidence),
+                        "signals": result.signals,
+                        "rejection_template": None,
+                    }
+                )
+                if not result.passed:
+                    # The routing decision was made at extraction time from
+                    # grounding alone. A bank signal is the strongest cheap
+                    # reason there is to put a person in front of an invoice,
+                    # so it reopens that decision and the artifact is re-saved
+                    # for every reader that takes routing from it.
+                    invoice["_routing"] = "REVIEW"
+                    summary = invoice.setdefault("_evidence", {}).setdefault(
+                        "_summary", {}
+                    )
+                    needing = summary.setdefault("fields_needing_review", [])
+                    needing.extend(
+                        f"bank: {s}"
+                        for s in result.signals
+                        if f"bank: {s}" not in needing
+                    )
+                    self.save_artifact(
+                        output_folder, "02_extraction.json", extraction
+                    )
 
         # Determine decision
         failed = _settle(validations)
