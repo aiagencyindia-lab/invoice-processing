@@ -130,6 +130,18 @@ class TestPropose:
         assert response.status_code == 400
         assert response.json()["detail"] == "Unknown invoice"
 
+    def test_source_case_cannot_traverse_out_of_the_case_root(
+        self, env, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            service,
+            "_cases",
+            FsCaseRepository(tmp_path / "cases", tenant_id=TENANT),
+        )
+        response = propose(env, source_case_id="../../etc")
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Unknown invoice"
+
     def test_viewer_cannot_propose(self, env):
         assert propose(env, token="viewer").status_code == 403
 

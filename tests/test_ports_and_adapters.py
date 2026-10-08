@@ -138,6 +138,20 @@ class TestCaseRepository:
             == {}
         )
 
+    def test_a_case_id_cannot_escape_the_root(self, tmp_path):
+        root = tmp_path / "cases"
+        root.mkdir()
+        outside = tmp_path / "x"
+        outside.mkdir()
+        (outside / "02_extraction.json").write_text('{"secret": 1}')
+        repo = FsCaseRepository(root, {"extraction": "02_extraction.json"})
+        assert repo.get_artifacts(RunContext(case_id="../x")) == {}
+        with pytest.raises(ValueError):
+            repo.put_artifact(RunContext(case_id="../x"), "extraction", {})
+        assert json.loads((outside / "02_extraction.json").read_text()) == {
+            "secret": 1
+        }
+
     def test_batch_read(self, tmp_path):
         for name in ("case_001", "case_002"):
             (tmp_path / name).mkdir()
