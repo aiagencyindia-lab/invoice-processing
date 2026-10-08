@@ -874,6 +874,10 @@ def test_unreadable_routing_table_is_503_not_unrouted(env, monkeypatch):
     assert not (env["root"] / CASE / "workflow.json").exists()
     mine = env["client"]("approver:anyone").get("/api/approvals/mine")
     assert mine.status_code == 503
+    # An edit keeps its correction and says the re-route failed.
+    edit = edit_total(env)
+    assert edit.status_code == 200
+    assert edit.json()["approvals_rerouted"] == "failed"
 
 
 def test_people_who_approve_must_hold_an_approving_role(env):
