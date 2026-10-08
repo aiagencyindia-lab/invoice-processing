@@ -50,6 +50,8 @@ ROLE_RANK = {"viewer": 0, "clerk": 1, "approver": 2, "admin": 3}
 # cost of an unlisted-but-production value is an open door.
 LOCAL_ENVIRONMENTS = {"local", "dev", "development", "test"}
 
+DEV_PRINCIPAL_HEADER = "X-Dev-Principal"
+
 
 # ---------------------------------------------------------------------------
 # Principal
@@ -191,7 +193,7 @@ def principal_from_claims(claims: dict[str, Any]) -> Principal:
 # ---------------------------------------------------------------------------
 
 
-def dev_principal() -> Principal | None:
+def dev_principal(request: Request | None = None) -> Principal | None:
     """The unauthenticated principal used for local development, or None.
 
     Guarded twice. `AUTH_DISABLED` must be explicitly truthy, and `ENV` must not
@@ -218,11 +220,29 @@ def dev_principal() -> Principal | None:
         "AUTH_DISABLED is set: every request runs as a local dev principal. "
         "This must never be set outside local development."
     )
+    email = os.getenv("AUTH_DEV_EMAIL", "dev@localhost")
+    role = "admin"
+    # Who the dev principal is, per request. A browser test of a two-person
+    # control (one proposes, another approves) cannot be run by a single fixed
+    # admin. Only read here, behind both guards above: this mode already hands
+    # every request an unauthenticated admin, so choosing a name or a lesser
+    # role grants nothing new, and in any other mode the header is ignored.
+    chosen = request.headers.get(DEV_PRINCIPAL_HEADER) if request else None
+    if chosen is not None:
+        email, _, role = chosen.strip().rpartition(":")
+        if "@" not in email or role not in ROLE_RANK:
+            # Refused rather than ignored: falling back to admin would let a
+            # mistyped test run as the wrong person and still pass.
+            raise AuthError(
+                f"{DEV_PRINCIPAL_HEADER} must be '<email>:<role>' with a role "
+                f"of {', '.join(ROLE_RANK)}.",
+                status_code=400,
+            )
     return Principal(
-        user_id="dev",
-        email=os.getenv("AUTH_DEV_EMAIL", "dev@localhost"),
+        user_id="dev" if chosen is None else f"dev:{email}",
+        email=email,
         tenant_id=os.getenv("AUTH_DEV_TENANT", "default"),
-        role="admin",
+        role=role,
     )
 
 
@@ -283,7 +303,7 @@ def current_principal(request: Request) -> Principal:
     if token:
         return principal_from_claims(get_verifier().verify(token))
 
-    dev = dev_principal()
+    dev = dev_principal(request)
     if dev is not None:
         return dev
 
