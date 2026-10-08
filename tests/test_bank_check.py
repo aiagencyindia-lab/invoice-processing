@@ -232,3 +232,25 @@ class TestDomainCaseAtCompareTime:
         assert check(
             invoice(), vendor=vendor, sender="billing@precisionweld.example"
         ).passed
+
+
+class TestPrintedIdentifierWithNothingOnFile:
+    def test_iban_matches_but_account_is_not_on_record(self):
+        vendor = Vendor(
+            name=VERIFIED.name, tax_id=VERIFIED.tax_id, bank_iban=IBAN
+        )
+        inv = invoice(
+            bank_account_number="476661095239", bank_code=None, bank_iban=IBAN
+        )
+        result = check(inv, vendor=vendor)
+        assert result.signals == [bank_check.BANK_MISMATCH]
+        assert "…5239" in result.evidence[0] and "not on" in result.evidence[0]
+
+    def test_account_printed_against_iban_only_vendor(self):
+        vendor = Vendor(
+            name=VERIFIED.name, tax_id=VERIFIED.tax_id, bank_iban=IBAN
+        )
+        inv = invoice(
+            bank_account_number="181386752041", bank_code=None, bank_iban=None
+        )
+        assert check(inv, vendor=vendor).signals == [bank_check.BANK_MISMATCH]

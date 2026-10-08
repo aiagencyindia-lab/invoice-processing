@@ -106,26 +106,38 @@ def compare(
     found: dict[str, str] = {}
 
     if vendor.has_bank:
-        # Every identifier the invoice prints that the vendor also has on file
-        # must match. One matching identifier must not vouch for a changed
-        # one: the vendor's real IBAN beside a different account number is
-        # exactly the redirection this check exists for.
+        # Every identifier the invoice prints must be one the vendor has on
+        # file, and must match it. One matching identifier must not vouch for
+        # a changed one, and a printed identifier nobody verified is a place a
+        # clerk could pay.
+        unlisted = []
         comparable = []
-        if account and norm_account(vendor.bank_account_number):
-            comparable.append(
-                account == norm_account(vendor.bank_account_number)
-            )
-        if iban and norm_code(vendor.bank_iban):
-            comparable.append(iban == norm_code(vendor.bank_iban))
-        # Identifiers printed, none of a kind the vendor has on file: nothing
-        # could be confirmed, so that is a hold too.
-        same_identifiers = bool(comparable) and all(comparable)
+        if account:
+            if norm_account(vendor.bank_account_number):
+                comparable.append(
+                    account == norm_account(vendor.bank_account_number)
+                )
+            else:
+                unlisted.append(
+                    f"Account {_tail(account)} on the invoice is not on "
+                    f"{vendor.name}'s verified record"
+                )
+        if iban:
+            if norm_code(vendor.bank_iban):
+                comparable.append(iban == norm_code(vendor.bank_iban))
+            else:
+                unlisted.append(
+                    f"IBAN {_tail(iban)} on the invoice is not on "
+                    f"{vendor.name}'s verified record"
+                )
         same_code = (
             not code
             or not vendor.bank_code
             or code == norm_code(vendor.bank_code)
         )
-        if not (same_identifiers and same_code):
+        if unlisted:
+            found[BANK_MISMATCH] = "; ".join(unlisted)
+        elif not (all(comparable) and same_code):
             found[BANK_MISMATCH] = (
                 f"Account {_tail(account or iban)} / {code or '(no code)'} on the invoice; "
                 f"{vendor.name} verified as {_tail(norm_account(vendor.bank_account_number) or norm_code(vendor.bank_iban))} "
