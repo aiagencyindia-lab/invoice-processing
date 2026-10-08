@@ -372,9 +372,9 @@ class TestXeroCredentialsBelongToOneTenant:
         assert service.get_exporter("tenant-acme") is None
 
 
-def test_completion_of_a_chain_still_exports(client, tmp_path, monkeypatch):
+def test_completion_of_a_chain_still_exports(client, scratch_db, monkeypatch):
     """Export reads the workflow keys chain completion writes, nothing else."""
-    url = f"sqlite:///{tmp_path / 'chain.db'}"
+    url = scratch_db("chain.db")
     models.Base.metadata.drop_all(get_engine(url))
     create_all(url)
     with tenant_session(TENANT, url) as session:

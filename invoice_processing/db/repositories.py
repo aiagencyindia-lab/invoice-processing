@@ -524,6 +524,26 @@ class PgDocumentRepository:
                 "reply_to": document.reply_to,
             }
 
+    def get(self, tenant_id: str, document_id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            d = session.scalar(
+                select(Document).where(
+                    Document.tenant_id == tenant_id,
+                    Document.id == document_id,
+                )
+            )
+            if d is None:
+                return None
+            return {
+                "id": d.id,
+                "source": d.source,
+                "source_ref": d.source_ref,
+                "filename": d.filename,
+                "sha256": d.sha256,
+                "sender": d.sender,
+                "reply_to": d.reply_to,
+            }
+
     def create(self, tenant_id: str, **fields) -> str:
         with tenant_session(tenant_id, self.url) as session:
             document = Document(tenant_id=tenant_id, **fields)

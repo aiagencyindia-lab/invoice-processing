@@ -16,6 +16,7 @@ test_rls_policies.py.
 import pytest
 from sqlalchemy.exc import DatabaseError
 
+from invoice_processing.adapters import JsonDocumentRepository
 from invoice_processing.case_projection import _decimal
 from invoice_processing.db import session as session_module
 from invoice_processing.db.models import (
@@ -36,6 +37,7 @@ from invoice_processing.db.repositories import (
     PgCaseRepository,
     PgClaimStore,
     PgCorrectionStore,
+    PgDocumentRepository,
     PgRuleRepository,
     entity_type_for,
 )
@@ -915,3 +917,28 @@ class TestFormattedMoneySurvivesProjection:
         assert float(_decimal("(250.00)")) == -250.0
         assert _decimal("not a number") is None
         assert _decimal(None) is None
+
+
+class TestDocumentGet:
+    def test_pg_get_is_tenant_scoped(self, db):
+        repo = PgDocumentRepository(db)
+        doc_id = repo.create(
+            ACME,
+            storage_key="k",
+            sha256="s" * 64,
+            filename="a.pdf",
+            byte_size=1,
+            source="upload",
+            source_ref="up@x.test",
+        )
+        got = repo.get(ACME, doc_id)
+        assert got["source"] == "upload" and got["source_ref"] == "up@x.test"
+        assert repo.get(GLOBEX, doc_id) is None
+        assert repo.get(ACME, "missing") is None
+
+    def test_json_get_is_tenant_scoped(self, tmp_path):
+        repo = JsonDocumentRepository(tmp_path / "documents.json")
+        doc_id = repo.create(ACME, source="upload", source_ref="up@x.test")
+        assert repo.get(ACME, doc_id)["source_ref"] == "up@x.test"
+        assert repo.get(GLOBEX, doc_id) is None
+        assert repo.get(ACME, "missing") is None

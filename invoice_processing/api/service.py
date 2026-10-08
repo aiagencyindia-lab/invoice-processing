@@ -534,7 +534,8 @@ class ActionRequest(BaseModel):
     # Defaulted rather than required, so a client written before this existed
     # keeps working. The workbench always sends one.
     reason_category: str | None = None
-    # Admin only: why this decision goes against the routing rule.
+    # Admin only: why this decision goes against the routing rule. A non-admin
+    # sending it gets 403 in file mode too (the field used to be ignored).
     override_reason: str | None = Field(default=None, max_length=2000)
 
 
@@ -1091,7 +1092,11 @@ def act(
                 "action": request.action,
                 "why": outcome.why,
                 "acting_for": step.get("acting_for"),
-                "override_reason": request.override_reason,
+                **(
+                    {"override_reason": request.override_reason}
+                    if outcome.overridden
+                    else {}
+                ),
             },
         )
         if not outcome.completed:

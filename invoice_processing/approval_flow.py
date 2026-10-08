@@ -41,11 +41,11 @@ def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
 
 
 def uploader_of(ctx, documents) -> str | None:
-    # ponytail: linear scan, same as _storage_key_for_case; add
-    # DocumentRepository.get() if listings outgrow it.
-    for doc in documents.list_documents(ctx.tenant_id, limit=1000) or []:
-        if doc.get("id") == ctx.case_id and doc.get("source") == "upload":
-            return doc.get("source_ref")
+    # A direct lookup, not a listing: a listing is capped, and a miss here
+    # would let the uploader approve their own invoice.
+    doc = documents.get(ctx.tenant_id, ctx.case_id)
+    if doc and doc.get("source") == "upload":
+        return doc.get("source_ref")
     return None
 
 
@@ -87,6 +87,9 @@ def decide(
     now: datetime,
 ) -> Decision:
     t, case = ctx.tenant_id, ctx.case_id
+    # Crash recovery: if the chain completed but the workflow write failed, the
+    # next act finds no pending step and builds a fresh chain after the decided
+    # ones, so the invoice can still be finished.
     current = repo.current(t, case)
     if current is None:
         # Processed before routing existed, or routed touchless: someone acting
@@ -149,11 +152,17 @@ def decide(
     except StepNotPending:
         raise AlreadyDecided("Someone else just decided this step.") from None
     second = False
+    # An editor may be one of several approvers; they only need a second
+    # person when nobody else has approved.
+    nobody_else = not any(
+        s["status"] == "approved" and s["id"] != step["id"]
+        for s in repo.chain(t, case)
+    )
     if (
         approve
         and completed
         and approvals.editor_needs_second(
-            email, editors_of(ctx, corrections), is_only_pending=True
+            email, editors_of(ctx, corrections), is_only_pending=nobody_else
         )
     ):
         # Someone who corrected the fields cannot be the only approver.

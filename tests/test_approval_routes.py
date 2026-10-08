@@ -3,6 +3,7 @@ last. Without rules the endpoint behaves as before: one approver, done."""
 
 import json
 import shutil
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -128,6 +129,7 @@ def test_two_tier_chain_needs_both_in_order(env):
     two_tier(env)
     first = act(env, "approver:a")
     assert first.status_code == 200
+    assert "invoice_approved" not in [e["event_type"] for e in env["events"]()]
     body = first.json()
     assert body["completed"] is False and body["step"] == 1
     assert body["next"]["assignee_value"] == "b@x.test"
@@ -203,3 +205,67 @@ def test_a_decided_invoice_is_409(env):
     again = act(env, "approver:b")
     assert again.status_code == 409
     assert "already decided" in again.json()["detail"]
+
+
+def test_unassigned_approver_is_refused(env):
+    two_tier(env)
+    r = act(env, "approver:c")
+    assert r.status_code == 403
+    assert "not assigned to you" in r.json()["detail"]
+    assert env["repo"].current(TENANT, CASE)["status"] == "pending"
+
+
+def test_admin_needs_an_override_reason_on_an_unassigned_step(env):
+    two_tier(env)
+    assert act(env, "admin:boss").status_code == 403
+    r = act(env, "admin:boss", override_reason="Urgent, a is away")
+    assert r.status_code == 200 and r.json()["completed"] is False
+    (event,) = [
+        e for e in env["events"]() if e["event_type"] == "approval_overridden"
+    ]
+    assert event["payload"]["override_reason"] == "Urgent, a is away"
+    assert event["payload"]["why"] == "override"
+    assert env["repo"].chain(TENANT, CASE)[0]["decided_by"] == "boss@x.test"
+
+
+def test_plain_decision_audit_has_no_override_reason(env):
+    act(env, "approver:anyone")
+    (event,) = [
+        e for e in env["events"]() if e["event_type"] == "approval_step_decided"
+    ]
+    assert "override_reason" not in event["payload"]
+
+
+def test_editor_finishing_after_another_approver_needs_no_extra_step(env):
+    two_tier(env)
+    env["client"]("approver:b").patch(
+        f"/api/invoices/{CASE}/fields",
+        json={"edits": [{"field": "vendor_name", "value": "Fixed Ltd"}]},
+    )
+    assert act(env, "approver:a").json()["completed"] is False
+    r = act(env, "approver:b")
+    assert r.json()["completed"] is True
+    assert len(env["repo"].chain(TENANT, CASE)) == 2
+
+
+def test_delegate_decision_records_acting_for(env):
+    two_tier(env)
+    env["repo"].create_delegation(
+        TENANT,
+        delegator="a@x.test",
+        delegate="pa@x.test",
+        starts_on=date.today() - timedelta(days=1),
+        ends_on=date.today() + timedelta(days=1),
+        created_by="admin@x.test",
+    )
+    assert act(env, "approver:pa").status_code == 200
+    assert env["repo"].chain(TENANT, CASE)[0]["acting_for"] == "a@x.test"
+
+
+def test_appended_editor_step_has_a_clock(env):
+    env["client"]("approver:ed").patch(
+        f"/api/invoices/{CASE}/fields",
+        json={"edits": [{"field": "vendor_name", "value": "Fixed Ltd"}]},
+    )
+    act(env, "approver:ed")
+    assert env["repo"].current(TENANT, CASE)["due_at"] is not None
