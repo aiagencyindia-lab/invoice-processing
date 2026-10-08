@@ -20,6 +20,7 @@ from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from .. import po_matching
@@ -781,13 +782,20 @@ class PgVendorRepository:
     def _iso(value):
         return value.isoformat() if value else None
 
-    def _vendor_dict(self, session, vendor: Vendor) -> dict:
-        pending = session.scalar(
+    @staticmethod
+    def _pending_id(session, vendor_id: str) -> str | None:
+        return session.scalar(
             select(VendorBankChange.id).where(
-                VendorBankChange.vendor_id == vendor.id,
+                VendorBankChange.vendor_id == vendor_id,
                 VendorBankChange.status == VendorBankChange.PENDING,
             )
         )
+
+    # ponytail: one pending-change query per vendor (here and in
+    # load_records); fine for a supplier list in the hundreds, group the
+    # queries by vendor_id when lists reach the thousands.
+    def _vendor_dict(self, session, vendor: Vendor) -> dict:
+        pending = self._pending_id(session, vendor.id)
         return {
             "id": vendor.id,
             "name": vendor.name,
@@ -836,6 +844,7 @@ class PgVendorRepository:
 
     # -- vendors ---------------------------------------------------------
     def upsert_many(self, tenant_id: str, records: list[dict]) -> int:
+        count = 0
         with tenant_session(tenant_id, self.url) as session:
             existing = {
                 v.normalized_name: v
@@ -861,8 +870,9 @@ class PgVendorRepository:
                 vendor.name = name
                 vendor.tax_id = str(record.get("tax_id") or "").strip()
                 vendor.kind = str(record.get("kind") or "").lower()
+                count += 1
             session.flush()
-        return len(records)
+        return count
 
     def list(self, tenant_id: str) -> list[dict]:
         with tenant_session(tenant_id, self.url) as session:
@@ -954,13 +964,10 @@ class PgVendorRepository:
     ) -> dict:
         with tenant_session(tenant_id, self.url) as session:
             vendor = self._vendor(session, tenant_id, vendor_id)
-            if session.scalar(
-                select(VendorBankChange.id).where(
-                    VendorBankChange.vendor_id == vendor.id,
-                    VendorBankChange.status == VendorBankChange.PENDING,
-                )
-            ):
-                raise PendingChangeExists(vendor.name)
+            # Read now: after a failed flush the session cannot lazy-load.
+            vendor_name = vendor.name
+            if self._pending_id(session, vendor.id):
+                raise PendingChangeExists(vendor_name)
             change = VendorBankChange(
                 tenant_id=tenant_id,
                 vendor_id=vendor.id,
@@ -973,7 +980,12 @@ class PgVendorRepository:
                 setattr(change, f"proposed_{f}", proposed.get(f"bank_{f}"))
                 setattr(change, f"previous_{f}", getattr(vendor, f"bank_{f}"))
             session.add(change)
-            session.flush()
+            try:
+                session.flush()
+            except IntegrityError as exc:
+                # Lost the race the pre-check cannot close: the partial unique
+                # index on pending changes refused the second one.
+                raise PendingChangeExists(vendor_name) from exc
             session.refresh(change)
             return self._change_dict(change, vendor.name)
 
@@ -1016,16 +1028,21 @@ class PgVendorRepository:
             raise ValueError(action)
         with tenant_session(tenant_id, self.url) as session:
             change = session.scalar(
-                select(VendorBankChange).where(
+                select(VendorBankChange)
+                .where(
                     VendorBankChange.tenant_id == tenant_id,
                     VendorBankChange.id == change_id,
                 )
+                .with_for_update()
             )
             if change is None:
                 raise KeyError(change_id)
             if change.status != VendorBankChange.PENDING:
                 raise ChangeNotPending(change.status)
-            if change.proposed_by == decided_by:
+            if (
+                change.proposed_by.strip().casefold()
+                == decided_by.strip().casefold()
+            ):
                 raise SelfApproval(decided_by)
             vendor = self._vendor(session, tenant_id, change.vendor_id)
             now = datetime.now(timezone.utc)

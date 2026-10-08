@@ -34,6 +34,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -377,6 +378,17 @@ class VendorBankChange(Base, TenantMixin, TimestampMixin):
     """
 
     __tablename__ = "vendor_bank_changes"
+    # The database, not a Python pre-check, is what stops two containers both
+    # proposing a change for one vendor.
+    __table_args__ = (
+        Index(
+            "uq_vendor_bank_changes_pending",
+            "vendor_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
 
     PENDING = "pending"
     APPROVED = "approved"

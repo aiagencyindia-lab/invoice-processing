@@ -5,6 +5,7 @@ them need a record both can read."""
 
 import pytest
 from sqlalchemy import inspect
+from sqlalchemy.exc import IntegrityError
 
 from invoice_processing.api import service
 from invoice_processing.db import models
@@ -80,9 +81,14 @@ def _acme(repo):
 
 
 class TestGuard:
-    def test_no_repository_when_the_vendors_table_is_missing(self, monkeypatch):
+    def test_no_repository_when_the_vendors_table_is_missing(self):
         # The suite's default DATABASE_URL is an empty in-memory SQLite.
         assert service.get_vendors() is None
+
+    def test_repository_when_the_table_exists(self, repo, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", repo.url)
+        monkeypatch.setattr(service, "_vendors", None)
+        assert isinstance(service.get_vendors(), PgVendorRepository)
 
 
 class TestUpsert:
@@ -207,3 +213,58 @@ class TestDualControl:
         assert record["name"] == ACME["name"]
         assert record["pending_change"] is True
         assert record["bank_account_number"] is None
+
+    def test_self_approval_ignores_case_and_whitespace(self, repo):
+        vendor = _acme(repo)
+        change = repo.propose(
+            T,
+            vendor["id"],
+            proposed=BANK,
+            reason="x",
+            proposed_by="Clerk@A.test",
+        )
+        with pytest.raises(SelfApproval):
+            repo.decide(
+                T,
+                change["id"],
+                action="approve",
+                decided_by=" clerk@a.test ",
+                note=None,
+            )
+
+    def test_database_refuses_a_second_pending_row(self, repo):
+        vendor = _acme(repo)
+
+        def pending():
+            return models.VendorBankChange(
+                tenant_id=T,
+                vendor_id=vendor["id"],
+                reason="x",
+                proposed_by="c@a",
+                status="pending",
+            )
+
+        with tenant_session(T, repo.url) as session:
+            session.add(pending())
+        with (
+            pytest.raises(IntegrityError),
+            tenant_session(T, repo.url) as session,
+        ):
+            session.add(pending())
+
+    def test_propose_turns_a_lost_race_into_pending_change_exists(
+        self, repo, monkeypatch
+    ):
+        vendor = _acme(repo)
+        repo.propose(
+            T, vendor["id"], proposed=BANK, reason="x", proposed_by="c@a"
+        )
+        # Blind the pre-check so only the index can object, as in a real race.
+        monkeypatch.setattr(PgVendorRepository, "_pending_id", lambda *a: None)
+        with pytest.raises(PendingChangeExists):
+            repo.propose(
+                T, vendor["id"], proposed=BANK, reason="y", proposed_by="c@a"
+            )
+
+    def test_upsert_counts_only_usable_records(self, repo):
+        assert repo.upsert_many(T, [ACME, {"name": "  ", "tax_id": "x"}]) == 1

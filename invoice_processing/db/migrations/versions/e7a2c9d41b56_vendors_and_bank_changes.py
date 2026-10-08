@@ -115,21 +115,20 @@ def upgrade() -> None:
         "documents", sa.Column("reply_to", sa.String(320), nullable=True)
     )
 
-    if op.get_bind().dialect.name != "postgresql":
-        return
     # One pending change per vendor, enforced where two API containers cannot
-    # race past a check in Python.
+    # race past a check in Python. Both dialects take a partial index.
     op.execute(
         "CREATE UNIQUE INDEX uq_vendor_bank_changes_pending "
         "ON vendor_bank_changes (vendor_id) WHERE status = 'pending'"
     )
+    if op.get_bind().dialect.name != "postgresql":
+        return
     for statement in enable_rls_statements(RLS_TABLES):
         op.execute(statement)
 
 
 def downgrade() -> None:
-    if op.get_bind().dialect.name == "postgresql":
-        op.execute("DROP INDEX IF EXISTS uq_vendor_bank_changes_pending")
+    op.execute("DROP INDEX IF EXISTS uq_vendor_bank_changes_pending")
     op.drop_column("documents", "reply_to")
     op.drop_column("documents", "sender")
     op.drop_table("vendor_bank_changes")
