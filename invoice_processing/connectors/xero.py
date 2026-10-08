@@ -156,8 +156,9 @@ def build_bill_payload(
 ) -> dict:
     """Map a canonical invoice to a Xero ACCPAY bill.
 
-    `account_code_map` translates our internal item codes (LABOUR, PARTS, ...)
-    to the tenant's Xero chart of accounts. Unmapped codes fall back to the
+    A line's `gl_account` wins. Otherwise `account_code_map` translates our
+    internal item codes (LABOUR, PARTS, ...) to the tenant's Xero chart of
+    accounts. Unmapped codes fall back to the
     default rather than failing the post: a bill in the wrong expense account is
     a reviewer's five-second fix, whereas a failed post blocks payment.
     """
@@ -174,9 +175,10 @@ def build_bill_payload(
                 or _decimal(line.get("amount_ex_tax"))
                 or 0,
                 "LineAmount": _decimal(line.get("amount_ex_tax")),
-                "AccountCode": account_code_map.get(
-                    item_code, default_account_code
-                ),
+                # A line's GL coding (rule or person) is the tenant's own
+                # answer; the item-code map is only a guess from the code.
+                "AccountCode": line.get("gl_account")
+                or account_code_map.get(item_code, default_account_code),
                 # Tax is carried per line so multi-rate invoices survive the
                 # mapping; a single header tax cannot express them.
                 "TaxAmount": _decimal(line.get("tax_amount")),

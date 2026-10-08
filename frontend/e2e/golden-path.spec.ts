@@ -448,3 +448,62 @@ test("a two-step rule routes an invoice through alice then bob", async ({
     .click();
   await expect(page.getByText(`Rule ${rule} deleted.`)).toBeVisible();
 });
+
+test("an admin can add a GL rule, see it listed, and delete it", async ({
+  page,
+}) => {
+  const vendor = "E2E GL Rule Vendor";
+  await goto(page, "/admin/gl-rules");
+  await expect(page.getByRole("heading", { name: "GL rules" })).toBeVisible();
+
+  await page.getByLabel("Vendor name").fill(vendor);
+  await page.getByLabel("GL account", { exact: true }).fill("6100-E2E");
+  await page.getByRole("button", { name: "Add rule" }).click();
+  await expect(page.getByText("Rule for 6100-E2E created.")).toBeVisible();
+
+  const row = page
+    .locator(".row-between")
+    .filter({ hasText: `vendor ${vendor}` });
+  await expect(row.getByText("6100-E2E", { exact: true })).toBeVisible();
+
+  // Tenant policy that outlives the test; remove it, which asks first.
+  page.once("dialog", (dialog) => dialog.accept());
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByText("Rule deleted.")).toBeVisible();
+  await expect(row).toHaveCount(0);
+});
+
+// This test owns case_004_gl (cloned in scripts/e2e_api.py); nothing else
+// decides it. No worker runs here, so rules never code it: manual coding only.
+test("a clerk codes a line to a GL account, and a decision closes it", async ({
+  page,
+}) => {
+  await as(page, "alice@e2e.test:clerk");
+  await goto(page, "/invoices?case=case_004_gl");
+  await expect(page.locator("#f_vendor_name")).toHaveValue("Ledger Test Supplies");
+
+  const gl = page.getByLabel("GL account for line 1");
+  await gl.fill("6200");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Line 1 coded to 6200")).toBeVisible();
+
+  // Persisted, and attributed to a person rather than a rule.
+  await page.reload();
+  await expect(gl).toHaveValue("6200");
+  await expect(gl.locator("xpath=..").getByText("manual", { exact: true })).toBeVisible();
+
+  // A second person approves; the coding is then closed.
+  await as(page, "dev@localhost:admin");
+  await goto(page, "/invoices?case=case_004_gl");
+  await page.getByRole("button", { name: /^Approve/ }).click();
+  await page
+    .getByRole("dialog", { name: "Approve invoice" })
+    .getByRole("button", { name: "Approve" })
+    .click();
+  await expect(page.getByText(/^Approved /)).toBeVisible();
+
+  // Approving advances the queue; come back to the decided invoice.
+  await goto(page, "/invoices?case=case_004_gl");
+  await expect(gl).toBeDisabled();
+  await expect(gl).toHaveValue("6200");
+});

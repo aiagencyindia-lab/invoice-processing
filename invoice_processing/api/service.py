@@ -128,6 +128,7 @@ _claim_store = None
 _locks = None
 _vendors = None
 _approvals = None
+_gl_rules = None
 _rules = None
 _tenant_settings = None
 _claims_writer = None
@@ -357,6 +358,25 @@ def get_approvals():
 
         _approvals = PgApprovalRepository()
     return _approvals
+
+
+def get_gl_rules():
+    """Tenant GL coding rules. `None` without the table.
+
+    Raises when a configured database cannot be asked, like `get_approvals`:
+    None means "no rules here", and the worker would then file every line
+    uncoded without saying why.
+    """
+    global _gl_rules
+    if (
+        _gl_rules is None
+        and _database_configured()
+        and _table_exists("gl_rules", "GL coding", raise_on_error=True)
+    ):
+        from ..db.repositories import PgGlRuleRepository  # noqa: PLC0415
+
+        _gl_rules = PgGlRuleRepository()
+    return _gl_rules
 
 
 def get_queue():
@@ -737,6 +757,11 @@ def get_invoice(
         **_summarize(case_id, artifacts),
         "fields": fields,
         "line_items": invoice.get("line_items") or [],
+        # The projected lines carry the numbering the GL endpoint addresses
+        # and the account each line is coded to, so the workbench never has
+        # to guess which extraction row is which line.
+        "lines": case_projection.lines(artifacts),
+        "gl_coding": artifacts.get("gl_coding"),
         "findings": _findings(artifacts),
         "corrections": get_corrections().list(principal.tenant_id, case_id),
         "evidence_summary": evidence.get("_summary") or {},
@@ -819,6 +844,16 @@ def edit_fields(
     The correction -- old value, new value, who, when -- is the point. It is
     what accuracy is measured from and what the learning loop mines for rules.
     """
+    # The fields get_invoice lists are the fields a person may edit. Lines and
+    # internals (evidence) are not fields: replacing line_items here would
+    # change what a decided invoice exports without anyone re-approving it.
+    for edit in request.edits:
+        if edit.field.startswith("_") or edit.field == "line_items":
+            raise HTTPException(
+                status_code=400,
+                detail=f"{edit.field} is not an editable field; edit the "
+                "invoice's header fields here.",
+            )
     _require_unlocked(principal, case_id)
     ctx = principal.context(case_id)
     artifacts = get_cases().get_artifacts(ctx)
@@ -916,14 +951,20 @@ ROUTING_FIELDS = {
 
 
 def _reroute_if_needed(ctx, artifacts, extraction, recorded) -> bool | str:
-    """True if the chain really changed, False if not, "failed" on an error.
-
-    A decided case is a no-op inside `route`, so the answer comes from
-    comparing the chain before and after rather than from having called it.
-    """
+    """Re-route only when an edit touched a field routing reads."""
     fields = sorted(ROUTING_FIELDS & {r["field_path"] for r in recorded})
     if not fields:
         return False
+    return reroute(ctx, {**artifacts, "extraction": extraction}, fields)
+
+
+def reroute(ctx, artifacts: dict, fields: list[str]) -> bool | str:
+    """Rebuild the pending chain after `fields` changed.
+
+    True if the chain really changed, False if not, "failed" on an error. A
+    decided case is a no-op inside `route`, so the answer comes from
+    comparing the chain before and after rather than from having called it.
+    """
     try:
         repo = get_approvals()
     except Exception as exc:
@@ -951,7 +992,7 @@ def _reroute_if_needed(ctx, artifacts, extraction, recorded) -> bool | str:
         before = shape()
         approval_flow.route(
             ctx,
-            {**artifacts, "extraction": extraction},
+            artifacts,
             repo=repo,
             now=datetime.now(timezone.utc),
         )
@@ -1402,7 +1443,45 @@ CSV_COLUMNS = [
     "total_inc_tax",
     "po_number",
     "payment_terms",
+    "gl_account",
 ]
+
+
+def _with_gl(ctx, invoice: dict, artifacts: dict) -> dict:
+    """The invoice with each line's GL account from the projected lines.
+
+    Export reads the extraction, which carries no coding. The projection is
+    where gl_coding is applied, so it is read here rather than re-deciding
+    which coding wins. Accounts are attached only when every extraction line
+    pairs with its projected line; otherwise none are, and the connector
+    falls back to its account map or default.
+    """
+    # ponytail: extraction line N <-> projected line N, checked by count and
+    # description. Pairing breaks when the transformer renumbers or drops
+    # lines, or when line items were replaced after coding (as /fields once
+    # allowed); an unpaired export is audited rather than guessed.
+    items = invoice.get("line_items") or []
+    projected = case_projection.lines(artifacts)
+    paired = len(items) == len(projected) and all(
+        isinstance(item, dict)
+        and case_projection._text(item.get("description"), 8000)
+        == line["description"]
+        for item, line in zip(items, projected, strict=False)
+    )
+    if not paired:
+        get_audit().emit(
+            ctx,
+            "gl_export_unpaired",
+            {"extraction_lines": len(items), "projected_lines": len(projected)},
+        )
+        return invoice
+    return {
+        **invoice,
+        "line_items": [
+            {**item, "gl_account": line["gl_account"]}
+            for item, line in zip(items, projected, strict=True)
+        ],
+    }
 
 
 def _csv_row(case_id: str, invoice: dict) -> list[str]:
@@ -1419,6 +1498,15 @@ def _csv_row(case_id: str, invoice: dict) -> list[str]:
         "total_inc_tax": invoice.get("invoice_total_inc_tax"),
         "po_number": invoice.get("po_number"),
         "payment_terms": invoice.get("payment_terms"),
+        # One row per invoice, so the lines' accounts share a cell: distinct,
+        # in line order.
+        "gl_account": "; ".join(
+            dict.fromkeys(
+                line["gl_account"]
+                for line in invoice.get("line_items") or []
+                if line.get("gl_account")
+            )
+        ),
     }
     return ["" if mapping[c] is None else str(mapping[c]) for c in CSV_COLUMNS]
 
@@ -1446,7 +1534,6 @@ def export_invoice(
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
 
-    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
     state = _workflow(ctx)
     approved = state.get("decision") == "approve"
 
@@ -1458,6 +1545,9 @@ def export_invoice(
                 "exporting earlier puts an unreviewed liability on the ledger."
             ),
         )
+    invoice = _with_gl(
+        ctx, (artifacts.get("extraction") or {}).get("invoice") or {}, artifacts
+    )
 
     if request.target == "csv":
         buffer = io.StringIO()
@@ -1526,6 +1616,7 @@ def export_invoice(
 from .admin_routes import router as admin_router  # noqa: E402
 from .approval_routes import router as approval_router  # noqa: E402
 from .config_routes import router as config_router  # noqa: E402
+from .gl_routes import router as gl_router  # noqa: E402
 from .ingest import router as ingest_router  # noqa: E402
 from .rules import router as rules_router  # noqa: E402
 from .sheet import router as sheet_router  # noqa: E402
@@ -1542,6 +1633,7 @@ app.include_router(sheet_router)
 app.include_router(rules_router)
 app.include_router(vendor_router)
 app.include_router(approval_router)
+app.include_router(gl_router)
 
 
 @app.get("/", response_class=HTMLResponse)

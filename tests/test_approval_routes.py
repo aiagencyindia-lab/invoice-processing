@@ -1048,3 +1048,71 @@ def test_a_seat_holder_without_the_approver_role_cannot_decide(env):
         "'approver' or higher is required.",
     )
     assert act(env, "clerk:a").status_code == 403
+
+
+def put_gl(accounts):
+    ctx = RunContext(tenant_id=TENANT, case_id=CASE)
+    lines = [
+        {"line_number": i + 1, "gl_account": a, "source": "rule"}
+        for i, a in enumerate(accounts)
+    ]
+    service.get_cases().put_artifact(ctx, "gl_coding", {"lines": lines})
+
+
+def test_route_sends_a_gl_coded_invoice_to_its_gl_rule(env):
+    put_gl(["6100-IT", None])
+    gl = make_rule(env, kind="gl", match={"gl_prefix": "6100"}, steps=[STEP_A])
+    assert gl.status_code == 201, gl.text
+    make_rule(env, steps=[{"kind": "user", "value": "b@x.test"}])
+    route_case(env)
+    chain = env["repo"].chain(TENANT, CASE)
+    assert [s["assignee_value"] for s in chain] == ["a@x.test", "b@x.test"]
+    assert chain[0]["source_rule_id"] == gl.json()["id"]
+
+
+def test_act_on_an_unrouted_invoice_routes_by_gl(env):
+    # decide() builds the chain itself when routing yielded none.
+    put_gl(["6100-IT"])
+    make_rule(env, kind="gl", match={"gl_prefix": "61"}, steps=[STEP_A])
+    assert act(env, "approver:a").status_code == 200
+    chain = env["repo"].chain(TENANT, CASE)
+    assert [(s["assignee_value"], s["status"]) for s in chain] == [
+        ("a@x.test", "approved")
+    ]
+
+
+@pytest.mark.parametrize(
+    "artifacts",
+    [
+        {},
+        {"gl_coding": None},
+        {"gl_coding": {"lines": "x"}},
+        {"gl_coding": {"lines": [None, {"gl_account": 5}, {}]}},
+    ],
+)
+def test_malformed_gl_coding_routes_with_no_accounts(artifacts):
+    assert approval_flow.routing_invoice(artifacts)["_gl_accounts"] == []
+
+
+def test_routing_invoice_lists_coded_accounts():
+    invoice = approval_flow.routing_invoice(
+        {
+            "extraction": {"invoice": {"vendor_name": "V"}},
+            "gl_coding": {
+                "lines": [{"gl_account": "4000"}, {"gl_account": None}]
+            },
+        }
+    )
+    assert invoice == {"vendor_name": "V", "_gl_accounts": ["4000"]}
+
+
+@pytest.mark.parametrize("prefix", [None, "", "  ", 6, "x" * 65])
+def test_gl_rule_needs_a_short_prefix(env, prefix):
+    r = make_rule(env, kind="gl", match={"gl_prefix": prefix})
+    assert r.status_code == 400, r.text
+    assert "gl_prefix" in r.json()["detail"]
+
+
+def test_unknown_kind_lists_gl(env):
+    r = make_rule(env, kind="bogus")
+    assert "gl" in r.json()["detail"].split("Use ")[1]

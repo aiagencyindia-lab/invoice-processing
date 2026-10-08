@@ -522,7 +522,18 @@ function InvoicesWorkbench() {
                   })}
                 </div>
 
-                <LineItems items={detail.line_items} />
+                <LineItems
+                  key={detail.case_id}
+                  detail={detail}
+                  canEdit={canEdit}
+                  isAdmin={can(me, "admin")}
+                  onSaved={(message) => {
+                    say(message);
+                    reloadDetail();
+                    // Coding a line can re-route the invoice.
+                    reloadChain();
+                  }}
+                />
                 <Findings findings={detail.findings} />
                 {chain && chain.steps.length > 0 ? (
                   <ApprovalPanel chain={chain} />
@@ -628,7 +639,25 @@ function ApprovalPanel({ chain }: { chain: ApprovalChain }) {
   );
 }
 
-function LineItems({ items }: { items: Record<string, unknown>[] }) {
+function LineItems({
+  detail,
+  canEdit,
+  isAdmin,
+  onSaved,
+}: {
+  detail: InvoiceDetail;
+  canEdit: boolean;
+  isAdmin: boolean;
+  onSaved: (message: string) => void;
+}) {
+  // The server's numbering, not a guess at it: a transformer that merged or
+  // renumbered lines would otherwise have Save code the wrong line.
+  const items = detail.lines?.length ? detail.lines : detail.line_items;
+  // Typed-but-unsaved GL accounts, by line number.
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const [remember, setRemember] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
   if (!items.length) {
     return (
       <div>
@@ -639,11 +668,61 @@ function LineItems({ items }: { items: Record<string, unknown>[] }) {
       </div>
     );
   }
+
+  // Same test the server refuses with a 409: a decided invoice's coding is closed.
+  const closed = detail.workflow?.decision
+    ? "Closed: this invoice was already decided."
+    : null;
+  const coded = new Map(
+    (detail.gl_coding?.lines ?? []).map((line) => [line.line_number, line]),
+  );
+
+  async function saveGl(lineNumber: number, value: string) {
+    setProblem(null);
+    try {
+      await api(`/api/invoices/${detail.case_id}/lines/${lineNumber}/gl`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          gl_account: value.trim() || null,
+          remember: isAdmin && remember,
+        }),
+      });
+      setDrafts((all) => {
+        const rest = { ...all };
+        delete rest[lineNumber];
+        return rest;
+      });
+      onSaved(`Line ${lineNumber} coded to ${value.trim() || "nothing"}`);
+    } catch (caught) {
+      setProblem(caught instanceof ApiError ? caught.friendly : String(caught));
+    }
+  }
+
   return (
     <div>
-      <div className="eyebrow" style={{ marginBottom: 6 }}>
-        Line items
+      <div className="row-between" style={{ marginBottom: 6 }}>
+        <div className="eyebrow">Line items</div>
+        {canEdit && isAdmin && !closed ? (
+          <label style={{ fontSize: 12 }}>
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(event) => setRemember(event.target.checked)}
+            />{" "}
+            Remember for this vendor
+          </label>
+        ) : null}
       </div>
+      {closed && canEdit ? (
+        <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+          {closed}
+        </div>
+      ) : null}
+      {problem ? (
+        <div role="alert" style={{ fontSize: 12, color: "var(--error)", marginBottom: 6 }}>
+          {problem}
+        </div>
+      ) : null}
       <div className="table-scroll">
         <table className="data-table">
           <thead>
@@ -652,17 +731,69 @@ function LineItems({ items }: { items: Record<string, unknown>[] }) {
               <th>Qty</th>
               <th>Unit</th>
               <th>Amount</th>
+              <th>GL account</th>
             </tr>
           </thead>
           <tbody>
-            {items.map((item, position) => (
-              <tr key={position}>
-                <td>{String(item.description ?? "")}</td>
-                <td>{String(item.quantity ?? "")}</td>
-                <td>{String(item.unit_price ?? "")}</td>
-                <td>{String(item.amount_ex_tax ?? "")}</td>
-              </tr>
-            ))}
+            {items.map((item, position) => {
+              // Projected lines always carry line_number; this is the fallback.
+              const lineNumber = Number(item.line_number) || position + 1;
+              const entry = coded.get(lineNumber);
+              const current =
+                entry?.gl_account ?? (item.gl_account ? String(item.gl_account) : "");
+              const draft = drafts[lineNumber];
+              const dirty = draft !== undefined && draft.trim() !== current;
+              return (
+                <tr key={position}>
+                  <td>{String(item.description ?? "")}</td>
+                  <td>{String(item.quantity ?? "")}</td>
+                  <td>{String(item.unit_price ?? "")}</td>
+                  <td>{String(item.amount_ex_tax ?? "")}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      {canEdit ? (
+                        <input
+                          className="input-field"
+                          aria-label={`GL account for line ${lineNumber}`}
+                          title={closed ?? undefined}
+                          style={{ minWidth: 90 }}
+                          maxLength={64}
+                          value={draft ?? current}
+                          disabled={!!closed}
+                          onChange={(event) =>
+                            setDrafts({ ...drafts, [lineNumber]: event.target.value })
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key !== "Enter") return;
+                            // Enter here saves this line, never the field edits
+                            // (the window handler saves those on Enter).
+                            event.stopPropagation();
+                            event.preventDefault();
+                            if (dirty) saveGl(lineNumber, draft);
+                          }}
+                        />
+                      ) : (
+                        <span>{current || "—"}</span>
+                      )}
+                      {dirty ? (
+                        <button
+                          type="button"
+                          className="btn-chip"
+                          onClick={() => saveGl(lineNumber, draft)}
+                        >
+                          Save
+                        </button>
+                      ) : null}
+                      {entry ? (
+                        <span className="muted" style={{ fontSize: 11 }}>
+                          {entry.source}
+                        </span>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

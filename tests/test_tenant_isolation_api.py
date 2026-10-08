@@ -37,6 +37,7 @@ from invoice_processing.api import (
     approval_routes,
     auth,
     config_routes,
+    gl_routes,
     service,
     system,
     vendor_routes,
@@ -45,6 +46,7 @@ from invoice_processing.api.service import app
 from invoice_processing.db.models import Base, Invoice, Tenant, User
 from invoice_processing.db.repositories import (
     PgApprovalRepository,
+    PgGlRuleRepository,
     PgRuleRepository,
     PgVendorRepository,
 )
@@ -377,6 +379,51 @@ class TestWritesDoNotCross:
         assert len(approvals_db.list_groups(ACME)) == 1
         assert len(approvals_db.list_rules(ACME)) == 1
         assert len(approvals_db.list_delegations(ACME)) == 1
+
+    @pytest.fixture
+    def gl_db(self, scratch_db, monkeypatch):
+        url = scratch_db("iso-gl.db")
+        Base.metadata.drop_all(get_engine(url))
+        create_all(url)
+        for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
+            with db_session(tid, url) as session:
+                session.add(
+                    Tenant(id=tid, name=slug, slug=slug, status="active")
+                )
+        repo = PgGlRuleRepository(url)
+        monkeypatch.setattr(service, "_gl_rules", repo)
+        monkeypatch.setenv("DATABASE_URL", url)
+        return repo
+
+    def test_gl_coding_does_not_cross_tenants(self, clients, gl_db):
+        """A guessed rule id or case id from another tenant is a 404 on every
+        write, and one tenant's rules never code or show in another's."""
+        acme = clients("acme")
+        rule = acme.post(
+            "/api/gl-rules", json={"keyword": "freight", "gl_account": "6100"}
+        ).json()
+        globex = clients("globex")
+        assert globex.get("/api/gl-rules").json()["rules"] == []
+        assert (
+            globex.patch(
+                f"/api/gl-rules/{rule['id']}", json={"gl_account": "9999"}
+            ).status_code
+            == 404
+        )
+        assert globex.delete(f"/api/gl-rules/{rule['id']}").status_code == 404
+        assert (
+            globex.patch(
+                "/api/invoices/case_005/lines/1/gl",
+                json={"gl_account": "9999", "remember": True},
+            ).status_code
+            == 404
+        )
+        # Nothing was damaged by the probes.
+        (kept,) = gl_db.list_rules(ACME)
+        assert kept["gl_account"] == "6100"
+        assert gl_db.list_rules(GLOBEX) == []
+        detail = acme.get("/api/invoices/case_005").json()
+        assert detail["gl_coding"] is None
 
     def test_manager_cannot_be_set_across_tenants(self, clients, approvals_db):
         acme_user = next(
@@ -1056,6 +1103,9 @@ class TestCoverage:
         "/api/approvals/rules/{rule_id}",
         "/api/approvals/delegations",
         "/api/approvals/delegations/{delegation_id}",
+        "/api/gl-rules",
+        "/api/gl-rules/{rule_id}",
+        "/api/invoices/{case_id}/lines/{line_number}/gl",
         "/api/sheet/invoices",
         "/api/sheet/summary",
         "/api/sheet/facets",
@@ -1108,6 +1158,7 @@ class TestCoverage:
             admin_routes,
             approval_routes,
             config_routes,
+            gl_routes,
             system,
             vendor_routes,
         ):

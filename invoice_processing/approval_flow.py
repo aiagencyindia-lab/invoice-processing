@@ -25,6 +25,19 @@ def _sla_days(tenant_id: str) -> int:
     return int(tenant_settings.effective(tenant_id)["approval_sla_days"])
 
 
+def routing_invoice(artifacts: dict) -> dict:
+    """The invoice as the engine sees it: extracted fields plus GL accounts."""
+    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+    coding = artifacts.get("gl_coding")
+    lines = coding.get("lines") if isinstance(coding, dict) else None
+    accounts = [
+        line["gl_account"]
+        for line in (lines if isinstance(lines, list) else [])
+        if isinstance(line, dict) and isinstance(line.get("gl_account"), str)
+    ]
+    return {**invoice, "_gl_accounts": accounts}
+
+
 def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
     """(Re)build the pending chain for a case from the current rules.
 
@@ -45,7 +58,7 @@ def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
     chain = repo.chain(t, ctx.case_id)
     if any(s["status"] == "rejected" for s in chain):
         return chain
-    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+    invoice = routing_invoice(artifacts)
     rules = repo.list_rules(t)
     specs = (
         approvals.build_chain(invoice, rules)
@@ -98,9 +111,24 @@ def uploader_of(ctx, documents) -> str | None:
     return None
 
 
-def editors_of(ctx, corrections) -> list[str]:
+def editors_of(ctx, corrections, artifacts: dict) -> list[str]:
+    """Who changed the invoice: corrected a field or coded a line by hand.
+
+    Coding a line routes the invoice (a GL rule can add or drop a step), so a
+    coder is an editor exactly as a field corrector is.
+    """
     rows = corrections.list(ctx.tenant_id, ctx.case_id)
-    return sorted({r["actor"] for r in rows if r.get("actor")})
+    coding = artifacts.get("gl_coding")
+    lines = coding.get("lines") if isinstance(coding, dict) else None
+    coders = [
+        line.get("coded_by")
+        for line in (lines if isinstance(lines, list) else [])
+        if isinstance(line, dict) and line.get("source") == "manual"
+    ]
+    return sorted(
+        {r["actor"] for r in rows if r.get("actor")}
+        | {c for c in coders if isinstance(c, str) and c}
+    )
 
 
 def assess(
@@ -186,7 +214,7 @@ def decide(
         # on it has chosen to review it. build_chain is never empty (it falls
         # back to a role step), unlike route() which yields [] for touchless.
         # Filtered as route() filters, so nobody who approved is asked again.
-        invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+        invoice = routing_invoice(artifacts)
         repo.replace_pending(
             t,
             case,
@@ -248,10 +276,13 @@ def decide(
         approve
         and completed
         and approvals.editor_needs_second(
-            email, editors_of(ctx, corrections), is_only_pending=nobody_else
+            email,
+            editors_of(ctx, corrections, artifacts),
+            is_only_pending=nobody_else,
         )
     ):
-        # Someone who corrected the fields cannot be the only approver.
+        # Someone who corrected the fields or coded a line cannot be the only
+        # approver.
         repo.append_step(
             t, case, approvals.ROLE_FALLBACK, sla_days=sla, now=now
         )

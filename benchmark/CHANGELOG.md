@@ -1354,3 +1354,22 @@ has no tiers, so nothing changes there. Had it set a 5-lakh tier (total >=
 person: MFG-INV-049, MFG-INV-056, SVC-INV-009, TECH-INV-043, TECH-INV-018,
 TECH-INV-048, TECH-INV-001, TECH-INV-016, TECH-INV-054. That is the intended
 cost of a tier, not a regression, and the threshold is the tenant's to choose.
+
+---
+
+## 2026-10-08 — GL coding: no benchmark decision moves
+
+**Problem.** Non-PO GL coding adds a stage after extraction and a column to the
+export, so it had to be shown not to move any benchmark number.
+
+**Root cause.** None; this is a guard, not a fix. GL coding is informational:
+it never feeds a validation check, a decision or routing, and the benchmark
+tenant has no GL rules, so every line stays uncoded.
+
+**Result (today's code replayed over the run at `ecb9bbd`, `replay-gl-coding`).**
+Against `replay-approvals`: posted untouched 40 of 45 clean -> 40 of 45; posted
+untouched wrongly 1 -> 1; decision accuracy 98.0% -> 98.0%; the scored report is
+identical line for line.
+
+**Regression status.** All 9 gates green (2037 tests, 21/21, 27/27, eval gate,
+lint, tsc, 22 e2e).

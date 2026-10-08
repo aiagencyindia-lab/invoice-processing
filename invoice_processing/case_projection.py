@@ -18,6 +18,8 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from .gl_coding import valid_entries
+
 
 # Money and confidence are Numeric columns. Floats are converted through their
 # string form -- Decimal(0.1) is 0.1000000000000000055511151231257827, and a
@@ -199,6 +201,24 @@ def lines(artifacts: dict) -> list[dict]:
     Falling back to the raw extraction means a case that was rejected before
     the transformer ran still has its lines.
     """
+    return _with_gl_coding(_lines(artifacts), artifacts.get("gl_coding"))
+
+
+def _with_gl_coding(rows: list[dict], coding) -> list[dict]:
+    """A coded account (rule or person) wins over the transformer's guess.
+
+    A malformed artifact is ignored rather than losing the projection.
+    """
+    coded = {
+        entry["line_number"]: _text(entry.get("gl_account"), 64)
+        for entry in valid_entries(coding)
+    }
+    for row in rows:
+        row["gl_account"] = coded.get(row["line_number"]) or row["gl_account"]
+    return rows
+
+
+def _lines(artifacts: dict) -> list[dict]:
     mapped = (artifacts.get("transformer") or {}).get("line_items_mapped")
     if mapped:
         return [

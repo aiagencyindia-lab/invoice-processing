@@ -302,13 +302,41 @@ export type InvoiceDetail = InvoiceSummary & {
   agreement: string | null;
   fields: InvoiceField[];
   line_items: Record<string, unknown>[];
+  /** The projected lines: the numbering the GL endpoint addresses, and each
+   *  line's coded account. Absent from an older API. */
+  lines?: Record<string, unknown>[];
   findings: Finding[];
   corrections: Correction[];
   /** Who is editing this record, if anyone. Null also means the deployment has
    *  no lock table, so a caller must not read absence as "free to edit
    *  exclusively" -- only as "nobody is stopping you". */
   lock: RecordLock | null;
+  /** Per-line GL coding; absent on a case coded before GL coding existed. */
+  gl_coding?: GlCoding | null;
 };
+
+/** A tenant rule that codes invoice lines to a GL account. At least one of
+ *  vendor_name/keyword is set. */
+export type GlRule = {
+  id: string;
+  vendor_name: string | null;
+  keyword: string | null;
+  gl_account: string;
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+};
+
+export type GlCodingLine = {
+  line_number: number;
+  gl_account: string | null;
+  source: "rule" | "manual" | "none";
+  rule_id: string | null;
+  coded_by: string | null;
+  coded_at: string | null;
+};
+
+export type GlCoding = { lines: GlCodingLine[] };
 
 export type PurchaseOrder = {
   po_number: string | null;
@@ -592,7 +620,7 @@ export type ApproverGroup = { id: string; name: string; members: string[] };
 export type ApprovalRule = {
   id: string;
   name: string;
-  kind: "vendor" | "entity" | "amount";
+  kind: "vendor" | "entity" | "gl" | "amount";
   match: Record<string, unknown>;
   steps: { kind: "user" | "group" | "role"; value: string }[];
   enabled: boolean;

@@ -249,6 +249,17 @@ class TestPayloadMapping:
         payload = build_bill_payload(INVOICE, account_code_map={})
         assert payload["LineItems"][0]["AccountCode"] == "429"
 
+    def test_a_coded_line_posts_to_its_gl_account(self):
+        """A person's or a rule's GL coding beats the item-code map."""
+        first, *rest = INVOICE["line_items"]
+        lines = [{**first, "gl_account": "6100"}, *rest]
+        payload = build_bill_payload(
+            {**INVOICE, "line_items": lines},
+            account_code_map={"PARTS": "310", "LABOUR": "477"},
+        )
+        assert payload["LineItems"][0]["AccountCode"] == "6100"
+        assert payload["LineItems"][1]["AccountCode"] == "477"
+
     def test_invoice_with_no_lines_still_posts(self):
         """Xero rejects a bill with no lines; a summary line keeps the total."""
         payload = build_bill_payload({**INVOICE, "line_items": []})

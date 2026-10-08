@@ -16,14 +16,16 @@ export function DelegationsPanel({
   const { data, error, reload } = usePoll<{ delegations: Delegation[] }>(
     "/api/approvals/delegations",
   );
-  // Local date: toISOString is UTC and is "yesterday" east of Greenwich
-  // until the morning.
+  // "Today" is the person's local date, but the server checks a delegation
+  // against the UTC date; near midnight they differ, and a range of the local
+  // date alone is not yet (or no longer) active. Default to a range covering both.
   const now = new Date();
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const local = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const utc = now.toISOString().slice(0, 10);
   const [delegator, setDelegator] = useState("");
   const [delegate, setDelegate] = useState("");
-  const [from, setFrom] = useState(today);
-  const [to, setTo] = useState(today);
+  const [from, setFrom] = useState(local < utc ? local : utc);
+  const [to, setTo] = useState(local < utc ? utc : local);
   const [notice, setNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
