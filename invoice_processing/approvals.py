@@ -17,11 +17,6 @@ from dataclasses import dataclass
 from . import po_matching
 
 ROLE_RANK = {"viewer": 0, "clerk": 1, "approver": 2, "admin": 3}
-KIND_ORDER = (
-    "vendor",
-    "entity",
-    "amount",
-)  # the fixed order rules contribute in
 
 
 @dataclass(frozen=True)
@@ -53,22 +48,64 @@ def match_entity(customer_name, organization_name) -> bool:
     return bool(org) and org in _fold(customer_name)
 
 
+def _number(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def _usable(rule) -> bool:
+    """Whether the engine can read this stored rule.
+
+    One malformed row must not stop routing for the whole tenant, so what
+    cannot be read is skipped. Write-time validation is the first line of
+    defence; this is the last.
+    """
+    if not isinstance(rule, dict) or not isinstance(rule.get("id"), str):
+        return False
+    if rule.get("kind") not in ("vendor", "entity", "amount"):
+        return False
+    if not isinstance(rule.get("match"), dict):
+        return False
+    steps = rule.get("steps")
+    if not isinstance(steps, list) or not all(
+        isinstance(s, dict)
+        and isinstance(s.get("kind"), str)
+        and isinstance(s.get("value"), str)
+        for s in steps
+    ):
+        return False
+    if rule["kind"] == "amount":
+        floor = rule["match"].get("min_amount")
+        return floor is None or _number(floor) is not None
+    return True
+
+
+def _live(rules: list[dict]) -> list[dict]:
+    return [r for r in rules if _usable(r) and r.get("enabled", True)]
+
+
+def _floor(rule: dict) -> float:
+    return _number(rule["match"].get("min_amount")) or 0.0
+
+
 def _amount_tier(invoice: dict, rules: list[dict]) -> dict | None:
-    total = invoice.get("invoice_total_inc_tax")
+    total = _number(invoice.get("invoice_total_inc_tax"))
     if total is None:
         return None
     currency = str(invoice.get("currency") or "").upper()
     best = None
-    for r in rules:
-        if r["kind"] != "amount" or not r.get("enabled", True):
+    # Earliest created wins a tie on the floor, then input order (strict >).
+    for r in sorted(_live(rules), key=lambda r: str(r.get("created_at") or "")):
+        if r["kind"] != "amount":
             continue
         wanted = str(r["match"].get("currency") or "").upper()
         if wanted and wanted != currency:
             continue
-        floor = float(r["match"].get("min_amount") or 0)
-        if float(total) >= floor and (
-            best is None or floor > float(best["match"].get("min_amount") or 0)
-        ):
+        if total >= _floor(r) and (best is None or _floor(r) > _floor(best)):
             best = r
     return best
 
@@ -80,12 +117,10 @@ def needs_person(invoice: dict, rules: list[dict]) -> bool:
     )
 
 
-def build_chain(
-    invoice: dict, rules: list[dict], *, organization_names: list[str]
-) -> list[StepSpec]:
+def build_chain(invoice: dict, rules: list[dict]) -> list[StepSpec]:
     vendor_key = po_matching.normalize_vendor(invoice.get("vendor_name"))
     ordered = sorted(
-        (r for r in rules if r.get("enabled", True)),
+        _live(rules),
         key=lambda r: str(r.get("created_at") or ""),
     )
     matched: list[dict] = []
@@ -155,7 +190,7 @@ def satisfaction(
     if kind == "role" and ROLE_RANK.get(role, -1) >= ROLE_RANK.get(value, 99):
         return f"has the {value} role"
     target = step.get("escalated_to")
-    if target:
+    if isinstance(target, str) and target:
         if target.startswith("role:"):
             if ROLE_RANK.get(role, -1) >= ROLE_RANK.get(target[5:], 99):
                 return f"escalated to {target[5:]}s"

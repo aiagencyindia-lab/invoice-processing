@@ -12,7 +12,6 @@ ACME = {
     "currency": "INR",
     "_routing": "AUTO",
 }
-ORGS = ["Zentrix Cloudworks"]
 
 
 def rule(kind, match, steps, rid="r1", enabled=True, created_at="2026-01-01"):
@@ -59,9 +58,9 @@ class TestNeedsPerson:
 
 class TestChain:
     def test_no_rule_means_any_approver(self):
-        assert ap.build_chain(
-            {**ACME, "_routing": "REVIEW"}, [], organization_names=ORGS
-        ) == [ap.ROLE_FALLBACK]
+        assert ap.build_chain({**ACME, "_routing": "REVIEW"}, []) == [
+            ap.ROLE_FALLBACK
+        ]
 
     def test_fixed_order_vendor_entity_amount(self):
         rules = [
@@ -79,7 +78,7 @@ class TestChain:
                 rid="ven",
             ),
         ]
-        chain = ap.build_chain(ACME, rules, organization_names=ORGS)
+        chain = ap.build_chain(ACME, rules)
         assert [(s.assignee.value, s.source_rule_id) for s in chain] == [
             ("it@a.test", "ven"),
             ("Zentrix approvers", "ent"),
@@ -93,10 +92,9 @@ class TestChain:
             rule("amount", {"min_amount": 100000}, [CFO], rid="high"),
             rule("amount", {"min_amount": 500000}, [IT], rid="top"),
         ]
-        assert [
-            s.source_rule_id
-            for s in ap.build_chain(ACME, rules, organization_names=ORGS)
-        ] == ["high"]
+        assert [s.source_rule_id for s in ap.build_chain(ACME, rules)] == [
+            "high"
+        ]
 
     def test_duplicate_assignee_collapses_to_first_position(self):
         rules = [
@@ -105,27 +103,21 @@ class TestChain:
             ),
             rule("amount", {"min_amount": 1}, [FIN, CFO], rid="amt"),
         ]
-        assert [
-            s.assignee.value
-            for s in ap.build_chain(ACME, rules, organization_names=ORGS)
-        ] == ["cfo@a.test", "Finance"]
+        assert [s.assignee.value for s in ap.build_chain(ACME, rules)] == [
+            "cfo@a.test",
+            "Finance",
+        ]
 
     def test_entity_match_folds_like_step_1_2(self):
         rules = [
             rule("entity", {"organization_name": "ZENTRIX  CLOUD-WORKS"}, [FIN])
         ]
-        assert (
-            ap.build_chain(ACME, rules, organization_names=ORGS)[
-                0
-            ].assignee.value
-            == "Finance"
-        )
+        assert ap.build_chain(ACME, rules)[0].assignee.value == "Finance"
 
     def test_review_invoice_with_no_match_gets_role_fallback_only(self):
         assert ap.build_chain(
             {**ACME, "_routing": "REVIEW"},
             [rule("vendor", {"vendor_name": "Other"}, [IT])],
-            organization_names=ORGS,
         ) == [ap.ROLE_FALLBACK]
 
 
@@ -267,4 +259,109 @@ class TestSegregation:
         )
         assert not ap.editor_needs_second(
             "other@a.test", ["ed@a.test"], is_only_pending=True
+        )
+
+
+class TestMalformedAndEdges:
+    GOOD = rule("amount", {"min_amount": 1}, [FIN], rid="good")
+
+    def chain(self, bad, invoice=ACME):
+        return ap.build_chain(invoice, [bad, self.GOOD])
+
+    def test_bad_min_amount_is_skipped(self):
+        bad = rule("amount", {"min_amount": "abc"}, [CFO], rid="bad")
+        assert [s.source_rule_id for s in self.chain(bad)] == ["good"]
+        assert ap.needs_person(ACME, [bad]) is False
+
+    def test_match_none_is_skipped(self):
+        bad = rule("vendor", None, [CFO], rid="bad")
+        assert [s.source_rule_id for s in self.chain(bad)] == ["good"]
+
+    def test_missing_id_is_skipped(self):
+        bad = rule("amount", {"min_amount": 1}, [CFO])
+        del bad["id"]
+        assert [s.source_rule_id for s in self.chain(bad)] == ["good"]
+
+    def test_step_missing_value_is_skipped(self):
+        bad = rule("amount", {"min_amount": 50}, [{"kind": "user"}], rid="bad")
+        assert [s.source_rule_id for s in self.chain(bad)] == ["good"]
+
+    def test_non_numeric_total_matches_no_tier(self):
+        inv = {**ACME, "invoice_total_inc_tax": "n/a"}
+        assert not ap.needs_person(inv, [self.GOOD])
+        assert ap.build_chain({**inv, "_routing": "REVIEW"}, [self.GOOD]) == [
+            ap.ROLE_FALLBACK
+        ]
+
+    def test_none_total_on_review_gets_fallback(self):
+        inv = {**ACME, "invoice_total_inc_tax": None, "_routing": "REVIEW"}
+        assert ap.build_chain(inv, [self.GOOD]) == [ap.ROLE_FALLBACK]
+
+    def test_equal_floor_earliest_created_wins(self):
+        a = rule(
+            "amount",
+            {"min_amount": 10},
+            [FIN],
+            rid="late",
+            created_at="2026-02-01",
+        )
+        b = rule(
+            "amount",
+            {"min_amount": 10},
+            [CFO],
+            rid="early",
+            created_at="2026-01-01",
+        )
+        assert [s.source_rule_id for s in ap.build_chain(ACME, [a, b])] == [
+            "early"
+        ]
+
+    def test_equal_floor_same_time_input_order(self):
+        a = rule("amount", {"min_amount": 10}, [FIN], rid="first")
+        b = rule("amount", {"min_amount": 10}, [CFO], rid="second")
+        assert [s.source_rule_id for s in ap.build_chain(ACME, [a, b])] == [
+            "first"
+        ]
+
+    def test_disabled_vendor_rule_ignored(self):
+        r = rule(
+            "vendor", {"vendor_name": ACME["vendor_name"]}, [IT], enabled=False
+        )
+        assert ap.build_chain({**ACME, "_routing": "REVIEW"}, [r]) == [
+            ap.ROLE_FALLBACK
+        ]
+
+    def test_satisfaction_edges(self):
+        grp = {
+            "assignee_kind": "group",
+            "assignee_value": "Nope",
+            "escalated_to": None,
+        }
+        assert (
+            ap.satisfaction(
+                "x@a.test", "admin", grp, groups={}, delegators_of=[]
+            )
+            is None
+        )
+        role = {
+            "assignee_kind": "role",
+            "assignee_value": "superuser",
+            "escalated_to": None,
+        }
+        assert (
+            ap.satisfaction(
+                "x@a.test", "admin", role, groups={}, delegators_of=[]
+            )
+            is None
+        )
+        esc = {
+            "assignee_kind": "user",
+            "assignee_value": "c@a.test",
+            "escalated_to": 5,
+        }
+        assert (
+            ap.satisfaction(
+                "x@a.test", "clerk", esc, groups={}, delegators_of=[]
+            )
+            is None
         )
