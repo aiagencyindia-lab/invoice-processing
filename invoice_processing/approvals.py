@@ -69,7 +69,7 @@ def _usable(rule) -> bool:
     """
     if not isinstance(rule, dict) or not isinstance(rule.get("id"), str):
         return False
-    if rule.get("kind") not in ("vendor", "entity", "amount"):
+    if rule.get("kind") not in ("vendor", "entity", "gl", "amount"):
         return False
     if not isinstance(rule.get("match"), dict):
         return False
@@ -84,6 +84,9 @@ def _usable(rule) -> bool:
     if rule["kind"] == "amount":
         floor = rule["match"].get("min_amount")
         return floor is None or parse_amount(floor) is not None
+    if rule["kind"] == "gl":
+        prefix = rule["match"].get("gl_prefix")
+        return isinstance(prefix, str) and bool(prefix.strip())
     return True
 
 
@@ -152,6 +155,20 @@ def build_chain(invoice: dict, rules: list[dict]) -> list[StepSpec]:
         if r["kind"] == "entity"
         and match_entity(
             invoice.get("customer_name"), r["match"].get("organization_name")
+        )
+    ]
+    accounts = invoice.get("_gl_accounts")
+    accounts = [
+        a.casefold()
+        for a in (accounts if isinstance(accounts, list) else [])
+        if isinstance(a, str)
+    ]
+    matched += [
+        r
+        for r in ordered
+        if r["kind"] == "gl"
+        and any(
+            a.startswith(r["match"]["gl_prefix"].casefold()) for a in accounts
         )
     ]
     tier = _amount_tier(invoice, rules)

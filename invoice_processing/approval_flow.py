@@ -25,6 +25,18 @@ def _sla_days(tenant_id: str) -> int:
     return int(tenant_settings.effective(tenant_id)["approval_sla_days"])
 
 
+def routing_invoice(artifacts: dict) -> dict:
+    """The invoice as the engine sees it: extracted fields plus GL accounts."""
+    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+    lines = (artifacts.get("gl_coding") or {}).get("lines")
+    accounts = [
+        line["gl_account"]
+        for line in (lines if isinstance(lines, list) else [])
+        if isinstance(line, dict) and isinstance(line.get("gl_account"), str)
+    ]
+    return {**invoice, "_gl_accounts": accounts}
+
+
 def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
     """(Re)build the pending chain for a case from the current rules.
 
@@ -45,7 +57,7 @@ def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
     chain = repo.chain(t, ctx.case_id)
     if any(s["status"] == "rejected" for s in chain):
         return chain
-    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+    invoice = routing_invoice(artifacts)
     rules = repo.list_rules(t)
     specs = (
         approvals.build_chain(invoice, rules)
@@ -186,7 +198,7 @@ def decide(
         # on it has chosen to review it. build_chain is never empty (it falls
         # back to a role step), unlike route() which yields [] for touchless.
         # Filtered as route() filters, so nobody who approved is asked again.
-        invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+        invoice = routing_invoice(artifacts)
         repo.replace_pending(
             t,
             case,

@@ -439,3 +439,55 @@ class TestCallerBeforeDelegators:
             )
             == "member of Finance"
         )
+
+
+class TestGlRules:
+    GL: ClassVar[dict] = {**ACME, "_gl_accounts": ["6100-IT", None, "4000"]}
+
+    def ids(self, invoice, rules):
+        return [s.source_rule_id for s in ap.build_chain(invoice, rules)]
+
+    def test_matches_a_casefolded_prefix_of_any_account(self):
+        r = rule("gl", {"gl_prefix": "6100-it"}, [IT], rid="gl")
+        assert self.ids(self.GL, [r]) == ["gl"]
+
+    def test_no_matching_account_falls_back(self):
+        r = rule("gl", {"gl_prefix": "7"}, [IT], rid="gl")
+        assert ap.build_chain(self.GL, [r]) == [ap.ROLE_FALLBACK]
+
+    def test_missing_or_garbage_accounts_never_match(self):
+        r = rule("gl", {"gl_prefix": "6"}, [IT], rid="gl")
+        for junk in (None, "6100", 6100, [6100, {"a": 1}]):
+            invoice = {**ACME, "_gl_accounts": junk}
+            assert ap.build_chain(invoice, [r]) == [ap.ROLE_FALLBACK]
+        assert ap.build_chain(ACME, [r]) == [ap.ROLE_FALLBACK]
+
+    def test_blank_or_missing_prefix_is_skipped(self):
+        for match in (
+            {},
+            {"gl_prefix": ""},
+            {"gl_prefix": " "},
+            {"gl_prefix": 6},
+        ):
+            bad = rule("gl", match, [IT], rid="bad")
+            assert ap.build_chain(self.GL, [bad]) == [ap.ROLE_FALLBACK]
+
+    def test_order_is_vendor_entity_gl_amount(self):
+        rules = [
+            rule("amount", {"min_amount": 1}, [CFO], rid="amt"),
+            rule("gl", {"gl_prefix": "4"}, [FIN], rid="gl"),
+            rule(
+                "entity",
+                {"organization_name": "Zentrix"},
+                [{"kind": "user", "value": "ent@a.test"}],
+                rid="ent",
+            ),
+            rule(
+                "vendor", {"vendor_name": ACME["vendor_name"]}, [IT], rid="ven"
+            ),
+        ]
+        assert self.ids(self.GL, rules) == ["ven", "ent", "gl", "amt"]
+
+    def test_gl_rule_does_not_pull_a_touchless_invoice_to_a_person(self):
+        r = rule("gl", {"gl_prefix": "6"}, [IT], rid="gl")
+        assert not ap.needs_person(self.GL, [r])
