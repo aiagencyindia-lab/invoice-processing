@@ -134,7 +134,9 @@ function InvoicesWorkbench() {
     "/api/approvals/mine",
   );
   const currentStep = chain?.steps.find((s) => s.position === chain.current);
-  // Only a hint: the buttons stay enabled and the server decides.
+  // Once the queue has loaded and this step is not in it, Approve and Reject
+  // would only earn a refusal, so they are disabled. Still only a hint: the
+  // server decides, and an admin keeps Override.
   const notMine =
     currentStep && mine && !mine.items.some((i) => i.case_id === current)
       ? currentStep
@@ -273,10 +275,10 @@ function InvoicesWorkbench() {
           if (index > 0) open(queue[index - 1].case_id);
           break;
         case "a":
-          if (canAct) setDeciding("approve");
+          if (canAct && !notMine) setDeciding("approve");
           break;
         case "r":
-          if (canAct) setDeciding("reject");
+          if (canAct && !notMine) setDeciding("reject");
           break;
         case "s":
           if (canEdit) save();
@@ -291,7 +293,7 @@ function InvoicesWorkbench() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [index, queue, open, act, save, exportCsv, canAct, canEdit]);
+  }, [index, queue, open, act, save, exportCsv, canAct, canEdit, notMine]);
 
   async function upload(file: File) {
     const body = new FormData();
@@ -437,6 +439,7 @@ function InvoicesWorkbench() {
                           type="button"
                           className="btn-chip"
                           onClick={() => setDeciding("approve")}
+                          disabled={Boolean(notMine)}
                         >
                           Approve<kbd>a</kbd>
                         </button>
@@ -444,6 +447,7 @@ function InvoicesWorkbench() {
                           type="button"
                           className="btn-chip"
                           onClick={() => setDeciding("reject")}
+                          disabled={Boolean(notMine)}
                         >
                           Reject<kbd>r</kbd>
                         </button>

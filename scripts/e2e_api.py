@@ -83,7 +83,8 @@ def seed_database() -> None:
             ("dev@localhost", "admin"),
             ("alice@e2e.test", "approver"),
             ("bob@e2e.test", "approver"),
-            ("pat@e2e.test", "clerk"),
+            # A delegate decides in the seat, so must be able to approve.
+            ("pat@e2e.test", "approver"),
         ):
             session.add(User(tenant_id=TENANT, email=email, role=role))
 
