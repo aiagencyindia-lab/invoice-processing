@@ -50,7 +50,17 @@ def main(argv: list[str] | None = None) -> int:
     if service._database_configured():
         from ..db.migrate import upgrade_to_head  # noqa: PLC0415
 
-        upgrade_to_head()
+        # Logged and turned into an exit code rather than left to unwind. Under
+        # a process supervisor the traceback is easy to lose among the API's
+        # output, and what the operator then sees is "the worker was last seen
+        # hours ago" with nothing saying why it never started.
+        try:
+            upgrade_to_head()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Worker not started: the database could not be migrated."
+            )
+            return 1
 
     worker = Worker(
         queue=queue,
