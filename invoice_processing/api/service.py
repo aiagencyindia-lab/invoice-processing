@@ -875,8 +875,8 @@ def edit_fields(
     ):
         raise HTTPException(
             status_code=409,
-            detail="This invoice is already decided; reject it before "
-            "changing the amount, vendor or customer.",
+            detail="This invoice was already decided; its amount, vendor, "
+            "customer and currency are closed.",
         )
     for edit in request.edits:
         if (

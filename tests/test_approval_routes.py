@@ -740,7 +740,7 @@ def test_a_decided_invoice_refuses_routing_edits(env):
     assert act(env, "approver:anyone").status_code == 200
     r = edit_total(env)
     assert r.status_code == 409
-    assert "reject it before changing" in r.json()["detail"]
+    assert "already decided" in r.json()["detail"]
     types = [e["event_type"] for e in env["events"]()]
     assert "fields_corrected" not in types
     assert "approval_rerouted" not in types
