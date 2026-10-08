@@ -123,8 +123,24 @@ def vendors(company_id: str) -> dict[str, dict]:
 
 
 def vendor_records(company_id: str) -> list[dict]:
+    """The supplier list as the tenant would have loaded it, with the bank
+    details and billing domain the dataset's vendor master carries: without
+    them step 3.4 has nothing to compare and the measurement is of nothing."""
     return [
-        {"name": v["name"], "tax_id": v["gstin"], "kind": v["kind"]}
+        {
+            "name": v["name"],
+            "tax_id": v["gstin"],
+            "kind": v["kind"],
+            "email_domain": (v.get("email") or "").split("@")[-1].lower()
+            or None,
+            "bank_account_name": v["name"],
+            "bank_account_number": v["account"],
+            "bank_code": v["ifsc"],
+            # Verified long before the reference date, so the recent-change
+            # signal measures invoices, not the seeding.
+            "bank_verified_at": "2025-01-01T00:00:00+00:00",
+            "last_bank_change_at": "2025-01-01T00:00:00+00:00",
+        }
         for v in vendors(company_id).values()
     ]
 
