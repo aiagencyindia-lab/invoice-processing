@@ -40,7 +40,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
-from .. import case_projection, paths
+from .. import approval_flow, case_projection, paths
 from ..adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
@@ -534,6 +534,8 @@ class ActionRequest(BaseModel):
     # Defaulted rather than required, so a client written before this existed
     # keeps working. The workbench always sends one.
     reason_category: str | None = None
+    # Admin only: why this decision goes against the routing rule.
+    override_reason: str | None = Field(default=None, max_length=2000)
 
 
 class ExportRequest(BaseModel):
@@ -1040,6 +1042,11 @@ def act(
             detail=f"Unknown reason: {category}. "
             f"One of: {', '.join(REASON_CATEGORIES)}.",
         )
+    if request.override_reason and not principal.can("admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only an admin can override an approval rule.",
+        )
 
     _require_unlocked(principal, case_id)
     ctx = principal.context(case_id)
@@ -1049,6 +1056,55 @@ def act(
 
     # From the artifacts already in hand rather than a second read.
     previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
+    repo = get_approvals()
+    if repo is not None:
+        if previous.get("decision"):
+            raise HTTPException(
+                status_code=409, detail="This invoice was already decided."
+            )
+        try:
+            outcome = approval_flow.decide(
+                ctx,
+                principal,
+                artifacts,
+                repo=repo,
+                documents=get_documents(),
+                corrections=get_corrections(),
+                approve=request.action == "approve",
+                note=request.reason,
+                override_reason=request.override_reason,
+                now=datetime.now(timezone.utc),
+            )
+        except approval_flow.AlreadyDecided as exc:
+            raise HTTPException(status_code=409, detail=exc.detail) from None
+        except approval_flow.Refused as exc:
+            raise HTTPException(status_code=403, detail=exc.detail) from None
+        step = outcome.step
+        get_audit().emit(
+            ctx,
+            "approval_overridden"
+            if outcome.overridden
+            else "approval_step_decided",
+            {
+                "step": step["position"],
+                "assignee": f"{step['assignee_kind']}:{step['assignee_value']}",
+                "action": request.action,
+                "why": outcome.why,
+                "acting_for": step.get("acting_for"),
+                "override_reason": request.override_reason,
+            },
+        )
+        if not outcome.completed:
+            return {
+                "case_id": case_id,
+                "action": request.action,
+                "completed": False,
+                "step": step["position"],
+                "next": repo.current(principal.tenant_id, case_id),
+            }
+        get_audit().emit(
+            ctx, "approval_chain_completed", {"action": request.action}
+        )
     state = _record_workflow(
         ctx,
         decision=request.action,
@@ -1087,6 +1143,7 @@ def act(
         "reason": request.reason,
         "reason_category": category,
         "agreement": agreement,
+        "completed": True,
     }
 
 

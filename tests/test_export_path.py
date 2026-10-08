@@ -37,6 +37,13 @@ from invoice_processing.connectors.xero import (
     HttpTransport,
     Transport,
 )
+from invoice_processing.db import models
+from invoice_processing.db.repositories import PgApprovalRepository
+from invoice_processing.db.session import (
+    create_all,
+    get_engine,
+    tenant_session,
+)
 
 TENANT = "tenant-acme"
 CLAIMS = {
@@ -363,3 +370,23 @@ class TestXeroCredentialsBelongToOneTenant:
         monkeypatch.delenv("XERO_TENANT_ID", raising=False)
 
         assert service.get_exporter("tenant-acme") is None
+
+
+def test_completion_of_a_chain_still_exports(client, tmp_path, monkeypatch):
+    """Export reads the workflow keys chain completion writes, nothing else."""
+    url = f"sqlite:///{tmp_path / 'chain.db'}"
+    models.Base.metadata.drop_all(get_engine(url))
+    create_all(url)
+    with tenant_session(TENANT, url) as session:
+        session.add(
+            models.Tenant(id=TENANT, name="Acme", slug="acme", status="active")
+        )
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setattr(service, "_approvals", PgApprovalRepository(url))
+
+    response = approve(client)
+    assert response.status_code == 200 and response.json()["completed"] is True
+    exported = client.post(
+        "/api/invoices/case_002/export", json={"target": "csv"}
+    )
+    assert exported.status_code == 200

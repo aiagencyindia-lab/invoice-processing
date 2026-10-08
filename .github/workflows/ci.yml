@@ -160,6 +160,7 @@ jobs:
                         tests/test_vendor_repository.py \
                         tests/test_approval_repository.py \
                         tests/test_vendor_routes.py \
+                        tests/test_approval_routes.py \
                         tests/test_tenant_isolation_api.py -q
 
   # A separate toolchain, so a separate job: a broken npm install must not

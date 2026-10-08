@@ -1,0 +1,164 @@
+"""Glue between the pure approval engine and the database.
+
+`approvals.py` decides; this module gathers what it needs (rules, groups,
+delegations, who uploaded and who edited the invoice), asks, and writes the
+result down. The API and the worker both go through here so a chain is built
+and decided the same way wherever it happens.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+
+from . import approvals, tenant_settings
+from .db.repositories import StepNotPending
+
+NEEDS_DB = "Approval routing needs a database. Configure DATABASE_URL."
+
+
+def _sla_days(tenant_id: str) -> int:
+    return int(tenant_settings.effective(tenant_id)["approval_sla_days"])
+
+
+def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
+    """(Re)build the pending chain for a case from the current rules.
+
+    A touchless invoice gets no steps: the AUTO rate is what a pilot is judged
+    on, and only an amount tier may pull such an invoice back to a person.
+    """
+    t = ctx.tenant_id
+    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+    rules = repo.list_rules(t)
+    specs = (
+        approvals.build_chain(invoice, rules)
+        if approvals.needs_person(invoice, rules)
+        else []
+    )
+    return repo.replace_pending(
+        t, ctx.case_id, specs, sla_days=_sla_days(t), now=now
+    )
+
+
+def uploader_of(ctx, documents) -> str | None:
+    # ponytail: linear scan, same as _storage_key_for_case; add
+    # DocumentRepository.get() if listings outgrow it.
+    for doc in documents.list_documents(ctx.tenant_id, limit=1000) or []:
+        if doc.get("id") == ctx.case_id and doc.get("source") == "upload":
+            return doc.get("source_ref")
+    return None
+
+
+def editors_of(ctx, corrections) -> list[str]:
+    rows = corrections.list(ctx.tenant_id, ctx.case_id)
+    return sorted({r["actor"] for r in rows if r.get("actor")})
+
+
+class Refused(Exception):
+    def __init__(self, detail: str):
+        super().__init__(detail)
+        self.detail = detail
+
+
+class AlreadyDecided(Refused):
+    """Lost a race: another person decided the step first (HTTP 409)."""
+
+
+@dataclass
+class Decision:
+    step: dict
+    completed: bool
+    why: str
+    overridden: bool
+    appended_second: bool
+
+
+def decide(
+    ctx,
+    principal,
+    artifacts: dict,
+    *,
+    repo,
+    documents,
+    corrections,
+    approve: bool,
+    note,
+    override_reason,
+    now: datetime,
+) -> Decision:
+    t, case = ctx.tenant_id, ctx.case_id
+    current = repo.current(t, case)
+    if current is None:
+        # Processed before routing existed, or routed touchless: someone acting
+        # on it has chosen to review it. build_chain is never empty (it falls
+        # back to a role step), unlike route() which yields [] for touchless.
+        invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+        repo.replace_pending(
+            t,
+            case,
+            approvals.build_chain(invoice, repo.list_rules(t)),
+            sla_days=_sla_days(t),
+            now=now,
+        )
+        current = repo.current(t, case)
+
+    email = principal.email
+    groups = repo.groups_map(t)
+    delegators = repo.active_delegators_of(t, email, now.date())
+    why = approvals.satisfaction(
+        email, principal.role, current, groups=groups, delegators_of=delegators
+    )
+    block = approvals.refusal(
+        email,
+        uploader=uploader_of(ctx, documents),
+        previous_deciders=[
+            s["decided_by"]
+            for s in repo.chain(t, case)
+            if s["status"] == "approved"
+        ],
+    )
+    overridden = bool((why is None or block) and override_reason)
+    if (why is None or block) and not (
+        principal.can("admin") and override_reason
+    ):
+        raise Refused(block or "This step is not assigned to you.")
+
+    acting_for = None
+    if why and why.startswith("delegate for"):
+        # Name the delegator whose seat this is (the group case does not say).
+        acting_for = next(
+            d
+            for d in delegators
+            if approvals.satisfaction(
+                d, "viewer", current, groups=groups, delegators_of=[]
+            )
+        )
+    sla = _sla_days(t)
+    try:
+        step, completed = repo.decide(
+            t,
+            current["id"],
+            approve=approve,
+            decided_by=email,
+            acting_for=acting_for,
+            override_reason=override_reason if overridden else None,
+            note=note,
+            sla_days=sla,
+            now=now,
+        )
+    except StepNotPending:
+        raise AlreadyDecided("Someone else just decided this step.") from None
+    second = False
+    if (
+        approve
+        and completed
+        and approvals.editor_needs_second(
+            email, editors_of(ctx, corrections), is_only_pending=True
+        )
+    ):
+        # Someone who corrected the fields cannot be the only approver.
+        repo.append_step(
+            t, case, approvals.ROLE_FALLBACK, sla_days=sla, now=now
+        )
+        completed, second = False, True
+    return Decision(step, completed, why or "override", overridden, second)
