@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from golden import GOLDEN_CASES
 
+from invoice_processing import master_files, paths, vendor_master
 from invoice_processing.adapters import FsCaseRepository, JsonlAuditSink
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
@@ -51,8 +52,7 @@ class FakeVerifier:
 def env(tmp_path, monkeypatch, scratch_db):
     url = scratch_db("vendors.db")
     # CI reruns these on a shared Postgres, so start from an empty schema.
-    Base = models.Base
-    Base.metadata.drop_all(get_engine(url))
+    models.Base.metadata.drop_all(get_engine(url))
     create_all(url)
     with tenant_session(TENANT, url) as session:
         session.add(
@@ -125,6 +125,11 @@ class TestPropose:
         assert listed["bank_status"] == "pending"
         assert listed["pending_change_id"] == body["id"]
 
+    def test_unknown_source_case_is_400(self, env):
+        response = propose(env, source_case_id="nope")
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Unknown invoice"
+
     def test_viewer_cannot_propose(self, env):
         assert propose(env, token="viewer").status_code == 403
 
@@ -162,6 +167,7 @@ class TestDecide:
         )
         assert response.status_code == 403
         assert "proposed" in response.json()["detail"]
+        assert "cannot decide" in response.json()["detail"]
 
     def test_clerk_cannot_decide(self, env):
         change = propose(env).json()
@@ -219,18 +225,51 @@ class TestEmailDomain:
 
 
 class TestWithoutADatabase:
-    def test_bank_change_routes_say_so(self, monkeypatch):
+    @pytest.mark.parametrize(
+        ("method", "url", "body"),
+        [
+            ("patch", "/api/vendors/x", {"email_domain": "x.example"}),
+            ("post", "/api/vendors/x/bank-changes", {**BANK, "reason": "r"}),
+            ("get", "/api/vendors/bank-changes", None),
+            (
+                "post",
+                "/api/vendors/bank-changes/x/decide",
+                {"action": "approve"},
+            ),
+            ("post", "/api/invoices/case_005/bank-change", {"reason": "r"}),
+        ],
+    )
+    def test_bank_change_routes_say_so(self, monkeypatch, method, url, body):
         monkeypatch.setattr(service, "_vendors", None)
         monkeypatch.delenv("DATABASE_URL", raising=False)
         monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
         monkeypatch.setattr(auth, "_verifier", FakeVerifier())
         monkeypatch.delenv("AUTH_DISABLED", raising=False)
-        client = TestClient(app, headers={"Authorization": "Bearer clerk"})
-        response = client.post(
-            "/api/vendors/x/bank-changes", json={**BANK, "reason": "r"}
+        client = TestClient(app, headers={"Authorization": "Bearer admin"})
+        response = getattr(client, method)(
+            url, **({"json": body} if body else {})
         )
         assert response.status_code == 503
         assert "database" in response.json()["detail"].lower()
+
+    def test_file_list_tolerates_a_hand_edited_record(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(service, "_vendors", None)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
+        monkeypatch.setattr(paths, "VENDOR_MASTER_DIR", tmp_path / "vendors")
+        monkeypatch.setattr(auth, "_verifier", FakeVerifier())
+        monkeypatch.delenv("AUTH_DISABLED", raising=False)
+        master_files.write_records(
+            paths.vendor_master_file(TENANT),
+            vendor_master.RECORD_KEY,
+            [{"name": "No Tax Id Ltd"}],
+        )
+        client = TestClient(app, headers={"Authorization": "Bearer clerk"})
+        response = client.get("/api/vendors")
+        assert response.status_code == 200
+        assert response.json()["vendors"][0]["name"] == "No Tax Id Ltd"
 
 
 class TestWorkbenchShortcut:
@@ -286,8 +325,7 @@ class TestWorkbenchShortcut:
         assert response.status_code == 409
 
     def test_second_proposal_is_409(self, env, with_case):
-        post = lambda: env["client"]("clerk").post(  # noqa: E731
-            f"/api/invoices/{with_case}/bank-change", json={}
-        )
-        assert post().status_code == 201
-        assert post().status_code == 409
+        url = f"/api/invoices/{with_case}/bank-change"
+        clerk = env["client"]("clerk")
+        assert clerk.post(url, json={}).status_code == 201
+        assert clerk.post(url, json={}).status_code == 409

@@ -343,11 +343,56 @@ class TestWritesDoNotCross:
         )
         assert pending["id"] == change["id"]
 
+    def test_file_backed_vendors_do_not_cross_tenants(
+        self, clients, tmp_path, monkeypatch
+    ):
+        """The no-database path keeps one file per tenant, and strips bank
+        fields before writing because a file has no approval queue."""
+        monkeypatch.setattr(service, "_vendors", None)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
+        monkeypatch.setattr(paths, "VENDOR_MASTER_DIR", tmp_path / "vendors")
+
+        clients("acme", "admin").put(
+            "/api/vendors",
+            json={
+                "vendors": [
+                    {
+                        "name": "Acme Supplier",
+                        "tax_id": "51824753556",
+                        "bank_account_number": "123456789",
+                    }
+                ]
+            },
+        )
+        acme = clients("acme", "clerk").get("/api/vendors").json()
+        assert acme["source"].endswith(".json")
+        (vendor,) = acme["vendors"]
+        assert vendor["bank_status"] == "unverified"
+        assert vendor["bank_account_masked"] is None
+        assert (
+            clients("globex", "clerk").get("/api/vendors").json()["vendors"]
+            == []
+        )
+
     def test_invoice_bank_change_shortcut_does_not_cross_tenants(
         self, clients, vendor_db
     ):
         """case_005 belongs to ACME in the `clients` fixture; a guessed id must
-        not let another tenant raise a bank change from its invoice."""
+        not let another tenant raise a bank change from its invoice. GLOBEX
+        holds a vendor with the invoice's vendor name, so a leak would return
+        201 rather than a coincidental 409."""
+        clients("globex").put(
+            "/api/vendors",
+            json={
+                "vendors": [
+                    {
+                        "name": "QuickFix HVAC Repairs",
+                        "tax_id": "29AAFCZ4821L1ZS",
+                    }
+                ]
+            },
+        )
         response = clients("globex", "clerk").post(
             "/api/invoices/case_005/bank-change", json={"reason": "r"}
         )

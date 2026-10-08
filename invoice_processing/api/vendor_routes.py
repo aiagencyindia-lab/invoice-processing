@@ -140,10 +140,23 @@ def list_vendors(
 
         path = paths.vendor_master_file(principal.tenant_id)
         records = master_files.read_records(path, vendor_master.RECORD_KEY)
-        vendors = [
-            vendor_out({"id": "", **r, "pending_change_id": None})
-            for r in records
-        ]
+        # Through Vendor.from_dict so a hand-edited record missing a field
+        # still lists. Only the plain fields: bank details never come from a
+        # file, which has no queue behind it.
+        vendors = []
+        for r in records:
+            v = vendor_master.Vendor.from_dict(r)
+            vendors.append(
+                vendor_out(
+                    {
+                        "id": "",
+                        "name": v.name,
+                        "tax_id": v.tax_id,
+                        "kind": v.kind,
+                        "email_domain": v.email_domain,
+                    }
+                )
+            )
         return {"vendors": vendors, "count": len(vendors), "source": path.name}
     vendors = [vendor_out(v) for v in repo.list(principal.tenant_id)]
     return {"vendors": vendors, "count": len(vendors), "source": "database"}
@@ -225,7 +238,7 @@ def decide_bank_change(
         raise HTTPException(404, "Unknown bank change") from None
     except repos.SelfApproval:
         raise HTTPException(
-            403, "The person who proposed a bank change cannot approve it."
+            403, "The person who proposed a bank change cannot decide it."
         ) from None
     except repos.ChangeNotPending as exc:
         raise HTTPException(409, f"This change was already {exc}.") from None
@@ -278,6 +291,14 @@ def propose_change(
         raise HTTPException(
             400, "A bank change needs an account number or IBAN."
         )
+    if proposal.source_case_id:
+        from . import service  # noqa: PLC0415
+
+        # Client-supplied and written to the audit trail, so it has to be a
+        # case this tenant owns.
+        ctx = principal.context(proposal.source_case_id)
+        if not service.get_cases().get_artifacts(ctx):
+            raise HTTPException(400, "Unknown invoice")
     try:
         change = repo.propose(
             principal.tenant_id,
