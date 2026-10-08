@@ -78,6 +78,7 @@ def resolve_adapters_afresh(monkeypatch):
         "_claim_store",
         "_locks",
         "_vendors",
+        "_approvals",
         "_rules",
         "_tenant_settings",
         "_claims_writer",

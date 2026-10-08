@@ -127,6 +127,7 @@ _corrections = None
 _claim_store = None
 _locks = None
 _vendors = None
+_approvals = None
 _rules = None
 _tenant_settings = None
 _claims_writer = None
@@ -331,6 +332,20 @@ def get_vendors():
 
         _vendors = PgVendorRepository()
     return _vendors
+
+
+def get_approvals():
+    """Approval chains, rules, groups and delegations. `None` without the table."""
+    global _approvals
+    if (
+        _approvals is None
+        and _database_configured()
+        and _table_exists("approval_steps", "approval routing")
+    ):
+        from ..db.repositories import PgApprovalRepository  # noqa: PLC0415
+
+        _approvals = PgApprovalRepository()
+    return _approvals
 
 
 def get_queue():
