@@ -59,6 +59,7 @@ export default function VendorsPage() {
   const canDecide = can(me, "approver");
   const isAdmin = can(me, "admin");
   const vendors = data?.vendors ?? [];
+  const fromDatabase = data?.source === "database";
 
   function fail(caught: unknown) {
     setProblem(caught instanceof ApiError ? caught.friendly : String(caught));
@@ -80,9 +81,13 @@ export default function VendorsPage() {
       return;
     }
     const replacing = data?.count ?? 0;
+    // The database import upserts by name; the file import rewrites the file.
     const confirmed = window.confirm(
       replacing
-        ? `Replace all ${replacing} vendors with the ${records.length} in ${file.name}?\n\n` +
+        ? fromDatabase
+          ? `Import the ${records.length} vendors in ${file.name}?\n\n` +
+            "This adds or updates suppliers; suppliers not in the file are kept."
+          : `Replace all ${replacing} vendors with the ${records.length} in ${file.name}?\n\n` +
             "This replaces rather than merges, so any vendor not in the file is dropped."
         : `Load ${records.length} vendors from ${file.name}?`,
     );
@@ -95,7 +100,11 @@ export default function VendorsPage() {
         method: "PUT",
         body: JSON.stringify({ vendors: records }),
       });
-      setNotice(`Loaded ${result.count} vendors. This replaced the previous set.`);
+      setNotice(
+        fromDatabase
+          ? `Loaded ${result.count} vendors. Suppliers not in the file were kept.`
+          : `Loaded ${result.count} vendors. This replaced the previous set.`,
+      );
       reload();
     } catch (caught) {
       fail(caught);
@@ -274,6 +283,11 @@ export default function VendorsPage() {
                     >
                       Reject
                     </button>
+                    {mine ? (
+                      <span className="muted" style={{ fontSize: 12.5 }}>
+                        You proposed this change; another approver must decide it.
+                      </span>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -312,7 +326,7 @@ export default function VendorsPage() {
               </thead>
               <tbody>
                 {vendors.map((vendor) => (
-                  <Fragment key={vendor.id}>{vendorRows(vendor)}</Fragment>
+                  <Fragment key={vendor.id || vendor.name}>{vendorRows(vendor)}</Fragment>
                 ))}
               </tbody>
             </table>
@@ -333,7 +347,7 @@ export default function VendorsPage() {
           <td>{vendor.tax_id}</td>
           <td>{vendor.kind}</td>
           <td>
-            {isAdmin ? (
+            {isAdmin && fromDatabase ? (
               <span className="row" style={{ gap: 6 }}>
                 <input
                   className="input-field"
