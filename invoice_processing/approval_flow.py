@@ -8,11 +8,15 @@ and decided the same way wherever it happens.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 
 from . import approvals, tenant_settings
 from .db.repositories import StepNotPending
+from .ports import RunContext
+
+logger = logging.getLogger(__name__)
 
 NEEDS_DB = "Approval routing needs a database. Configure DATABASE_URL."
 
@@ -171,3 +175,42 @@ def decide(
         )
         completed, second = False, True
     return Decision(step, completed, why or "override", overridden, second)
+
+
+def escalate_overdue(repo, audit, *, now: datetime) -> int:
+    """Hand every overdue, not-yet-escalated step to a manager, else the admins.
+
+    Escalation notifies; it does not reassign, so the original assignee can
+    still decide. One tenant failing must not stop the others being swept.
+    """
+    count = 0
+    for t in repo.tenant_ids():
+        try:
+            steps = repo.overdue(t, now)
+            for step in steps:
+                manager = (
+                    repo.manager_of(t, step["assignee_value"])
+                    if step["assignee_kind"] == "user"
+                    else None
+                )
+                target = manager or "role:admin"
+                try:
+                    repo.escalate(t, step["id"], to=target, now=now)
+                except StepNotPending:
+                    continue  # decided between the scan and now
+                audit.emit(
+                    RunContext(
+                        tenant_id=t, case_id=step["case_id"], actor="worker"
+                    ),
+                    "approval_escalated",
+                    {
+                        "position": step["position"],
+                        "assignee": f"{step['assignee_kind']}:{step['assignee_value']}",
+                        "escalated_to": target,
+                        "due_at": step["due_at"],
+                    },
+                )
+                count += 1
+        except Exception:
+            logger.exception("Escalation scan failed for tenant %s", t)
+    return count

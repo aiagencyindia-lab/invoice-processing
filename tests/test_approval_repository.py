@@ -53,6 +53,7 @@ from datetime import date, datetime, timedelta, timezone  # noqa: E402
 
 import pytest  # noqa: E402
 
+from invoice_processing import approval_flow  # noqa: E402
 from invoice_processing.api import service  # noqa: E402
 from invoice_processing.approvals import Assignee, StepSpec  # noqa: E402
 from invoice_processing.db.repositories import (  # noqa: E402
@@ -561,3 +562,80 @@ class TestFixRound:
                 sla_days=2,
                 now=NOW,
             )
+
+
+class TestEscalateOverdue:
+    """The scan hands an overdue step to the assignee's manager, else admins."""
+
+    @pytest.fixture
+    def audit(self):
+        class Audit:
+            def __init__(self):
+                self.events = []
+
+            def emit(self, ctx, event, payload):
+                self.events.append((ctx, event, payload))
+
+        return Audit()
+
+    def _make_user(self, repo, email, manager):
+        with tenant_session(T, repo.url) as session:
+            session.add(
+                models.User(
+                    tenant_id=T,
+                    email=email,
+                    role="viewer",
+                    manager_email=manager,
+                )
+            )
+
+    def _scan(self, repo, audit):
+        return approval_flow.escalate_overdue(
+            repo, audit, now=NOW + timedelta(days=5)
+        )
+
+    def test_manager_then_admin_fallback_and_once_only(self, repo, audit):
+        self._make_user(repo, "a@x.com", "boss@x.com")
+        self._make_user(repo, "solo@x.com", None)
+        seed(repo, "c1", spec("user", "a@x.com"))
+        seed(repo, "c2", spec("user", "solo@x.com"))
+        seed(repo, "c3", spec("group", "Finance"))
+        assert self._scan(repo, audit) == 3
+        to = {
+            c: repo.chain(T, c)[0]["escalated_to"] for c in ("c1", "c2", "c3")
+        }
+        assert to == {
+            "c1": "boss@x.com",
+            "c2": "role:admin",
+            "c3": "role:admin",
+        }
+        assert [e[1] for e in audit.events] == ["approval_escalated"] * 3
+        ctx, _, payload = audit.events[0]
+        assert (ctx.tenant_id, ctx.actor) == (T, "worker")
+        assert payload["escalated_to"] in to.values()
+        assert self._scan(repo, audit) == 0
+        assert len(audit.events) == 3
+
+    def test_a_step_decided_mid_scan_is_skipped(self, repo, audit, monkeypatch):
+        seed(repo, "c1", spec("role", "approver"))
+        real = repo.escalate
+
+        def raced(*a, **k):
+            raise StepNotPending("x")
+
+        monkeypatch.setattr(repo, "escalate", raced)
+        assert self._scan(repo, audit) == 0
+        assert audit.events == []
+        monkeypatch.setattr(repo, "escalate", real)
+
+    def test_one_tenant_failing_does_not_stop_the_rest(self, repo, audit):
+        seed(repo, "c1", spec("role", "approver"))
+        real = repo.overdue
+
+        def flaky(t, now):
+            if t == "tenant-b":
+                raise RuntimeError("boom")
+            return real(t, now)
+
+        repo.overdue = flaky
+        assert self._scan(repo, audit) == 1
