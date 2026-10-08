@@ -408,6 +408,16 @@ adk run invoice_processing
 
 ---
 
+## Vendor Bank Details and Bank-Change Approval
+
+Bank details reach a vendor only through a change proposed by a clerk or above and decided by a different approver or above. Self-decision is refused, and only one change per vendor can be pending. The supplier import (`PUT /api/vendors`) never writes bank fields or the email domain; admins set the email domain with `PATCH`.
+
+Pipeline step 3.4 compares each invoice against the vendor record and holds it for review, never rejecting it, on any of these signals: `bank_mismatch`, `bank_unverified`, `payee_name_differs`, `recent_bank_change` (window set by `bank_change_recent_days`, default 30) and `sender_domain_mismatch` (emailed invoices; Reply-To beats From). Comparison is literal, with no O/0 folding.
+
+Without a database, the vendor list works from the per-tenant file and the bank-change routes answer 503.
+
+Routes: `GET/PUT /api/vendors`, `PATCH /api/vendors/{vendor_id}`, `POST /api/vendors/{vendor_id}/bank-changes`, `GET /api/vendors/bank-changes`, `POST /api/vendors/bank-changes/{change_id}/decide`, `POST /api/invoices/{case_id}/bank-change`.
+
 ## Evaluation
 
 The evaluation framework lives in [`eval/`](eval/) and provides schema-driven assessment of agent output quality.
