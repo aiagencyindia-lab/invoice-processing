@@ -204,14 +204,25 @@ class TestSatisfaction:
             ap.satisfaction(
                 "boss@a.test", "clerk", step, groups={}, delegators_of=[]
             )
-            == "escalated to you"
+            == "escalated from cfo@a.test"
         )
         step = {**step, "escalated_to": "role:admin"}
         assert (
             ap.satisfaction(
                 "root@a.test", "admin", step, groups={}, delegators_of=[]
             )
-            == "escalated to admins"
+            == "escalated from cfo@a.test"
+        )
+        group = {
+            "assignee_kind": "group",
+            "assignee_value": "Finance",
+            "escalated_to": "role:admin",
+        }
+        assert (
+            ap.satisfaction(
+                "root@a.test", "admin", group, groups={}, delegators_of=[]
+            )
+            == "escalated from Finance"
         )
 
     def test_nobody_else(self):

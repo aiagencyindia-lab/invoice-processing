@@ -207,11 +207,13 @@ def satisfaction(
         return f"has the {value} role"
     target = step.get("escalated_to")
     if isinstance(target, str) and target:
-        if target.startswith("role:"):
-            if ROLE_RANK.get(role, -1) >= ROLE_RANK.get(target[5:], 99):
-                return f"escalated to {target[5:]}s"
-        elif _email(target) == me:
-            return "escalated to you"
+        # Named after the seat it came from (a user, group or role), which is
+        # what the escalation target needs to know about the step.
+        if (
+            target.startswith("role:")
+            and ROLE_RANK.get(role, -1) >= ROLE_RANK.get(target[5:], 99)
+        ) or (not target.startswith("role:") and _email(target) == me):
+            return f"escalated from {value}"
     return None
 
 
