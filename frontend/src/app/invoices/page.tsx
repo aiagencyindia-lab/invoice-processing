@@ -620,7 +620,9 @@ function ApprovalPanel({ chain }: { chain: ApprovalChain }) {
           </div>
           <div className="evidence">
             {step.decided_by
-              ? `${step.decided_by}${step.acting_for ? ` (as delegate for ${step.acting_for})` : ""}`
+              ? `by ${step.decided_by}${step.acting_for ? ` (as delegate for ${step.acting_for})` : ""}${
+                  step.decided_at ? ` on ${new Date(step.decided_at).toLocaleString()}` : ""
+                }`
               : null}
             {step.due_at ? ` due ${new Date(step.due_at).toLocaleDateString()}` : ""}
             {step.escalated_to ? ` escalated to ${step.escalated_to}` : ""}

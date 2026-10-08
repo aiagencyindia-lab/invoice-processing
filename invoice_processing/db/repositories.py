@@ -1171,6 +1171,7 @@ class PgApprovalRepository:
             "status": s.status,
             "due_at": self._iso(s.due_at),
             "decided_by": s.decided_by,
+            "decided_at": self._iso(s.decided_at),
             "acting_for": s.acting_for,
             "override_reason": s.override_reason,
             "escalated_to": s.escalated_to,
@@ -1470,6 +1471,7 @@ class PgApprovalRepository:
                 ApprovalStep.APPROVED if approve else ApprovalStep.REJECTED
             )
             step.decided_by = decided_by
+            step.decided_at = now
             step.acting_for = acting_for
             step.override_reason = override_reason
             step.note = note

@@ -560,6 +560,7 @@ export type ApprovalStep = {
   status: "pending" | "approved" | "rejected" | "cancelled";
   due_at: string | null;
   decided_by: string | null;
+  decided_at: string | null;
   acting_for: string | null;
   override_reason: string | null;
   escalated_to: string | null;

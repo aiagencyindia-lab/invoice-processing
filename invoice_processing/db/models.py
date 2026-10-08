@@ -671,6 +671,7 @@ class ApprovalStep(Base, TenantMixin, TimestampMixin):
     )
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decided_by: Mapped[str | None] = mapped_column(String(320))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     acting_for: Mapped[str | None] = mapped_column(String(320))
     override_reason: Mapped[str | None] = mapped_column(Text)
     # "role:admin" or an email

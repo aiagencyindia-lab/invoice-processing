@@ -39,6 +39,7 @@ class TestSchema:
             "status",
             "due_at",
             "decided_by",
+            "decided_at",
             "acting_for",
             "override_reason",
             "escalated_to",
@@ -933,3 +934,34 @@ class TestARejectedChainStaysClosed:
         out = approval_flow.route(self.CTX, self.ART, repo=repo, now=NOW)
         assert [(s["id"], s["status"]) for s in out] == before
         assert [(s["id"], s["status"]) for s in repo.chain(T, "c1")] == before
+
+
+class TestDecidedAt:
+    def test_approve_and_reject_record_when_and_cancelled_steps_do_not(
+        self, repo
+    ):
+        chain = seed(repo)
+        first_at, second_at = NOW + timedelta(hours=1), NOW + timedelta(hours=2)
+        step, _ = repo.decide(
+            T,
+            chain[0]["id"],
+            approve=True,
+            decided_by="a@x.com",
+            sla_days=2,
+            now=first_at,
+        )
+        assert at(step["decided_at"]) == first_at.replace(tzinfo=None)
+        step, _ = repo.decide(
+            T,
+            chain[1]["id"],
+            approve=False,
+            decided_by="b@x.com",
+            sla_days=2,
+            now=second_at,
+        )
+        assert at(step["decided_at"]) == second_at.replace(tzinfo=None)
+        approved, rejected, cancelled = repo.chain(T, "c1")
+        assert at(approved["decided_at"]) == first_at.replace(tzinfo=None)
+        assert at(rejected["decided_at"]) == second_at.replace(tzinfo=None)
+        assert cancelled["status"] == "cancelled"
+        assert cancelled["decided_at"] is None
