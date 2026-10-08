@@ -786,7 +786,15 @@ class TestAuditEventsNameTheirDocument:
 class TestRoutingAfterProjection:
     """The worker decides who must approve once the columns exist."""
 
-    def _run(self, tmp_path, monkeypatch, scratch_db, routing, project_ok=True):
+    def _run(
+        self,
+        tmp_path,
+        monkeypatch,
+        scratch_db,
+        routing,
+        project_ok=True,
+        stored=None,
+    ):
         url = scratch_db("route.db")
         # tenant_settings (the SLA) reads the same database the repo uses.
         monkeypatch.setenv("DATABASE_URL", url)
@@ -817,6 +825,9 @@ class TestRoutingAfterProjection:
 
         class Sink:
             def put_artifact(self, ctx, key, payload): ...
+
+            def get_artifacts(self, ctx):
+                return stored
 
             def project_case(self, ctx, artifacts):
                 if not project_ok:
@@ -855,6 +866,19 @@ class TestRoutingAfterProjection:
             tmp_path, monkeypatch, scratch_db, "REVIEW", project_ok=False
         )
         assert len(chain) == 1
+
+    def test_a_decided_case_reprocessed_gets_no_new_steps(
+        self, tmp_path, monkeypatch, scratch_db
+    ):
+        # The retry endpoint re-runs a case that was already approved; the
+        # pipeline's artifacts carry no workflow, the stored record does.
+        decided = {"workflow": {"decision": "approve"}}
+        assert (
+            self._run(
+                tmp_path, monkeypatch, scratch_db, "REVIEW", stored=decided
+            )
+            == []
+        )
 
     def test_auto_invoice_gets_no_steps(
         self, tmp_path, monkeypatch, scratch_db

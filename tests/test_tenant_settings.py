@@ -70,3 +70,25 @@ def test_approval_sla_days_is_settable_and_defaults_to_3():
 def test_approval_sla_days_cannot_be_negative():
     with pytest.raises(tenant_settings.SettingsError):
         tenant_settings.validate({"approval_sla_days": -1})
+
+
+@pytest.mark.parametrize("value", [0, 1.5, True, "3", -2])
+def test_approval_sla_days_is_a_whole_number_of_at_least_one(value):
+    with pytest.raises(
+        tenant_settings.SettingsError, match="approval_sla_days"
+    ):
+        tenant_settings.validate({"approval_sla_days": value})
+
+
+def test_approval_sla_days_keeps_its_integer():
+    assert tenant_settings.validate({"approval_sla_days": 1}) == {
+        "approval_sla_days": 1
+    }
+    assert isinstance(
+        tenant_settings.validate({"approval_sla_days": 7})["approval_sla_days"],
+        int,
+    )
+    assert (
+        "whole days"
+        in tenant_settings.DESCRIPTIONS["approval_sla_days"].lower()
+    )

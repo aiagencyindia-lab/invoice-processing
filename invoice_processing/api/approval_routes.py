@@ -18,7 +18,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import approval_flow
+from .. import approval_flow, approvals
 from ..db import repositories as repos
 from .auth import ROLE_RANK, Principal, require_role
 
@@ -91,25 +91,44 @@ def _audit():
     return service.get_audit()
 
 
-def _tenant_emails(tenant_id: str) -> set[str]:
+def _tenant_users(tenant_id: str) -> dict[str, str]:
     from .admin_routes import _provisioner  # noqa: PLC0415
 
-    return {u["email"].casefold() for u in _provisioner().list_users(tenant_id)}
+    return {
+        u["email"].casefold(): u["role"]
+        for u in _provisioner().list_users(tenant_id)
+    }
 
 
 def _fold(email: str) -> str:
     return email.strip().casefold()
 
 
+# Roles that can decide a step. Anyone else named on a chain would be a seat
+# nobody can fill: the act endpoint needs approver.
+APPROVING = ("approver", "admin")
+
+
 def _need_users(
-    tenant_id: str, emails, what: str, known: set[str] | None = None
+    tenant_id: str,
+    emails,
+    what: str,
+    known: dict[str, str] | None = None,
+    *,
+    approving: bool = True,
 ) -> list[str]:
-    known = _tenant_emails(tenant_id) if known is None else known
+    known = _tenant_users(tenant_id) if known is None else known
     out = [_fold(e) for e in emails]
     for e in out:
         if e not in known:
             raise HTTPException(
                 400, f"{e} is not a user of this account, so {what}."
+            )
+        if approving and known[e] not in APPROVING:
+            raise HTTPException(
+                400,
+                f"{e} is a {known[e]}, so {what}; only an approver or admin "
+                "can approve.",
             )
     return out
 
@@ -174,7 +193,7 @@ def _check_rule(repo, tenant_id: str, kind, match, steps) -> tuple[dict, list]:
                 400, f"Unknown step kind {k!r}. Use user, group or role."
             )
         if k == "user":
-            known = _tenant_emails(tenant_id) if known is None else known
+            known = _tenant_users(tenant_id) if known is None else known
             (v,) = _need_users(
                 tenant_id, [v], "it cannot approve a step", known
             )
@@ -212,6 +231,27 @@ def my_queue(
         groups_map=repo.groups_map(t),
         delegators_of=repo.active_delegators_of(t, principal.email, now.date()),
     )
+    # The queue offers only what the caller could actually decide: the
+    # uploader of an invoice, or someone who decided an earlier step of it,
+    # would be refused by act, so listing it is a promise the server breaks.
+    # ponytail: two lookups per waiting case; batch them if queues grow large.
+    documents = service.get_documents()
+    steps = [
+        s
+        for s in steps
+        if approvals.refusal(
+            principal.email,
+            uploader=approval_flow.uploader_of(
+                principal.context(s["case_id"]), documents
+            ),
+            previous_deciders=[
+                x["decided_by"]
+                for x in repo.chain(t, s["case_id"])
+                if x["status"] == "approved"
+            ],
+        )
+        is None
+    ]
     cases = service.read_cases(
         service.get_cases(), t, [s["case_id"] for s in steps]
     )
@@ -479,10 +519,15 @@ def create_delegation(
         principal.email
     ):
         raise HTTPException(403, "You can only delegate your own approvals.")
-    delegator, delegate = _need_users(
+    # Only the delegate must be able to approve: they decide in the seat.
+    (delegator,) = _need_users(
         t,
-        [request.delegator_email, request.delegate_email],
+        [request.delegator_email],
         "it cannot take part in a delegation",
+        approving=False,
+    )
+    (delegate,) = _need_users(
+        t, [request.delegate_email], "it cannot cover approvals"
     )
     try:
         row = repo.create_delegation(

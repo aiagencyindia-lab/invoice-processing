@@ -307,16 +307,21 @@ class Provisioner:
                     raise ProvisioningError(
                         "A person cannot be their own manager."
                     )
-                if (
-                    session.scalar(
-                        select(User.id).where(
-                            User.tenant_id == tenant_id, User.email == manager
-                        )
+                role = session.scalar(
+                    select(User.role).where(
+                        User.tenant_id == tenant_id, User.email == manager
                     )
-                    is None
-                ):
+                )
+                if role is None:
                     raise ProvisioningError(
                         f"{manager} is not a user of this account."
+                    )
+                # Escalations land on the manager; one who cannot approve
+                # would receive steps they are unable to decide.
+                if role not in ("approver", "admin"):
+                    raise ProvisioningError(
+                        f"{manager} is a {role}, so they cannot be a manager "
+                        "for approvals; only an approver or admin can approve."
                     )
             previous = user.manager_email
             user.manager_email = manager

@@ -320,8 +320,15 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
 
             repo = service.get_approvals()
             if repo is not None:
+                # The workflow decision lives in the stored record, not in the
+                # pipeline's output: without it a retried, already-decided
+                # case would be handed a fresh pending chain.
+                record = cases.get_artifacts(ctx) or {}
                 approval_flow.route(
-                    ctx, artifacts, repo=repo, now=datetime.now(timezone.utc)
+                    ctx,
+                    {**artifacts, "workflow": record.get("workflow")},
+                    repo=repo,
+                    now=datetime.now(timezone.utc),
                 )
         except Exception as exc:
             logger.warning("Case %s not routed for approval: %s", case_id, exc)

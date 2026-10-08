@@ -49,7 +49,7 @@ def match_entity(customer_name, organization_name) -> bool:
     return bool(org) and org in _fold(customer_name)
 
 
-def _number(value) -> float | None:
+def parse_amount(value) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
     try:
@@ -83,7 +83,7 @@ def _usable(rule) -> bool:
         return False
     if rule["kind"] == "amount":
         floor = rule["match"].get("min_amount")
-        return floor is None or _number(floor) is not None
+        return floor is None or parse_amount(floor) is not None
     return True
 
 
@@ -92,7 +92,7 @@ def _live(rules: list[dict]) -> list[dict]:
 
 
 def _floor(rule: dict) -> float:
-    return _number(rule["match"].get("min_amount")) or 0.0
+    return parse_amount(rule["match"].get("min_amount")) or 0.0
 
 
 def _amount_tier(invoice: dict, rules: list[dict]) -> dict | None:
@@ -102,7 +102,7 @@ def _amount_tier(invoice: dict, rules: list[dict]) -> dict | None:
     OCR'd "12,500.00" would otherwise route as touchless), so it takes the
     highest tier instead: the most senior approver looks at it.
     """
-    total = _number(invoice.get("invoice_total_inc_tax"))
+    total = parse_amount(invoice.get("invoice_total_inc_tax"))
     currency = str(invoice.get("currency") or "").upper()
     best = None
     # Earliest created wins a tie on the floor, then input order (strict >).
@@ -126,7 +126,7 @@ def needs_person(invoice: dict, rules: list[dict]) -> bool:
         return True
     # Unreadable total and amount rules exist, but none in this currency:
     # still a person, since nobody can say the invoice is under every tier.
-    return _number(invoice.get("invoice_total_inc_tax")) is None and any(
+    return parse_amount(invoice.get("invoice_total_inc_tax")) is None and any(
         r["kind"] == "amount" for r in _live(rules)
     )
 

@@ -303,9 +303,13 @@ class TestWritesDoNotCross:
                 session.add(
                     Tenant(id=tid, name=slug, slug=slug, status="active")
                 )
-                for email in ("admin", "approver"):
+                for role in ("admin", "approver"):
                     session.add(
-                        User(tenant_id=tid, email=f"{email}@{slug}.test")
+                        User(
+                            tenant_id=tid,
+                            email=f"{role}@{slug}.test",
+                            role=role,
+                        )
                     )
         repo = PgApprovalRepository(url)
         monkeypatch.setattr(service, "_approvals", repo)

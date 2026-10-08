@@ -19,6 +19,7 @@ from invoice_processing.adapters import (
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
 from invoice_processing.db import models
+from invoice_processing.db import session as db_session
 from invoice_processing.db.repositories import PgApprovalRepository
 from invoice_processing.db.session import (
     create_all,
@@ -86,10 +87,12 @@ def env(tmp_path, monkeypatch, scratch_db):
     def events():
         return [json.loads(x) for x in audit.read_text().splitlines()]
 
-    def add_users(*emails):
+    def add_users(*emails, role="approver"):
         with tenant_session(TENANT, url) as session:
             for email in emails:
-                session.add(models.User(tenant_id=TENANT, email=email))
+                session.add(
+                    models.User(tenant_id=TENANT, email=email, role=role)
+                )
 
     add_users("a@x.test", "b@x.test", "pa@x.test", "fin1@x.test")
 
@@ -733,12 +736,24 @@ def edit_total(env, value=2_000_000):
     )
 
 
-def test_editing_a_decided_invoice_reports_no_reroute(env):
+def test_a_decided_invoice_refuses_routing_edits(env):
     assert act(env, "approver:anyone").status_code == 200
     r = edit_total(env)
-    assert r.json()["approvals_rerouted"] is False
+    assert r.status_code == 409
+    assert "reject it before changing" in r.json()["detail"]
     types = [e["event_type"] for e in env["events"]()]
+    assert "fields_corrected" not in types
     assert "approval_rerouted" not in types
+    assert not (env["root"].parent / "corrections.jsonl").exists()
+
+
+def test_a_decided_invoice_still_takes_non_routing_edits(env):
+    assert act(env, "approver:anyone").status_code == 200
+    r = env["client"]("clerk").patch(
+        f"/api/invoices/{CASE}/fields",
+        json={"edits": [{"field": "payment_terms", "value": "Net 45"}]},
+    )
+    assert r.status_code == 200 and r.json()["count"] == 1
 
 
 def test_a_failed_reroute_is_reported_and_audited(env, monkeypatch):
@@ -831,3 +846,80 @@ def test_an_identical_reroute_reports_no_change(env):
     )
     assert r.json()["approvals_rerouted"] is False
     assert "approval_rerouted" not in [e["event_type"] for e in env["events"]()]
+
+
+# -- final review --------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["12,500.00", "lots", None, "nan", True])
+def test_a_non_numeric_total_is_refused(env, value):
+    r = edit_total(env, value)
+    assert r.status_code == 400, r.text
+    assert "invoice_total_inc_tax" in r.json()["detail"]
+
+
+def test_a_numeric_string_total_is_accepted(env):
+    assert edit_total(env, "2500.50").status_code == 200
+
+
+def test_unreadable_routing_table_is_503_not_unrouted(env, monkeypatch):
+    def down(*a, **k):
+        raise RuntimeError("database unreachable")
+
+    monkeypatch.setattr(service, "_approvals", None)
+    monkeypatch.setattr(db_session, "get_engine", down)
+    r = act(env, "approver:anyone")
+    assert r.status_code == 503
+    assert r.json()["detail"] == "Approval routing is unavailable."
+    assert not (env["root"] / CASE / "workflow.json").exists()
+
+
+def test_people_who_approve_must_hold_an_approving_role(env):
+    env["add_users"]("cl@x.test", role="clerk")
+    r = make_rule(env, steps=[{"kind": "user", "value": "cl@x.test"}])
+    assert r.status_code == 400
+    assert "cl@x.test" in r.json()["detail"]
+    assert "clerk" in r.json()["detail"]
+    g = env["client"]("admin:boss").post(
+        "/api/approvals/groups", json={"name": "G", "members": ["cl@x.test"]}
+    )
+    assert g.status_code == 400 and "clerk" in g.json()["detail"]
+    d = delegation(env, "approver:a", delegate_email="cl@x.test")
+    assert d.status_code == 400 and "clerk" in d.json()["detail"]
+    admin = env["client"]("admin:boss")
+    users = admin.get("/api/admin/users").json()["users"]
+    a = next(u for u in users if u["email"] == "a@x.test")
+    m = admin.patch(
+        f"/api/admin/users/{a['id']}", json={"manager_email": "cl@x.test"}
+    )
+    assert m.status_code == 400
+    assert "cl@x.test" in m.json()["detail"] and "clerk" in m.json()["detail"]
+
+
+def test_mine_leaves_out_what_the_caller_may_not_approve(env):
+    make_rule(
+        env,
+        steps=[
+            {"kind": "role", "value": "approver"},
+            {"kind": "role", "value": "admin"},
+        ],
+    )
+    route_case(env)
+    # The uploader holds the role but may not approve their own invoice.
+    mine = env["client"]("approver:uploader").get("/api/approvals/mine")
+    assert mine.json()["items"] == []
+    assert (
+        env["client"]("approver:other")
+        .get("/api/approvals/mine")
+        .json()["count"]
+        == 1
+    )
+    assert act(env, "approver:a").status_code == 200
+    # Step 2 is the admins'; a, who decided step 1, is not offered it.
+    assert (
+        env["client"]("admin:a").get("/api/approvals/mine").json()["items"]
+        == []
+    )
+    assert (
+        env["client"]("admin:z").get("/api/approvals/mine").json()["count"] == 1
+    )

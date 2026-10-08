@@ -40,7 +40,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
-from .. import approval_flow, case_projection, paths
+from .. import approval_flow, approvals, case_projection, paths
 from ..adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
@@ -290,7 +290,9 @@ def get_locks():
     return _locks
 
 
-def _table_exists(name: str, unprotected: str) -> bool:
+def _table_exists(
+    name: str, unprotected: str, *, raise_on_error: bool = False
+) -> bool:
     """Whether the schema a feature needs is actually there.
 
     A database can be configured and unmigrated -- an in-memory one in a test,
@@ -308,6 +310,8 @@ def _table_exists(name: str, unprotected: str) -> bool:
         if inspect(get_engine()).has_table(name):
             return True
     except Exception:
+        if raise_on_error:
+            raise
         logger.warning("Could not check for the %s table", name)
         return False
     logger.warning(
@@ -335,12 +339,19 @@ def get_vendors():
 
 
 def get_approvals():
-    """Approval chains, rules, groups and delegations. `None` without the table."""
+    """Approval chains, rules, groups and delegations. `None` without the table.
+
+    A database that is configured but cannot be asked raises rather than
+    answering None: None means "no routing here", and `act` would then record
+    a decision on an invoice whose chain nobody checked.
+    """
     global _approvals
     if (
         _approvals is None
         and _database_configured()
-        and _table_exists("approval_steps", "approval routing")
+        and _table_exists(
+            "approval_steps", "approval routing", raise_on_error=True
+        )
     ):
         from ..db.repositories import PgApprovalRepository  # noqa: PLC0415
 
@@ -817,6 +828,34 @@ def edit_fields(
     extraction = artifacts.get("extraction") or {}
     invoice = extraction.get("invoice") or {}
 
+    changed = {
+        e.field for e in request.edits if invoice.get(e.field) != e.value
+    }
+    # Checked before any correction is recorded, so a refused edit leaves no
+    # half-applied trace. A decided invoice keeps its decision only while the
+    # facts that routed it stand: changing who is paid, or how much, after
+    # sign-off would ship a payment nobody approved.
+    if (artifacts.get(WORKFLOW_ARTIFACT) or {}).get("decision") and (
+        changed & ROUTING_FIELDS
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="This invoice is already decided; reject it before "
+            "changing the amount, vendor or customer.",
+        )
+    for edit in request.edits:
+        if (
+            edit.field == "invoice_total_inc_tax"
+            and edit.field in changed
+            and approvals.parse_amount(edit.value) is None
+        ):
+            # An unreadable total would route to the highest tier anyway; a
+            # person typing one has made a mistake worth saying so.
+            raise HTTPException(
+                status_code=400,
+                detail="invoice_total_inc_tax must be a number, e.g. 12500.00.",
+            )
+
     rerouted = False
     recorded = []
     for edit in request.edits:
@@ -882,9 +921,18 @@ def _reroute_if_needed(ctx, artifacts, extraction, recorded) -> bool | str:
     A decided case is a no-op inside `route`, so the answer comes from
     comparing the chain before and after rather than from having called it.
     """
-    repo = get_approvals()
     fields = sorted(ROUTING_FIELDS & {r["field_path"] for r in recorded})
-    if repo is None or not fields:
+    if not fields:
+        return False
+    try:
+        repo = get_approvals()
+    except Exception as exc:
+        logger.exception(
+            "Approval routing unreachable re-routing %s", ctx.case_id
+        )
+        get_audit().emit(ctx, "approval_reroute_failed", {"error": str(exc)})
+        return "failed"
+    if repo is None:
         return False
 
     def shape():
@@ -1116,7 +1164,13 @@ def act(
 
     # From the artifacts already in hand rather than a second read.
     previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
-    repo = get_approvals()
+    try:
+        repo = get_approvals()
+    except Exception:
+        logger.exception("Approval routing could not be reached")
+        raise HTTPException(
+            status_code=503, detail="Approval routing is unavailable."
+        ) from None
     if repo is not None:
         if previous.get("decision"):
             raise HTTPException(
