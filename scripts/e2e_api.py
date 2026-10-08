@@ -117,12 +117,14 @@ def seed() -> Path:
     # The three frozen cases stand in for "invoices that have been processed".
     # Extraction itself needs Vertex and stays out of this run.
     shutil.copytree(GOLDEN, SCRATCH / "agent_output")
-    # Two more cases, so the approval-chain and rejection tests each have an
-    # invoice nothing else in the run decides (a decided case is closed to
-    # further approvals, and an edited one needs a second approver).
+    # More cases, so the approval-chain, rejection and GL-coding tests each
+    # have an invoice nothing else in the run decides (a decided case is closed
+    # to further approvals, and an edited one needs a second approver).
+    # case_004_gl sorts before case_005, which stays the queue's last row.
     for new, vendor in (
         ("case_003", "Chain Test Supplies"),
         ("case_004", "Returned Goods Supplies"),
+        ("case_004_gl", "Ledger Test Supplies"),
     ):
         clone = SCRATCH / "agent_output" / new
         shutil.copytree(GOLDEN / "case_005", clone)
