@@ -682,6 +682,19 @@ class ApprovalStep(Base, TenantMixin, TimestampMixin):
     note: Mapped[str | None] = mapped_column(Text)
 
 
+class GlRule(Base, TenantMixin, TimestampMixin):
+    """Codes an invoice line to a GL account by vendor and/or keyword."""
+
+    __tablename__ = "gl_rules"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    vendor_name: Mapped[str | None] = mapped_column(String(255))
+    keyword: Mapped[str | None] = mapped_column(String(200))
+    gl_account: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(320), nullable=False)
+
+
 TENANT_TABLES = (
     "users",
     "record_locks",
@@ -702,4 +715,5 @@ TENANT_TABLES = (
     "approval_rules",
     "delegations",
     "approval_steps",
+    "gl_rules",
 )

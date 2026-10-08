@@ -43,6 +43,7 @@ from .models import (
     DocumentClaim,
     ExportJob,
     Finding,
+    GlRule,
     Invoice,
     InvoiceLine,
     PipelineRun,
@@ -1581,6 +1582,94 @@ class PgApprovalRepository:
                     func.lower(User.email) == email.strip().casefold(),
                 )
             )
+
+
+class PgGlRuleRepository:
+    """GL coding rules for a tenant. Storage only: the API validates."""
+
+    FIELDS = frozenset({"vendor_name", "keyword", "gl_account", "enabled"})
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    @staticmethod
+    def _dict(r: GlRule) -> dict:
+        return {
+            "id": r.id,
+            "vendor_name": r.vendor_name,
+            "keyword": r.keyword,
+            "gl_account": r.gl_account,
+            "enabled": bool(r.enabled),
+            "created_by": r.created_by,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+
+    @staticmethod
+    def _row(session, tenant_id: str, rule_id: str) -> GlRule | None:
+        # Explicit tenant filter: SQLite has no RLS to fall back on.
+        return session.scalar(
+            select(GlRule).where(
+                GlRule.tenant_id == tenant_id, GlRule.id == rule_id
+            )
+        )
+
+    def list_rules(self, tenant_id: str) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(GlRule)
+                .where(GlRule.tenant_id == tenant_id)
+                .order_by(GlRule.created_at, GlRule.id)
+            )
+            return [self._dict(r) for r in rows]
+
+    def get(self, tenant_id: str, rule_id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            row = self._row(session, tenant_id, rule_id)
+            return self._dict(row) if row else None
+
+    def create(
+        self,
+        tenant_id: str,
+        *,
+        vendor_name,
+        keyword,
+        gl_account,
+        created_by,
+        enabled=True,
+    ) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            rule = GlRule(
+                tenant_id=tenant_id,
+                vendor_name=vendor_name,
+                keyword=keyword,
+                gl_account=gl_account,
+                created_by=created_by,
+                enabled=enabled,
+            )
+            session.add(rule)
+            session.flush()
+            return self._dict(rule)
+
+    def update(self, tenant_id: str, rule_id: str, **fields) -> dict | None:
+        unknown = set(fields) - self.FIELDS
+        if unknown:
+            raise TypeError(f"not editable: {sorted(unknown)}")
+        with tenant_session(tenant_id, self.url) as session:
+            row = self._row(session, tenant_id, rule_id)
+            if row is None:
+                return None
+            for key, value in fields.items():
+                setattr(row, key, value)
+            session.flush()
+            return self._dict(row)
+
+    def delete(self, tenant_id: str, rule_id: str) -> bool:
+        with tenant_session(tenant_id, self.url) as session:
+            row = self._row(session, tenant_id, rule_id)
+            if row is None:
+                return False
+            session.delete(row)
+            return True
 
 
 class PgClaimStore:
