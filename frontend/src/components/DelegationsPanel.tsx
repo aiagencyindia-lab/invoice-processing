@@ -16,7 +16,10 @@ export function DelegationsPanel({
   const { data, error, reload } = usePoll<{ delegations: Delegation[] }>(
     "/api/approvals/delegations",
   );
-  const today = new Date().toISOString().slice(0, 10);
+  // Local date: toISOString is UTC and is "yesterday" east of Greenwich
+  // until the morning.
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const [delegator, setDelegator] = useState("");
   const [delegate, setDelegate] = useState("");
   const [from, setFrom] = useState(today);

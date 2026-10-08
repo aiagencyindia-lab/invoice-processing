@@ -373,6 +373,7 @@ test("an approved invoice appears on the approved sheet", async ({ page }) => {
   await expect(page.getByRole("cell", { name: vendor, exact: true }).first()).toBeVisible();
 });
 
+// This test owns case_003 (cloned in scripts/e2e_api.py); nothing else decides it.
 test("a two-step rule routes an invoice through alice then bob", async ({
   page,
 }) => {
@@ -400,6 +401,14 @@ test("a two-step rule routes an invoice through alice then bob", async ({
   await expect(page.getByText(/Step 1 approved; waiting on user:bob@e2e.test/)).toBeVisible();
   await expect(page.getByText("Step 2 is assigned to user:bob@e2e.test")).toBeVisible();
 
+  // Alice cannot also sign step 2; the server's own sentence reaches her.
+  await page.getByRole("button", { name: /^Approve/ }).click();
+  await page
+    .getByRole("dialog", { name: "Approve invoice" })
+    .getByRole("button", { name: "Approve" })
+    .click();
+  await expect(page.getByText(/earlier step/)).toBeVisible();
+
   // Alice is away: bob hands his seat to pat, a clerk, for today.
   await as(page, "bob@e2e.test:approver");
   await goto(page, "/approvals");
@@ -424,4 +433,14 @@ test("a two-step rule routes an invoice through alice then bob", async ({
   await expect(
     page.getByRole("cell", { name: vendor, exact: true }).first(),
   ).toBeVisible();
+
+  // The rule is tenant policy that outlives the test; remove it.
+  await as(page, "dev@localhost:admin");
+  await goto(page, "/admin/approvals");
+  await page
+    .getByText(rule)
+    .locator("xpath=ancestor::div[contains(@class,'row-between')][1]")
+    .getByRole("button", { name: "Delete" })
+    .click();
+  await expect(page.getByText(`Rule ${rule} deleted.`)).toBeVisible();
 });

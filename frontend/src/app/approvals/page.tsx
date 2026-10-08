@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   api,
   ApiError,
+  objectUrl,
   can,
   type ActionResult,
   type Me,
@@ -27,6 +28,19 @@ export default function ApprovalsPage() {
   } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // The document route needs the bearer token, which a plain link cannot send.
+  async function openPdf(caseId: string) {
+    const tab = window.open("", "_blank");
+    try {
+      const url = await objectUrl(`/api/invoices/${caseId}/document`);
+      if (tab) tab.location.href = url;
+    } catch (caught) {
+      tab?.close();
+      setProblem(caught instanceof ApiError ? caught.friendly : String(caught));
+    }
+  }
 
   async function decide(
     item: MyApproval,
@@ -34,6 +48,8 @@ export default function ApprovalsPage() {
     reason: string,
     category: string,
   ) {
+    if (busy) return;
+    setBusy(true);
     setNotice(null);
     setProblem(null);
     try {
@@ -61,6 +77,8 @@ export default function ApprovalsPage() {
       reload();
     } catch (caught) {
       setProblem(caught instanceof ApiError ? caught.friendly : String(caught));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -119,7 +137,15 @@ export default function ApprovalsPage() {
               ) : null}
               <button
                 type="button"
+                className="btn-chip"
+                onClick={() => openPdf(item.case_id)}
+              >
+                Open PDF
+              </button>
+              <button
+                type="button"
                 className="btn-primary btn-big"
+                disabled={busy}
                 onClick={() => setDeciding({ item, action: "approve" })}
               >
                 Approve
@@ -127,6 +153,7 @@ export default function ApprovalsPage() {
               <button
                 type="button"
                 className="btn-secondary btn-big"
+                disabled={busy}
                 onClick={() => setDeciding({ item, action: "reject" })}
               >
                 Reject

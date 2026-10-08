@@ -136,7 +136,7 @@ function InvoicesWorkbench() {
   const currentStep = chain?.steps.find((s) => s.position === chain.current);
   // Only a hint: the buttons stay enabled and the server decides.
   const notMine =
-    currentStep && !(mine?.items ?? []).some((i) => i.case_id === current)
+    currentStep && mine && !mine.items.some((i) => i.case_id === current)
       ? currentStep
       : null;
 
@@ -605,7 +605,14 @@ function ApprovalPanel({ chain }: { chain: ApprovalChain }) {
             <span>
               Step {step.position} · {step.assignee_kind}:{step.assignee_value}
             </span>
-            <span className={`badge ${badge(step)}`}>{step.status}</span>
+            <span>
+              {step.position === chain.current ? (
+                <span className="muted" style={{ marginRight: 6 }}>
+                  current
+                </span>
+              ) : null}
+              <span className={`badge ${badge(step)}`}>{step.status}</span>
+            </span>
           </div>
           <div className="evidence">
             {step.decided_by

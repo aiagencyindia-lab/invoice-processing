@@ -346,7 +346,15 @@ export default function ApprovalSetupPage() {
                   <button
                     type="button"
                     className="btn-primary"
-                    disabled={!ruleName.trim() || steps.some((s) => !s.value.trim())}
+                    disabled={
+                      !ruleName.trim() ||
+                      steps.some((s) => !s.value.trim()) ||
+                      !(kind === "vendor"
+                        ? vendorName.trim()
+                        : kind === "entity"
+                          ? orgName.trim()
+                          : minAmount.trim())
+                    }
                     onClick={addRule}
                   >
                     Add rule

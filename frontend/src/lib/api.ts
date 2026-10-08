@@ -21,7 +21,13 @@ export class ApiError extends Error {
    *  should surface as a raw status code. */
   get friendly(): string {
     if (this.status === 401) return "Your session has expired. Sign in again.";
-    if (this.status === 403) return "Your role does not allow this.";
+    // A 403 usually carries the reason ("This step is not assigned to you."),
+    // which is more useful than a blanket role message.
+    if (this.status === 403) {
+      return typeof this.detail === "string" && this.detail
+        ? this.detail
+        : "Your role does not allow this.";
+    }
     if (this.status === 423) {
       const lock = this.detail as RecordLock | undefined;
       return lock?.holder
@@ -85,11 +91,19 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       .catch(() => null);
     // A structured detail is kept whole and never squeezed into the message:
     // `String({holder})` is "[object Object]", which tells the reader nothing.
-    throw new ApiError(
-      response.status,
-      typeof detail === "string" && detail ? detail : response.statusText,
-      detail,
-    );
+    // A pydantic 422 is a list of {loc, msg}; show it as "field: message".
+    const message =
+      typeof detail === "string" && detail
+        ? detail
+        : Array.isArray(detail) && detail.length
+          ? detail
+              .map(
+                (item: { loc?: unknown[]; msg?: string }) =>
+                  `${(item.loc ?? []).filter((p) => p !== "body").join(".")}: ${item.msg ?? ""}`,
+              )
+              .join("\n")
+          : response.statusText;
+    throw new ApiError(response.status, message, detail);
   }
   return response.json() as Promise<T>;
 }
