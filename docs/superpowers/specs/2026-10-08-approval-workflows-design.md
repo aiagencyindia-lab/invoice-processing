@@ -144,6 +144,9 @@ endpoint keeps today's single-approver behaviour (file-backed mode and e2e-less 
   step 1, A refused on step 2, B completes, sheet shows approved); uploader refused; delegate
   sees the delegator's step on `/approvals`.
 
+  Implementation note: the uploader-refusal browser test was replaced by an API test, because the
+  e2e stack runs no worker, so an uploaded PDF never becomes a case.
+
 ## Section 5 — Testing, measurement, rollout
 
 Tests (each failing without its change):

@@ -420,6 +420,24 @@ Routes: `GET/PUT /api/vendors`, `PATCH /api/vendors/{vendor_id}`, `POST /api/ven
 
 ---
 
+## Approval Workflows
+
+Routing applies only to invoices a person must touch: those the pipeline routes to REVIEW, or whose total reaches an amount tier's minimum (optionally restricted to a currency). An AUTO invoice below every tier gets no approval steps and stays touchless.
+
+The chain order is fixed: vendor rules (by normalised vendor name), then entity rules (organisation name, matched the way step 1.2 matches the customer), then the single highest matching amount tier. If nothing matches, the chain is one step for anyone with the approver role. A duplicate assignee collapses to its first position.
+
+Steps are sequential and the lowest pending one is current. An assignee is a user, a group (any member may decide) or a role. An active delegate of the assignee may decide, and the decision is recorded as acting for them. Each step has a due date (`approval_sla_days`, default 3); the worker escalates an overdue step to the assignee's manager or, failing that, to admins. Nothing is ever auto-approved.
+
+Segregation: the uploader is refused at every step; whoever decided an earlier step cannot decide the next; someone who corrected the invoice's fields cannot be the sole approver, so a second step is added. Admins may override, with a recorded reason.
+
+Completing the chain writes the same workflow decision as before, so export, the approved sheet and the learning loop are unchanged. A rejection at any step ends the chain. Editing the total, vendor, customer or currency re-routes the pending steps; decided steps stay, and a decided invoice is never re-opened.
+
+Without a database the approval routes answer 503 and approval behaves as before (a single approver).
+
+Routes: `GET /api/approvals/mine`, `GET /api/invoices/{case_id}/approvals`, `POST /api/invoices/{case_id}/actions` (decides one step; admins may add `override_reason`), groups, rules and delegations under `/api/approvals/...`, and `PATCH /api/admin/users/{user_id}` to set a user's manager.
+
+---
+
 ## Evaluation
 
 The evaluation framework lives in [`eval/`](eval/) and provides schema-driven assessment of agent output quality.
