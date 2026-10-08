@@ -929,3 +929,27 @@ def test_mine_leaves_out_what_the_caller_may_not_approve(env):
     assert (
         env["client"]("admin:z").get("/api/approvals/mine").json()["count"] == 1
     )
+
+
+# -- gap fixes -----------------------------------------------------------------
+
+
+def lose_the_workflow_write(env):
+    # The step is rejected but the crash took the workflow artifact with it.
+    (env["root"] / CASE / "workflow.json").unlink()
+
+
+def test_a_rejected_chain_without_a_workflow_stays_closed(env):
+    two_tier(env)
+    assert act(env, "approver:a").status_code == 200
+    assert (
+        act(env, "approver:b", action="reject", reason="no").status_code == 200
+    )
+    lose_the_workflow_write(env)
+    before = env["repo"].chain(TENANT, CASE)
+    r = edit_total(env)
+    assert r.status_code == 200
+    assert r.json()["approvals_rerouted"] is False
+    assert "approval_rerouted" not in [e["event_type"] for e in env["events"]()]
+    assert env["repo"].chain(TENANT, CASE) == before
+    assert act(env, "approver:pa").status_code == 409

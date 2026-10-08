@@ -902,3 +902,34 @@ class TestCallerHoldsTheSeatThemselves:
         outcome = TestCrashRecovery().decide(repo, "pa@x.com")
         assert outcome.why == "member of Finance"
         assert repo.chain(T, "c1")[0]["acting_for"] is None
+
+
+class TestARejectedChainStaysClosed:
+    """A rejection whose workflow write was lost (a crash between deciding
+    the step and recording the decision) must not be re-opened by route()."""
+
+    CTX = RunContext(tenant_id=T, case_id="c1")
+    ART: ClassVar[dict] = {"extraction": {"invoice": {"_routing": "REVIEW"}}}
+
+    def test_route_adds_nothing_after_a_rejected_step(self, repo, monkeypatch):
+        monkeypatch.setattr(approval_flow, "_sla_days", lambda t: 2)
+        chain = seed(
+            repo, "c1", spec("user", "a@x.com"), spec("user", "b@x.com")
+        )
+        for step, approve, who in (
+            (chain[0], True, "a@x.com"),
+            (chain[1], False, "b@x.com"),
+        ):
+            repo.decide(
+                T,
+                step["id"],
+                approve=approve,
+                decided_by=who,
+                sla_days=2,
+                now=NOW,
+            )
+        before = [(s["id"], s["status"]) for s in repo.chain(T, "c1")]
+        assert [st for _, st in before] == ["approved", "rejected"]
+        out = approval_flow.route(self.CTX, self.ART, repo=repo, now=NOW)
+        assert [(s["id"], s["status"]) for s in out] == before
+        assert [(s["id"], s["status"]) for s in repo.chain(T, "c1")] == before

@@ -38,6 +38,13 @@ def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
     # steps and replaces the pending ones.
     if (artifacts.get("workflow") or {}).get("decision"):
         return repo.chain(t, ctx.case_id)
+    # A rejected step closes the chain even when the workflow write was lost
+    # (a crash between deciding the step and recording the decision): new
+    # pending steps after it would let a later approval overturn the
+    # rejection. decide() refuses such a chain for the same reason.
+    chain = repo.chain(t, ctx.case_id)
+    if any(s["status"] == "rejected" for s in chain):
+        return chain
     invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
     rules = repo.list_rules(t)
     specs = (
@@ -48,7 +55,7 @@ def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
     return repo.replace_pending(
         t,
         ctx.case_id,
-        _not_yet_asked(repo.chain(t, ctx.case_id), specs),
+        _not_yet_asked(chain, specs),
         sla_days=_sla_days(t),
         now=now,
     )
