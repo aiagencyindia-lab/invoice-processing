@@ -253,3 +253,54 @@ class TestRunContext:
         """A handler that could rewrite tenant_id would defeat the point."""
         with pytest.raises(dataclasses.FrozenInstanceError):
             Principal("u", "a@b.c", "t").tenant_id = "other"
+
+
+class TestDevIdentityHeader:
+    """In local dev mode a browser test needs to be more than one person: the
+    two-person bank-change flow cannot be exercised by a single fixed admin.
+    The header picks who the dev principal is. It grants nothing the mode does
+    not already hand out, and outside the mode it is never read."""
+
+    HEADER = "X-Dev-Principal"
+
+    @pytest.fixture
+    def local(self, monkeypatch):
+        monkeypatch.setenv("AUTH_DISABLED", "1")
+        monkeypatch.setenv("ENV", "local")
+
+    def test_the_header_sets_email_and_role(self, app, local):
+        as_clerk = {self.HEADER: "alice@e2e.test:clerk"}
+        assert app.get("/whoami", headers=as_clerk).json()["email"] == (
+            "alice@e2e.test"
+        )
+        assert app.post("/approve", headers=as_clerk).status_code == 403
+        as_approver = {self.HEADER: "bob@e2e.test:approver"}
+        assert app.post("/approve", headers=as_approver).status_code == 200
+
+    def test_without_the_header_the_dev_admin_is_unchanged(self, app, local):
+        assert app.get("/whoami").json()["email"] == "dev@localhost"
+        assert app.post("/approve").status_code == 200
+
+    @pytest.mark.parametrize(
+        "value", ["alice@e2e.test:owner", "alice@e2e.test", "alice:clerk", ""]
+    )
+    def test_a_malformed_header_is_refused_not_ignored(self, app, local, value):
+        """Silently falling back to admin would let a typo in a test pass as
+        the wrong person."""
+        response = app.get("/whoami", headers={self.HEADER: value or " "})
+        assert response.status_code == 400
+
+    def test_ignored_when_the_bypass_is_off(self, app, monkeypatch):
+        monkeypatch.delenv("AUTH_DISABLED", raising=False)
+        response = app.get(
+            "/whoami", headers={self.HEADER: "alice@e2e.test:admin"}
+        )
+        assert response.status_code == 401
+
+    def test_ignored_outside_a_local_environment(self, app, monkeypatch):
+        monkeypatch.setenv("AUTH_DISABLED", "1")
+        monkeypatch.setenv("ENV", "production")
+        response = app.get(
+            "/whoami", headers={self.HEADER: "alice@e2e.test:admin"}
+        )
+        assert response.status_code == 401

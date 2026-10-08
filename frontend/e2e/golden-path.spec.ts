@@ -189,11 +189,53 @@ test("every sidebar view opens", async ({ page }) => {
   }
 });
 
-test("the vendors page explains it needs a database for bank changes", async ({ page }) => {
+// Who the local dev principal is, per request: the e2e API runs with auth
+// disabled, and this header is how one browser plays two people.
+function as(page: Page, who: string) {
+  return page.setExtraHTTPHeaders({ "X-Dev-Principal": who });
+}
+
+test("a bank change needs a second person to approve it", async ({ page }) => {
+  const vendor = "E2E Dual Control Supplies";
   await goto(page, "/vendors");
-  await expect(page.getByRole("heading", { name: "Vendors" })).toBeVisible();
-  // e2e runs on file stores; the page must say so rather than show a broken queue.
-  await expect(page.getByText(/needs a database/)).toBeVisible();
+
+  // As the default dev admin: load the supplier.
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#vendor-upload").setInputFiles({
+    name: "vendors.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(
+      JSON.stringify([{ name: vendor, tax_id: "29AAFCZ4821L1ZS", kind: "goods" }]),
+    ),
+  });
+  const row = page.getByRole("row", { name: new RegExp(vendor) });
+  await expect(row.getByText("unverified")).toBeVisible();
+
+  // Alice, a clerk, proposes new bank details.
+  await as(page, "alice@e2e.test:clerk");
+  await page.reload();
+  await row.getByRole("button", { name: "Request bank change" }).click();
+  await page.locator("#bank-account-number").fill("123456789012");
+  await page.locator("#bank-reason").fill("Confirmed by phone on the number we hold");
+  await page.getByRole("button", { name: "Propose" }).click();
+  await expect(page.getByText(/Bank change proposed/)).toBeVisible();
+  await expect(row.getByText("pending")).toBeVisible();
+
+  // Alice again, now with approval rights: she still cannot decide her own.
+  await as(page, "alice@e2e.test:approver");
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Approve" })).toBeDisabled();
+  await expect(
+    page.getByText("You proposed this change; another approver must decide it."),
+  ).toBeVisible();
+
+  // Bob approves, and the vendor's bank details become verified.
+  await as(page, "bob@e2e.test:approver");
+  await page.reload();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByText(`Bank details for ${vendor} are now verified.`)).toBeVisible();
+  await expect(row.getByText(/…9012/)).toBeVisible();
 });
 
 test("Xero reports whether it is configured", async ({ page }) => {
@@ -312,16 +354,21 @@ test("every validation check can be switched off from settings", async ({
   ).not.toBeChecked();
 });
 
-test("the approved sheet explains itself without a database", async ({ page }) => {
-  // The e2e stack runs on the filesystem store, where invoices cannot be
-  // queried. The page has to say so rather than render an empty grid that
-  // reads as "you have approved nothing".
+test("an approved invoice appears on the approved sheet", async ({ page }) => {
+  // Approves one itself rather than relying on an earlier test: the sheet is
+  // a database query, and this is the first e2e run that has a database.
+  await goto(page, "/invoices");
+  await page.locator(".queue-item").last().click();
+  const vendor = await page.locator("#f_vendor_name").inputValue();
+  await page.getByRole("button", { name: /^Approve/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Approve invoice" });
+  await dialog.getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByText(/^Approved /)).toBeVisible();
+
   await goto(page, "/sheet");
   await expect(
     page.getByRole("heading", { name: "Approved invoices" }),
   ).toBeVisible();
-  // The e2e stack has no database, so the sheet says why rather than showing
-  // an empty grid that reads as "you have approved nothing".
-  await expect(page.locator(".empty-state").first()).toContainText(/database/i);
   await expect(page.locator(".sheet-toolbar")).toBeVisible();
+  await expect(page.getByRole("cell", { name: vendor, exact: true }).first()).toBeVisible();
 });

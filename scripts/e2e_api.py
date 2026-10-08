@@ -9,6 +9,11 @@ exists.
 So this seeds a throwaway tree and execs uvicorn against it. Seeded, not empty:
 the data directory holds tracked configuration as well as output, and an empty
 one leaves the engine with no rules book.
+
+The API runs on a scratch SQLite database inside that tree, as production runs
+on Postgres. Without one, every database-only feature -- the approved-invoice
+sheet, the two-person bank-change queue -- could only be tested for its "needs
+a database" message, never for what it does.
 """
 
 from __future__ import annotations
@@ -26,6 +31,60 @@ GOLDEN = REPO / "tests" / "fixtures" / "golden" / "cases"
 # Under frontend/ so `npx playwright test` owns its own workspace, and
 # gitignored there.
 SCRATCH = REPO / "frontend" / "e2e" / ".data"
+
+TENANT = "e2e"
+
+
+def environment(port: str) -> dict[str, str]:
+    return {
+        "INVOICE_DATA_DIR": str(SCRATCH),
+        "DATABASE_URL": f"sqlite:///{SCRATCH / 'e2e.db'}",
+        # The browser cannot sign in to Identity Platform unattended, and the
+        # sign-in gate itself is covered by tests/test_frontend_reaches_the_flow.py.
+        "AUTH_DISABLED": "1",
+        "ENV": "local",
+        "AUTH_DEV_TENANT": TENANT,
+        # Never the real bucket, database or queue. Set empty rather than
+        # removed: the product calls load_dotenv(), which refills absent ones.
+        "GCS_BUCKET": "",
+        "CLOUD_SQL_INSTANCE": "",
+        "PUBSUB_TOPIC": "",
+        "E2E_API_PORT": port,
+    }
+
+
+def seed_database() -> None:
+    """Migrate the scratch database and load the golden cases into it.
+
+    The cases are read from the copied fixture tree with the filesystem store
+    and written through the database store, the same calls the worker makes for
+    a processed document -- so the API serves them exactly as it would serve
+    real ones.
+    """
+    # Imported here, after main() has set the environment: the product reads
+    # its configuration at import, and must see the scratch database.
+    sys.path.insert(0, str(REPO))
+    from invoice_processing.adapters import FsCaseRepository  # noqa: PLC0415
+    from invoice_processing.db.migrate import upgrade_to_head  # noqa: PLC0415
+    from invoice_processing.db.models import Tenant  # noqa: PLC0415
+    from invoice_processing.db.repositories import (  # noqa: PLC0415
+        PgCaseRepository,
+    )
+    from invoice_processing.db.session import tenant_session  # noqa: PLC0415
+    from invoice_processing.ports import RunContext  # noqa: PLC0415
+
+    upgrade_to_head()
+    with tenant_session(TENANT) as session:
+        session.add(Tenant(id=TENANT, slug=TENANT, name="End-to-end"))
+
+    source = FsCaseRepository(SCRATCH / "agent_output", tenant_id=TENANT)
+    target = PgCaseRepository()
+    for case_id in source.iter_case_ids(TENANT):
+        ctx = RunContext(tenant_id=TENANT, case_id=case_id)
+        artifacts = source.get_artifacts(ctx)
+        for key, payload in artifacts.items():
+            target.put_artifact(ctx, key, payload)
+        target.project_case(ctx, artifacts)
 
 
 def seed() -> Path:
@@ -53,20 +112,8 @@ def seed() -> Path:
 def main() -> int:
     seed()
     port = os.getenv("E2E_API_PORT", "8100")
-    env = {
-        **os.environ,
-        "INVOICE_DATA_DIR": str(SCRATCH),
-        # The browser cannot sign in to Identity Platform unattended, and the
-        # sign-in gate itself is covered by tests/test_frontend_reaches_the_flow.py.
-        "AUTH_DISABLED": "1",
-        "ENV": "local",
-        "AUTH_DEV_TENANT": "e2e",
-        # Never the real bucket, database or queue.
-        "GCS_BUCKET": "",
-        "CLOUD_SQL_INSTANCE": "",
-        "DATABASE_URL": "",
-        "PUBSUB_TOPIC": "",
-    }
+    os.environ.update(environment(port))
+    seed_database()
     return subprocess.call(
         [
             sys.executable,
@@ -77,7 +124,7 @@ def main() -> int:
             port,
         ],
         cwd=REPO,
-        env=env,
+        env=dict(os.environ),
     )
 
 
