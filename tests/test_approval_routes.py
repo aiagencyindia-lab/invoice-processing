@@ -953,3 +953,40 @@ def test_a_rejected_chain_without_a_workflow_stays_closed(env):
     assert "approval_rerouted" not in [e["event_type"] for e in env["events"]()]
     assert env["repo"].chain(TENANT, CASE) == before
     assert act(env, "approver:pa").status_code == 409
+
+
+def escalate_a_to_b(env):
+    """Route a one-step chain for a, let it go overdue, escalate to b."""
+    make_rule(env)
+    route_case(env)
+    with tenant_session(TENANT, env["url"]) as session:
+        session.query(models.User).filter_by(
+            email="a@x.test"
+        ).one().manager_email = "b@x.test"
+    later = datetime.now(timezone.utc) + timedelta(days=60)
+    assert approval_flow.escalate_overdue(env["repo"], None, now=later) == 1
+    (step,) = env["repo"].chain(TENANT, CASE)
+    assert step["escalated_to"] == "b@x.test"
+    return step
+
+
+def test_escalation_does_not_decide_or_reassign(env):
+    step = escalate_a_to_b(env)
+    assert step["status"] == "pending"
+    assert not (env["root"] / CASE / "workflow.json").exists()
+    r = act(env, "approver:a")
+    assert r.status_code == 200 and r.json()["completed"] is True
+    (step,) = env["repo"].chain(TENANT, CASE)
+    assert step["status"] == "approved" and step["decided_by"] == "a@x.test"
+
+
+def test_the_escalation_target_may_approve_instead(env):
+    escalate_a_to_b(env)
+    (item,) = (
+        env["client"]("approver:b").get("/api/approvals/mine").json()["items"]
+    )
+    assert item["why"] == "escalated from a@x.test"
+    r = act(env, "approver:b")
+    assert r.status_code == 200 and r.json()["completed"] is True
+    (step,) = env["repo"].chain(TENANT, CASE)
+    assert step["status"] == "approved" and step["decided_by"] == "b@x.test"
