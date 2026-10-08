@@ -23,10 +23,12 @@ from pathlib import Path
 import pytest
 from sqlalchemy import inspect
 
+from invoice_processing.api import service
 from invoice_processing.db import migrate, session
 from invoice_processing.db.models import TENANT_TABLES
 from invoice_processing.gcs import GcsBlobStore, for_tenant
 from invoice_processing.ports import BlobStore
+from invoice_processing.worker import __main__ as worker_main
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -335,3 +337,86 @@ class TestMigrationsRunAtStartup:
 
         present = set(inspect(session.get_engine()).get_table_names())
         assert set(TENANT_TABLES) <= present
+
+
+# Run in a child process. Each child marks itself ready, waits for the other,
+# then migrates -- so both reach the DDL together, as the API and the worker do
+# when the local stack starts.
+_RACE_CHILD = """
+import os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["REPO"])
+from invoice_processing.db import migrate
+gate = Path(os.environ["GATE"])
+(gate / os.environ["NAME"]).touch()
+deadline = time.time() + 60
+while len(list(gate.iterdir())) < 2 and time.time() < deadline:
+    time.sleep(0.01)
+print(migrate.upgrade_to_head())
+"""
+
+
+class TestConcurrentSqliteMigration:
+    def test_two_processes_migrating_at_once_both_succeed(self, tmp_path):
+        """The local stack starts the API and the worker together on one
+        SQLite file. With a migration pending, the loser of the race died on
+        `duplicate column name` halfway through DDL the winner had applied."""
+        db = tmp_path / "race.db"
+        behind = _alembic("upgrade head-1", db)
+        assert behind.returncode == 0, behind.stderr
+        heads = _alembic("heads", db).stdout.splitlines()
+        head = next(line.split()[0] for line in heads if "(head)" in line)
+
+        gate = tmp_path / "gate"
+        gate.mkdir()
+        env = {
+            **dict(__import__("os").environ),
+            "DATABASE_URL": f"sqlite:///{db}",
+            "CLOUD_SQL_INSTANCE": "",
+            "RUN_MIGRATIONS": "1",
+            "REPO": str(REPO),
+            "GATE": str(gate),
+        }
+        children = [
+            subprocess.Popen(
+                [sys.executable, "-c", _RACE_CHILD],
+                cwd=REPO,
+                env={**env, "NAME": name},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for name in ("api", "worker")
+        ]
+        results = [child.communicate(timeout=180) for child in children]
+
+        for child, (out, err) in zip(children, results, strict=True):
+            assert child.returncode == 0, err[-2000:]
+            assert out.strip().splitlines()[-1] == head
+        version = sqlite3.connect(db).execute(
+            "select version_num from alembic_version"
+        )
+        assert [row[0] for row in version] == [head]
+
+
+class TestWorkerStartup:
+    def test_a_failed_migration_is_logged_and_exits_nonzero(
+        self, monkeypatch, caplog
+    ):
+        """A worker that cannot migrate must say so, not vanish: the UI only
+        reports that the worker was last seen hours ago."""
+
+        def broken():
+            raise RuntimeError("duplicate column name: human_decision")
+
+        monkeypatch.setattr(
+            worker_main, "materialise_credentials", lambda: None
+        )
+        monkeypatch.setattr(worker_main, "get_queue", object)
+        monkeypatch.setattr(service, "_database_configured", lambda: True)
+        monkeypatch.setattr(migrate, "upgrade_to_head", broken)
+
+        with caplog.at_level("ERROR"):
+            assert worker_main.main([]) == 1
+        assert "could not be migrated" in caplog.text
+        assert "duplicate column name" in caplog.text

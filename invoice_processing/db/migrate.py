@@ -14,7 +14,10 @@ remembering:
 * **Only one process migrates at a time.** Every replica of the API and the
   worker starts at once on a deploy; a Postgres advisory lock means the others
   wait and then find the work already done, rather than racing each other
-  through the same DDL.
+  through the same DDL. SQLite gets the same guarantee from an exclusive lock
+  on a file beside the database: the local stack starts the API and the worker
+  together against one file, and the loser of that race used to die on
+  `duplicate column name` halfway through a migration the winner had applied.
 
 Set `RUN_MIGRATIONS=0` to turn it off -- for a deployment where migrations are
 applied by a separate release step, which is the better arrangement once there
@@ -25,6 +28,8 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from sqlalchemy import text
 
@@ -74,8 +79,8 @@ def upgrade_to_head() -> str | None:
     )
 
     if not is_postgres(engine):
-        # SQLite has no advisory locks, and nothing shares it anyway.
-        command.upgrade(config, "head")
+        with _sqlite_migration_lock(engine.url.database):
+            command.upgrade(config, "head")
         return current_revision()
 
     with engine.connect() as connection:
@@ -95,6 +100,30 @@ def upgrade_to_head() -> str | None:
     revision = current_revision()
     logger.info("Database schema is at %s", revision)
     return revision
+
+
+@contextmanager
+def _sqlite_migration_lock(database: str | None) -> Iterator[None]:
+    """Hold an exclusive lock on `<database>.migrate-lock` while migrating.
+
+    SQLite has no advisory locks, so the lock is a file next to the database.
+    The second process blocks here, then finds Alembic's version table already
+    at head and does nothing. An in-memory database is private to its
+    connection, so there is nothing to share and nothing to lock.
+    """
+    if not database or database == ":memory:":
+        yield
+        return
+    # ponytail: fcntl is POSIX only (macOS, Linux, the Docker image). A Windows
+    # host would need msvcrt.locking or the `filelock` package here.
+    import fcntl  # noqa: PLC0415
+
+    with open(f"{database}.migrate-lock", "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def current_revision() -> str | None:
