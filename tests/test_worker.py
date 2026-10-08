@@ -591,6 +591,115 @@ class TestArtifactsAreStoredUnderTheKeysReadersUse:
         assert "something_else" in stored
 
 
+GL_RULE = {
+    "id": "r1",
+    "vendor_name": "Acme",
+    "keyword": None,
+    "gl_account": "6100",
+    "enabled": True,
+    "created_at": "2026-01-01T00:00:00",
+}
+
+
+class TestLinesAreGlCoded:
+    """The worker codes each line from the tenant's GL rules before the
+    projection, keeps what a person coded, and never loses an invoice to it."""
+
+    def run(self, tmp_path, monkeypatch, rules, previous=None):
+        output = tmp_path / "case-1"
+        output.mkdir()
+        (output / "02_extraction.json").write_text(
+            json.dumps(
+                {
+                    "invoice": {
+                        "vendor_name": "Acme",
+                        "line_items": [
+                            {"description": "Bolts"},
+                            {"description": "Freight"},
+                        ],
+                    }
+                }
+            )
+        )
+        stored: dict[str, dict] = {}
+        if previous is not None:
+            stored["gl_coding"] = previous
+        projected: list[dict] = []
+
+        class Verbatim:
+            def put_artifact(self, ctx, key, payload):
+                stored[key] = payload
+
+            def get_artifacts(self, ctx):
+                return dict(stored)
+
+            def project_case(self, ctx, artifacts):
+                projected.append(artifacts)
+
+        class Blobs:
+            def get(self, key):
+                return b"%PDF-1.4"
+
+        monkeypatch.setattr(gia, "get_output_folder", _folder(output))
+        monkeypatch.setattr(gia, "process_invoice", _rejects)
+        monkeypatch.setattr(tenant_settings, "apply_to_pipeline", _no_settings)
+        monkeypatch.setattr(service, "get_gl_rules", rules)
+        process_document(
+            RunContext(tenant_id="t", case_id="case-1"),
+            {"id": "case-1", "storage_key": "k", "sha256": "s"},
+            cases=Verbatim(),
+            blobs=Blobs(),
+        )
+        return stored, projected
+
+    def repo(self):
+        class Repo:
+            def list_rules(self, tenant_id):
+                assert tenant_id == "t"
+                return [GL_RULE]
+
+        return Repo
+
+    def test_lines_are_coded_before_projection(self, tmp_path, monkeypatch):
+        stored, projected = self.run(tmp_path, monkeypatch, self.repo())
+        lines = stored["gl_coding"]["lines"]
+        assert [x["gl_account"] for x in lines] == ["6100", "6100"]
+        assert lines[0]["source"] == "rule" and lines[0]["rule_id"] == "r1"
+        assert projected[0]["gl_coding"] == stored["gl_coding"]
+
+    def test_a_person_s_coding_survives_a_rerun(self, tmp_path, monkeypatch):
+        manual = {
+            "line_number": 2,
+            "gl_account": "5000",
+            "source": "manual",
+            "rule_id": None,
+            "coded_by": "c@x.test",
+            "coded_at": "2026-01-02T00:00:00",
+        }
+        stored, _ = self.run(
+            tmp_path, monkeypatch, self.repo(), previous={"lines": [manual]}
+        )
+        assert stored["gl_coding"]["lines"][1] == manual
+        assert stored["gl_coding"]["lines"][0]["gl_account"] == "6100"
+
+    def test_without_rules_storage_nothing_is_coded(
+        self, tmp_path, monkeypatch
+    ):
+        stored, projected = self.run(tmp_path, monkeypatch, lambda: None)
+        assert "gl_coding" not in stored
+        assert projected
+
+    def test_a_coding_failure_does_not_cost_the_invoice(
+        self, tmp_path, monkeypatch
+    ):
+        def broken():
+            raise RuntimeError("database is down")
+
+        stored, projected = self.run(tmp_path, monkeypatch, broken)
+        assert "gl_coding" not in stored
+        assert "extraction" in stored and projected
+
+
 class TestHeartbeatWhileBusy:
     """A worker mid-extraction must not look like a worker that has gone.
 

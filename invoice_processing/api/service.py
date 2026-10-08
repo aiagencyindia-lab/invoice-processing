@@ -128,6 +128,7 @@ _claim_store = None
 _locks = None
 _vendors = None
 _approvals = None
+_gl_rules = None
 _rules = None
 _tenant_settings = None
 _claims_writer = None
@@ -357,6 +358,25 @@ def get_approvals():
 
         _approvals = PgApprovalRepository()
     return _approvals
+
+
+def get_gl_rules():
+    """Tenant GL coding rules. `None` without the table.
+
+    Raises when a configured database cannot be asked, like `get_approvals`:
+    None means "no rules here", and the worker would then file every line
+    uncoded without saying why.
+    """
+    global _gl_rules
+    if (
+        _gl_rules is None
+        and _database_configured()
+        and _table_exists("gl_rules", "GL coding", raise_on_error=True)
+    ):
+        from ..db.repositories import PgGlRuleRepository  # noqa: PLC0415
+
+        _gl_rules = PgGlRuleRepository()
+    return _gl_rules
 
 
 def get_queue():
@@ -737,6 +757,11 @@ def get_invoice(
         **_summarize(case_id, artifacts),
         "fields": fields,
         "line_items": invoice.get("line_items") or [],
+        # The projected lines carry the numbering the GL endpoint addresses
+        # and the account each line is coded to, so the workbench never has
+        # to guess which extraction row is which line.
+        "lines": case_projection.lines(artifacts),
+        "gl_coding": artifacts.get("gl_coding"),
         "findings": _findings(artifacts),
         "corrections": get_corrections().list(principal.tenant_id, case_id),
         "evidence_summary": evidence.get("_summary") or {},
@@ -916,14 +941,20 @@ ROUTING_FIELDS = {
 
 
 def _reroute_if_needed(ctx, artifacts, extraction, recorded) -> bool | str:
-    """True if the chain really changed, False if not, "failed" on an error.
-
-    A decided case is a no-op inside `route`, so the answer comes from
-    comparing the chain before and after rather than from having called it.
-    """
+    """Re-route only when an edit touched a field routing reads."""
     fields = sorted(ROUTING_FIELDS & {r["field_path"] for r in recorded})
     if not fields:
         return False
+    return reroute(ctx, {**artifacts, "extraction": extraction}, fields)
+
+
+def reroute(ctx, artifacts: dict, fields: list[str]) -> bool | str:
+    """Rebuild the pending chain after `fields` changed.
+
+    True if the chain really changed, False if not, "failed" on an error. A
+    decided case is a no-op inside `route`, so the answer comes from
+    comparing the chain before and after rather than from having called it.
+    """
     try:
         repo = get_approvals()
     except Exception as exc:
@@ -951,7 +982,7 @@ def _reroute_if_needed(ctx, artifacts, extraction, recorded) -> bool | str:
         before = shape()
         approval_flow.route(
             ctx,
-            {**artifacts, "extraction": extraction},
+            artifacts,
             repo=repo,
             now=datetime.now(timezone.utc),
         )
@@ -1562,6 +1593,7 @@ def export_invoice(
 from .admin_routes import router as admin_router  # noqa: E402
 from .approval_routes import router as approval_router  # noqa: E402
 from .config_routes import router as config_router  # noqa: E402
+from .gl_routes import router as gl_router  # noqa: E402
 from .ingest import router as ingest_router  # noqa: E402
 from .rules import router as rules_router  # noqa: E402
 from .sheet import router as sheet_router  # noqa: E402
@@ -1578,6 +1610,7 @@ app.include_router(sheet_router)
 app.include_router(rules_router)
 app.include_router(vendor_router)
 app.include_router(approval_router)
+app.include_router(gl_router)
 
 
 @app.get("/", response_class=HTMLResponse)

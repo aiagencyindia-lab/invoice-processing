@@ -191,6 +191,33 @@ def _apply_rules(ctx: RunContext, cases, artifacts: dict, *, binding: bool):
     return written
 
 
+def _code_gl(ctx: RunContext, cases, artifacts: dict) -> dict:
+    """Code each line from this tenant's GL rules and store the coding.
+
+    Informational, so a failure logs and leaves the lines uncoded rather than
+    failing the invoice. A line a person coded is kept: the stored record's
+    coding is passed as `previous`.
+    """
+    from .. import case_projection, gl_coding  # noqa: PLC0415
+    from ..api import service  # noqa: PLC0415
+
+    try:
+        repo = service.get_gl_rules()
+        if repo is None:
+            return {}
+        coding = gl_coding.code_lines(
+            case_projection.extraction(artifacts),
+            case_projection.lines(artifacts),
+            repo.list_rules(ctx.tenant_id),
+            previous=(cases.get_artifacts(ctx) or {}).get("gl_coding"),
+        )
+        cases.put_artifact(ctx, "gl_coding", coding)
+    except Exception as exc:
+        logger.warning("Lines of %s not GL coded: %s", ctx.case_id, exc)
+        return {}
+    return {"gl_coding": coding}
+
+
 def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
     """Run the acting pipeline over one stored document.
 
@@ -297,6 +324,9 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
                 binding=bool(settings.get("rules_binding")),
             )
         )
+
+        # Then the GL account of each line, so the projected lines carry it.
+        artifacts.update(_code_gl(ctx, cases, artifacts))
 
         # Then the queryable view of them. Deliberately after: the artifacts
         # are the record, and a projection that failed must not cost a run

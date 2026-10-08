@@ -648,7 +648,9 @@ function LineItems({
   isAdmin: boolean;
   onSaved: (message: string) => void;
 }) {
-  const items = detail.line_items;
+  // The server's numbering, not a guess at it: a transformer that merged or
+  // renumbered lines would otherwise have Save code the wrong line.
+  const items = detail.lines?.length ? detail.lines : detail.line_items;
   // Typed-but-unsaved GL accounts, by line number.
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [remember, setRemember] = useState(false);
@@ -732,7 +734,7 @@ function LineItems({
           </thead>
           <tbody>
             {items.map((item, position) => {
-              // Same fallback numbering as case_projection.lines.
+              // Projected lines always carry line_number; this is the fallback.
               const lineNumber = Number(item.line_number) || position + 1;
               const entry = coded.get(lineNumber);
               const current =

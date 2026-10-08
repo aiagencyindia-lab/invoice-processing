@@ -607,12 +607,20 @@ _ENTITY_TYPES = {
     "vendor": "vendor",
     "approval": "approval",
     "delegation": "delegation",
+    "gl_rule": "gl_rule",
 }
 
 
 def entity_type_for(event_type: str, case_id: str = "") -> str | None:
+    # Two-word subjects first: gl_rule_created is about a rule, while
+    # gl_line_coded falls through to the invoice it names.
+    head = event_type.rsplit("_", 1)[0]
     prefix = event_type.split("_", 1)[0]
-    return _ENTITY_TYPES.get(prefix) or ("invoice" if case_id else None)
+    return (
+        _ENTITY_TYPES.get(head)
+        or _ENTITY_TYPES.get(prefix)
+        or ("invoice" if case_id else None)
+    )
 
 
 class PgAuditSink:

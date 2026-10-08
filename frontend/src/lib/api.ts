@@ -302,6 +302,9 @@ export type InvoiceDetail = InvoiceSummary & {
   agreement: string | null;
   fields: InvoiceField[];
   line_items: Record<string, unknown>[];
+  /** The projected lines: the numbering the GL endpoint addresses, and each
+   *  line's coded account. Absent from an older API. */
+  lines?: Record<string, unknown>[];
   findings: Finding[];
   corrections: Correction[];
   /** Who is editing this record, if anyone. Null also means the deployment has
