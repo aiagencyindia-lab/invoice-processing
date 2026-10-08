@@ -76,7 +76,9 @@ def _recent(stamp: str | None, reference: date, days: int) -> bool:
     try:
         when = datetime.fromisoformat(stamp).date()
     except ValueError:
-        return False
+        # A change date we cannot read is treated as recent: the check fails
+        # toward a hold, never toward silently passing.
+        return True
     return reference - when <= timedelta(days=days)
 
 
@@ -104,15 +106,26 @@ def compare(
     found: dict[str, str] = {}
 
     if vendor.has_bank:
-        same_account = (
-            account and account == norm_account(vendor.bank_account_number)
-        ) or (iban and iban == norm_code(vendor.bank_iban))
+        # Every identifier the invoice prints that the vendor also has on file
+        # must match. One matching identifier must not vouch for a changed
+        # one: the vendor's real IBAN beside a different account number is
+        # exactly the redirection this check exists for.
+        comparable = []
+        if account and norm_account(vendor.bank_account_number):
+            comparable.append(
+                account == norm_account(vendor.bank_account_number)
+            )
+        if iban and norm_code(vendor.bank_iban):
+            comparable.append(iban == norm_code(vendor.bank_iban))
+        # Identifiers printed, none of a kind the vendor has on file: nothing
+        # could be confirmed, so that is a hold too.
+        same_identifiers = bool(comparable) and all(comparable)
         same_code = (
             not code
             or not vendor.bank_code
             or code == norm_code(vendor.bank_code)
         )
-        if not (same_account and same_code):
+        if not (same_identifiers and same_code):
             found[BANK_MISMATCH] = (
                 f"Account {_tail(account or iban)} / {code or '(no code)'} on the invoice; "
                 f"{vendor.name} verified as {_tail(norm_account(vendor.bank_account_number) or norm_code(vendor.bank_iban))} "
@@ -142,13 +155,10 @@ def compare(
         )
 
     sender_domain = domain_of(sender)
-    if (
-        sender_domain
-        and vendor.email_domain
-        and sender_domain != vendor.email_domain
-    ):
+    vendor_domain = (vendor.email_domain or "").lower()
+    if sender_domain and vendor_domain and sender_domain != vendor_domain:
         found[SENDER_DOMAIN_MISMATCH] = (
-            f"Sent from {sender_domain}; vendor domain is {vendor.email_domain}"
+            f"Sent from {sender_domain}; vendor domain is {vendor_domain}"
         )
 
     result.signals = [s for s in SEVERITY if s in found]

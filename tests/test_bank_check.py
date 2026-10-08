@@ -174,3 +174,61 @@ class TestOrdering:
             bank_check.RECENT_BANK_CHANGE,
             bank_check.SENDER_DOMAIN_MISMATCH,
         ]
+
+
+IBAN = "DE89370400440532013000"
+OTHER_IBAN = "DE75512108001245126199"
+
+
+def with_vendor(**changes):
+    return Vendor(**{**VERIFIED.__dict__, **changes})
+
+
+class TestEveryPrintedIdentifierMustMatch:
+    def test_matching_iban_with_changed_account_is_mismatch(self):
+        vendor = with_vendor(bank_iban=IBAN)
+        result = check(
+            invoice(bank_iban=IBAN, bank_account_number="476661095239"),
+            vendor=vendor,
+        )
+        assert result.signals == [bank_check.BANK_MISMATCH]
+
+    def test_matching_account_with_changed_iban_is_mismatch(self):
+        vendor = with_vendor(bank_iban=IBAN)
+        result = check(invoice(bank_iban=OTHER_IBAN), vendor=vendor)
+        assert result.signals == [bank_check.BANK_MISMATCH]
+
+    def test_iban_only_matching_passes(self):
+        vendor = Vendor(
+            name=VERIFIED.name, tax_id=VERIFIED.tax_id, bank_iban=IBAN
+        )
+        inv = invoice(bank_account_number=None, bank_code=None, bank_iban=IBAN)
+        assert check(inv, vendor=vendor).passed
+
+    def test_iban_only_invoice_against_account_only_vendor_is_mismatch(self):
+        inv = invoice(bank_account_number=None, bank_code=None, bank_iban=IBAN)
+        assert check(inv).signals == [bank_check.BANK_MISMATCH]
+
+
+class TestRecentChangeEdges:
+    def test_unreadable_change_date_counts_as_recent(self):
+        vendor = with_vendor(last_bank_change_at="not-a-date")
+        assert (
+            bank_check.RECENT_BANK_CHANGE
+            in check(invoice(), vendor=vendor).signals
+        )
+
+    def test_change_exactly_recent_days_ago_is_recent(self):
+        vendor = with_vendor(last_bank_change_at="2026-08-04T00:00:00+00:00")
+        assert (
+            bank_check.RECENT_BANK_CHANGE
+            in check(invoice(), vendor=vendor, recent_days=30).signals
+        )
+
+
+class TestDomainCaseAtCompareTime:
+    def test_vendor_domain_is_compared_case_insensitively(self):
+        vendor = with_vendor(email_domain="PrecisionWeld.EXAMPLE")
+        assert check(
+            invoice(), vendor=vendor, sender="billing@precisionweld.example"
+        ).passed
