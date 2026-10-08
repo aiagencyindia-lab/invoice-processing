@@ -1036,3 +1036,15 @@ def test_the_refusal_act_gives_is_the_reason_the_chain_gives(env):
     _, reason = chain_for(env, "approver:b")
     r = act(env, "approver:b")
     assert r.status_code == 403 and r.json()["detail"] == reason
+
+
+def test_a_seat_holder_without_the_approver_role_cannot_decide(env):
+    # Named on the step, then demoted: act would 403 on the role, so the
+    # chain must not offer the decision either.
+    two_tier(env)
+    route_case(env)
+    assert chain_for(env, "clerk:a") == (
+        False,
+        "'approver' or higher is required.",
+    )
+    assert act(env, "clerk:a").status_code == 403

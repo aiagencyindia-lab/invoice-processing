@@ -306,6 +306,10 @@ def invoice_chain(
         documents=service.get_documents(),
         now=datetime.now(timezone.utc),
     )
+    if current is not None and not principal.can("approver"):
+        # act needs the approver role before any seat counts; a seat holder
+        # demoted since being named would only get a 403 (require_role's words).
+        reason = "'approver' or higher is required."
     return {
         "steps": steps,
         "current": current["position"] if current else None,
