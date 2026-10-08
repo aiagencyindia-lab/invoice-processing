@@ -6,37 +6,22 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import pytest
-
-from invoice_processing.po_matching import normalize_vendor
 from invoice_processing.shared_libraries.acting import general_invoice_agent
 from invoice_processing.shared_libraries.acting.general_invoice_agent import (
     Phase3ValidatorAgent,
 )
 
-RUN = Path("benchmark/runs/after-ecb9bbd/raw/A.jsonl")
-
-pytestmark = pytest.mark.skipif(
-    not RUN.exists(), reason="stored benchmark run not present"
-)
+# One extraction from the stored benchmark run (see "source" in the file),
+# committed because the runs themselves are gitignored -- read from there, this
+# test skipped in CI and the planted faults were never checked where it matters.
+# Chosen by the rule the test needs: a payee that already equals the vendor once
+# normalised and no IBAN, so the only signal a planted fault can raise is
+# bank_mismatch and the exact-signal assertions mean something.
+FIXTURE = Path(__file__).parent / "fixtures" / "bank_check" / "planted.json"
 
 
 def _extraction() -> dict:
-    # A record whose payee name already equals the vendor name once normalised
-    # and which prints no IBAN, so the only signal a planted fault can raise is
-    # bank_mismatch and the exact-signal assertions mean something.
-    for line in RUN.read_text().splitlines():
-        inv = json.loads(line).get("extracted") or {}
-        if (
-            inv.get("bank_account_number")
-            and inv.get("bank_code")
-            and not inv.get("bank_iban")
-            and inv.get("vendor_name")
-            and normalize_vendor(inv.get("bank_account_name"))
-            == normalize_vendor(inv["vendor_name"])
-        ):
-            return inv
-    pytest.skip("no stored record with a clean payee name and no IBAN")
+    return json.loads(FIXTURE.read_text(encoding="utf-8"))["extracted"]
 
 
 def _hold(

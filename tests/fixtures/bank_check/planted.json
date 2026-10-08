@@ -1,0 +1,81 @@
+{
+  "source": "benchmark/runs/after-ecb9bbd/raw/A.jsonl, invoice TECH-INV-061 (synthetic India-GST dataset)",
+  "extracted": {
+    "invoice_number": "CH/2026-27/0569",
+    "invoice_date": "2026-05-25",
+    "invoice_total_inc_tax": 839602.0,
+    "invoice_total_ex_tax": 712544.0,
+    "tax_amount": 128257.92,
+    "vendor_tax_id": "29ZOICE4B28P1ZD",
+    "vendor_name": "Cloudhaven Infra Services Pvt Ltd",
+    "customer_name": "Zentrix Cloudworks Private Limited",
+    "currency": "INR",
+    "line_items": [
+      {
+        "description": "Managed cloud\noperations - May 2026",
+        "quantity": 84.0,
+        "unit": "hour",
+        "unit_price": 3181.0,
+        "amount_ex_tax": 267204.0,
+        "tax_code": null,
+        "tax_amount": 48096.72,
+        "amount_inc_tax": null,
+        "hsn_sac": "998315",
+        "tax_rate": 0.18,
+        "line_discount": null,
+        "line_discount_pct": null,
+        "has_discount": false
+      },
+      {
+        "description": "On-call SRE support -\nMay 2026",
+        "quantity": 140.0,
+        "unit": "hour",
+        "unit_price": 3181.0,
+        "amount_ex_tax": 445340.0,
+        "tax_code": null,
+        "tax_amount": 80161.2,
+        "amount_inc_tax": null,
+        "hsn_sac": "998315",
+        "tax_rate": 0.18,
+        "line_discount": null,
+        "line_discount_pct": null,
+        "has_discount": false
+      }
+    ],
+    "po_number": "ZC-PO-265400",
+    "due_date": "2026-06-09",
+    "payment_terms": "Net 15",
+    "vendor_address": "366, Tech Boulevard 29, Bengaluru 459779, Karnataka",
+    "bank_account_name": "Cloudhaven Infra Services Pvt Ltd",
+    "bank_account_number": "901031925572",
+    "bank_code": "KCBL0230056",
+    "bank_iban": null,
+    "tax_breakdown": [
+      {
+        "rate": 0.18,
+        "taxable_base": 712544.0,
+        "tax_amount": 128257.92,
+        "tax_code": "IGST"
+      }
+    ],
+    "document_type": "TAX INVOICE",
+    "customer_tax_id": "29AAFCZ4821L1ZS",
+    "work_authorization_reference": "WA-A-2026-003",
+    "project": "Customer Portal v3",
+    "service_period_start": "2026-03-22",
+    "service_period_end": "2026-04-12",
+    "place_of_supply": "29-Karnataka",
+    "subtotal": 712544.0,
+    "discount": null,
+    "other_charges": [],
+    "round_off": 0.08,
+    "cgst_amount": null,
+    "sgst_amount": null,
+    "igst_amount": 128257.92,
+    "_tax_id_validation": {
+      "valid": false,
+      "reason": "Invalid check character: expected 'A', found 'D'"
+    },
+    "_routing": "REVIEW"
+  }
+}
