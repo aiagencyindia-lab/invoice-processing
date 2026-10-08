@@ -986,6 +986,10 @@ class TestTheTwoExportsDescribeTheSameInvoice:
     """
 
     def test_every_csv_column_names_a_catalogue_column(self):
-        assert list(CSV_EQUIVALENT) == list(CSV_COLUMNS)
+        # gl_account is line-level coding; the sheet has one row per invoice
+        # and no line columns, so it has no equivalent there.
+        assert list(CSV_EQUIVALENT) == [
+            c for c in CSV_COLUMNS if c != "gl_account"
+        ]
         missing = [key for key in CSV_EQUIVALENT.values() if key not in BY_KEY]
         assert missing == []

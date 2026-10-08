@@ -1402,7 +1402,32 @@ CSV_COLUMNS = [
     "total_inc_tax",
     "po_number",
     "payment_terms",
+    "gl_account",
 ]
+
+
+def _with_gl(invoice: dict, artifacts: dict) -> dict:
+    """The invoice with each line's GL account from the projected lines.
+
+    Export reads the extraction, which carries no coding. The projection is
+    where gl_coding is applied, so it is read here rather than re-deciding
+    which coding wins.
+    """
+    # ponytail: extraction line N <-> projected line_number N; wrong only if
+    # the transformer renumbers or drops lines.
+    gl = {
+        line["line_number"]: line["gl_account"]
+        for line in case_projection.lines(artifacts)
+    }
+    return {
+        **invoice,
+        "line_items": [
+            {**item, "gl_account": gl.get(index)}
+            for index, item in enumerate(
+                invoice.get("line_items") or [], start=1
+            )
+        ],
+    }
 
 
 def _csv_row(case_id: str, invoice: dict) -> list[str]:
@@ -1419,6 +1444,15 @@ def _csv_row(case_id: str, invoice: dict) -> list[str]:
         "total_inc_tax": invoice.get("invoice_total_inc_tax"),
         "po_number": invoice.get("po_number"),
         "payment_terms": invoice.get("payment_terms"),
+        # One row per invoice, so the lines' accounts share a cell: distinct,
+        # in line order.
+        "gl_account": "; ".join(
+            dict.fromkeys(
+                line["gl_account"]
+                for line in invoice.get("line_items") or []
+                if line.get("gl_account")
+            )
+        ),
     }
     return ["" if mapping[c] is None else str(mapping[c]) for c in CSV_COLUMNS]
 
@@ -1446,7 +1480,9 @@ def export_invoice(
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
 
-    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+    invoice = _with_gl(
+        (artifacts.get("extraction") or {}).get("invoice") or {}, artifacts
+    )
     state = _workflow(ctx)
     approved = state.get("decision") == "approve"
 
