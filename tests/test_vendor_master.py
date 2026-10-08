@@ -176,3 +176,24 @@ class TestInThePipeline:
         assert step is not None
         assert step["passed"] is False
         assert step["outcome"] == vendor_master.UNKNOWN_VENDOR
+
+
+class TestVendorRecordCarriesBankDetails:
+    """The DB-backed master hands the pipeline the fields step 3.4 compares."""
+
+    def test_from_dict_reads_bank_and_email_fields(self):
+        v = vendor_master.Vendor.from_dict(
+            {
+                **ACME,
+                "email_domain": "Cloudhaven.example",
+                "bank_account_number": "901031925572",
+                "bank_code": "KCBL0230056",
+                "pending_change": True,
+            }
+        )
+        assert v.email_domain == "cloudhaven.example"
+        assert v.has_bank and v.pending_change
+
+    def test_missing_fields_default_to_none(self):
+        v = vendor_master.Vendor.from_dict(ACME)
+        assert v.bank_account_number is None and not v.has_bank
