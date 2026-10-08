@@ -39,6 +39,7 @@ import logging
 import os
 from dataclasses import dataclass
 from email import policy
+from email.utils import parseaddr
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -408,13 +409,22 @@ def _parse_mime(raw: bytes, headers: dict[str, str]) -> InboundMessage:
     recipient = headers.get("x-original-to") or ""
     message_id = ""
     sender = reply_to = ""
+    message = None
     try:
         message = email.message_from_bytes(raw, policy=policy.default)
         recipient = recipient or str(
             message.get("Delivered-To") or message.get("To") or ""
         )
         message_id = str(message.get("Message-ID") or "")
+    except Exception:
+        pass
+    # Separate guards: a From that raises must not hide the Reply-To, which is
+    # the header a fraudster actually sets.
+    try:
         sender = _bare_address(message.get("From"))
+    except Exception:
+        pass
+    try:
         reply_to = _bare_address(message.get("Reply-To"))
     except Exception:
         pass
@@ -540,13 +550,18 @@ def _decode_attachments(
 
 
 def _bare_address(value) -> str:
-    """`Name <a@b>` -> `a@b`; a Postmark `FromFull` dict -> its Email."""
+    """`Name <a@b>` -> `a@b`; a Postmark `FromFull` dict -> its Email.
+
+    The header is attacker-controlled and lands in a String(320) column, where
+    an over-long value would raise on Postgres, 500 the webhook and make the
+    provider retry forever. So anything malformed or too long becomes "" rather
+    than being truncated: a truncated address would hand the sender-domain
+    signal a wrong domain.
+    """
     if isinstance(value, dict):
         value = value.get("Email") or value.get("email") or ""
-    text = str(value or "").strip()
-    if "<" in text and ">" in text:
-        text = text[text.rindex("<") + 1 : text.rindex(">")]
-    return text.strip().lower()
+    address = parseaddr(str(value or ""))[1].strip().lower()
+    return address if "@" in address and len(address) <= 320 else ""
 
 
 def _first_address(value) -> str:

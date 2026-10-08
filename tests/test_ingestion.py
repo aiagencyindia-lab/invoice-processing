@@ -337,6 +337,20 @@ class TestInboundEmailAuth:
 
 
 class TestInboundEmailIngestion:
+    @pytest.mark.parametrize(
+        "from_header", ["a" * 400 + "@supplier.test", "not-an-address"]
+    )
+    def test_unusable_from_is_dropped_not_fatal(
+        self, client, wired, from_header
+    ):
+        """An over-long From would overflow String(320) and 500 the webhook."""
+        _, documents, _ = wired
+        raw = build_email([("a.pdf", PDF, "pdf")]).replace(
+            b"From: vendor@supplier.test", b"From: " + from_header.encode()
+        )
+        assert post_email(client, raw).status_code == 200
+        assert documents.rows["doc-1"]["sender"] is None
+
     def test_sender_is_stored_on_the_document(self, client, wired):
         """The sender-domain BEC signal reads it from here; the raw .eml alone
         would mean parsing a blob on every pipeline run."""
