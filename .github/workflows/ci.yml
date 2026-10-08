@@ -158,6 +158,7 @@ jobs:
                         tests/test_exports.py \
                         tests/test_db_repositories.py \
                         tests/test_vendor_repository.py \
+                        tests/test_approval_repository.py \
                         tests/test_vendor_routes.py \
                         tests/test_tenant_isolation_api.py -q
 

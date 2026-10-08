@@ -89,7 +89,7 @@ def upgrade() -> None:
         "approval_steps",
         sa.Column("id", sa.String(36), primary_key=True),
         _tenant_id(),
-        sa.Column("case_id", sa.String(64), nullable=False, index=True),
+        sa.Column("case_id", sa.String(128), nullable=False, index=True),
         sa.Column("position", sa.Integer, nullable=False),
         sa.Column("source_rule_id", sa.String(36)),
         sa.Column("assignee_kind", sa.String(16), nullable=False),

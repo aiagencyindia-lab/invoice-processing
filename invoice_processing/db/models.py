@@ -657,7 +657,9 @@ class ApprovalStep(Base, TenantMixin, TimestampMixin):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    case_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    case_id: Mapped[str] = mapped_column(
+        String(128), nullable=False, index=True
+    )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     source_rule_id: Mapped[str | None] = mapped_column(String(36))
     assignee_kind: Mapped[str] = mapped_column(
