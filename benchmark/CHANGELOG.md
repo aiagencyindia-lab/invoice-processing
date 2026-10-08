@@ -1326,3 +1326,31 @@ plant, which the planted tests cover.
 O/0 on identifiers confirmed 24 wrong values across three runs, and a changed
 bank code is exactly what this check exists to catch; OCR noise belongs in
 review.
+
+---
+
+## 2026-10-08 — Approval workflows: no benchmark decision moves
+
+**Problem.** Approval routing sits between a decision and its sign-off and
+shares code with the pipeline, so it had to be shown not to move any benchmark
+number.
+
+**Root cause.** None; this is a guard, not a fix. Routing is not in the replay
+path (the replay re-runs the pipeline over stored extractions and never creates
+approval steps), so the replay can only prove the shared code did not change.
+
+**Fix.** None to the pipeline. Approval chains are built after the pipeline
+decides, only for invoices a person must touch (REVIEW, or a total at or above an
+amount tier). An AUTO invoice below every tier gets no steps.
+
+**Result (today's code replayed over the run at `ecb9bbd`, `replay-approvals`).**
+Against `replay-currency-on-ecb9bbd`: posted untouched 40 of 45 clean -> 40 of
+45; posted untouched wrongly 1 -> 1; decision accuracy 98.0% -> 98.0%; zero
+flips.
+
+**What the feature would change, reported and not tuned.** The benchmark tenant
+has no tiers, so nothing changes there. Had it set a 5-lakh tier (total >=
+500,000), 9 of the 18 invoices the run accepted and routed AUTO would now need a
+person: MFG-INV-049, MFG-INV-056, SVC-INV-009, TECH-INV-043, TECH-INV-018,
+TECH-INV-048, TECH-INV-001, TECH-INV-016, TECH-INV-054. That is the intended
+cost of a tier, not a regression, and the threshold is the tenant's to choose.

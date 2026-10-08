@@ -32,6 +32,7 @@ setTokenProvider(currentIdToken);
 const NAV = [
   { href: "/dashboard", label: "Dashboard", glyph: "▦" },
   { href: "/invoices", label: "Invoices", glyph: "▤" },
+  { href: "/approvals", label: "Approvals", glyph: "✓", min: "viewer" },
   { href: "/sheet", label: "Approved invoices", glyph: "▥" },
   { href: "/documents", label: "Documents", glyph: "▣", min: "clerk" },
   { href: "/activity", label: "Activity", glyph: "≡" },

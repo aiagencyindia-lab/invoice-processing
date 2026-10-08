@@ -15,15 +15,15 @@ import hashlib
 import json
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
-from .. import po_matching
+from .. import approvals, po_matching
 from ..ports import LockHeld, RuleBaseConflict, RunContext
 from ..sheet_columns import (
     ATTENTION_FLAGS,
@@ -33,8 +33,12 @@ from ..sheet_columns import (
     is_sortable,
 )
 from .models import (
+    ApprovalRule,
+    ApprovalStep,
+    ApproverGroup,
     AuditEvent,
     Correction,
+    Delegation,
     Document,
     DocumentClaim,
     ExportJob,
@@ -520,6 +524,26 @@ class PgDocumentRepository:
                 "reply_to": document.reply_to,
             }
 
+    def get(self, tenant_id: str, document_id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            d = session.scalar(
+                select(Document).where(
+                    Document.tenant_id == tenant_id,
+                    Document.id == document_id,
+                )
+            )
+            if d is None:
+                return None
+            return {
+                "id": d.id,
+                "source": d.source,
+                "source_ref": d.source_ref,
+                "filename": d.filename,
+                "sha256": d.sha256,
+                "sender": d.sender,
+                "reply_to": d.reply_to,
+            }
+
     def create(self, tenant_id: str, **fields) -> str:
         with tenant_session(tenant_id, self.url) as session:
             document = Document(tenant_id=tenant_id, **fields)
@@ -580,6 +604,8 @@ _ENTITY_TYPES = {
     "settings": "settings",
     "purchase": "purchase_order",
     "vendor": "vendor",
+    "approval": "approval",
+    "delegation": "delegation",
 }
 
 
@@ -1071,6 +1097,490 @@ class PgVendorRepository:
             change.decision_note = note
             session.flush()
             return self._change_dict(change, vendor.name)
+
+
+class StepNotPending(Exception):
+    """The step is decided already, or an earlier step is still waiting."""
+
+
+class UnknownGroup(KeyError):
+    pass
+
+
+class UnknownRule(KeyError):
+    pass
+
+
+class InvalidDelegation(ValueError):
+    pass
+
+
+class PgApprovalRepository:
+    """Approval chains, groups, rules and delegations for a tenant.
+
+    The API and the worker are separate containers, so "what is waiting for
+    me" and "what is overdue" have to be queries both can run.
+    """
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    # -- shapes ----------------------------------------------------------
+    @staticmethod
+    def _iso(value):
+        return value.isoformat() if value else None
+
+    def _group_dict(self, g: ApproverGroup) -> dict:
+        return {
+            "id": g.id,
+            "name": g.name,
+            "members": list(g.members or []),
+            "created_at": self._iso(g.created_at),
+        }
+
+    def _rule_dict(self, r: ApprovalRule) -> dict:
+        return {
+            "id": r.id,
+            "name": r.name,
+            "kind": r.kind,
+            "match": dict(r.match or {}),
+            "steps": list(r.steps or []),
+            "enabled": bool(r.enabled),
+            "created_at": self._iso(r.created_at),
+        }
+
+    def _delegation_dict(self, d: Delegation) -> dict:
+        return {
+            "id": d.id,
+            "delegator_email": d.delegator_email,
+            "delegate_email": d.delegate_email,
+            "starts_on": d.starts_on.isoformat(),
+            "ends_on": d.ends_on.isoformat(),
+            "created_by": d.created_by,
+            "created_at": self._iso(d.created_at),
+        }
+
+    def _step_dict(self, s: ApprovalStep) -> dict:
+        return {
+            "id": s.id,
+            "case_id": s.case_id,
+            "position": s.position,
+            "source_rule_id": s.source_rule_id,
+            "assignee_kind": s.assignee_kind,
+            "assignee_value": s.assignee_value,
+            "status": s.status,
+            "due_at": self._iso(s.due_at),
+            "decided_by": s.decided_by,
+            "decided_at": self._iso(s.decided_at),
+            "acting_for": s.acting_for,
+            "override_reason": s.override_reason,
+            "escalated_to": s.escalated_to,
+            "escalated_at": self._iso(s.escalated_at),
+            "note": s.note,
+            "updated_at": self._iso(s.updated_at),
+        }
+
+    @staticmethod
+    def _one(session, model, tenant_id: str, row_id: str, missing):
+        row = session.scalar(
+            select(model).where(
+                model.tenant_id == tenant_id, model.id == row_id
+            )
+        )
+        if row is None:
+            raise missing(row_id)
+        return row
+
+    # -- groups ----------------------------------------------------------
+    def list_groups(self, tenant_id: str) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(ApproverGroup)
+                .where(ApproverGroup.tenant_id == tenant_id)
+                .order_by(ApproverGroup.name)
+            )
+            return [self._group_dict(g) for g in rows]
+
+    def groups_map(self, tenant_id: str) -> dict[str, list[str]]:
+        return {g["name"]: g["members"] for g in self.list_groups(tenant_id)}
+
+    def create_group(
+        self, tenant_id: str, name: str, members: list[str]
+    ) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            group = ApproverGroup(
+                tenant_id=tenant_id, name=name, members=list(members)
+            )
+            session.add(group)
+            session.flush()
+            return self._group_dict(group)
+
+    def update_group(
+        self, tenant_id: str, group_id: str, *, name=None, members=None
+    ) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            group = self._one(
+                session, ApproverGroup, tenant_id, group_id, UnknownGroup
+            )
+            if name is not None:
+                group.name = name
+            if members is not None:
+                group.members = list(members)
+            session.flush()
+            return self._group_dict(group)
+
+    def delete_group(self, tenant_id: str, group_id: str) -> None:
+        with tenant_session(tenant_id, self.url) as session:
+            session.delete(
+                self._one(
+                    session, ApproverGroup, tenant_id, group_id, UnknownGroup
+                )
+            )
+
+    # -- rules -----------------------------------------------------------
+    def list_rules(self, tenant_id: str) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(ApprovalRule)
+                .where(ApprovalRule.tenant_id == tenant_id)
+                .order_by(ApprovalRule.created_at, ApprovalRule.id)
+            )
+            return [self._rule_dict(r) for r in rows]
+
+    def create_rule(
+        self, tenant_id: str, *, name, kind, match, steps, enabled=True
+    ) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            rule = ApprovalRule(
+                tenant_id=tenant_id,
+                name=name,
+                kind=kind,
+                match=match,
+                steps=steps,
+                enabled=enabled,
+            )
+            session.add(rule)
+            session.flush()
+            return self._rule_dict(rule)
+
+    def update_rule(self, tenant_id: str, rule_id: str, **fields) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            rule = self._one(
+                session, ApprovalRule, tenant_id, rule_id, UnknownRule
+            )
+            for key in ("name", "kind", "match", "steps", "enabled"):
+                if key in fields:
+                    setattr(rule, key, fields[key])
+            session.flush()
+            return self._rule_dict(rule)
+
+    def delete_rule(self, tenant_id: str, rule_id: str) -> None:
+        with tenant_session(tenant_id, self.url) as session:
+            session.delete(
+                self._one(
+                    session, ApprovalRule, tenant_id, rule_id, UnknownRule
+                )
+            )
+
+    # -- delegations -----------------------------------------------------
+    def list_delegations(self, tenant_id: str, *, email=None) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            query = select(Delegation).where(Delegation.tenant_id == tenant_id)
+            if email:
+                who = email.strip().casefold()
+                query = query.where(
+                    or_(
+                        Delegation.delegator_email == who,
+                        Delegation.delegate_email == who,
+                    )
+                )
+            rows = session.scalars(query.order_by(Delegation.starts_on))
+            return [self._delegation_dict(d) for d in rows]
+
+    def create_delegation(
+        self, tenant_id, *, delegator, delegate, starts_on, ends_on, created_by
+    ) -> dict:
+        # Emails are stored folded so matching is a plain equality.
+        delegator, delegate = (
+            delegator.strip().casefold(),
+            delegate.strip().casefold(),
+        )
+        if delegator == delegate:
+            raise InvalidDelegation("You cannot delegate to yourself.")
+        if ends_on < starts_on:
+            raise InvalidDelegation("The end date is before the start date.")
+        with tenant_session(tenant_id, self.url) as session:
+            row = Delegation(
+                tenant_id=tenant_id,
+                delegator_email=delegator,
+                delegate_email=delegate,
+                starts_on=starts_on,
+                ends_on=ends_on,
+                created_by=created_by,
+            )
+            session.add(row)
+            session.flush()
+            return self._delegation_dict(row)
+
+    def delete_delegation(self, tenant_id: str, delegation_id: str) -> None:
+        with tenant_session(tenant_id, self.url) as session:
+            row = session.scalar(
+                select(Delegation).where(
+                    Delegation.tenant_id == tenant_id,
+                    Delegation.id == delegation_id,
+                )
+            )
+            if row is not None:
+                session.delete(row)
+
+    def active_delegators_of(
+        self, tenant_id: str, email: str, today: date
+    ) -> list[str]:
+        with tenant_session(tenant_id, self.url) as session:
+            return list(
+                session.scalars(
+                    select(Delegation.delegator_email).where(
+                        Delegation.tenant_id == tenant_id,
+                        Delegation.delegate_email == email.strip().casefold(),
+                        Delegation.starts_on <= today,
+                        Delegation.ends_on >= today,
+                    )
+                )
+            )
+
+    # -- steps -----------------------------------------------------------
+    def _steps(
+        self, session, tenant_id: str, case_id: str, *, lock: bool = False
+    ) -> list[ApprovalStep]:
+        query = (
+            select(ApprovalStep)
+            .where(
+                ApprovalStep.tenant_id == tenant_id,
+                ApprovalStep.case_id == case_id,
+            )
+            .order_by(ApprovalStep.position)
+        )
+        if lock:
+            # Postgres re-reads a row after waiting on a concurrent decide, so
+            # we see its new status. A no-op on SQLite (see `decide`).
+            query = query.with_for_update()
+        return list(session.scalars(query))
+
+    def chain(self, tenant_id: str, case_id: str) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            return [
+                self._step_dict(s)
+                for s in self._steps(session, tenant_id, case_id)
+            ]
+
+    def current(self, tenant_id: str, case_id: str) -> dict | None:
+        for step in self.chain(tenant_id, case_id):
+            if step["status"] == ApprovalStep.PENDING:
+                return step
+        return None
+
+    def _add_steps(self, session, tenant_id, case_id, specs, *, sla_days, now):
+        rows = self._steps(session, tenant_id, case_id, lock=True)
+        position = max((s.position for s in rows), default=0)
+        has_pending = any(s.status == ApprovalStep.PENDING for s in rows)
+        for spec in specs:
+            position += 1
+            session.add(
+                ApprovalStep(
+                    tenant_id=tenant_id,
+                    case_id=case_id,
+                    position=position,
+                    source_rule_id=spec.source_rule_id,
+                    assignee_kind=spec.assignee.kind,
+                    assignee_value=spec.assignee.value,
+                    status=ApprovalStep.PENDING,
+                    # Only the step that is up next runs a clock.
+                    due_at=None
+                    if has_pending
+                    else now + timedelta(days=sla_days),
+                )
+            )
+            has_pending = True
+        session.flush()
+
+    def replace_pending(
+        self, tenant_id, case_id, specs, *, sla_days, now
+    ) -> list[dict]:
+        """Re-route: drop what is still waiting, keep what people decided."""
+        with tenant_session(tenant_id, self.url) as session:
+            self._steps(session, tenant_id, case_id, lock=True)
+            # One guarded statement, never per-row deletes of rows read
+            # earlier: a decision that landed meanwhile must survive.
+            session.execute(
+                delete(ApprovalStep).where(
+                    ApprovalStep.tenant_id == tenant_id,
+                    ApprovalStep.case_id == case_id,
+                    ApprovalStep.status == ApprovalStep.PENDING,
+                )
+            )
+            self._add_steps(
+                session, tenant_id, case_id, specs, sla_days=sla_days, now=now
+            )
+            return [
+                self._step_dict(s)
+                for s in self._steps(session, tenant_id, case_id)
+            ]
+
+    def append_step(self, tenant_id, case_id, spec, *, sla_days, now) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            self._add_steps(
+                session, tenant_id, case_id, [spec], sla_days=sla_days, now=now
+            )
+            return self._step_dict(self._steps(session, tenant_id, case_id)[-1])
+
+    def decide(
+        self,
+        tenant_id: str,
+        step_id: str,
+        *,
+        approve: bool,
+        decided_by: str,
+        acting_for=None,
+        override_reason=None,
+        note=None,
+        sla_days: int,
+        now: datetime,
+    ) -> tuple[dict, bool]:
+        # ponytail: FOR UPDATE is a no-op on SQLite, so the double-decision
+        # guard (the status re-check after the lock wait) holds on Postgres
+        # only; dev/test SQLite serialises writers with its file lock.
+        with tenant_session(tenant_id, self.url) as session:
+            step = session.scalar(
+                select(ApprovalStep)
+                .where(
+                    ApprovalStep.tenant_id == tenant_id,
+                    ApprovalStep.id == step_id,
+                )
+                .with_for_update()
+            )
+            if step is None or step.status != ApprovalStep.PENDING:
+                raise StepNotPending(step_id)
+            pending = [
+                s
+                for s in self._steps(session, tenant_id, step.case_id)
+                if s.status == ApprovalStep.PENDING
+            ]
+            if pending[0].id != step.id:
+                raise StepNotPending(step_id)
+            step.status = (
+                ApprovalStep.APPROVED if approve else ApprovalStep.REJECTED
+            )
+            step.decided_by = decided_by
+            step.decided_at = now
+            step.acting_for = acting_for
+            step.override_reason = override_reason
+            step.note = note
+            later = pending[1:]
+            if approve and later:
+                later[0].due_at = now + timedelta(days=sla_days)
+            if not approve:
+                for s in later:
+                    s.status = ApprovalStep.CANCELLED
+            session.flush()
+            return self._step_dict(step), not approve or not later
+
+    def mine(
+        self, tenant_id, *, email, role, groups_map, delegators_of
+    ) -> list[dict]:
+        # ponytail: loads every pending step for the tenant and groups in
+        # Python; fine for a queue in the hundreds, push "lowest pending per
+        # case" into SQL (window function) when queues reach the thousands.
+        # Callers resolve delegations (for their own date) and pass the
+        # delegators in.
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(ApprovalStep)
+                .where(
+                    ApprovalStep.tenant_id == tenant_id,
+                    ApprovalStep.status == ApprovalStep.PENDING,
+                )
+                .order_by(ApprovalStep.case_id, ApprovalStep.position)
+            )
+            heads: dict[str, ApprovalStep] = {}
+            for s in rows:
+                heads.setdefault(s.case_id, s)
+            out = []
+            # Most urgent first: soonest due, steps with no clock last.
+            ordered = sorted(
+                heads.values(),
+                key=lambda s: (
+                    s.due_at is None,
+                    s.due_at.replace(tzinfo=None) if s.due_at else None,
+                    s.created_at.replace(tzinfo=None),
+                ),
+            )
+            for s in ordered:
+                d = self._step_dict(s)
+                why = approvals.satisfaction(
+                    email,
+                    role,
+                    d,
+                    groups=groups_map,
+                    delegators_of=delegators_of,
+                )
+                if why:
+                    out.append({**d, "why": why})
+            return out
+
+    def overdue(self, tenant_id: str, now: datetime) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(ApprovalStep)
+                .where(
+                    ApprovalStep.tenant_id == tenant_id,
+                    ApprovalStep.status == ApprovalStep.PENDING,
+                    ApprovalStep.due_at.is_not(None),
+                    ApprovalStep.due_at < now,
+                    ApprovalStep.escalated_at.is_(None),
+                )
+                .order_by(ApprovalStep.due_at)
+            )
+            return [self._step_dict(s) for s in rows]
+
+    def escalate(self, tenant_id: str, step_id: str, *, to: str, now) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            step = session.scalar(
+                select(ApprovalStep)
+                .where(
+                    ApprovalStep.tenant_id == tenant_id,
+                    ApprovalStep.id == step_id,
+                )
+                .with_for_update()
+            )
+            # Escalated already counts as not pending for this purpose: two
+            # workers scanning at once must not both notify, and the second
+            # must not overwrite where the first sent it.
+            if (
+                step is None
+                or step.status != ApprovalStep.PENDING
+                or step.escalated_at is not None
+            ):
+                raise StepNotPending(step_id)
+            step.escalated_to = to
+            step.escalated_at = now
+            session.flush()
+            return self._step_dict(step)
+
+    def tenant_ids(self) -> list[str]:
+        """Every tenant id. The one deliberately cross-tenant read here, like
+        `PgDocumentRepository.tenant_id_for_slug`: the SLA sweep has to visit
+        each tenant to find its overdue steps, and `tenants` has no RLS."""
+        with tenant_session("", self.url) as session:
+            return list(session.scalars(select(Tenant.id)))
+
+    def manager_of(self, tenant_id: str, email: str) -> str | None:
+        with tenant_session(tenant_id, self.url) as session:
+            return session.scalar(
+                select(User.manager_email).where(
+                    User.tenant_id == tenant_id,
+                    func.lower(User.email) == email.strip().casefold(),
+                )
+            )
 
 
 class PgClaimStore:

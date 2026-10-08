@@ -15,6 +15,7 @@ No test touches GCS; a fake client records calls.
 """
 
 import glob
+import os
 import sqlite3
 import subprocess
 import sys
@@ -278,6 +279,137 @@ class TestMigration:
         assert 'dialect.name == "postgresql"' in source, (
             "RLS must be guarded: these statements are Postgres-only"
         )
+
+    def test_approval_json_columns_are_jsonb_on_postgres(self, monkeypatch):
+        """The models declare JSONB on Postgres; a migration creating JSON
+        is drift autogenerate flags and the JSONB operators would not work."""
+        import importlib.util  # noqa: PLC0415
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        import sqlalchemy as sa  # noqa: PLC0415
+        from sqlalchemy.dialects import postgresql  # noqa: PLC0415
+
+        path = glob.glob(
+            str(
+                REPO
+                / "invoice_processing/db/migrations/versions/f2c7a19d8e43_*.py"
+            )
+        )[0]
+        spec = importlib.util.spec_from_file_location("approval_mig", path)
+        mig = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mig)
+        tables = {}
+        monkeypatch.setattr(
+            mig,
+            "op",
+            SimpleNamespace(
+                create_table=lambda name, *cols: tables.update({name: cols}),
+                create_index=lambda *a, **k: None,
+                add_column=lambda *a, **k: None,
+                get_bind=lambda: SimpleNamespace(
+                    dialect=SimpleNamespace(name="sqlite")
+                ),
+            ),
+        )
+        mig.upgrade()
+        json_cols = {
+            f"{t}.{c.name}": c.type.dialect_impl(postgresql.dialect())
+            for t, cols in tables.items()
+            for c in cols
+            if isinstance(c, sa.Column) and isinstance(c.type, sa.JSON)
+        }
+        assert set(json_cols) == {
+            "approver_groups.members",
+            "approval_rules.match",
+            "approval_rules.steps",
+        }
+        for name, impl in json_cols.items():
+            assert isinstance(impl, postgresql.JSONB), name
+
+    APPROVAL_MIGRATION = (
+        "invoice_processing/db/migrations/versions/f2c7a19d8e43_*.py"
+    )
+
+    def test_approval_migration_protects_exactly_the_tables_it_creates(self):
+        """RLS_TABLES is written by hand; a table left off it has no
+        tenant isolation on Postgres and nothing else would notice."""
+        import importlib.util  # noqa: PLC0415
+        import re  # noqa: PLC0415
+
+        path = glob.glob(str(REPO / self.APPROVAL_MIGRATION))[0]
+        spec = importlib.util.spec_from_file_location("approval_mig_rls", path)
+        mig = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mig)
+        created = re.findall(
+            r'op\.create_table\(\s*"(\w+)"', Path(path).read_text()
+        )
+        assert len(created) == 4
+        assert sorted(mig.RLS_TABLES) == sorted(created)
+        for table in created:
+            assert table in TENANT_TABLES, table
+
+    @pytest.mark.skipif(
+        not (os.getenv("TEST_DATABASE_URL") or "").startswith("postgresql"),
+        reason="RLS policies exist only on Postgres",
+    )
+    def test_approval_tables_have_forced_isolation_policies_after_upgrade(self):
+        """Checked on a database alembic built, not one create_all rebuilt."""
+        import uuid  # noqa: PLC0415
+
+        from sqlalchemy import create_engine, text  # noqa: PLC0415
+        from sqlalchemy.engine import make_url  # noqa: PLC0415
+
+        server = make_url(os.environ["TEST_DATABASE_URL"])
+        name = f"rls_{uuid.uuid4().hex[:12]}"
+        admin = create_engine(server, isolation_level="AUTOCOMMIT")
+        with admin.connect() as c:
+            c.execute(text(f"CREATE DATABASE {name}"))
+        url = server.set(database=name)
+        try:
+            up = subprocess.run(
+                [sys.executable, "-m", "alembic", "upgrade", "head"],
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False,
+                env={
+                    **os.environ,
+                    "DATABASE_URL": url.render_as_string(hide_password=False),
+                },
+            )
+            assert up.returncode == 0, up.stderr
+            engine = create_engine(url)
+            tables = [
+                "approver_groups",
+                "approval_rules",
+                "delegations",
+                "approval_steps",
+            ]
+            with engine.connect() as c:
+                policies = {
+                    (r[0], r[1])
+                    for r in c.execute(
+                        text("select tablename, policyname from pg_policies")
+                    )
+                }
+                forced = dict(
+                    c.execute(
+                        text(
+                            "select relname, relforcerowsecurity from pg_class "
+                            "where relname = any(:names)"
+                        ),
+                        {"names": tables},
+                    ).all()
+                )
+            engine.dispose()
+            for table in tables:
+                assert (table, f"{table}_isolation") in policies, table
+                assert forced.get(table) is True, table
+        finally:
+            with admin.connect() as c:
+                c.execute(text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+            admin.dispose()
 
     def test_no_connection_string_is_committed(self):
         """The URL comes from DATABASE_URL, so no password reaches the repo."""

@@ -273,6 +273,7 @@ class Provisioner:
                     "role": u.role,
                     "display_name": u.display_name,
                     "is_active": u.is_active,
+                    "manager_email": u.manager_email,
                     "created_at": u.created_at.isoformat()
                     if u.created_at
                     else None,
@@ -281,6 +282,56 @@ class Provisioner:
             ]
 
     # -- users -------------------------------------------------------------
+
+    def set_manager(
+        self, tenant_id: str, user_id: str, manager_email: str | None
+    ) -> dict:
+        """Point a user at the person overdue approvals escalate to.
+
+        Both ends are looked up inside the one tenant, so neither a user id nor
+        a manager email from elsewhere can resolve. Unknown user is a
+        LookupError (the API answers 404); a bad manager is a ProvisioningError.
+        Returns the user with `previous_manager_email` for the audit trail.
+        """
+        manager = validate_email(manager_email) if manager_email else None
+        with tenant_session(tenant_id, self.url) as session:
+            user = session.scalar(
+                select(User).where(
+                    User.tenant_id == tenant_id, User.id == user_id
+                )
+            )
+            if user is None:
+                raise LookupError(user_id)
+            if manager is not None:
+                if manager == user.email.casefold():
+                    raise ProvisioningError(
+                        "A person cannot be their own manager."
+                    )
+                role = session.scalar(
+                    select(User.role).where(
+                        User.tenant_id == tenant_id, User.email == manager
+                    )
+                )
+                if role is None:
+                    raise ProvisioningError(
+                        f"{manager} is not a user of this account."
+                    )
+                # Escalations land on the manager; one who cannot approve
+                # would receive steps they are unable to decide.
+                if role not in ("approver", "admin"):
+                    raise ProvisioningError(
+                        f"{manager} is a {role}, so they cannot be a manager "
+                        "for approvals; only an approver or admin can approve."
+                    )
+            previous = user.manager_email
+            user.manager_email = manager
+            session.flush()
+            return {
+                "id": user.id,
+                "email": user.email,
+                "manager_email": manager,
+                "previous_manager_email": previous,
+            }
 
     def add_user(
         self,

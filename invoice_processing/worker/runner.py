@@ -46,6 +46,8 @@ logger = logging.getLogger(__name__)
 # enough to ride out a transient model timeout and few enough that a genuinely
 # broken document is parked in minutes rather than hours.
 MAX_ATTEMPTS = 3
+# ponytail: a poll-loop timer; a scheduler when there is one.
+ESCALATION_SCAN_SECONDS = 60
 
 DOCUMENT_INGESTED = "document.ingested"
 
@@ -308,6 +310,28 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
                 case_id,
                 exc,
             )
+
+        # Who must approve, decided now that the columns exist. Separate from
+        # projection on purpose: a projection failure must not leave an invoice
+        # unrouted, and an unrouted invoice is one nobody is asked to approve.
+        try:
+            from .. import approval_flow  # noqa: PLC0415
+            from ..api import service  # noqa: PLC0415
+
+            repo = service.get_approvals()
+            if repo is not None:
+                # The workflow decision lives in the stored record, not in the
+                # pipeline's output: without it a retried, already-decided
+                # case would be handed a fresh pending chain.
+                record = cases.get_artifacts(ctx) or {}
+                approval_flow.route(
+                    ctx,
+                    {**artifacts, "workflow": record.get("workflow")},
+                    repo=repo,
+                    now=datetime.now(timezone.utc),
+                )
+        except Exception as exc:
+            logger.warning("Case %s not routed for approval: %s", case_id, exc)
 
         return {
             "case_id": case_id,
@@ -577,7 +601,10 @@ class Worker:
         audit=None,
         max_attempts: int = MAX_ATTEMPTS,
         attempts: AttemptLog | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ):
+        self.clock = clock
+        self._last_scan: float | None = None
         self.queue = queue
         self.claims = claims
         self.handler = handler or self._default_handler
@@ -672,10 +699,31 @@ class Worker:
                 logger.exception("Pull failed; continuing.")
                 outcomes = []
             write_heartbeat()
+            self._escalate_if_due()
             if not outcomes:
                 sleep(poll_seconds)
 
     # -- internals ---------------------------------------------------------
+
+    def _escalate_if_due(self) -> None:
+        now = self.clock()
+        if (
+            self._last_scan is not None
+            and now - self._last_scan < ESCALATION_SCAN_SECONDS
+        ):
+            return
+        self._last_scan = now
+        try:
+            from .. import approval_flow  # noqa: PLC0415
+            from ..api import service  # noqa: PLC0415
+
+            repo = service.get_approvals()
+            if repo is not None:
+                approval_flow.escalate_overdue(
+                    repo, self.audit, now=datetime.now(timezone.utc)
+                )
+        except Exception:
+            logger.exception("Overdue-approval scan failed; continuing.")
 
     def _default_handler(self, message: Message) -> dict:
         from ..api import service  # noqa: PLC0415

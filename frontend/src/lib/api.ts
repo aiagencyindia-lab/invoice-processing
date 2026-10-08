@@ -21,7 +21,13 @@ export class ApiError extends Error {
    *  should surface as a raw status code. */
   get friendly(): string {
     if (this.status === 401) return "Your session has expired. Sign in again.";
-    if (this.status === 403) return "Your role does not allow this.";
+    // A 403 usually carries the reason ("Step 2 is assigned to user:x."),
+    // which is more useful than a blanket role message.
+    if (this.status === 403) {
+      return typeof this.detail === "string" && this.detail
+        ? this.detail
+        : "Your role does not allow this.";
+    }
     if (this.status === 423) {
       const lock = this.detail as RecordLock | undefined;
       return lock?.holder
@@ -85,11 +91,19 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       .catch(() => null);
     // A structured detail is kept whole and never squeezed into the message:
     // `String({holder})` is "[object Object]", which tells the reader nothing.
-    throw new ApiError(
-      response.status,
-      typeof detail === "string" && detail ? detail : response.statusText,
-      detail,
-    );
+    // A pydantic 422 is a list of {loc, msg}; show it as "field: message".
+    const message =
+      typeof detail === "string" && detail
+        ? detail
+        : Array.isArray(detail) && detail.length
+          ? detail
+              .map(
+                (item: { loc?: unknown[]; msg?: string }) =>
+                  `${(item.loc ?? []).filter((p) => p !== "body").join(".")}: ${item.msg ?? ""}`,
+              )
+              .join("\n")
+          : response.statusText;
+    throw new ApiError(response.status, message, detail);
   }
   return response.json() as Promise<T>;
 }
@@ -366,6 +380,8 @@ export type TenantResponse = {
 };
 
 export type User = {
+  id?: string;
+  manager_email?: string | null;
   email: string;
   role: string;
   uid?: string | null;
@@ -535,3 +551,66 @@ export function sheetQuery(filters: SheetFilters, extra: Record<string, string |
   });
   return params.toString();
 }
+
+export type ApprovalStep = {
+  id: string;
+  position: number;
+  assignee_kind: "user" | "group" | "role";
+  assignee_value: string;
+  status: "pending" | "approved" | "rejected" | "cancelled";
+  due_at: string | null;
+  decided_by: string | null;
+  decided_at: string | null;
+  acting_for: string | null;
+  override_reason: string | null;
+  escalated_to: string | null;
+  escalated_at: string | null;
+  note: string | null;
+  source_rule_id: string | null;
+};
+/** `can_decide`/`reason` answer for the caller, by the same test the
+ *  actions endpoint applies. */
+export type ApprovalChain = {
+  steps: ApprovalStep[];
+  current: number | null;
+  can_decide: boolean;
+  reason: string | null;
+};
+export type MyApproval = {
+  case_id: string;
+  vendor: string | null;
+  invoice_number: string | null;
+  total: number | null;
+  currency: string | null;
+  position: number;
+  due_at: string | null;
+  overdue: boolean;
+  why: string;
+  assignee: string;
+};
+export type ApproverGroup = { id: string; name: string; members: string[] };
+export type ApprovalRule = {
+  id: string;
+  name: string;
+  kind: "vendor" | "entity" | "amount";
+  match: Record<string, unknown>;
+  steps: { kind: "user" | "group" | "role"; value: string }[];
+  enabled: boolean;
+};
+export type Delegation = {
+  id: string;
+  delegator_email: string;
+  delegate_email: string;
+  starts_on: string;
+  ends_on: string;
+  created_by: string;
+};
+/** The reply to an approve/reject: a chain with steps left answers with the
+ *  step it recorded and the one now waiting; the last step finishes the case. */
+export type ActionResult = {
+  case_id: string;
+  action: string;
+  completed: boolean;
+  step?: number;
+  next?: ApprovalStep | null;
+};

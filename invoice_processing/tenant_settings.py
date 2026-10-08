@@ -54,6 +54,10 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     # How long after a bank change is approved an invoice paying to it still
     # draws a review signal: fraud is most often caught in that window.
     "bank_change_recent_days": (int, float),
+    # How long an approval step may sit before it escalates; a policy number
+    # each organisation sets for itself, like the bank-change window. Whole
+    # days and at least one: a zero SLA escalates every step on creation.
+    "approval_sla_days": int,
 }
 
 # Settings the validation engine knows nothing about, with their defaults.
@@ -64,11 +68,16 @@ NON_ENGINE_DEFAULTS: dict[str, Any] = {
     "high_value_threshold": 0,
     # Off. A rule starts by being watched, not obeyed.
     "rules_binding": False,
+    "approval_sla_days": 3,
 }
 
 # Shown alongside each field in the UI so an administrator can tell what a
 # setting does without reading the rulebook.
 DESCRIPTIONS: dict[str, str] = {
+    "approval_sla_days": (
+        "Whole days (1 or more) an approval step may wait before it is "
+        "escalated to the approver's manager, or an admin."
+    ),
     "bank_change_recent_days": (
         "An invoice paid to bank details approved within this many days is "
         "held for review. The window in which a fraudulent change is most "
@@ -164,7 +173,7 @@ def validate(payload: dict) -> dict:
     for key, value in payload.items():
         expected = SETTABLE[key]
         # bool is a subclass of int, so a stray True would pass a numeric check.
-        if expected in ((int, float),) and isinstance(value, bool):
+        if expected in ((int, float), int) and isinstance(value, bool):
             raise SettingsError(
                 f"{key} must be a number, not a true/false value."
             )
@@ -247,6 +256,13 @@ def validate(payload: dict) -> dict:
             if value < 0:
                 raise SettingsError(f"{key} cannot be negative.")
             cleaned[key] = float(value)
+        elif key == "approval_sla_days":
+            if value < 1:
+                raise SettingsError(
+                    "approval_sla_days must be a whole number of days, "
+                    "1 or more."
+                )
+            cleaned[key] = value
         else:
             cleaned[key] = value
     return cleaned

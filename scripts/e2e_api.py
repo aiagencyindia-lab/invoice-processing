@@ -66,7 +66,7 @@ def seed_database() -> None:
     sys.path.insert(0, str(REPO))
     from invoice_processing.adapters import FsCaseRepository  # noqa: PLC0415
     from invoice_processing.db.migrate import upgrade_to_head  # noqa: PLC0415
-    from invoice_processing.db.models import Tenant  # noqa: PLC0415
+    from invoice_processing.db.models import Tenant, User  # noqa: PLC0415
     from invoice_processing.db.repositories import (  # noqa: PLC0415
         PgCaseRepository,
     )
@@ -76,6 +76,17 @@ def seed_database() -> None:
     upgrade_to_head()
     with tenant_session(TENANT) as session:
         session.add(Tenant(id=TENANT, slug=TENANT, name="End-to-end"))
+        session.flush()
+        # Approval rules and delegations may only name real users of the
+        # tenant, and the browser plays these people via X-Dev-Principal.
+        for email, role in (
+            ("dev@localhost", "admin"),
+            ("alice@e2e.test", "approver"),
+            ("bob@e2e.test", "approver"),
+            # A delegate decides in the seat, so must be able to approve.
+            ("pat@e2e.test", "approver"),
+        ):
+            session.add(User(tenant_id=TENANT, email=email, role=role))
 
     source = FsCaseRepository(SCRATCH / "agent_output", tenant_id=TENANT)
     target = PgCaseRepository()
@@ -106,6 +117,21 @@ def seed() -> Path:
     # The three frozen cases stand in for "invoices that have been processed".
     # Extraction itself needs Vertex and stays out of this run.
     shutil.copytree(GOLDEN, SCRATCH / "agent_output")
+    # Two more cases, so the approval-chain and rejection tests each have an
+    # invoice nothing else in the run decides (a decided case is closed to
+    # further approvals, and an edited one needs a second approver).
+    for new, vendor in (
+        ("case_003", "Chain Test Supplies"),
+        ("case_004", "Returned Goods Supplies"),
+    ):
+        clone = SCRATCH / "agent_output" / new
+        shutil.copytree(GOLDEN / "case_005", clone)
+        for path in clone.glob("*.json"):
+            path.write_text(
+                path.read_text()
+                .replace("case_005", new)
+                .replace("QuickFix HVAC Repairs", vendor)
+            )
     return SCRATCH
 
 

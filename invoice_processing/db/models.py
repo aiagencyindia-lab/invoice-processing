@@ -22,10 +22,11 @@ signal for accuracy measurement and the raw material for ALF rules.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -111,6 +112,8 @@ class User(Base, TenantMixin, TimestampMixin):
         String(32), nullable=False, default="clerk"
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Where an overdue approval step escalates to; unset falls back to an admin.
+    manager_email: Mapped[str | None] = mapped_column(String(320))
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +586,102 @@ class RecordLock(Base, TenantMixin, TimestampMixin):
     )
 
 
+class ApproverGroup(Base, TenantMixin, TimestampMixin):
+    """A named set of people any one of whom satisfies a step."""
+
+    __tablename__ = "approver_groups"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_approver_groups_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # ponytail: a JSON list of emails, filtered in Python. A tenant has a
+    # handful of groups; a members table when "which groups is X in" needs SQL.
+    members: Mapped[list] = mapped_column(JSONType, default=list)
+
+
+class ApprovalRule(Base, TenantMixin, TimestampMixin):
+    """Who must approve, keyed by vendor, entity or amount tier."""
+
+    __tablename__ = "approval_rules"
+
+    VENDOR, ENTITY, AMOUNT = "vendor", "entity", "amount"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    match: Mapped[dict] = mapped_column(JSONType, default=dict)
+    steps: Mapped[list] = mapped_column(JSONType, default=list)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Delegation(Base, TenantMixin, TimestampMixin):
+    """Out of office: the delegate may decide anything routed to the delegator
+    while the range is active."""
+
+    __tablename__ = "delegations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    delegator_email: Mapped[str] = mapped_column(
+        String(320), nullable=False, index=True
+    )
+    delegate_email: Mapped[str] = mapped_column(
+        String(320), nullable=False, index=True
+    )
+    starts_on: Mapped[date] = mapped_column(Date, nullable=False)
+    ends_on: Mapped[date] = mapped_column(Date, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(320), nullable=False)
+
+
+class ApprovalStep(Base, TenantMixin, TimestampMixin):
+    """One link of an invoice's approval chain. The lowest pending position is
+    the current step; nothing is ever decided out of order."""
+
+    __tablename__ = "approval_steps"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "case_id",
+            "position",
+            name="uq_approval_steps_position",
+        ),
+        Index("ix_approval_steps_pending", "tenant_id", "status", "due_at"),
+    )
+
+    PENDING, APPROVED, REJECTED, CANCELLED = (
+        "pending",
+        "approved",
+        "rejected",
+        "cancelled",
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    case_id: Mapped[str] = mapped_column(
+        String(128), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_rule_id: Mapped[str | None] = mapped_column(String(36))
+    assignee_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )  # user|group|role
+    assignee_value: Mapped[str] = mapped_column(String(320), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=PENDING
+    )
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(320))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acting_for: Mapped[str | None] = mapped_column(String(320))
+    override_reason: Mapped[str | None] = mapped_column(Text)
+    # "role:admin" or an email
+    escalated_to: Mapped[str | None] = mapped_column(String(320))
+    escalated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+
+
 TENANT_TABLES = (
     "users",
     "record_locks",
@@ -599,4 +698,8 @@ TENANT_TABLES = (
     "export_jobs",
     "vendors",
     "vendor_bank_changes",
+    "approver_groups",
+    "approval_rules",
+    "delegations",
+    "approval_steps",
 )

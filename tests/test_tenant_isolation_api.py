@@ -19,13 +19,14 @@ import json
 import pathlib
 import re
 import shutil
+from datetime import datetime, timezone
 from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
 from golden import GOLDEN_CASES
 
-from invoice_processing import paths
+from invoice_processing import approval_flow, paths
 from invoice_processing.adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
@@ -33,6 +34,7 @@ from invoice_processing.adapters import (
 )
 from invoice_processing.api import (
     admin_routes,
+    approval_routes,
     auth,
     config_routes,
     service,
@@ -40,8 +42,9 @@ from invoice_processing.api import (
     vendor_routes,
 )
 from invoice_processing.api.service import app
-from invoice_processing.db.models import Base, Invoice, Tenant
+from invoice_processing.db.models import Base, Invoice, Tenant, User
 from invoice_processing.db.repositories import (
+    PgApprovalRepository,
     PgRuleRepository,
     PgVendorRepository,
 )
@@ -289,6 +292,110 @@ class TestWritesDoNotCross:
         )
         acme = clients("acme").get("/api/vendors").json()["vendors"]
         assert [v["name"] for v in acme] == ["Acme Supplier"]
+
+    @pytest.fixture
+    def approvals_db(self, scratch_db, monkeypatch):
+        url = scratch_db("iso-approvals.db")
+        Base.metadata.drop_all(get_engine(url))
+        create_all(url)
+        for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
+            with db_session(tid, url) as session:
+                session.add(
+                    Tenant(id=tid, name=slug, slug=slug, status="active")
+                )
+                for role in ("admin", "approver"):
+                    session.add(
+                        User(
+                            tenant_id=tid,
+                            email=f"{role}@{slug}.test",
+                            role=role,
+                        )
+                    )
+        repo = PgApprovalRepository(url)
+        monkeypatch.setattr(service, "_approvals", repo)
+        monkeypatch.setenv("DATABASE_URL", url)
+        return repo
+
+    def test_approvals_do_not_cross_tenants(self, clients, approvals_db):
+        """Guessing an id from another tenant must be a 404 on every write,
+        and ACME's pending steps must never show in GLOBEX's queue."""
+        acme = clients("acme")
+        group = acme.post(
+            "/api/approvals/groups",
+            json={"name": "Finance", "members": ["admin@acme.test"]},
+        ).json()
+        rule = acme.post(
+            "/api/approvals/rules",
+            json={
+                "name": "All",
+                "kind": "amount",
+                "match": {"min_amount": 0},
+                "steps": [{"kind": "role", "value": "approver"}],
+            },
+        ).json()
+        dele = acme.post(
+            "/api/approvals/delegations",
+            json={
+                "delegator_email": "approver@acme.test",
+                "delegate_email": "admin@acme.test",
+                "starts_on": "2026-01-01",
+                "ends_on": "2026-12-31",
+            },
+        ).json()
+        ctx = RunContext(tenant_id=ACME, case_id="case_005")
+        approval_flow.route(
+            ctx,
+            service.get_cases().get_artifacts(ctx),
+            repo=approvals_db,
+            now=datetime.now(timezone.utc),
+        )
+        assert approvals_db.chain(ACME, "case_005")
+
+        globex = clients("globex")
+        assert globex.get("/api/invoices/case_005/approvals").status_code == 404
+        assert globex.get("/api/approvals/mine").json()["items"] == []
+        assert acme.get("/api/approvals/mine").json()["count"] == 1
+        for kind, rid in (("groups", group["id"]), ("rules", rule["id"])):
+            assert globex.get(f"/api/approvals/{kind}").json()["count"] == 0
+            assert (
+                globex.patch(
+                    f"/api/approvals/{kind}/{rid}", json={"name": "Hijack"}
+                ).status_code
+                == 404
+            )
+            assert (
+                globex.delete(f"/api/approvals/{kind}/{rid}").status_code == 404
+            )
+        assert globex.get("/api/approvals/delegations").json()["count"] == 0
+        assert (
+            globex.delete(
+                f"/api/approvals/delegations/{dele['id']}"
+            ).status_code
+            == 404
+        )
+        # Nothing was damaged by the probes.
+        assert len(approvals_db.list_groups(ACME)) == 1
+        assert len(approvals_db.list_rules(ACME)) == 1
+        assert len(approvals_db.list_delegations(ACME)) == 1
+
+    def test_manager_cannot_be_set_across_tenants(self, clients, approvals_db):
+        acme_user = next(
+            u
+            for u in clients("acme").get("/api/admin/users").json()["users"]
+            if u["email"] == "approver@acme.test"
+        )
+        r = clients("globex").patch(
+            f"/api/admin/users/{acme_user['id']}",
+            json={"manager_email": "admin@globex.test"},
+        )
+        assert r.status_code == 404
+        assert approvals_db.manager_of(ACME, "approver@acme.test") is None
+        # A manager from another tenant is not a user here either.
+        own = clients("acme").patch(
+            f"/api/admin/users/{acme_user['id']}",
+            json={"manager_email": "admin@globex.test"},
+        )
+        assert own.status_code == 400
 
     def test_bank_changes_do_not_cross_tenants(self, clients, vendor_db):
         """A vendor id guessed from another tenant must be a 404, and the other
@@ -940,6 +1047,15 @@ class TestCoverage:
         "/api/admin/tenants",
         "/api/admin/users",
         "/api/admin/users/claims",
+        "/api/admin/users/{user_id}",
+        "/api/approvals/mine",
+        "/api/invoices/{case_id}/approvals",
+        "/api/approvals/groups",
+        "/api/approvals/groups/{group_id}",
+        "/api/approvals/rules",
+        "/api/approvals/rules/{rule_id}",
+        "/api/approvals/delegations",
+        "/api/approvals/delegations/{delegation_id}",
         "/api/sheet/invoices",
         "/api/sheet/summary",
         "/api/sheet/facets",
@@ -988,7 +1104,13 @@ class TestCoverage:
 
     def test_no_endpoint_reads_a_tenant_from_the_request(self):
         """The complement: a tenant must not arrive in a body or query either."""
-        for module in (admin_routes, config_routes, system, vendor_routes):
+        for module in (
+            admin_routes,
+            approval_routes,
+            config_routes,
+            system,
+            vendor_routes,
+        ):
             source = pathlib.Path(module.__file__).read_text(encoding="utf-8")
             assert "request.tenant_id" not in source, module.__name__
             assert "tenant_id: str = Query" not in source, module.__name__

@@ -379,6 +379,12 @@ class JsonDocumentRepository:
                 return document
         return None
 
+    def get(self, tenant_id: str, document_id: str) -> dict | None:
+        for document in self._read().get(tenant_id, {}).values():
+            if document.get("id") == document_id:
+                return document
+        return None
+
     def create(self, tenant_id: str, **fields) -> str:
         data = self._read()
         document_id = str(uuid.uuid4())

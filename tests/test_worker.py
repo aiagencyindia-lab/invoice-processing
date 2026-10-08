@@ -18,8 +18,16 @@ import time
 
 import pytest
 
-from invoice_processing import tenant_settings
+from invoice_processing import approval_flow, tenant_settings
+from invoice_processing.api import service
 from invoice_processing.core.config import ARTIFACT_MAP
+from invoice_processing.db import models
+from invoice_processing.db.repositories import PgApprovalRepository
+from invoice_processing.db.session import (
+    create_all,
+    get_engine,
+    tenant_session,
+)
 from invoice_processing.ports import RunContext
 from invoice_processing.shared_libraries.acting import (
     general_invoice_agent as gia,
@@ -773,3 +781,129 @@ class TestAuditEventsNameTheirDocument:
         [(ctx, event)] = emitted
         assert event == "document_processed"
         assert ctx.case_id == "d-1"
+
+
+class TestRoutingAfterProjection:
+    """The worker decides who must approve once the columns exist."""
+
+    def _run(
+        self,
+        tmp_path,
+        monkeypatch,
+        scratch_db,
+        routing,
+        project_ok=True,
+        stored=None,
+    ):
+        url = scratch_db("route.db")
+        # tenant_settings (the SLA) reads the same database the repo uses.
+        monkeypatch.setenv("DATABASE_URL", url)
+        models.Base.metadata.drop_all(get_engine(url))
+        create_all(url)
+        with tenant_session("t", url) as session:
+            session.add(models.Tenant(id="t", name="t", slug="t"))
+        repo = PgApprovalRepository(url)
+        monkeypatch.setattr(service, "get_approvals", lambda: repo)
+
+        output = tmp_path / "case-r"
+        output.mkdir()
+
+        def process(*args, **kwargs):
+            (output / "02_extraction.json").write_text(
+                json.dumps(
+                    {
+                        "invoice": {
+                            "vendor_name": "Acme",
+                            "invoice_total_inc_tax": 10.0,
+                            "currency": "AUD",
+                            "_routing": routing,
+                        }
+                    }
+                )
+            )
+            return {"decision": "REJECT"}
+
+        class Sink:
+            def put_artifact(self, ctx, key, payload): ...
+
+            def get_artifacts(self, ctx):
+                return stored
+
+            def project_case(self, ctx, artifacts):
+                if not project_ok:
+                    raise RuntimeError("projection down")
+
+        class Blobs:
+            def get(self, key):
+                return b"%PDF-1.4"
+
+        monkeypatch.setattr(gia, "get_output_folder", _folder(output))
+        monkeypatch.setattr(gia, "process_invoice", process)
+        monkeypatch.setattr(tenant_settings, "apply_to_pipeline", _no_settings)
+        monkeypatch.setattr(runner, "_apply_rules", lambda *a, **k: {})
+        process_document(
+            RunContext(tenant_id="t", case_id="case-r"),
+            {"id": "case-r", "storage_key": "k", "sha256": "s"},
+            cases=Sink(),
+            blobs=Blobs(),
+        )
+        return repo.chain("t", "case-r")
+
+    def test_review_invoice_gets_one_pending_approver_step(
+        self, tmp_path, monkeypatch, scratch_db
+    ):
+        [step] = self._run(tmp_path, monkeypatch, scratch_db, "REVIEW")
+        assert (step["assignee_kind"], step["assignee_value"]) == (
+            "role",
+            "approver",
+        )
+        assert step["status"] == "pending" and step["due_at"]
+
+    def test_routing_runs_even_when_projection_failed(
+        self, tmp_path, monkeypatch, scratch_db
+    ):
+        chain = self._run(
+            tmp_path, monkeypatch, scratch_db, "REVIEW", project_ok=False
+        )
+        assert len(chain) == 1
+
+    def test_a_decided_case_reprocessed_gets_no_new_steps(
+        self, tmp_path, monkeypatch, scratch_db
+    ):
+        # The retry endpoint re-runs a case that was already approved; the
+        # pipeline's artifacts carry no workflow, the stored record does.
+        decided = {"workflow": {"decision": "approve"}}
+        assert (
+            self._run(
+                tmp_path, monkeypatch, scratch_db, "REVIEW", stored=decided
+            )
+            == []
+        )
+
+    def test_auto_invoice_gets_no_steps(
+        self, tmp_path, monkeypatch, scratch_db
+    ):
+        assert self._run(tmp_path, monkeypatch, scratch_db, "AUTO") == []
+
+
+class TestEscalationTimer:
+    def test_the_poll_loop_scans_for_overdue_steps(
+        self, queue, tmp_path, monkeypatch
+    ):
+        calls = []
+        monkeypatch.setattr(service, "get_approvals", object)
+        monkeypatch.setattr(
+            approval_flow,
+            "escalate_overdue",
+            lambda repo, audit, *, now: calls.append(now) or 0,
+        )
+        monkeypatch.setattr(runner, "write_heartbeat", lambda: None)
+        monkeypatch.setattr(runner, "start_heartbeat", lambda: None)
+
+        def stop(_):
+            raise StopIteration
+
+        worker = Worker(queue, ClaimStore(tmp_path / "c"), clock=lambda: 1000.0)
+        with pytest.raises(StopIteration):
+            worker.run_forever(sleep=stop)
+        assert len(calls) == 1

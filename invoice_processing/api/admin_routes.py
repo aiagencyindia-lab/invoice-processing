@@ -26,7 +26,7 @@ from contextlib import contextmanager
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .auth import Principal, require_role
 
@@ -64,6 +64,10 @@ class UserCreate(BaseModel):
     # Identity Platform uid. Without one the row is created but grants nothing,
     # which is the safe half-state.
     uid: str | None = None
+
+
+class UserPatch(BaseModel):
+    manager_email: str | None = Field(default=None, max_length=320)
 
 
 class ClaimsUpdate(BaseModel):
@@ -241,6 +245,37 @@ def create_user(
             "Created, but no Identity Platform account was linked, so this "
             "user cannot sign in yet. Add their uid to finish."
         )
+    return record
+
+
+@router.patch("/api/admin/users/{user_id}")
+def patch_user(
+    user_id: str,
+    request: UserPatch,
+    principal: Annotated[Principal, Depends(require_role("admin"))],
+) -> dict:
+    """Set who a user's overdue approvals escalate to (null clears it)."""
+    from . import service  # noqa: PLC0415
+
+    # Omitted and null differ: null clears the manager, omitted is a mistake.
+    if "manager_email" not in request.model_fields_set:
+        raise HTTPException(status_code=400, detail="Nothing to change.")
+    try:
+        with _database_required():
+            record = _provisioner().set_manager(
+                principal.tenant_id, user_id, request.manager_email
+            )
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Unknown user") from None
+    except _provisioning_error() as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    previous = record.pop("previous_manager_email")
+    service.get_audit().emit(
+        principal.context(),
+        "user_updated",
+        {"user_id": user_id, "manager_email": record["manager_email"]},
+        before={"manager_email": previous},
+    )
     return record
 
 

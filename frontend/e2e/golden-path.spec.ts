@@ -98,8 +98,8 @@ test("a rejection has to say why, and in which sense", async ({ page }) => {
   // The reason used to be a `window.prompt`, which Playwright cannot see and
   // a person cannot classify. The category is the half the system acts on:
   // only "policy exception" describes a rule the rulebook is missing.
-  await goto(page, "/invoices");
-  await page.locator(".queue-item").last().click();
+  await goto(page, "/invoices?case=case_004");
+  await expect(page.locator("#f_vendor_name")).toBeVisible();
 
   await page.getByRole("button", { name: /^Reject/ }).click();
   const dialog = page.getByRole("dialog", { name: "Reject invoice" });
@@ -172,6 +172,7 @@ test("every sidebar view opens", async ({ page }) => {
   await goto(page, "/dashboard");
   for (const label of [
     "Invoices",
+    "Approvals",
     "Approved invoices",
     "Documents",
     "Activity",
@@ -357,8 +358,7 @@ test("every validation check can be switched off from settings", async ({
 test("an approved invoice appears on the approved sheet", async ({ page }) => {
   // Approves one itself rather than relying on an earlier test: the sheet is
   // a database query, and this is the first e2e run that has a database.
-  await goto(page, "/invoices");
-  await page.locator(".queue-item").last().click();
+  await goto(page, "/invoices?case=case_002");
   const vendor = await page.locator("#f_vendor_name").inputValue();
   await page.getByRole("button", { name: /^Approve/ }).click();
   const dialog = page.getByRole("dialog", { name: "Approve invoice" });
@@ -371,4 +371,80 @@ test("an approved invoice appears on the approved sheet", async ({ page }) => {
   ).toBeVisible();
   await expect(page.locator(".sheet-toolbar")).toBeVisible();
   await expect(page.getByRole("cell", { name: vendor, exact: true }).first()).toBeVisible();
+});
+
+// This test owns case_003 (cloned in scripts/e2e_api.py); nothing else decides it.
+test("a two-step rule routes an invoice through alice then bob", async ({
+  page,
+}) => {
+  const rule = "E2E two-step amount rule";
+  await goto(page, "/admin/approvals");
+  await page.getByLabel("Rule name").fill(rule);
+  await page.getByLabel("Minimum amount").fill("1");
+  await page.getByLabel("Step 1 value").fill("alice@e2e.test");
+  await page.getByRole("button", { name: "Add step" }).click();
+  await page.getByLabel("Step 2 value").fill("bob@e2e.test");
+  await page.getByRole("button", { name: "Add rule" }).click();
+  await expect(page.getByText(`Rule ${rule} created.`)).toBeVisible();
+
+  // Nothing is routed until someone acts on a case, so alice starts the chain
+  // from the workbench. The panel then shows the second step waiting on bob.
+  await as(page, "alice@e2e.test:approver");
+  await goto(page, "/invoices?case=case_003");
+  await expect(page.locator("#f_vendor_name")).toBeVisible();
+  const vendor = await page.locator("#f_vendor_name").inputValue();
+  await page.getByRole("button", { name: /^Approve/ }).click();
+  await page
+    .getByRole("dialog", { name: "Approve invoice" })
+    .getByRole("button", { name: "Approve" })
+    .click();
+  await expect(page.getByText(/Step 1 approved; waiting on user:bob@e2e.test/)).toBeVisible();
+
+  // Alice cannot also sign step 2: she decided step 1. The workbench says so,
+  // in the server's words, and disables the buttons rather than offering a
+  // decision the server refuses.
+  await expect(
+    page.getByText("You decided an earlier step; each step needs a different person."),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Approve/ })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /^Reject/ })).toBeDisabled();
+
+  // Alice is away: bob hands his seat to pat, an approver, for today.
+  await as(page, "bob@e2e.test:approver");
+  await goto(page, "/approvals");
+  await page.getByLabel("Delegate email").fill("pat@e2e.test");
+  await page.getByRole("button", { name: "Add delegation" }).click();
+  await expect(page.getByText(/pat@e2e.test will cover for you/)).toBeVisible();
+  await as(page, "pat@e2e.test:approver");
+  await goto(page, "/approvals");
+  await expect(page.getByText("delegate for bob@e2e.test")).toBeVisible();
+
+  // Bob approves from his phone-sized queue; the chain completes.
+  await as(page, "bob@e2e.test:approver");
+  await goto(page, "/approvals");
+  await page.getByRole("button", { name: "Approve" }).click();
+  await page
+    .getByRole("dialog", { name: "Approve invoice" })
+    .getByRole("button", { name: "Approve" })
+    .click();
+  await expect(page.getByText("Nothing is waiting for you.")).toBeVisible();
+
+  // The sheet row records who signed last, not only that the invoice is there.
+  await goto(page, "/sheet");
+  const row = page
+    .getByRole("row")
+    .filter({ has: page.getByRole("cell", { name: vendor, exact: true }) });
+  await expect(
+    row.getByRole("cell", { name: "bob@e2e.test", exact: true }),
+  ).toBeVisible();
+
+  // The rule is tenant policy that outlives the test; remove it.
+  await as(page, "dev@localhost:admin");
+  await goto(page, "/admin/approvals");
+  await page
+    .getByText(rule)
+    .locator("xpath=ancestor::div[contains(@class,'row-between')][1]")
+    .getByRole("button", { name: "Delete" })
+    .click();
+  await expect(page.getByText(`Rule ${rule} deleted.`)).toBeVisible();
 });
