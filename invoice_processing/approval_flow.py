@@ -45,12 +45,21 @@ def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
         if approvals.needs_person(invoice, rules)
         else []
     )
+    return repo.replace_pending(
+        t,
+        ctx.case_id,
+        _not_yet_asked(repo.chain(t, ctx.case_id), specs),
+        sla_days=_sla_days(t),
+        now=now,
+    )
+
+
+def _not_yet_asked(chain: list[dict], specs: list) -> list:
+    """The specs still to ask, given the decided steps already in the chain."""
     # Someone who already approved a step is not asked again by the new chain,
     # neither for the same seat nor by name (they may have approved through a
     # group or role seat).
-    approved = [
-        s for s in repo.chain(t, ctx.case_id) if s["status"] == "approved"
-    ]
+    approved = [s for s in chain if s["status"] == "approved"]
     seats = {
         (s["assignee_kind"], s["assignee_value"].casefold()) for s in approved
     }
@@ -70,9 +79,7 @@ def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
         # workflow decision), so another approver must confirm the changed
         # invoice. Nothing is ever auto-completed.
         specs = [approvals.ROLE_FALLBACK]
-    return repo.replace_pending(
-        t, ctx.case_id, specs, sla_days=_sla_days(t), now=now
-    )
+    return specs
 
 
 def uploader_of(ctx, documents) -> str | None:
@@ -127,14 +134,22 @@ def decide(
     # ones, so the invoice can still be finished.
     current = repo.current(t, case)
     if current is None:
+        chain = repo.chain(t, case)
+        if any(s["status"] == "rejected" for s in chain):
+            # The rejection landed and only the workflow write was lost; a
+            # fresh chain would let a later approval overturn it.
+            raise AlreadyDecided("This invoice was already rejected.")
         # Processed before routing existed, or routed touchless: someone acting
         # on it has chosen to review it. build_chain is never empty (it falls
         # back to a role step), unlike route() which yields [] for touchless.
+        # Filtered as route() filters, so nobody who approved is asked again.
         invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
         repo.replace_pending(
             t,
             case,
-            approvals.build_chain(invoice, repo.list_rules(t)),
+            _not_yet_asked(
+                chain, approvals.build_chain(invoice, repo.list_rules(t))
+            ),
             sla_days=_sla_days(t),
             now=now,
         )
@@ -228,7 +243,7 @@ def escalate_overdue(repo, audit, *, now: datetime) -> int:
                 try:
                     repo.escalate(t, step["id"], to=target, now=now)
                 except StepNotPending:
-                    continue  # decided between the scan and now
+                    continue  # decided or escalated since the scan
                 count += 1
                 if audit is None:
                     continue

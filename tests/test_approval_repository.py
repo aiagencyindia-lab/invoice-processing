@@ -634,6 +634,20 @@ class TestEscalateOverdue:
         assert self._scan(repo, audit) == 0
         assert audit.events == []
 
+    def test_a_step_escalated_mid_scan_is_not_escalated_again(
+        self, repo, audit, monkeypatch
+    ):
+        seed(repo, "c1", spec("role", "approver"))
+        stale = repo.overdue(T, NOW + timedelta(days=5))
+        repo.escalate(T, stale[0]["id"], to="boss@x.com", now=NOW)
+        with pytest.raises(StepNotPending):
+            repo.escalate(T, stale[0]["id"], to="role:admin", now=NOW)
+        # A second worker listed the step before the first escalated it.
+        monkeypatch.setattr(repo, "overdue", lambda t, now: stale)
+        assert self._scan(repo, audit) == 0
+        assert audit.events == []
+        assert repo.chain(T, "c1")[0]["escalated_to"] == "boss@x.com"
+
     def test_a_failing_audit_sink_loses_no_escalation(self, repo):
         class Broken:
             def emit(self, *a):
@@ -787,3 +801,104 @@ class TestRerouteNeverStrandsAPartlyApprovedChain:
         assert [
             s["assignee_value"] for s in out if s["status"] == "pending"
         ] == ["bob@x.com"]
+
+
+class TestCrashRecovery:
+    """The chain finished but the workflow write did not: the next act rebuilds
+    a chain the same way route() does, and never reopens a rejection."""
+
+    CTX = RunContext(tenant_id=T, case_id="c1")
+    ART: ClassVar[dict] = {
+        "extraction": {
+            "invoice": {"_routing": "REVIEW", "invoice_total_inc_tax": 5}
+        }
+    }
+
+    class Who:
+        def __init__(self, email, role="approver"):
+            self.email, self.role = email, role
+
+        def can(self, role):
+            return approvals.ROLE_RANK[self.role] >= approvals.ROLE_RANK[role]
+
+    class Nothing:
+        def get(self, *a):
+            return None
+
+        def list(self, *a):
+            return []
+
+    def decide(self, repo, who, approve=True):
+        return approval_flow.decide(
+            self.CTX,
+            self.Who(who),
+            self.ART,
+            repo=repo,
+            documents=self.Nothing(),
+            corrections=self.Nothing(),
+            approve=approve,
+            note="n",
+            override_reason=None,
+            now=NOW,
+        )
+
+    def finish_chain(self, repo, approve_last=True):
+        repo.create_rule(
+            T,
+            name="Two",
+            kind="amount",
+            match={"min_amount": 0},
+            steps=[
+                {"kind": "user", "value": "alice@x.com"},
+                {"kind": "user", "value": "bob@x.com"},
+            ],
+        )
+        seed(repo, "c1", spec("user", "alice@x.com"), spec("user", "bob@x.com"))
+        for who, ok in (("alice@x.com", True), ("bob@x.com", approve_last)):
+            repo.decide(
+                T,
+                repo.current(T, "c1")["id"],
+                approve=ok,
+                decided_by=who,
+                sla_days=2,
+                now=NOW,
+            )
+
+    def test_rebuilt_chain_does_not_ask_people_who_already_approved(
+        self, repo, monkeypatch
+    ):
+        monkeypatch.setattr(approval_flow, "_sla_days", lambda t: 2)
+        self.finish_chain(repo)
+        outcome = self.decide(repo, "carol@x.com")
+        assert outcome.completed is True
+        assert [
+            (s["assignee_kind"], s["assignee_value"])
+            for s in repo.chain(T, "c1")[2:]
+        ] == [("role", "approver")]
+
+    def test_a_rejected_chain_is_not_reopened(self, repo, monkeypatch):
+        monkeypatch.setattr(approval_flow, "_sla_days", lambda t: 2)
+        self.finish_chain(repo, approve_last=False)
+        with pytest.raises(approval_flow.AlreadyDecided):
+            self.decide(repo, "carol@x.com")
+        assert len(repo.chain(T, "c1")) == 2
+
+
+class TestCallerHoldsTheSeatThemselves:
+    def test_acting_for_is_none_when_the_caller_is_a_member(
+        self, repo, monkeypatch
+    ):
+        monkeypatch.setattr(approval_flow, "_sla_days", lambda t: 2)
+        repo.create_group(T, "Finance", ["a@x.com", "pa@x.com"])
+        repo.create_delegation(
+            T,
+            delegator="a@x.com",
+            delegate="pa@x.com",
+            starts_on=NOW.date(),
+            ends_on=NOW.date(),
+            created_by="a@x.com",
+        )
+        seed(repo, "c1", spec("group", "Finance"))
+        outcome = TestCrashRecovery().decide(repo, "pa@x.com")
+        assert outcome.why == "member of Finance"
+        assert repo.chain(T, "c1")[0]["acting_for"] is None

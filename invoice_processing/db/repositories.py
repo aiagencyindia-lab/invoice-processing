@@ -1550,7 +1550,14 @@ class PgApprovalRepository:
                 )
                 .with_for_update()
             )
-            if step is None or step.status != ApprovalStep.PENDING:
+            # Escalated already counts as not pending for this purpose: two
+            # workers scanning at once must not both notify, and the second
+            # must not overwrite where the first sent it.
+            if (
+                step is None
+                or step.status != ApprovalStep.PENDING
+                or step.escalated_at is not None
+            ):
                 raise StepNotPending(step_id)
             step.escalated_to = to
             step.escalated_at = now

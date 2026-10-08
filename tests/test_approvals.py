@@ -286,16 +286,18 @@ class TestMalformedAndEdges:
         bad = rule("amount", {"min_amount": 50}, [{"kind": "user"}], rid="bad")
         assert [s.source_rule_id for s in self.chain(bad)] == ["good"]
 
-    def test_non_numeric_total_matches_no_tier(self):
+    def test_non_numeric_total_takes_the_highest_tier(self):
         inv = {**ACME, "invoice_total_inc_tax": "n/a"}
-        assert not ap.needs_person(inv, [self.GOOD])
-        assert ap.build_chain({**inv, "_routing": "REVIEW"}, [self.GOOD]) == [
-            ap.ROLE_FALLBACK
+        assert ap.needs_person(inv, [self.GOOD])
+        assert [s.source_rule_id for s in ap.build_chain(inv, [self.GOOD])] == [
+            "good"
         ]
 
-    def test_none_total_on_review_gets_fallback(self):
+    def test_none_total_on_review_takes_the_highest_tier(self):
         inv = {**ACME, "invoice_total_inc_tax": None, "_routing": "REVIEW"}
-        assert ap.build_chain(inv, [self.GOOD]) == [ap.ROLE_FALLBACK]
+        assert [s.source_rule_id for s in ap.build_chain(inv, [self.GOOD])] == [
+            "good"
+        ]
 
     def test_equal_floor_earliest_created_wins(self):
         a = rule(
@@ -364,4 +366,65 @@ class TestMalformedAndEdges:
                 "x@a.test", "clerk", esc, groups={}, delegators_of=[]
             )
             is None
+        )
+
+
+class TestUnreadableTotal:
+    """A total the engine cannot read must not slip under every tier: the
+    highest tier applies, so the invoice reaches the most senior approver."""
+
+    LOW = rule("amount", {"min_amount": 0}, [FIN], rid="low")
+    HIGH = rule("amount", {"min_amount": 100000}, [CFO], rid="high")
+    OTHER_CCY = rule(
+        "amount", {"min_amount": 900000, "currency": "USD"}, [IT], rid="usd"
+    )
+
+    def tier(self, total, rules=None):
+        inv = {**ACME, "invoice_total_inc_tax": total}
+        rules = rules or [self.LOW, self.HIGH, self.OTHER_CCY]
+        return ap.needs_person(inv, rules), [
+            s.source_rule_id for s in ap.build_chain(inv, rules)
+        ]
+
+    def test_thousands_separator_takes_the_highest_tier(self):
+        assert self.tier("12,500.00") == (True, ["high"])
+
+    def test_missing_total_takes_the_highest_tier(self):
+        assert self.tier(None) == (True, ["high"])
+
+    def test_nan_takes_the_highest_tier(self):
+        assert self.tier("nan") == (True, ["high"])
+        assert self.tier(float("inf")) == (True, ["high"])
+
+    def test_invoice_without_currency_may_take_any_tier(self):
+        inv = {**ACME, "invoice_total_inc_tax": None, "currency": None}
+        rules = [self.LOW, self.HIGH, self.OTHER_CCY]
+        assert [s.source_rule_id for s in ap.build_chain(inv, rules)] == ["usd"]
+
+    def test_no_amount_rule_leaves_auto_touchless(self):
+        assert (
+            self.tier(None, [rule("vendor", {"vendor_name": "Z"}, [IT])])[0]
+            is False
+        )
+
+
+class TestCallerBeforeDelegators:
+    def test_own_membership_never_reads_as_a_delegation(self):
+        step = {
+            "assignee_kind": "group",
+            "assignee_value": "Finance",
+            "escalated_to": None,
+        }
+        groups = {
+            "Finance": [f"d{i}@a.test" for i in range(20)] + ["me@a.test"]
+        }
+        assert (
+            ap.satisfaction(
+                "me@a.test",
+                "clerk",
+                step,
+                groups=groups,
+                delegators_of=[f"d{i}@a.test" for i in range(20)],
+            )
+            == "member of Finance"
         )

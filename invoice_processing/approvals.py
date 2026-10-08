@@ -11,6 +11,7 @@ that can pull an AUTO invoice back to a person.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -52,9 +53,11 @@ def _number(value) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
     try:
-        return float(value)
+        number = float(value)
     except ValueError:
         return None
+    # "nan" and "inf" parse, but no tier can be compared against them.
+    return number if math.isfinite(number) else None
 
 
 def _usable(rule) -> bool:
@@ -93,9 +96,13 @@ def _floor(rule: dict) -> float:
 
 
 def _amount_tier(invoice: dict, rules: list[dict]) -> dict | None:
+    """The amount rule that applies, or None.
+
+    A total that is missing or unreadable must not slip under every tier (an
+    OCR'd "12,500.00" would otherwise route as touchless), so it takes the
+    highest tier instead: the most senior approver looks at it.
+    """
     total = _number(invoice.get("invoice_total_inc_tax"))
-    if total is None:
-        return None
     currency = str(invoice.get("currency") or "").upper()
     best = None
     # Earliest created wins a tie on the floor, then input order (strict >).
@@ -103,17 +110,24 @@ def _amount_tier(invoice: dict, rules: list[dict]) -> dict | None:
         if r["kind"] != "amount":
             continue
         wanted = str(r["match"].get("currency") or "").upper()
-        if wanted and wanted != currency:
+        # An unknown total with no currency either may be any tier.
+        if wanted and wanted != currency and (total is not None or currency):
             continue
-        if total >= _floor(r) and (best is None or _floor(r) > _floor(best)):
+        reaches = total is None or total >= _floor(r)
+        if reaches and (best is None or _floor(r) > _floor(best)):
             best = r
     return best
 
 
 def needs_person(invoice: dict, rules: list[dict]) -> bool:
-    return (
-        invoice.get("_routing") == "REVIEW"
-        or _amount_tier(invoice, rules) is not None
+    if invoice.get("_routing") == "REVIEW":
+        return True
+    if _amount_tier(invoice, rules) is not None:
+        return True
+    # Unreadable total and amount rules exist, but none in this currency:
+    # still a person, since nobody can say the invoice is under every tier.
+    return _number(invoice.get("invoice_total_inc_tax")) is None and any(
+        r["kind"] == "amount" for r in _live(rules)
     )
 
 
@@ -168,7 +182,6 @@ def satisfaction(
     """Why this person may decide this step, or None."""
     me = _email(email)
     kind, value = step["assignee_kind"], step["assignee_value"]
-    mine = {me, *(_email(d) for d in delegators_of)}
 
     def direct(who: str) -> str | None:
         if kind == "user" and _email(value) == who:
@@ -183,7 +196,10 @@ def satisfaction(
             )
         return None
 
-    for who in mine:
+    # The caller first, then delegators in the order given: a list, never a
+    # set, so someone who holds the seat themselves is never recorded as
+    # acting for somebody else.
+    for who in [me, *(_email(d) for d in delegators_of)]:
         why = direct(who)
         if why:
             return why
