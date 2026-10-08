@@ -56,3 +56,17 @@ def test_apply_to_pipeline_without_a_vendor_table_injects_none(monkeypatch):
         ]
         is None
     )
+
+
+def test_approval_sla_days_is_settable_and_defaults_to_3():
+    assert tenant_settings.validate({"approval_sla_days": 5}) == {
+        "approval_sla_days": 5
+    }
+    assert (
+        tenant_settings.effective("nobody", store={})["approval_sla_days"] == 3
+    )
+
+
+def test_approval_sla_days_cannot_be_negative():
+    with pytest.raises(tenant_settings.SettingsError):
+        tenant_settings.validate({"approval_sla_days": -1})

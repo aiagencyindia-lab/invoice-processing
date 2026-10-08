@@ -54,6 +54,9 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     # How long after a bank change is approved an invoice paying to it still
     # draws a review signal: fraud is most often caught in that window.
     "bank_change_recent_days": (int, float),
+    # How long an approval step may sit before it escalates; a policy number
+    # each organisation sets for itself, like the bank-change window.
+    "approval_sla_days": (int, float),
 }
 
 # Settings the validation engine knows nothing about, with their defaults.
@@ -64,11 +67,16 @@ NON_ENGINE_DEFAULTS: dict[str, Any] = {
     "high_value_threshold": 0,
     # Off. A rule starts by being watched, not obeyed.
     "rules_binding": False,
+    "approval_sla_days": 3,
 }
 
 # Shown alongside each field in the UI so an administrator can tell what a
 # setting does without reading the rulebook.
 DESCRIPTIONS: dict[str, str] = {
+    "approval_sla_days": (
+        "Days an approval step may wait before it is escalated to the "
+        "approver's manager, or an admin."
+    ),
     "bank_change_recent_days": (
         "An invoice paid to bank details approved within this many days is "
         "held for review. The window in which a fraudulent change is most "
@@ -243,6 +251,7 @@ def validate(payload: dict) -> dict:
             "tax_rate_tolerance",
             "tax_rate_tolerance_pct",
             "bank_change_recent_days",
+            "approval_sla_days",
         ):
             if value < 0:
                 raise SettingsError(f"{key} cannot be negative.")
