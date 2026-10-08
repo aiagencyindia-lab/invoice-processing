@@ -122,7 +122,10 @@ export default function AdminPage() {
     <div className="stack" style={{ gap: 20, maxWidth: 860 }}>
       <div className="row-between">
         <h1>Admin</h1>
-        <Link href="/admin/approvals">Approval setup</Link>
+        <span style={{ display: "flex", gap: 16 }}>
+          <Link href="/admin/approvals">Approval setup</Link>
+          <Link href="/admin/gl-rules">GL rules</Link>
+        </span>
       </div>
 
       {problem ? (
