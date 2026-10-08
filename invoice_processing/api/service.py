@@ -38,7 +38,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 
 from .. import case_projection, paths
 from ..adapters import (
@@ -1076,7 +1076,7 @@ def act(
 
 
 class BankChangeFromInvoice(BaseModel):
-    reason: str = ""
+    reason: str = Field(default="", max_length=2000)
 
 
 @app.post("/api/invoices/{case_id}/bank-change", status_code=201)
@@ -1117,16 +1117,30 @@ def propose_bank_change_from_invoice(
             status_code=409,
             detail="This invoice prints no bank details to propose.",
         )
-    proposal = vendor_routes.BankChangeProposal(
-        bank_account_name=invoice.get("bank_account_name"),
-        bank_account_number=invoice.get("bank_account_number"),
-        bank_code=invoice.get("bank_code"),
-        bank_iban=invoice.get("bank_iban"),
-        reason=request.reason
-        or "Bank details printed on invoice "
-        f"{invoice.get('invoice_number') or case_id}",
-        source_case_id=case_id,
-    )
+    if not request.reason.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="A bank change needs a reason the approver can check.",
+        )
+    try:
+        proposal = vendor_routes.BankChangeProposal(
+            bank_account_name=invoice.get("bank_account_name"),
+            bank_account_number=invoice.get("bank_account_number"),
+            bank_code=invoice.get("bank_code"),
+            bank_iban=invoice.get("bank_iban"),
+            reason=request.reason,
+            source_case_id=case_id,
+        )
+    except ValidationError:
+        # Extracted text is untrusted length-wise; refuse rather than truncate
+        # a payee account.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "An extracted bank value is too long to propose; enter it "
+                "on the Vendors page."
+            ),
+        ) from None
     return vendor_routes.propose_change(principal, vendor["id"], proposal)
 
 

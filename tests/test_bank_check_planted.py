@@ -3,6 +3,7 @@ account, then a different IFSC, from what a real extraction printed. Both must
 hold the invoice for review."""
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -38,7 +39,9 @@ def _extraction() -> dict:
     pytest.skip("no stored record with a clean payee name and no IBAN")
 
 
-def _hold(tmp_path, monkeypatch, vendor_overrides: dict) -> tuple[dict, dict]:
+def _hold(
+    tmp_path, monkeypatch, vendor_overrides: dict, config: dict | None = None
+) -> tuple[dict, dict]:
     inv = dict(_extraction())
     vendor = {
         "name": inv["vendor_name"],
@@ -57,6 +60,7 @@ def _hold(tmp_path, monkeypatch, vendor_overrides: dict) -> tuple[dict, dict]:
             **general_invoice_agent.DEFAULT_CONFIG,
             "duplicate_check_enabled": False,
             "vendor_master_records": [vendor],
+            **(config or {}),
         },
     )
     extraction = {
@@ -95,3 +99,14 @@ def test_the_real_master_passes(tmp_path, monkeypatch):
     assert (
         step["passed"] is True and extraction["invoice"]["_routing"] == "AUTO"
     )
+
+
+def test_zero_recent_days_means_zero_not_thirty(tmp_path, monkeypatch):
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    changed = {"last_bank_change_at": yesterday}
+    step, _ = _hold(tmp_path, monkeypatch, changed)
+    assert step["signals"] == ["recent_bank_change"]
+    step, _ = _hold(
+        tmp_path, monkeypatch, changed, {"bank_change_recent_days": 0}
+    )
+    assert step["passed"] is True

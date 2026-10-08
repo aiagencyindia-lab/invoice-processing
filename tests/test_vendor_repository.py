@@ -182,6 +182,29 @@ class TestDualControl:
         assert after["bank_verified_at"] is not None
         assert after["pending_change_id"] is None
 
+    def test_first_verification_is_not_a_recent_change(self, repo):
+        vendor = _acme(repo)
+        first = repo.propose(
+            T, vendor["id"], proposed=BANK, reason="x", proposed_by="clerk@a"
+        )
+        repo.decide(
+            T, first["id"], action="approve", decided_by="boss@a", note=None
+        )
+        (record,) = repo.load_records(T)
+        assert record["last_bank_change_at"] is None
+        second = repo.propose(
+            T,
+            vendor["id"],
+            proposed={**BANK, "bank_account_number": "111122223333"},
+            reason="new account",
+            proposed_by="clerk@a",
+        )
+        repo.decide(
+            T, second["id"], action="approve", decided_by="boss@a", note=None
+        )
+        (record,) = repo.load_records(T)
+        assert record["last_bank_change_at"] is not None
+
     def test_reject_is_terminal(self, repo):
         vendor = _acme(repo)
         change = repo.propose(

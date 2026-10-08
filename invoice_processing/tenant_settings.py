@@ -242,6 +242,7 @@ def validate(payload: dict) -> dict:
             "high_value_threshold",
             "tax_rate_tolerance",
             "tax_rate_tolerance_pct",
+            "bank_change_recent_days",
         ):
             if value < 0:
                 raise SettingsError(f"{key} cannot be negative.")

@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import master_files, po_matching, vendor_master
 from ..db import repositories as repos
@@ -33,16 +33,19 @@ class VendorUpdate(BaseModel):
 
 
 class VendorPatch(BaseModel):
-    email_domain: str | None = None
+    email_domain: str | None = Field(default=None, max_length=255)
 
 
+# Limits match the column widths: an over-long value would otherwise fail at
+# flush as a 500, or be silently truncated on a lenient database.
 class BankChangeProposal(BaseModel):
-    bank_account_name: str | None = None
-    bank_account_number: str | None = None
-    bank_code: str | None = None
-    bank_iban: str | None = None
-    reason: str = ""
-    source_case_id: str | None = None
+    bank_account_name: str | None = Field(default=None, max_length=255)
+    bank_account_number: str | None = Field(default=None, max_length=64)
+    bank_code: str | None = Field(default=None, max_length=64)
+    bank_iban: str | None = Field(default=None, max_length=64)
+    # Text column, but the reason is copied into every audit payload.
+    reason: str = Field(default="", max_length=2000)
+    source_case_id: str | None = Field(default=None, max_length=64)
 
 
 class BankChangeDecision(BaseModel):
@@ -81,8 +84,12 @@ def vendor_out(v: dict) -> dict:
     }
 
 
-def change_out(c: dict) -> dict:
+def change_out(c: dict, *, full: bool = False) -> dict:
+    """`full` is for approvers, who must compare the real number before
+    releasing it. Everything else, the audit trail included, gets the mask."""
     out = dict(c)
+    if full:
+        return out
     for key in (
         "proposed_account_number",
         "previous_account_number",
@@ -206,7 +213,8 @@ def list_bank_changes(
     if repo is None:
         raise HTTPException(503, NEEDS_DB)
     changes = [
-        change_out(c) for c in repo.list_changes(principal.tenant_id, status)
+        change_out(c, full=principal.can("approver"))
+        for c in repo.list_changes(principal.tenant_id, status)
     ]
     return {"changes": changes, "count": len(changes)}
 
@@ -243,13 +251,13 @@ def decide_bank_change(
     except repos.ChangeNotPending as exc:
         raise HTTPException(409, f"This change was already {exc}.") from None
     _audit().emit(
-        principal.context(change.get("source_case_id") or ""),
+        principal.context(change["vendor_id"]),
         "vendor_bank_change_approved"
         if request.action == "approve"
         else "vendor_bank_change_rejected",
         change_out(change),
     )
-    return change_out(change)
+    return change_out(change, full=principal.can("approver"))
 
 
 @router.patch("/api/vendors/{vendor_id}")
@@ -268,7 +276,7 @@ def patch_vendor(
         principal.tenant_id, vendor_id, email_domain=request.email_domain
     )
     _audit().emit(
-        principal.context(),
+        principal.context(vendor_id),
         "vendor_updated",
         {"vendor_id": vendor_id, "email_domain": after["email_domain"]},
         before={"email_domain": before["email_domain"]},
@@ -322,11 +330,11 @@ def propose_change(
             409, "A bank change for this vendor is already awaiting approval."
         ) from None
     _audit().emit(
-        principal.context(proposal.source_case_id or ""),
+        principal.context(vendor_id),
         "vendor_bank_change_proposed",
         change_out(change),
     )
-    return change_out(change)
+    return change_out(change, full=principal.can("approver"))
 
 
 @router.post("/api/vendors/{vendor_id}/bank-changes", status_code=201)

@@ -783,9 +783,10 @@ class PgVendorRepository:
         return value.isoformat() if value else None
 
     @staticmethod
-    def _pending_id(session, vendor_id: str) -> str | None:
+    def _pending_id(session, tenant_id: str, vendor_id: str) -> str | None:
         return session.scalar(
             select(VendorBankChange.id).where(
+                VendorBankChange.tenant_id == tenant_id,
                 VendorBankChange.vendor_id == vendor_id,
                 VendorBankChange.status == VendorBankChange.PENDING,
             )
@@ -795,7 +796,7 @@ class PgVendorRepository:
     # load_records); fine for a supplier list in the hundreds, group the
     # queries by vendor_id when lists reach the thousands.
     def _vendor_dict(self, session, vendor: Vendor) -> dict:
-        pending = self._pending_id(session, vendor.id)
+        pending = self._pending_id(session, vendor.tenant_id, vendor.id)
         return {
             "id": vendor.id,
             "name": vendor.name,
@@ -922,11 +923,20 @@ class PgVendorRepository:
             for v in rows:
                 changes = session.scalars(
                     select(VendorBankChange)
-                    .where(VendorBankChange.vendor_id == v.id)
+                    .where(
+                        VendorBankChange.tenant_id == tenant_id,
+                        VendorBankChange.vendor_id == v.id,
+                    )
                     .order_by(VendorBankChange.created_at.desc())
                 ).all()
+                # A first verification (nothing recorded before it) is not a
+                # change of payee, so it must not trip the "recent change"
+                # signal on a vendor nobody has ever had different details for.
                 approved = [
-                    c for c in changes if c.status == VendorBankChange.APPROVED
+                    c
+                    for c in changes
+                    if c.status == VendorBankChange.APPROVED
+                    and any(getattr(c, f"previous_{f}") for f in BANK_FIELDS)
                 ]
                 out.append(
                     {
@@ -966,7 +976,7 @@ class PgVendorRepository:
             vendor = self._vendor(session, tenant_id, vendor_id)
             # Read now: after a failed flush the session cannot lazy-load.
             vendor_name = vendor.name
-            if self._pending_id(session, vendor.id):
+            if self._pending_id(session, tenant_id, vendor.id):
                 raise PendingChangeExists(vendor_name)
             change = VendorBankChange(
                 tenant_id=tenant_id,

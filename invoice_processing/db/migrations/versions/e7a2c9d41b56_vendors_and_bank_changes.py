@@ -37,7 +37,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(512), nullable=False),
         sa.Column("normalized_name", sa.String(512), nullable=False),
         sa.Column("tax_id", sa.String(64), nullable=False),
-        sa.Column("kind", sa.String(16), server_default=""),
+        sa.Column("kind", sa.String(16), nullable=False, server_default=""),
         sa.Column("email_domain", sa.String(255)),
         sa.Column("bank_account_name", sa.String(255)),
         sa.Column("bank_account_number", sa.String(64)),
@@ -48,11 +48,13 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
+            nullable=False,
             server_default=sa.func.now(),
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
+            nullable=False,
             server_default=sa.func.now(),
         ),
         sa.UniqueConstraint(
@@ -100,11 +102,13 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
+            nullable=False,
             server_default=sa.func.now(),
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
+            nullable=False,
             server_default=sa.func.now(),
         ),
     )

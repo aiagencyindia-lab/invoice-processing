@@ -2,6 +2,7 @@
 tests pin the HTTP contract the UI relies on and that masking holds at the
 boundary."""
 
+import json
 import shutil
 
 import pytest
@@ -13,7 +14,10 @@ from invoice_processing.adapters import FsCaseRepository, JsonlAuditSink
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
 from invoice_processing.db import models
-from invoice_processing.db.repositories import PgVendorRepository
+from invoice_processing.db.repositories import (
+    PgVendorRepository,
+    entity_type_for,
+)
 from invoice_processing.db.session import (
     create_all,
     get_engine,
@@ -166,6 +170,69 @@ class TestPropose:
         assert [c["id"] for c in body["changes"]] == [change["id"]]
         assert body["changes"][0]["vendor_name"] == ACME["name"]
         assert body["changes"][0]["proposed_account_number"] == "…5572"
+
+
+class TestLengths:
+    def test_over_long_account_number_is_422(self, env):
+        assert propose(env, bank_account_number="9" * 65).status_code == 422
+
+    def test_over_long_reason_is_422(self, env):
+        assert propose(env, reason="r" * 2001).status_code == 422
+
+    def test_over_long_email_domain_is_422(self, env):
+        response = env["client"]("admin").patch(
+            f"/api/vendors/{env['vendor_id']}",
+            json={"email_domain": "d" * 256},
+        )
+        assert response.status_code == 422
+
+
+class TestApproverSeesFullNumbers:
+    def test_approver_reads_the_full_number_and_clerk_the_mask(self, env):
+        change = propose(env).json()
+        assert change["proposed_account_number"] == "…5572"
+        queue = "/api/vendors/bank-changes?status=pending"
+        (as_approver,) = (
+            env["client"]("approver:bob").get(queue).json()["changes"]
+        )
+        (as_clerk,) = env["client"]("clerk:carol").get(queue).json()["changes"]
+        assert as_approver["proposed_account_number"] == "901031925572"
+        assert as_clerk["proposed_account_number"] == "…5572"
+
+    def test_decide_returns_full_number_and_audit_stays_masked(self, env):
+        change = propose(env).json()
+        response = env["client"]("approver:bob").post(
+            f"/api/vendors/bank-changes/{change['id']}/decide",
+            json={"action": "approve"},
+        )
+        assert response.json()["proposed_account_number"] == "901031925572"
+        assert "901031925572" not in (env["tmp"] / "audit.jsonl").read_text()
+
+
+class TestAuditEntity:
+    def test_vendor_events_are_filed_under_the_vendor(self, env):
+        change = propose(env, source_case_id=None).json()
+        env["client"]("approver:bob").post(
+            f"/api/vendors/bank-changes/{change['id']}/decide",
+            json={"action": "approve"},
+        )
+        env["client"]("admin").patch(
+            f"/api/vendors/{env['vendor_id']}", json={"email_domain": "x.test"}
+        )
+        events = [
+            json.loads(line)
+            for line in (env["tmp"] / "audit.jsonl").read_text().splitlines()
+        ]
+        wanted = {
+            "vendor_bank_change_proposed",
+            "vendor_bank_change_approved",
+            "vendor_updated",
+        }
+        seen = [e for e in events if e["event_type"] in wanted]
+        assert {e["event_type"] for e in seen} == wanted
+        for e in seen:
+            assert e["case_id"] == env["vendor_id"]
+            assert entity_type_for(e["event_type"], e["case_id"]) == "vendor"
 
 
 class TestDecide:
@@ -339,5 +406,22 @@ class TestWorkbenchShortcut:
     def test_second_proposal_is_409(self, env, with_case):
         url = f"/api/invoices/{with_case}/bank-change"
         clerk = env["client"]("clerk")
-        assert clerk.post(url, json={}).status_code == 201
-        assert clerk.post(url, json={}).status_code == 409
+        body = {"reason": "Printed on invoice"}
+        assert clerk.post(url, json=body).status_code == 201
+        assert clerk.post(url, json=body).status_code == 409
+
+    @pytest.mark.parametrize("reason", ["", "   "])
+    def test_empty_reason_is_400(self, env, with_case, reason):
+        response = env["client"]("clerk").post(
+            f"/api/invoices/{with_case}/bank-change", json={"reason": reason}
+        )
+        assert response.status_code == 400
+        assert "needs a reason" in response.json()["detail"]
+
+    def test_over_long_extracted_value_is_409(self, env, with_case):
+        self._edit_invoice(with_case, bank_account_number="9" * 65)
+        response = env["client"]("clerk").post(
+            f"/api/invoices/{with_case}/bank-change", json={"reason": "r"}
+        )
+        assert response.status_code == 409
+        assert "too long to propose" in response.json()["detail"]

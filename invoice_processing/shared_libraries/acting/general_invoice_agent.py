@@ -2037,6 +2037,10 @@ def _load_vendors() -> "vendor_master.VendorMaster":
     are different containers, so a file written by one is invisible to the
     other); the file path is the single-process fallback the benchmark and the
     local stack still use.
+
+    File records that carry bank fields are trusted as verified, with no
+    approval queue behind them. That path exists for the benchmark harness and
+    single-process dev; a database deployment always loads from the table.
     """
     config = _get_config()
     records = config.get("vendor_master_records")
@@ -2191,8 +2195,10 @@ class Phase3ValidatorAgent(BaseAgent):
                 match.vendor,
                 sender=_get_config().get("document_sender"),
                 reference_date=today,
+                # Default only when absent: 0 is a legitimate "never treat a
+                # change as recent", not a request for 30.
                 recent_days=int(
-                    _get_config().get("bank_change_recent_days") or 30
+                    _get_config().get("bank_change_recent_days", 30)
                 ),
             )
             if result.compared:

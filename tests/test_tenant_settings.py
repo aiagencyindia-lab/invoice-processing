@@ -1,3 +1,5 @@
+import pytest
+
 from invoice_processing import tenant_settings
 from invoice_processing.api import service
 from invoice_processing.shared_libraries.acting import general_invoice_agent
@@ -11,6 +13,14 @@ def test_bank_change_recent_days_is_settable_and_defaults_to_30():
         tenant_settings.effective("nobody", store={})["bank_change_recent_days"]
         == 30
     )
+
+
+def test_bank_change_recent_days_cannot_be_negative():
+    with pytest.raises(tenant_settings.SettingsError):
+        tenant_settings.validate({"bank_change_recent_days": -1})
+    assert tenant_settings.validate({"bank_change_recent_days": 0}) == {
+        "bank_change_recent_days": 0
+    }
 
 
 def test_apply_to_pipeline_injects_vendor_records(monkeypatch):
