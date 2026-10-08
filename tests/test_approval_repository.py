@@ -50,6 +50,7 @@ class TestSchema:
 # Repository
 # ---------------------------------------------------------------------------
 from datetime import date, datetime, timedelta, timezone  # noqa: E402
+from typing import ClassVar  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -68,6 +69,7 @@ from invoice_processing.db.session import (  # noqa: E402
     get_engine,
     tenant_session,
 )
+from invoice_processing.ports import RunContext  # noqa: E402
 
 T = "tenant-a"
 NOW = datetime(2026, 10, 8, 9, 0, tzinfo=timezone.utc)
@@ -618,15 +620,33 @@ class TestEscalateOverdue:
 
     def test_a_step_decided_mid_scan_is_skipped(self, repo, audit, monkeypatch):
         seed(repo, "c1", spec("role", "approver"))
-        real = repo.escalate
-
-        def raced(*a, **k):
-            raise StepNotPending("x")
-
-        monkeypatch.setattr(repo, "escalate", raced)
+        stale = repo.overdue(T, NOW + timedelta(days=5))
+        repo.decide(
+            T,
+            stale[0]["id"],
+            approve=True,
+            decided_by="z@x.com",
+            sla_days=2,
+            now=NOW,
+        )
+        # The scan listed the step before the decision landed.
+        monkeypatch.setattr(repo, "overdue", lambda t, now: stale)
         assert self._scan(repo, audit) == 0
         assert audit.events == []
-        monkeypatch.setattr(repo, "escalate", real)
+
+    def test_a_failing_audit_sink_loses_no_escalation(self, repo):
+        class Broken:
+            def emit(self, *a):
+                raise RuntimeError("sink down")
+
+        seed(repo, "c1", spec("role", "approver"))
+        seed(repo, "c2", spec("role", "approver"))
+        assert self._scan(repo, Broken()) == 2
+        assert all(repo.chain(T, c)[0]["escalated_at"] for c in ("c1", "c2"))
+
+    def test_no_audit_sink_still_escalates(self, repo):
+        seed(repo, "c1", spec("role", "approver"))
+        assert self._scan(repo, None) == 1
 
     def test_one_tenant_failing_does_not_stop_the_rest(self, repo, audit):
         seed(repo, "c1", spec("role", "approver"))
@@ -639,3 +659,29 @@ class TestEscalateOverdue:
 
         repo.overdue = flaky
         assert self._scan(repo, audit) == 1
+
+
+class TestRouteLeavesDecidedCasesAlone:
+    CTX = RunContext(tenant_id=T, case_id="c1")
+    ART: ClassVar[dict] = {"extraction": {"invoice": {"_routing": "REVIEW"}}}
+
+    def test_a_recorded_decision_adds_no_steps(self, repo):
+        art = {**self.ART, "workflow": {"decision": "approve"}}
+        assert approval_flow.route(self.CTX, art, repo=repo, now=NOW) == []
+        assert repo.chain(T, "c1") == []
+
+    def test_a_decided_step_closes_the_chain(self, repo):
+        seed(repo, "c1", spec("role", "approver"), spec("role", "admin"))
+        first = repo.chain(T, "c1")[0]
+        repo.decide(
+            T,
+            first["id"],
+            approve=True,
+            decided_by="z@x.com",
+            sla_days=2,
+            now=NOW,
+        )
+        before = repo.chain(T, "c1")
+        out = approval_flow.route(self.CTX, self.ART, repo=repo, now=NOW)
+        assert out == before == repo.chain(T, "c1")
+        assert [s["status"] for s in out] == ["approved", "pending"]

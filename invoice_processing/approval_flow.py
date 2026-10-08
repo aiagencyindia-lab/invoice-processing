@@ -32,6 +32,14 @@ def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
     on, and only an amount tier may pull such an invoice back to a person.
     """
     t = ctx.tenant_id
+    # A decided chain is closed. Re-processing (the retry endpoint) must not
+    # append a fresh pending chain after the decided steps, or an approved
+    # invoice would silently re-enter approval.
+    if (artifacts.get("workflow") or {}).get("decision") or any(
+        s["status"] in ("approved", "rejected")
+        for s in repo.chain(t, ctx.case_id)
+    ):
+        return repo.chain(t, ctx.case_id)
     invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
     rules = repo.list_rules(t)
     specs = (
@@ -198,19 +206,26 @@ def escalate_overdue(repo, audit, *, now: datetime) -> int:
                     repo.escalate(t, step["id"], to=target, now=now)
                 except StepNotPending:
                     continue  # decided between the scan and now
-                audit.emit(
-                    RunContext(
-                        tenant_id=t, case_id=step["case_id"], actor="worker"
-                    ),
-                    "approval_escalated",
-                    {
-                        "position": step["position"],
-                        "assignee": f"{step['assignee_kind']}:{step['assignee_value']}",
-                        "escalated_to": target,
-                        "due_at": step["due_at"],
-                    },
-                )
                 count += 1
+                if audit is None:
+                    continue
+                # The escalation is already recorded; a failing audit sink
+                # must not undo it or skip this tenant's remaining steps.
+                try:
+                    audit.emit(
+                        RunContext(
+                            tenant_id=t, case_id=step["case_id"], actor="worker"
+                        ),
+                        "approval_escalated",
+                        {
+                            "position": step["position"],
+                            "assignee": f"{step['assignee_kind']}:{step['assignee_value']}",
+                            "escalated_to": target,
+                            "due_at": step["due_at"],
+                        },
+                    )
+                except Exception:
+                    logger.exception("Audit of escalation failed for %s", t)
         except Exception:
             logger.exception("Escalation scan failed for tenant %s", t)
     return count
