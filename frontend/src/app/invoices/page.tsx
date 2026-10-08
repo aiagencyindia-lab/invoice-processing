@@ -17,7 +17,6 @@ import {
   type InvoiceField,
   type InvoiceList,
   type Me,
-  type MyApproval,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { DecisionDialog } from "@/components/DecisionDialog";
@@ -130,17 +129,13 @@ function InvoicesWorkbench() {
   const { data: chain, reload: reloadChain } = usePoll<ApprovalChain>(
     current ? `/api/invoices/${current}/approvals` : null,
   );
-  const { data: mine, reload: reloadMine } = usePoll<{ items: MyApproval[] }>(
-    "/api/approvals/mine",
-  );
   const currentStep = chain?.steps.find((s) => s.position === chain.current);
-  // Once the queue has loaded and this step is not in it, Approve and Reject
-  // would only earn a refusal, so they are disabled. Still only a hint: the
-  // server decides, and an admin keeps Override.
-  const notMine =
-    currentStep && mine && !mine.items.some((i) => i.case_id === current)
-      ? currentStep
-      : null;
+  // The chain says whether this person may decide its current step, by the
+  // same test the server applies to a decision; when not, Approve and Reject
+  // would only earn a refusal, so they are disabled with that reason. Still
+  // only a hint: the server decides, and an admin keeps Override.
+  const notMine: string | null =
+    currentStep && chain && !chain.can_decide ? (chain.reason ?? "") : null;
 
   const canEdit = can(me, "clerk");
   const canAct = can(me, "approver");
@@ -204,7 +199,6 @@ function InvoicesWorkbench() {
           },
         );
         reloadChain();
-        reloadMine();
         if (result.completed === false) {
           // More people still have to sign: stay here, the queue has not moved.
           const next = result.next
@@ -222,7 +216,7 @@ function InvoicesWorkbench() {
         say(caught instanceof ApiError ? caught.friendly : String(caught));
       }
     },
-    [detail, index, queue, open, say, reloadQueue, reloadDetail, reloadChain, reloadMine],
+    [detail, index, queue, open, say, reloadQueue, reloadDetail, reloadChain],
   );
 
   const exportCsv = useCallback(async () => {
@@ -275,10 +269,10 @@ function InvoicesWorkbench() {
           if (index > 0) open(queue[index - 1].case_id);
           break;
         case "a":
-          if (canAct && !notMine) setDeciding("approve");
+          if (canAct && notMine === null) setDeciding("approve");
           break;
         case "r":
-          if (canAct && !notMine) setDeciding("reject");
+          if (canAct && notMine === null) setDeciding("reject");
           break;
         case "s":
           if (canEdit) save();
@@ -439,7 +433,7 @@ function InvoicesWorkbench() {
                           type="button"
                           className="btn-chip"
                           onClick={() => setDeciding("approve")}
-                          disabled={Boolean(notMine)}
+                          disabled={notMine !== null}
                         >
                           Approve<kbd>a</kbd>
                         </button>
@@ -447,7 +441,7 @@ function InvoicesWorkbench() {
                           type="button"
                           className="btn-chip"
                           onClick={() => setDeciding("reject")}
-                          disabled={Boolean(notMine)}
+                          disabled={notMine !== null}
                         >
                           Reject<kbd>r</kbd>
                         </button>
@@ -479,8 +473,7 @@ function InvoicesWorkbench() {
 
                 {canAct && notMine ? (
                   <span className="muted" style={{ fontSize: 12.5 }}>
-                    Step {notMine.position} is assigned to {notMine.assignee_kind}:
-                    {notMine.assignee_value}
+                    {notMine}
                   </span>
                 ) : null}
 

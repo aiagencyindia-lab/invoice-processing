@@ -291,14 +291,26 @@ def invoice_chain(
 ) -> dict:
     from . import service  # noqa: PLC0415
 
-    repo = _repo()
-    if not service.get_cases().get_artifacts(principal.context(case_id)):
+    repo, ctx = _repo(), principal.context(case_id)
+    if not service.get_cases().get_artifacts(ctx):
         raise HTTPException(404, f"Unknown case {case_id}")
     steps = repo.chain(principal.tenant_id, case_id)
     current = next((s for s in steps if s["status"] == "pending"), None)
+    # The same test act applies, so the workbench's buttons and reason match
+    # what a decision would get. An admin may still override a refusal.
+    _, reason = approval_flow.assess(
+        ctx,
+        principal,
+        steps,
+        repo=repo,
+        documents=service.get_documents(),
+        now=datetime.now(timezone.utc),
+    )
     return {
         "steps": steps,
         "current": current["position"] if current else None,
+        "can_decide": current is not None and reason is None,
+        "reason": reason,
     }
 
 

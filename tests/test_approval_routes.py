@@ -225,7 +225,7 @@ def test_unassigned_approver_is_refused(env):
     two_tier(env)
     r = act(env, "approver:c")
     assert r.status_code == 403
-    assert "not assigned to you" in r.json()["detail"]
+    assert r.json()["detail"] == "Step 1 is assigned to user:a@x.test."
     assert env["repo"].current(TENANT, CASE)["status"] == "pending"
 
 
@@ -990,3 +990,49 @@ def test_the_escalation_target_may_approve_instead(env):
     assert r.status_code == 200 and r.json()["completed"] is True
     (step,) = env["repo"].chain(TENANT, CASE)
     assert step["status"] == "approved" and step["decided_by"] == "b@x.test"
+
+
+def chain_for(env, token):
+    r = env["client"](token).get(f"/api/invoices/{CASE}/approvals")
+    assert r.status_code == 200
+    body = r.json()
+    return body["can_decide"], body["reason"]
+
+
+def test_chain_says_whether_the_caller_can_decide(env):
+    two_tier(env)
+    route_case(env)
+    assert chain_for(env, "approver:a") == (True, None)
+    assert chain_for(env, "approver:b") == (
+        False,
+        "Step 1 is assigned to user:a@x.test.",
+    )
+    # An admin may override, but the rule itself still says no.
+    assert chain_for(env, "admin:boss") == (
+        False,
+        "Step 1 is assigned to user:a@x.test.",
+    )
+    assert act(env, "approver:a").status_code == 200
+    can, reason = chain_for(env, "approver:a")
+    assert can is False and "earlier step" in reason
+    assert chain_for(env, "approver:b") == (True, None)
+
+
+def test_chain_names_the_uploader_rule(env):
+    make_rule(env, steps=[{"kind": "role", "value": "approver"}])
+    route_case(env)
+    can, reason = chain_for(env, "approver:uploader")
+    assert can is False and "uploaded" in reason
+    assert chain_for(env, "approver:other") == (True, None)
+
+
+def test_chain_without_a_current_step_cannot_be_decided(env):
+    assert chain_for(env, "approver:a") == (False, None)
+
+
+def test_the_refusal_act_gives_is_the_reason_the_chain_gives(env):
+    two_tier(env)
+    route_case(env)
+    _, reason = chain_for(env, "approver:b")
+    r = act(env, "approver:b")
+    assert r.status_code == 403 and r.json()["detail"] == reason

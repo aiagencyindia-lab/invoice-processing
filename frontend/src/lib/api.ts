@@ -21,7 +21,7 @@ export class ApiError extends Error {
    *  should surface as a raw status code. */
   get friendly(): string {
     if (this.status === 401) return "Your session has expired. Sign in again.";
-    // A 403 usually carries the reason ("This step is not assigned to you."),
+    // A 403 usually carries the reason ("Step 2 is assigned to user:x."),
     // which is more useful than a blanket role message.
     if (this.status === 403) {
       return typeof this.detail === "string" && this.detail
@@ -568,7 +568,14 @@ export type ApprovalStep = {
   note: string | null;
   source_rule_id: string | null;
 };
-export type ApprovalChain = { steps: ApprovalStep[]; current: number | null };
+/** `can_decide`/`reason` answer for the caller, by the same test the
+ *  actions endpoint applies. */
+export type ApprovalChain = {
+  steps: ApprovalStep[];
+  current: number | null;
+  can_decide: boolean;
+  reason: string | null;
+};
 export type MyApproval = {
   case_id: string;
   vendor: string | null;

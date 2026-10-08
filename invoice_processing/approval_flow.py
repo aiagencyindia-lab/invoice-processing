@@ -103,6 +103,42 @@ def editors_of(ctx, corrections) -> list[str]:
     return sorted({r["actor"] for r in rows if r.get("actor")})
 
 
+def assess(
+    ctx, principal, chain: list[dict], *, repo, documents, now: datetime
+) -> tuple[str | None, str | None]:
+    """(why the caller may decide the current step, why they may not).
+
+    The one test both decide() and the chain endpoint apply, so the workbench
+    never offers a decision the server would refuse. The refusal is the
+    segregation sentence when one applies, else who the step belongs to; it is
+    None when the caller may decide. No current step: (None, None).
+    """
+    current = next((s for s in chain if s["status"] == "pending"), None)
+    if current is None:
+        return None, None
+    t, email = ctx.tenant_id, principal.email
+    why = approvals.satisfaction(
+        email,
+        principal.role,
+        current,
+        groups=repo.groups_map(t),
+        delegators_of=repo.active_delegators_of(t, email, now.date()),
+    )
+    refusal = approvals.refusal(
+        email,
+        uploader=uploader_of(ctx, documents),
+        previous_deciders=[
+            s["decided_by"] for s in chain if s["status"] == "approved"
+        ],
+    )
+    if refusal is None and why is None:
+        refusal = (
+            f"Step {current['position']} is assigned to "
+            f"{current['assignee_kind']}:{current['assignee_value']}."
+        )
+    return why, refusal
+
+
 class Refused(Exception):
     def __init__(self, detail: str):
         super().__init__(detail)
@@ -163,32 +199,25 @@ def decide(
         current = repo.current(t, case)
 
     email = principal.email
-    groups = repo.groups_map(t)
-    delegators = repo.active_delegators_of(t, email, now.date())
-    why = approvals.satisfaction(
-        email, principal.role, current, groups=groups, delegators_of=delegators
+    why, refusal = assess(
+        ctx,
+        principal,
+        repo.chain(t, case),
+        repo=repo,
+        documents=documents,
+        now=now,
     )
-    block = approvals.refusal(
-        email,
-        uploader=uploader_of(ctx, documents),
-        previous_deciders=[
-            s["decided_by"]
-            for s in repo.chain(t, case)
-            if s["status"] == "approved"
-        ],
-    )
-    overridden = bool((why is None or block) and override_reason)
-    if (why is None or block) and not (
-        principal.can("admin") and override_reason
-    ):
-        raise Refused(block or "This step is not assigned to you.")
+    overridden = bool(refusal and override_reason)
+    if refusal and not (principal.can("admin") and override_reason):
+        raise Refused(refusal)
 
     acting_for = None
     if why and why.startswith("delegate for"):
         # Name the delegator whose seat this is (the group case does not say).
+        groups = repo.groups_map(t)
         acting_for = next(
             d
-            for d in delegators
+            for d in repo.active_delegators_of(t, email, now.date())
             if approvals.satisfaction(
                 d, "viewer", current, groups=groups, delegators_of=[]
             )

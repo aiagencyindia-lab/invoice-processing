@@ -399,10 +399,13 @@ test("a two-step rule routes an invoice through alice then bob", async ({
     .getByRole("button", { name: "Approve" })
     .click();
   await expect(page.getByText(/Step 1 approved; waiting on user:bob@e2e.test/)).toBeVisible();
-  await expect(page.getByText("Step 2 is assigned to user:bob@e2e.test")).toBeVisible();
 
-  // Alice cannot also sign step 2: it is not in her queue, so the workbench
-  // disables the buttons rather than offering a decision the server refuses.
+  // Alice cannot also sign step 2: she decided step 1. The workbench says so,
+  // in the server's words, and disables the buttons rather than offering a
+  // decision the server refuses.
+  await expect(
+    page.getByText("You decided an earlier step; each step needs a different person."),
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: /^Approve/ })).toBeDisabled();
   await expect(page.getByRole("button", { name: /^Reject/ })).toBeDisabled();
 
