@@ -889,7 +889,13 @@ def _reroute_if_needed(ctx, artifacts, extraction, recorded) -> bool | str:
 
     def shape():
         return [
-            (s["id"], s["status"], s["assignee_kind"], s["assignee_value"])
+            # No ids: replace_pending re-creates pending rows with new ones.
+            (
+                s["position"],
+                s["status"],
+                s["assignee_kind"],
+                s["assignee_value"],
+            )
             for s in repo.chain(ctx.tenant_id, ctx.case_id)
         ]
 

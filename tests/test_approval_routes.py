@@ -815,3 +815,19 @@ def test_groups_need_members_and_rules_need_staffed_groups(env):
     env["repo"].update_group(TENANT, g["id"], members=[])
     r = make_rule(env, steps=[{"kind": "group", "value": "Finance"}])
     assert r.status_code == 400 and "no members" in r.json()["detail"]
+
+
+def test_an_identical_reroute_reports_no_change(env):
+    make_rule(env, match={"min_amount": 0})
+    route_case(env)
+    env["client"]("clerk").patch(
+        f"/api/invoices/{CASE}/fields",
+        json={"edits": [{"field": "currency", "value": "AUD"}]},
+    )
+    # Same rules, same chain: pending rows are re-created with new ids.
+    r = env["client"]("clerk").patch(
+        f"/api/invoices/{CASE}/fields",
+        json={"edits": [{"field": "currency", "value": "NZD"}]},
+    )
+    assert r.json()["approvals_rerouted"] is False
+    assert "approval_rerouted" not in [e["event_type"] for e in env["events"]()]

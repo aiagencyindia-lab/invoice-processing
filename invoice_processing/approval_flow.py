@@ -45,17 +45,31 @@ def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
         if approvals.needs_person(invoice, rules)
         else []
     )
-    # Someone who already approved a step is not asked again by the new chain.
-    done = {
-        (s["assignee_kind"], s["assignee_value"].casefold())
-        for s in repo.chain(t, ctx.case_id)
-        if s["status"] == "approved"
+    # Someone who already approved a step is not asked again by the new chain,
+    # neither for the same seat nor by name (they may have approved through a
+    # group or role seat).
+    approved = [
+        s for s in repo.chain(t, ctx.case_id) if s["status"] == "approved"
+    ]
+    seats = {
+        (s["assignee_kind"], s["assignee_value"].casefold()) for s in approved
     }
+    people = {s["decided_by"].casefold() for s in approved if s["decided_by"]}
     specs = [
         sp
         for sp in specs
-        if (sp.assignee.kind, sp.assignee.value.casefold()) not in done
+        if (sp.assignee.kind, sp.assignee.value.casefold()) not in seats
+        and not (
+            sp.assignee.kind == "user"
+            and sp.assignee.value.casefold() in people
+        )
     ]
+    if approved and not specs:
+        # Some approvals are recorded but none are left to ask. With no pending
+        # step the chain could never complete (only deciding a step writes the
+        # workflow decision), so another approver must confirm the changed
+        # invoice. Nothing is ever auto-completed.
+        specs = [approvals.ROLE_FALLBACK]
     return repo.replace_pending(
         t, ctx.case_id, specs, sla_days=_sla_days(t), now=now
     )

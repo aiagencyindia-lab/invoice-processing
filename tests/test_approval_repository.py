@@ -54,7 +54,7 @@ from typing import ClassVar  # noqa: E402
 
 import pytest  # noqa: E402
 
-from invoice_processing import approval_flow  # noqa: E402
+from invoice_processing import approval_flow, approvals  # noqa: E402
 from invoice_processing.api import service  # noqa: E402
 from invoice_processing.approvals import Assignee, StepSpec  # noqa: E402
 from invoice_processing.db.repositories import (  # noqa: E402
@@ -704,3 +704,86 @@ class TestRouteLeavesDecidedCasesAlone:
             ("approved", "approver"),
             ("pending", "boss@x.com"),
         ]
+
+
+class TestRerouteNeverStrandsAPartlyApprovedChain:
+    CTX = RunContext(tenant_id=T, case_id="c1")
+    AUTO: ClassVar[dict] = {"extraction": {"invoice": {"_routing": "AUTO"}}}
+
+    def approve_first(self, repo, by="a@x.com"):
+        seed(repo, "c1", spec("role", "approver"), spec("role", "admin"))
+        repo.decide(
+            T,
+            repo.chain(T, "c1")[0]["id"],
+            approve=True,
+            decided_by=by,
+            sla_days=2,
+            now=NOW,
+        )
+
+    def test_specs_that_collapse_leave_a_fallback_step(self, repo, monkeypatch):
+        monkeypatch.setattr(approval_flow, "_sla_days", lambda t: 2)
+        self.approve_first(repo)
+        repo.create_rule(
+            T,
+            name="Same seat",
+            kind="amount",
+            match={"min_amount": 0},
+            steps=[{"kind": "role", "value": "approver"}],
+        )
+        art = {
+            "extraction": {
+                "invoice": {"_routing": "REVIEW", "invoice_total_inc_tax": 5}
+            }
+        }
+        out = approval_flow.route(self.CTX, art, repo=repo, now=NOW)
+        assert [(s["status"], s["assignee_value"]) for s in out] == [
+            ("approved", "approver"),
+            ("pending", "approver"),
+        ]
+
+    def test_auto_reroute_still_leaves_a_pending_step_a_cannot_take(
+        self, repo, monkeypatch
+    ):
+        monkeypatch.setattr(approval_flow, "_sla_days", lambda t: 2)
+        self.approve_first(repo)
+        out = approval_flow.route(self.CTX, self.AUTO, repo=repo, now=NOW)
+        assert [s["status"] for s in out] == ["approved", "pending"]
+        current = repo.current(T, "c1")
+        assert (current["assignee_kind"], current["assignee_value"]) == (
+            "role",
+            "approver",
+        )
+        why = approvals.refusal(
+            "a@x.com",
+            uploader=None,
+            previous_deciders=[
+                s["decided_by"] for s in out if s["status"] == "approved"
+            ],
+        )
+        assert why
+
+    def test_a_named_spec_for_someone_who_approved_by_seat_is_dropped(
+        self, repo, monkeypatch
+    ):
+        monkeypatch.setattr(approval_flow, "_sla_days", lambda t: 2)
+        self.approve_first(repo, by="Alice@x.com")
+        repo.create_rule(
+            T,
+            name="Named",
+            kind="amount",
+            match={"min_amount": 0},
+            steps=[
+                {"kind": "user", "value": "alice@x.com"},
+                {"kind": "user", "value": "bob@x.com"},
+            ],
+        )
+        art = {
+            "extraction": {
+                "invoice": {"_routing": "REVIEW", "invoice_total_inc_tax": 5}
+            }
+        }
+        out = approval_flow.route(self.CTX, art, repo=repo, now=NOW)
+        assert [
+            s["assignee_value"] for s in out if s["status"] == "pending"
+        ] == ["bob@x.com"]
