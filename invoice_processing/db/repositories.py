@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
@@ -1329,18 +1329,21 @@ class PgApprovalRepository:
 
     # -- steps -----------------------------------------------------------
     def _steps(
-        self, session, tenant_id: str, case_id: str
+        self, session, tenant_id: str, case_id: str, *, lock: bool = False
     ) -> list[ApprovalStep]:
-        return list(
-            session.scalars(
-                select(ApprovalStep)
-                .where(
-                    ApprovalStep.tenant_id == tenant_id,
-                    ApprovalStep.case_id == case_id,
-                )
-                .order_by(ApprovalStep.position)
+        query = (
+            select(ApprovalStep)
+            .where(
+                ApprovalStep.tenant_id == tenant_id,
+                ApprovalStep.case_id == case_id,
             )
+            .order_by(ApprovalStep.position)
         )
+        if lock:
+            # Postgres re-reads a row after waiting on a concurrent decide, so
+            # we see its new status. A no-op on SQLite (see `decide`).
+            query = query.with_for_update()
+        return list(session.scalars(query))
 
     def chain(self, tenant_id: str, case_id: str) -> list[dict]:
         with tenant_session(tenant_id, self.url) as session:
@@ -1356,7 +1359,7 @@ class PgApprovalRepository:
         return None
 
     def _add_steps(self, session, tenant_id, case_id, specs, *, sla_days, now):
-        rows = self._steps(session, tenant_id, case_id)
+        rows = self._steps(session, tenant_id, case_id, lock=True)
         position = max((s.position for s in rows), default=0)
         has_pending = any(s.status == ApprovalStep.PENDING for s in rows)
         for spec in specs:
@@ -1384,10 +1387,16 @@ class PgApprovalRepository:
     ) -> list[dict]:
         """Re-route: drop what is still waiting, keep what people decided."""
         with tenant_session(tenant_id, self.url) as session:
-            for step in self._steps(session, tenant_id, case_id):
-                if step.status == ApprovalStep.PENDING:
-                    session.delete(step)
-            session.flush()
+            self._steps(session, tenant_id, case_id, lock=True)
+            # One guarded statement, never per-row deletes of rows read
+            # earlier: a decision that landed meanwhile must survive.
+            session.execute(
+                delete(ApprovalStep).where(
+                    ApprovalStep.tenant_id == tenant_id,
+                    ApprovalStep.case_id == case_id,
+                    ApprovalStep.status == ApprovalStep.PENDING,
+                )
+            )
             self._add_steps(
                 session, tenant_id, case_id, specs, sla_days=sla_days, now=now
             )
@@ -1416,6 +1425,9 @@ class PgApprovalRepository:
         sla_days: int,
         now: datetime,
     ) -> tuple[dict, bool]:
+        # ponytail: FOR UPDATE is a no-op on SQLite, so the double-decision
+        # guard (the status re-check after the lock wait) holds on Postgres
+        # only; dev/test SQLite serialises writers with its file lock.
         with tenant_session(tenant_id, self.url) as session:
             step = session.scalar(
                 select(ApprovalStep)
@@ -1451,13 +1463,13 @@ class PgApprovalRepository:
             return self._step_dict(step), not approve or not later
 
     def mine(
-        self, tenant_id, *, email, role, groups_map, delegators_of, today
+        self, tenant_id, *, email, role, groups_map, delegators_of
     ) -> list[dict]:
         # ponytail: loads every pending step for the tenant and groups in
         # Python; fine for a queue in the hundreds, push "lowest pending per
         # case" into SQL (window function) when queues reach the thousands.
-        # `today` is accepted so callers resolve delegations at one instant;
-        # the delegators arrive already filtered to it.
+        # Callers resolve delegations (for their own date) and pass the
+        # delegators in.
         with tenant_session(tenant_id, self.url) as session:
             rows = session.scalars(
                 select(ApprovalStep)
@@ -1471,7 +1483,16 @@ class PgApprovalRepository:
             for s in rows:
                 heads.setdefault(s.case_id, s)
             out = []
-            for s in heads.values():
+            # Most urgent first: soonest due, steps with no clock last.
+            ordered = sorted(
+                heads.values(),
+                key=lambda s: (
+                    s.due_at is None,
+                    s.due_at.replace(tzinfo=None) if s.due_at else None,
+                    s.created_at.replace(tzinfo=None),
+                ),
+            )
+            for s in ordered:
                 d = self._step_dict(s)
                 why = approvals.satisfaction(
                     email,
@@ -1501,9 +1522,16 @@ class PgApprovalRepository:
 
     def escalate(self, tenant_id: str, step_id: str, *, to: str, now) -> dict:
         with tenant_session(tenant_id, self.url) as session:
-            step = self._one(
-                session, ApprovalStep, tenant_id, step_id, StepNotPending
+            step = session.scalar(
+                select(ApprovalStep)
+                .where(
+                    ApprovalStep.tenant_id == tenant_id,
+                    ApprovalStep.id == step_id,
+                )
+                .with_for_update()
             )
+            if step is None or step.status != ApprovalStep.PENDING:
+                raise StepNotPending(step_id)
             step.escalated_to = to
             step.escalated_at = now
             session.flush()

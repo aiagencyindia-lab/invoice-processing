@@ -391,7 +391,6 @@ class TestMine:
             "role": "clerk",
             "groups_map": repo.groups_map(tenant),
             "delegators_of": [],
-            "today": date(2026, 10, 8),
         }
         args.update(kw)
         return repo.mine(tenant, **args)
@@ -473,3 +472,92 @@ class TestTenantsAndManagers:
         assert repo.manager_of(T, "top@x.com") is None
         assert repo.manager_of(T, "nobody@x.com") is None
         assert repo.manager_of("tenant-b", "dev@x.com") is None
+
+
+class TestFixRound:
+    def approve(self, repo, step):
+        return repo.decide(
+            T,
+            step["id"],
+            approve=True,
+            decided_by="a@x.com",
+            sla_days=2,
+            now=NOW,
+        )
+
+    def test_replace_pending_never_removes_an_approval(self, repo):
+        chain = seed(repo)
+        self.approve(repo, chain[0])
+        out = repo.replace_pending(
+            T, "c1", [spec("role", "approver")], sla_days=2, now=NOW
+        )
+        assert out[0]["id"] == chain[0]["id"]
+        assert out[0]["status"] == "approved"
+        assert [s["position"] for s in out] == [1, 2]
+
+    def test_append_twice_gets_distinct_positions(self, repo):
+        seed(repo)
+        a = repo.append_step(
+            T, "c1", spec("user", "x@x.com"), sla_days=2, now=NOW
+        )
+        b = repo.append_step(
+            T, "c1", spec("user", "y@x.com"), sla_days=2, now=NOW
+        )
+        assert (a["position"], b["position"]) == (4, 5)
+
+    def test_second_decision_on_the_same_step_is_refused(self, repo):
+        chain = seed(repo)
+        self.approve(repo, chain[0])
+        with pytest.raises(StepNotPending):
+            repo.decide(
+                T,
+                chain[0]["id"],
+                approve=False,
+                decided_by="b@x.com",
+                sla_days=2,
+                now=NOW,
+            )
+        assert repo.chain(T, "c1")[0]["status"] == "approved"
+
+    def test_escalate_refuses_unknown_and_decided_steps(self, repo):
+        chain = seed(repo)
+        with pytest.raises(StepNotPending):
+            repo.escalate(T, "nope", to="role:admin", now=NOW)
+        self.approve(repo, chain[0])
+        with pytest.raises(StepNotPending):
+            repo.escalate(T, chain[0]["id"], to="role:admin", now=NOW)
+
+    def test_mine_orders_by_due_then_created_and_advances(self, repo):
+        seed(repo, "late", spec("user", "m@x.com"))
+        repo.replace_pending(
+            T,
+            "soon",
+            [spec("user", "m@x.com"), spec("user", "m@x.com")],
+            sla_days=1,
+            now=NOW,
+        )
+        # "soon" is due a day after NOW, "late" two days after.
+        got = repo.mine(
+            T, email="m@x.com", role="clerk", groups_map={}, delegators_of=[]
+        )
+        assert [s["case_id"] for s in got] == ["soon", "late"]
+        head = repo.current(T, "soon")
+        self.approve(repo, head)
+        got = repo.mine(
+            T, email="m@x.com", role="clerk", groups_map={}, delegators_of=[]
+        )
+        nxt = next(s for s in got if s["case_id"] == "soon")
+        assert nxt["position"] == 2
+        assert [s["case_id"] for s in got] == ["late", "soon"]
+
+    def test_decide_refuses_a_step_behind_a_pending_one(self, repo):
+        chain = seed(repo)
+        with pytest.raises(StepNotPending):
+            repo.decide(
+                T,
+                chain[2]["id"],
+                approve=True,
+                decided_by="x@x.com",
+                sla_days=2,
+                now=NOW,
+            )
