@@ -326,24 +326,32 @@ class TestMigration:
         for name, impl in json_cols.items():
             assert isinstance(impl, postgresql.JSONB), name
 
-    APPROVAL_MIGRATION = (
-        "invoice_processing/db/migrations/versions/f2c7a19d8e43_*.py"
+    @pytest.mark.parametrize(
+        ("revision", "count"), [("f2c7a19d8e43", 4), ("b21ac023e07e", 1)]
     )
-
-    def test_approval_migration_protects_exactly_the_tables_it_creates(self):
+    def test_migration_protects_exactly_the_tables_it_creates(
+        self, revision, count
+    ):
         """RLS_TABLES is written by hand; a table left off it has no
         tenant isolation on Postgres and nothing else would notice."""
         import importlib.util  # noqa: PLC0415
         import re  # noqa: PLC0415
 
-        path = glob.glob(str(REPO / self.APPROVAL_MIGRATION))[0]
-        spec = importlib.util.spec_from_file_location("approval_mig_rls", path)
+        path = glob.glob(
+            str(
+                REPO
+                / f"invoice_processing/db/migrations/versions/{revision}_*.py"
+            )
+        )[0]
+        spec = importlib.util.spec_from_file_location(
+            f"mig_rls_{revision}", path
+        )
         mig = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mig)
         created = re.findall(
             r'op\.create_table\(\s*"(\w+)"', Path(path).read_text()
         )
-        assert len(created) == 4
+        assert len(created) == count
         assert sorted(mig.RLS_TABLES) == sorted(created)
         for table in created:
             assert table in TENANT_TABLES, table
