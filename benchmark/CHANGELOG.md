@@ -1299,13 +1299,15 @@ the same check run standalone over all 300 stored extractions:
 | held | 6 (2 `bank_mismatch`, 4 `payee_name_differs`) |
 | not compared (no extraction, or vendor not in the master) | 53 |
 
-The brief expected 245 / 2 / 53; four more are held because the payee name
-printed on the invoice differs from the vendor name (`payee_name_differs`),
-which counting account and code alone did not see.
+Counting account and code alone gives 245 / 2 / 53; four more are held because
+the payee name printed on the invoice differs from the vendor name
+(`payee_name_differs`), which an account-and-code count does not see.
 
 - MFG-INV-011 (faulty): IFSC printed `DTBKO117671`, master `DTBK0117671`.
 - MFG-INV-003 (faulty): account printed with a stray leading digit, `1 974810581534`.
-  Both are OCR near-misses held on purpose; no O/0 folding was added.
+  Both invoices are faulty for other planted faults; the bank values here are
+  OCR near-misses, not planted bank faults. They are held on purpose; no O/0
+  folding was added.
 - SVC-INV-045, SVC-INV-028 (faulty) and TECH-INV-070 (faulty): payee misread
   by one letter ("Metia", "PIR", "Lt").
 - **TECH-INV-052 (clean): payee `Kestrel Cyber Assurance Pvt Lt` against vendor
