@@ -88,7 +88,7 @@ def repo(scratch_db):
 
 
 def at(iso):
-    # SQLite hands timestamps back without a zone; Postgres keeps +00:00.
+    # Timestamps come back as UTC with an offset; compare them naive.
     return datetime.fromisoformat(iso).replace(tzinfo=None)
 
 
@@ -234,6 +234,12 @@ class TestReplacePending:
         )
         assert chain[1]["due_at"] is None and chain[2]["due_at"] is None
         assert repo.current(T, "c1")["id"] == chain[0]["id"]
+
+    def test_timestamps_carry_a_utc_offset(self, repo):
+        # SQLite returns them naive; without an offset a browser reads them
+        # as local time and the due date shifts by the viewer's offset.
+        due = seed(repo)[0]["due_at"]
+        assert datetime.fromisoformat(due).utcoffset() == timedelta(0)
 
     def test_keeps_decided_and_continues_numbering(self, repo):
         chain = seed(repo)

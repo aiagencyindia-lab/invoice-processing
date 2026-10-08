@@ -58,6 +58,20 @@ from .models import (
 from .session import tenant_session
 
 
+def _iso(value: datetime | None) -> str | None:
+    """A stored timestamp as ISO text that always carries its offset.
+
+    Every timestamp is written in UTC, but SQLite hands it back naive, and a
+    browser reads offset-less ISO as local time, so the UI shifted it by the
+    viewer's offset. Postgres already returns it aware; this is a no-op there.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
+
+
 class PgCaseRepository:
     """Case artifacts, stored as the invoice row plus its pipeline run.
 
@@ -400,9 +414,7 @@ class PgRuleRepository:
             "has_collateral": bool(metadata.get("has_collateral")),
             "collateral_warning": metadata.get("collateral_warning"),
             "error": metadata.get("error"),
-            "created_at": rule.created_at.isoformat()
-            if rule.created_at
-            else None,
+            "created_at": _iso(rule.created_at),
         }
 
     def proposals(self, tenant_id: str, status: str | None = None) -> list:
@@ -570,9 +582,7 @@ class PgDocumentRepository:
                     "byte_size": d.byte_size,
                     "source": d.source,
                     "source_ref": d.source_ref,
-                    "created_at": d.created_at.isoformat()
-                    if d.created_at
-                    else None,
+                    "created_at": _iso(d.created_at),
                 }
                 for d in rows
             ]
@@ -691,7 +701,7 @@ class PgRecordLocks:
         return {
             "case_id": lock.case_id,
             "holder": lock.holder,
-            "expires_at": expires.isoformat() if expires else None,
+            "expires_at": _iso(expires),
         }
 
     @staticmethod
@@ -815,7 +825,7 @@ class PgVendorRepository:
     # -- shapes ----------------------------------------------------------
     @staticmethod
     def _iso(value):
-        return value.isoformat() if value else None
+        return _iso(value)
 
     @staticmethod
     def _pending_id(session, tenant_id: str, vendor_id: str) -> str | None:
@@ -1137,7 +1147,7 @@ class PgApprovalRepository:
     # -- shapes ----------------------------------------------------------
     @staticmethod
     def _iso(value):
-        return value.isoformat() if value else None
+        return _iso(value)
 
     def _group_dict(self, g: ApproverGroup) -> dict:
         return {
@@ -1609,7 +1619,7 @@ class PgGlRuleRepository:
             "gl_account": r.gl_account,
             "enabled": bool(r.enabled),
             "created_by": r.created_by,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "created_at": _iso(r.created_at),
         }
 
     @staticmethod
@@ -1829,9 +1839,7 @@ class PgCorrectionStore:
                     "new_value": correction.new_value,
                     "actor": email,
                     "tenant_id": tenant_id,
-                    "at": correction.created_at.isoformat()
-                    if correction.created_at
-                    else None,
+                    "at": _iso(correction.created_at),
                 }
                 for correction, row_case_id, email in session.execute(query)
             ]
@@ -2381,12 +2389,8 @@ class PgSheetViews:
             "owner": view.owner,
             "shared": bool(view.shared),
             "definition": dict(view.definition or {}),
-            "created_at": view.created_at.isoformat()
-            if view.created_at
-            else None,
-            "updated_at": view.updated_at.isoformat()
-            if view.updated_at
-            else None,
+            "created_at": _iso(view.created_at),
+            "updated_at": _iso(view.updated_at),
         }
 
     def list(self, tenant_id: str, owner: str) -> list[dict]:
@@ -2488,17 +2492,13 @@ class PgExportJobs:
             "row_count": job.row_count,
             "storage_key": job.storage_key,
             "error": job.error,
-            "created_at": job.created_at.isoformat()
-            if job.created_at
-            else None,
+            "created_at": _iso(job.created_at),
             # In-process jobs die with the API, and a job whose process is
             # gone stays `running` for ever with nobody left to finish it.
             # Rather than a sweeper, say so on the way out: anything still
             # unfinished after the window is stale, and stale offers a retry.
             "stale": _export_is_stale(job),
-            "finished_at": (
-                job.finished_at.isoformat() if job.finished_at else None
-            ),
+            "finished_at": _iso(job.finished_at),
         }
 
     def create(
