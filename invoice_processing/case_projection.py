@@ -18,6 +18,8 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from .gl_coding import valid_entries
+
 
 # Money and confidence are Numeric columns. Floats are converted through their
 # string form -- Decimal(0.1) is 0.1000000000000000055511151231257827, and a
@@ -207,11 +209,9 @@ def _with_gl_coding(rows: list[dict], coding) -> list[dict]:
 
     A malformed artifact is ignored rather than losing the projection.
     """
-    entries = coding.get("lines") if isinstance(coding, dict) else None
     coded = {
-        entry.get("line_number"): _text(entry.get("gl_account"), 64)
-        for entry in (entries if isinstance(entries, list) else [])
-        if isinstance(entry, dict)
+        entry["line_number"]: _text(entry.get("gl_account"), 64)
+        for entry in valid_entries(coding)
     }
     for row in rows:
         row["gl_account"] = coded.get(row["line_number"]) or row["gl_account"]

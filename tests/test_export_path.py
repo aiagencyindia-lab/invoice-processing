@@ -255,6 +255,31 @@ class TestGlAccountInExports:
         assert lines[0]["gl_account"] == "6100"
         assert lines[1].get("gl_account") is None
 
+    @pytest.mark.parametrize("change", ["description", "count"])
+    def test_unpaired_lines_export_no_accounts(self, client, tmp_path, change):
+        """Lines replaced after coding no longer match the projected lines;
+        exporting the old accounts against them would post to the wrong GL."""
+        code_line_one(client)
+        path = service._cases.root / "case_002" / "02_extraction.json"
+        data = json.loads(path.read_text())
+        items = data["invoice"]["line_items"]
+        if change == "description":
+            items[0]["description"] = "Something else entirely"
+        else:
+            items.append({"description": "Extra"})
+        path.write_text(json.dumps(data))
+        approve(client)
+        body = client.post(
+            "/api/invoices/case_002/export", json={"target": "csv"}
+        ).json()
+        header, row = list(csv.reader(io.StringIO(body["csv"])))
+        assert dict(zip(header, row, strict=True))["gl_account"] == ""
+        events = [
+            json.loads(line)
+            for line in (tmp_path / "audit.jsonl").read_text().splitlines()
+        ]
+        assert "gl_export_unpaired" in [e["event_type"] for e in events]
+
 
 class TestXeroExport:
     def test_unconfigured_xero_is_503_not_500(self, client):

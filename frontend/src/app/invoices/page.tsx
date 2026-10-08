@@ -530,6 +530,8 @@ function InvoicesWorkbench() {
                   onSaved={(message) => {
                     say(message);
                     reloadDetail();
+                    // Coding a line can re-route the invoice.
+                    reloadChain();
                   }}
                 />
                 <Findings findings={detail.findings} />
@@ -669,7 +671,7 @@ function LineItems({
 
   // Same test the server refuses with a 409: a decided invoice's coding is closed.
   const closed = detail.workflow?.decision
-    ? `Closed: this invoice is already ${detail.workflow.decision}.`
+    ? "Closed: this invoice was already decided."
     : null;
   const coded = new Map(
     (detail.gl_coding?.lines ?? []).map((line) => [line.line_number, line]),
@@ -762,7 +764,12 @@ function LineItems({
                             setDrafts({ ...drafts, [lineNumber]: event.target.value })
                           }
                           onKeyDown={(event) => {
-                            if (event.key === "Enter" && dirty) saveGl(lineNumber, draft);
+                            if (event.key !== "Enter") return;
+                            // Enter here saves this line, never the field edits
+                            // (the window handler saves those on Enter).
+                            event.stopPropagation();
+                            event.preventDefault();
+                            if (dirty) saveGl(lineNumber, draft);
                           }}
                         />
                       ) : (

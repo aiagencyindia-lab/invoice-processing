@@ -15,6 +15,7 @@ The processing function is injected, so none of this runs a real extraction.
 
 import json
 import time
+from typing import ClassVar
 
 import pytest
 
@@ -605,9 +606,9 @@ class TestLinesAreGlCoded:
     """The worker codes each line from the tenant's GL rules before the
     projection, keeps what a person coded, and never loses an invoice to it."""
 
-    def run(self, tmp_path, monkeypatch, rules, previous=None):
+    def run(self, tmp_path, monkeypatch, rules, previous=None, workflow=None):
         output = tmp_path / "case-1"
-        output.mkdir()
+        output.mkdir(parents=True)
         (output / "02_extraction.json").write_text(
             json.dumps(
                 {
@@ -624,6 +625,8 @@ class TestLinesAreGlCoded:
         stored: dict[str, dict] = {}
         if previous is not None:
             stored["gl_coding"] = previous
+        if workflow is not None:
+            stored["workflow"] = workflow
         projected: list[dict] = []
 
         class Verbatim:
@@ -698,6 +701,36 @@ class TestLinesAreGlCoded:
         stored, projected = self.run(tmp_path, monkeypatch, broken)
         assert "gl_coding" not in stored
         assert "extraction" in stored and projected
+
+    PREVIOUS: ClassVar[dict] = {
+        "lines": [
+            {"line_number": 1, "gl_account": "5000", "source": "rule"},
+            {"line_number": 2, "gl_account": None, "source": "none"},
+        ]
+    }
+
+    def test_a_failure_keeps_the_stored_coding(self, tmp_path, monkeypatch):
+        def broken():
+            raise RuntimeError("database is down")
+
+        for n, rules in enumerate((broken, lambda: None)):
+            stored, projected = self.run(
+                tmp_path / str(n), monkeypatch, rules, self.PREVIOUS
+            )
+            assert stored["gl_coding"] == self.PREVIOUS
+            assert projected[0]["gl_coding"] == self.PREVIOUS
+
+    def test_a_decided_invoice_is_not_recoded(self, tmp_path, monkeypatch):
+        """The account an approver signed off is the account exported."""
+        stored, projected = self.run(
+            tmp_path,
+            monkeypatch,
+            self.repo(),
+            self.PREVIOUS,
+            workflow={"decision": "approve"},
+        )
+        assert stored["gl_coding"] == self.PREVIOUS
+        assert projected[0]["gl_coding"] == self.PREVIOUS
 
 
 class TestHeartbeatWhileBusy:

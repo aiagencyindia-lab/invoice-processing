@@ -28,7 +28,8 @@ def _sla_days(tenant_id: str) -> int:
 def routing_invoice(artifacts: dict) -> dict:
     """The invoice as the engine sees it: extracted fields plus GL accounts."""
     invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
-    lines = (artifacts.get("gl_coding") or {}).get("lines")
+    coding = artifacts.get("gl_coding")
+    lines = coding.get("lines") if isinstance(coding, dict) else None
     accounts = [
         line["gl_account"]
         for line in (lines if isinstance(lines, list) else [])
@@ -110,9 +111,24 @@ def uploader_of(ctx, documents) -> str | None:
     return None
 
 
-def editors_of(ctx, corrections) -> list[str]:
+def editors_of(ctx, corrections, artifacts: dict) -> list[str]:
+    """Who changed the invoice: corrected a field or coded a line by hand.
+
+    Coding a line routes the invoice (a GL rule can add or drop a step), so a
+    coder is an editor exactly as a field corrector is.
+    """
     rows = corrections.list(ctx.tenant_id, ctx.case_id)
-    return sorted({r["actor"] for r in rows if r.get("actor")})
+    coding = artifacts.get("gl_coding")
+    lines = coding.get("lines") if isinstance(coding, dict) else None
+    coders = [
+        line.get("coded_by")
+        for line in (lines if isinstance(lines, list) else [])
+        if isinstance(line, dict) and line.get("source") == "manual"
+    ]
+    return sorted(
+        {r["actor"] for r in rows if r.get("actor")}
+        | {c for c in coders if isinstance(c, str) and c}
+    )
 
 
 def assess(
@@ -260,10 +276,13 @@ def decide(
         approve
         and completed
         and approvals.editor_needs_second(
-            email, editors_of(ctx, corrections), is_only_pending=nobody_else
+            email,
+            editors_of(ctx, corrections, artifacts),
+            is_only_pending=nobody_else,
         )
     ):
-        # Someone who corrected the fields cannot be the only approver.
+        # Someone who corrected the fields or coded a line cannot be the only
+        # approver.
         repo.append_step(
             t, case, approvals.ROLE_FALLBACK, sla_days=sla, now=now
         )

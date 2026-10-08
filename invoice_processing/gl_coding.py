@@ -44,6 +44,22 @@ def _rank(rule: dict, vendor: str, description: str) -> int:
     return _VENDOR
 
 
+def valid_entries(coding) -> list[dict]:
+    """The stored coding's entries that address a line; the rest are ignored.
+
+    A line number must be a real int: a list would not hash, and True would
+    silently code line 1.
+    """
+    entries = coding.get("lines") if isinstance(coding, dict) else None
+    return [
+        e
+        for e in (entries if isinstance(entries, list) else [])
+        if isinstance(e, dict)
+        and isinstance(e.get("line_number"), int)
+        and not isinstance(e.get("line_number"), bool)
+    ]
+
+
 def _uncoded(line_number) -> dict:
     return {
         "line_number": line_number,
@@ -66,11 +82,11 @@ def code_lines(
     A line a person coded (source "manual" in `previous`) is kept as it is:
     a re-run never overwrites a person.
     """
-    manual = {}
-    stored = previous.get("lines") if isinstance(previous, dict) else None
-    for entry in stored if isinstance(stored, list) else []:
-        if isinstance(entry, dict) and entry.get("source") == "manual":
-            manual[entry.get("line_number")] = entry
+    manual = {
+        entry["line_number"]: entry
+        for entry in valid_entries(previous)
+        if entry.get("source") == "manual"
+    }
 
     vendor = po_matching.normalize_vendor(invoice.get("vendor_name"))
     # Stable sort: earliest created first, then input order, so a strict >

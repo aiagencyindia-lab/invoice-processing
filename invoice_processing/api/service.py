@@ -844,6 +844,16 @@ def edit_fields(
     The correction -- old value, new value, who, when -- is the point. It is
     what accuracy is measured from and what the learning loop mines for rules.
     """
+    # The fields get_invoice lists are the fields a person may edit. Lines and
+    # internals (evidence) are not fields: replacing line_items here would
+    # change what a decided invoice exports without anyone re-approving it.
+    for edit in request.edits:
+        if edit.field.startswith("_") or edit.field == "line_items":
+            raise HTTPException(
+                status_code=400,
+                detail=f"{edit.field} is not an editable field; edit the "
+                "invoice's header fields here.",
+            )
     _require_unlocked(principal, case_id)
     ctx = principal.context(case_id)
     artifacts = get_cases().get_artifacts(ctx)
@@ -1437,26 +1447,39 @@ CSV_COLUMNS = [
 ]
 
 
-def _with_gl(invoice: dict, artifacts: dict) -> dict:
+def _with_gl(ctx, invoice: dict, artifacts: dict) -> dict:
     """The invoice with each line's GL account from the projected lines.
 
     Export reads the extraction, which carries no coding. The projection is
     where gl_coding is applied, so it is read here rather than re-deciding
-    which coding wins.
+    which coding wins. Accounts are attached only when every extraction line
+    pairs with its projected line; otherwise none are, and the connector
+    falls back to its account map or default.
     """
-    # ponytail: extraction line N <-> projected line_number N; wrong only if
-    # the transformer renumbers or drops lines.
-    gl = {
-        line["line_number"]: line["gl_account"]
-        for line in case_projection.lines(artifacts)
-    }
+    # ponytail: extraction line N <-> projected line N, checked by count and
+    # description. Pairing breaks when the transformer renumbers or drops
+    # lines, or when line items were replaced after coding (as /fields once
+    # allowed); an unpaired export is audited rather than guessed.
+    items = invoice.get("line_items") or []
+    projected = case_projection.lines(artifacts)
+    paired = len(items) == len(projected) and all(
+        isinstance(item, dict)
+        and case_projection._text(item.get("description"), 8000)
+        == line["description"]
+        for item, line in zip(items, projected, strict=False)
+    )
+    if not paired:
+        get_audit().emit(
+            ctx,
+            "gl_export_unpaired",
+            {"extraction_lines": len(items), "projected_lines": len(projected)},
+        )
+        return invoice
     return {
         **invoice,
         "line_items": [
-            {**item, "gl_account": gl.get(index)}
-            for index, item in enumerate(
-                invoice.get("line_items") or [], start=1
-            )
+            {**item, "gl_account": line["gl_account"]}
+            for item, line in zip(items, projected, strict=True)
         ],
     }
 
@@ -1511,9 +1534,6 @@ def export_invoice(
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
 
-    invoice = _with_gl(
-        (artifacts.get("extraction") or {}).get("invoice") or {}, artifacts
-    )
     state = _workflow(ctx)
     approved = state.get("decision") == "approve"
 
@@ -1525,6 +1545,9 @@ def export_invoice(
                 "exporting earlier puts an unreviewed liability on the ledger."
             ),
         )
+    invoice = _with_gl(
+        ctx, (artifacts.get("extraction") or {}).get("invoice") or {}, artifacts
+    )
 
     if request.target == "csv":
         buffer = io.StringIO()

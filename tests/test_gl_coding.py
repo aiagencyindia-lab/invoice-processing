@@ -2,7 +2,7 @@
 
 from typing import ClassVar
 
-from invoice_processing import case_projection
+from invoice_processing import approval_flow, case_projection
 from invoice_processing.gl_coding import code_lines
 
 INVOICE = {"vendor_name": "Acme Supplies Pty Ltd"}
@@ -147,3 +147,39 @@ class TestProjection:
                 line["gl_account"] for line in case_projection.lines(artifacts)
             ]
             assert got == ["T1", "T2"]
+
+    def test_only_integer_line_numbers_code_a_line(self):
+        bad = {
+            "lines": [
+                {"line_number": [1], "gl_account": "9"},
+                {"line_number": True, "gl_account": "9"},
+            ]
+        }
+        artifacts = {**self.ARTIFACTS, "gl_coding": bad}
+        got = [line["gl_account"] for line in case_projection.lines(artifacts)]
+        assert got == ["T1", "T2"]
+
+
+def test_previous_entries_without_an_integer_line_number_are_ignored():
+    manual = {"source": "manual", "gl_account": "9"}
+    previous = {
+        "lines": [
+            {**manual, "line_number": [1]},
+            {**manual, "line_number": True},
+        ]
+    }
+    assert coded(code_lines(INVOICE, LINES, [], previous)) == {
+        1: (None, None),
+        2: (None, None),
+    }
+
+
+def test_routing_ignores_a_malformed_coding():
+    for bad in (
+        "x",
+        ["x"],
+        {"lines": "x"},
+        {"lines": ["x", {"gl_account": 1}]},
+    ):
+        invoice = approval_flow.routing_invoice({"gl_coding": bad})
+        assert invoice["_gl_accounts"] == []

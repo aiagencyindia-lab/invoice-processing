@@ -253,7 +253,9 @@ def test_a_decided_invoice_is_closed(env):
     )
     r = code(env, gl_account="6100")
     assert r.status_code == 409
-    assert "already approve" in r.json()["detail"]
+    assert r.json()["detail"] == (
+        "This invoice was already decided; its GL coding is closed."
+    )
     assert not (env["root"] / CASE / "gl_coding.json").exists()
 
 
@@ -337,3 +339,81 @@ def test_coding_works_without_a_database(tmp_path, monkeypatch):
 def test_the_trail_names_what_each_event_is_about():
     assert entity_type_for("gl_rule_created") == "gl_rule"
     assert entity_type_for("gl_line_coded", CASE) == "invoice"
+
+
+def test_an_approver_who_recoded_a_line_cannot_approve_alone(env):
+    """Coding a line is an edit: the coder may not be the only approver, even
+    when their recode is what dropped the step that would have asked someone
+    else."""
+    approvals = env["approvals"]
+    approvals.create_rule(
+        TENANT,
+        name="Facilities",
+        kind="gl",
+        match={"gl_prefix": "61"},
+        steps=[{"kind": "user", "value": "a@x.test"}],
+    )
+    approvals.create_rule(
+        TENANT,
+        name="Everything",
+        kind="amount",
+        match={"min_amount": 0},
+        steps=[{"kind": "role", "value": "approver"}],
+    )
+    code(env, gl_account="6100")
+    assert any(
+        s["assignee_value"] == "a@x.test" for s in approvals.chain(TENANT, CASE)
+    )
+    code(env, "approver:boss", gl_account="7000")
+    assert not any(
+        s["assignee_value"] == "a@x.test" and s["status"] == "pending"
+        for s in approvals.chain(TENANT, CASE)
+    )
+    r = env["client"]("approver:boss").post(
+        f"/api/invoices/{CASE}/actions", json={"action": "approve"}
+    )
+    assert r.status_code == 200
+    assert r.json()["completed"] is False
+    assert not (env["root"] / CASE / "workflow.json").exists()
+
+
+def test_remember_refuses_an_oversized_vendor_before_writing(env):
+    path = env["root"] / CASE / "02_extraction.json"
+    data = json.loads(path.read_text())
+    data["invoice"]["vendor_name"] = "V" * 256
+    path.write_text(json.dumps(data))
+    r = code(env, "admin", gl_account="6100", remember=True)
+    assert r.status_code == 400
+    assert not (env["root"] / CASE / "gl_coding.json").exists()
+    assert env["repo"].list_rules(TENANT) == []
+
+
+def test_a_malformed_stored_coding_does_not_break_coding_a_line(env):
+    (env["root"] / CASE / "gl_coding.json").write_text(
+        json.dumps(
+            {
+                "lines": [
+                    {"line_number": "x", "gl_account": "1"},
+                    {"line_number": [2], "gl_account": "2"},
+                    {"line_number": True, "gl_account": "3"},
+                    {"line_number": 2, "gl_account": "4"},
+                ]
+            }
+        )
+    )
+    r = code(env, gl_account="6100")
+    assert r.status_code == 200
+    got = [(x["line_number"], x["gl_account"]) for x in r.json()["lines"]]
+    assert got == [(1, "6100"), (2, "4")]
+
+
+@pytest.mark.parametrize("field", ["line_items", "_evidence"])
+def test_field_edits_cannot_reach_lines_or_internals(env, field):
+    path = env["root"] / CASE / "02_extraction.json"
+    before = path.read_text()
+    r = env["client"]("clerk").patch(
+        f"/api/invoices/{CASE}/fields",
+        json={"edits": [{"field": field, "value": []}]},
+    )
+    assert r.status_code == 400
+    assert path.read_text() == before

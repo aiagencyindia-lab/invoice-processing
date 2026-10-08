@@ -200,7 +200,7 @@ def code_line(
     if decision:
         raise HTTPException(
             409,
-            f"This invoice is already {decision}; its GL coding is closed.",
+            "This invoice was already decided; its GL coding is closed.",
         )
     lines = case_projection.lines(artifacts)
     line = next((x for x in lines if x["line_number"] == line_number), None)
@@ -223,8 +223,17 @@ def code_line(
                 "This invoice has no vendor name, so there is nothing to "
                 "remember the account against.",
             )
+        if len(vendor) > 255:
+            raise HTTPException(
+                400,
+                "This invoice's vendor name is too long to remember an "
+                "account for (255 characters at most).",
+            )
         repo = _repo()
 
+    # ponytail: read-modify-write of the whole artifact; two people coding
+    # different lines at once can lose one edit (as edit_fields can). Upgrade:
+    # SELECT ... FOR UPDATE on the case row around the read and the write.
     stored = artifacts.get("gl_coding")
     coding = (
         stored
@@ -233,8 +242,8 @@ def code_line(
     )
     entries = [
         e
-        for e in coding["lines"]
-        if isinstance(e, dict) and e.get("line_number") != line_number
+        for e in gl_coding.valid_entries(coding)
+        if e["line_number"] != line_number
     ]
     entries.append(
         {
@@ -246,7 +255,7 @@ def code_line(
             "coded_at": datetime.now(timezone.utc).isoformat(),
         }
     )
-    entries.sort(key=lambda e: e.get("line_number") or 0)
+    entries.sort(key=lambda e: e["line_number"])
     coding = {**coding, "lines": entries}
 
     artifacts["gl_coding"] = coding

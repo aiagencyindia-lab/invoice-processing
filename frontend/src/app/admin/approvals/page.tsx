@@ -91,7 +91,9 @@ export default function ApprovalSetupPage() {
         ? { vendor_name: vendorName }
         : kind === "entity"
           ? { organization_name: orgName }
-          : {
+          : kind === "gl"
+            ? { gl_prefix: glPrefix.trim() }
+            : {
               min_amount: Number(minAmount),
               ...(currency.trim() ? { currency: currency.trim().toUpperCase() } : {}),
             };
