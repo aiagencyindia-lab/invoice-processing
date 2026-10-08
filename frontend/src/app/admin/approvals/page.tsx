@@ -18,6 +18,7 @@ function matchSummary(rule: ApprovalRule): string {
   const m = rule.match;
   if (rule.kind === "vendor") return `vendor ${m.vendor_name}`;
   if (rule.kind === "entity") return `organisation ${m.organization_name}`;
+  if (rule.kind === "gl") return `GL starting ${m.gl_prefix}`;
   return `at least ${m.min_amount}${m.currency ? ` ${m.currency}` : ""}`;
 }
 
@@ -36,6 +37,7 @@ export default function ApprovalSetupPage() {
   const [kind, setKind] = useState("amount");
   const [vendorName, setVendorName] = useState("");
   const [orgName, setOrgName] = useState("");
+  const [glPrefix, setGlPrefix] = useState("");
   const [minAmount, setMinAmount] = useState("");
   const [currency, setCurrency] = useState("");
   const [steps, setSteps] = useState<StepRow[]>([{ kind: "user", value: "" }]);
@@ -102,6 +104,7 @@ export default function ApprovalSetupPage() {
         setRuleName("");
         setVendorName("");
         setOrgName("");
+        setGlPrefix("");
         setMinAmount("");
         setCurrency("");
         setSteps([{ kind: "user", value: "" }]);
@@ -252,6 +255,7 @@ export default function ApprovalSetupPage() {
                       <option value="amount">amount</option>
                       <option value="vendor">vendor</option>
                       <option value="entity">entity</option>
+                      <option value="gl">gl</option>
                     </select>
                   </label>
                   {kind === "vendor" ? (
@@ -270,6 +274,16 @@ export default function ApprovalSetupPage() {
                         className="input-field"
                         value={orgName}
                         onChange={(event) => setOrgName(event.target.value)}
+                      />
+                    </label>
+                  ) : kind === "gl" ? (
+                    <label style={{ fontSize: 12 }}>
+                      GL prefix
+                      <input
+                        className="input-field"
+                        maxLength={64}
+                        value={glPrefix}
+                        onChange={(event) => setGlPrefix(event.target.value)}
                       />
                     </label>
                   ) : (
@@ -353,6 +367,8 @@ export default function ApprovalSetupPage() {
                         ? vendorName.trim()
                         : kind === "entity"
                           ? orgName.trim()
+                          : kind === "gl"
+                            ? glPrefix.trim()
                           : minAmount.trim())
                     }
                     onClick={addRule}
