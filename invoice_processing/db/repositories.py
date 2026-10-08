@@ -22,6 +22,7 @@ from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import aliased
 
+from .. import po_matching
 from ..ports import LockHeld, RuleBaseConflict, RunContext
 from ..sheet_columns import (
     ATTENTION_FLAGS,
@@ -45,6 +46,8 @@ from .models import (
     SheetView,
     Tenant,
     User,
+    Vendor,
+    VendorBankChange,
 )
 from .session import tenant_session
 
@@ -511,6 +514,9 @@ class PgDocumentRepository:
                 "storage_key": document.storage_key,
                 "filename": document.filename,
                 "sha256": document.sha256,
+                "source": document.source,
+                "sender": document.sender,
+                "reply_to": document.reply_to,
             }
 
     def create(self, tenant_id: str, **fields) -> str:
@@ -572,6 +578,7 @@ _ENTITY_TYPES = {
     "tenant": "tenant",
     "settings": "settings",
     "purchase": "purchase_order",
+    "vendor": "vendor",
 }
 
 
@@ -741,6 +748,302 @@ class PgRecordLocks:
             broken = self._to_dict(lock)
             session.delete(lock)
             return broken
+
+
+class PendingChangeExists(Exception):
+    """A vendor already has a bank change awaiting decision."""
+
+
+class SelfApproval(Exception):
+    """The proposer tried to approve their own bank change."""
+
+
+class ChangeNotPending(Exception):
+    """The change was already decided."""
+
+
+BANK_FIELDS = ("account_name", "account_number", "code", "iban")
+
+
+class PgVendorRepository:
+    """Suppliers and the dual-control queue for their payee details.
+
+    Bank columns on `vendors` are written only by `decide(approve)`. The
+    bulk `upsert_many` is the customer's supplier export and deliberately
+    cannot carry bank details: an export is one person's file.
+    """
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    # -- shapes ----------------------------------------------------------
+    @staticmethod
+    def _iso(value):
+        return value.isoformat() if value else None
+
+    def _vendor_dict(self, session, vendor: Vendor) -> dict:
+        pending = session.scalar(
+            select(VendorBankChange.id).where(
+                VendorBankChange.vendor_id == vendor.id,
+                VendorBankChange.status == VendorBankChange.PENDING,
+            )
+        )
+        return {
+            "id": vendor.id,
+            "name": vendor.name,
+            "tax_id": vendor.tax_id,
+            "kind": vendor.kind or "",
+            "email_domain": vendor.email_domain,
+            "bank_account_name": vendor.bank_account_name,
+            "bank_account_number": vendor.bank_account_number,
+            "bank_code": vendor.bank_code,
+            "bank_iban": vendor.bank_iban,
+            "bank_verified_at": self._iso(vendor.bank_verified_at),
+            "bank_verified_by": vendor.bank_verified_by,
+            "pending_change_id": pending,
+        }
+
+    def _change_dict(
+        self, change: VendorBankChange, vendor_name: str = ""
+    ) -> dict:
+        out = {
+            "id": change.id,
+            "vendor_id": change.vendor_id,
+            "vendor_name": vendor_name,
+            "reason": change.reason,
+            "source_case_id": change.source_case_id,
+            "status": change.status,
+            "proposed_by": change.proposed_by,
+            "decided_by": change.decided_by,
+            "decided_at": self._iso(change.decided_at),
+            "decision_note": change.decision_note,
+            "created_at": self._iso(change.created_at),
+        }
+        for f in BANK_FIELDS:
+            out[f"proposed_{f}"] = getattr(change, f"proposed_{f}")
+            out[f"previous_{f}"] = getattr(change, f"previous_{f}")
+        return out
+
+    def _vendor(self, session, tenant_id: str, vendor_id: str) -> Vendor:
+        vendor = session.scalar(
+            select(Vendor).where(
+                Vendor.tenant_id == tenant_id, Vendor.id == vendor_id
+            )
+        )
+        if vendor is None:
+            raise KeyError(vendor_id)
+        return vendor
+
+    # -- vendors ---------------------------------------------------------
+    def upsert_many(self, tenant_id: str, records: list[dict]) -> int:
+        with tenant_session(tenant_id, self.url) as session:
+            existing = {
+                v.normalized_name: v
+                for v in session.scalars(
+                    select(Vendor).where(Vendor.tenant_id == tenant_id)
+                )
+            }
+            for record in records:
+                name = str(record.get("name") or "").strip()
+                key = po_matching.normalize_vendor(name)
+                if not key:
+                    continue
+                vendor = existing.get(key)
+                if vendor is None:
+                    vendor = Vendor(
+                        tenant_id=tenant_id,
+                        name=name,
+                        normalized_name=key,
+                        tax_id="",
+                    )
+                    session.add(vendor)
+                    existing[key] = vendor
+                vendor.name = name
+                vendor.tax_id = str(record.get("tax_id") or "").strip()
+                vendor.kind = str(record.get("kind") or "").lower()
+            session.flush()
+        return len(records)
+
+    def list(self, tenant_id: str) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(Vendor)
+                .where(Vendor.tenant_id == tenant_id)
+                .order_by(Vendor.name)
+            ).all()
+            return [self._vendor_dict(session, v) for v in rows]
+
+    def get(self, tenant_id: str, vendor_id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            try:
+                return self._vendor_dict(
+                    session, self._vendor(session, tenant_id, vendor_id)
+                )
+            except KeyError:
+                return None
+
+    def find_by_name(self, tenant_id: str, name: str) -> dict | None:
+        key = po_matching.normalize_vendor(name)
+        with tenant_session(tenant_id, self.url) as session:
+            vendor = session.scalar(
+                select(Vendor).where(
+                    Vendor.tenant_id == tenant_id,
+                    Vendor.normalized_name == key,
+                )
+            )
+            return self._vendor_dict(session, vendor) if vendor else None
+
+    def patch(
+        self, tenant_id: str, vendor_id: str, *, email_domain: str | None
+    ) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            vendor = self._vendor(session, tenant_id, vendor_id)
+            vendor.email_domain = (email_domain or "").strip().lower() or None
+            session.flush()
+            return self._vendor_dict(session, vendor)
+
+    def load_records(self, tenant_id: str) -> list[dict]:
+        """What the pipeline's VendorMaster is built from."""
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(Vendor).where(Vendor.tenant_id == tenant_id)
+            ).all()
+            out = []
+            for v in rows:
+                changes = session.scalars(
+                    select(VendorBankChange)
+                    .where(VendorBankChange.vendor_id == v.id)
+                    .order_by(VendorBankChange.created_at.desc())
+                ).all()
+                approved = [
+                    c for c in changes if c.status == VendorBankChange.APPROVED
+                ]
+                out.append(
+                    {
+                        "vendor_id": v.id,
+                        "name": v.name,
+                        "tax_id": v.tax_id,
+                        "kind": v.kind or "",
+                        "email_domain": v.email_domain,
+                        "bank_account_name": v.bank_account_name,
+                        "bank_account_number": v.bank_account_number,
+                        "bank_code": v.bank_code,
+                        "bank_iban": v.bank_iban,
+                        "bank_verified_at": self._iso(v.bank_verified_at),
+                        "pending_change": any(
+                            c.status == VendorBankChange.PENDING
+                            for c in changes
+                        ),
+                        "last_bank_change_at": self._iso(approved[0].decided_at)
+                        if approved
+                        else None,
+                    }
+                )
+            return out
+
+    # -- bank changes ----------------------------------------------------
+    def propose(
+        self,
+        tenant_id: str,
+        vendor_id: str,
+        *,
+        proposed: dict,
+        reason: str,
+        proposed_by: str,
+        source_case_id: str | None = None,
+    ) -> dict:
+        with tenant_session(tenant_id, self.url) as session:
+            vendor = self._vendor(session, tenant_id, vendor_id)
+            if session.scalar(
+                select(VendorBankChange.id).where(
+                    VendorBankChange.vendor_id == vendor.id,
+                    VendorBankChange.status == VendorBankChange.PENDING,
+                )
+            ):
+                raise PendingChangeExists(vendor.name)
+            change = VendorBankChange(
+                tenant_id=tenant_id,
+                vendor_id=vendor.id,
+                reason=reason,
+                proposed_by=proposed_by,
+                source_case_id=source_case_id,
+                status=VendorBankChange.PENDING,
+            )
+            for f in BANK_FIELDS:
+                setattr(change, f"proposed_{f}", proposed.get(f"bank_{f}"))
+                setattr(change, f"previous_{f}", getattr(vendor, f"bank_{f}"))
+            session.add(change)
+            session.flush()
+            session.refresh(change)
+            return self._change_dict(change, vendor.name)
+
+    def list_changes(
+        self, tenant_id: str, status: str | None = None
+    ) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            query = (
+                select(VendorBankChange, Vendor.name)
+                .join(Vendor, Vendor.id == VendorBankChange.vendor_id)
+                .where(VendorBankChange.tenant_id == tenant_id)
+                .order_by(VendorBankChange.created_at.desc())
+            )
+            if status:
+                query = query.where(VendorBankChange.status == status)
+            return [self._change_dict(c, n) for c, n in session.execute(query)]
+
+    def get_change(self, tenant_id: str, change_id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            row = session.execute(
+                select(VendorBankChange, Vendor.name)
+                .join(Vendor, Vendor.id == VendorBankChange.vendor_id)
+                .where(
+                    VendorBankChange.tenant_id == tenant_id,
+                    VendorBankChange.id == change_id,
+                )
+            ).first()
+            return self._change_dict(*row) if row else None
+
+    def decide(
+        self,
+        tenant_id: str,
+        change_id: str,
+        *,
+        action: str,
+        decided_by: str,
+        note: str | None,
+    ) -> dict:
+        if action not in ("approve", "reject"):
+            raise ValueError(action)
+        with tenant_session(tenant_id, self.url) as session:
+            change = session.scalar(
+                select(VendorBankChange).where(
+                    VendorBankChange.tenant_id == tenant_id,
+                    VendorBankChange.id == change_id,
+                )
+            )
+            if change is None:
+                raise KeyError(change_id)
+            if change.status != VendorBankChange.PENDING:
+                raise ChangeNotPending(change.status)
+            if change.proposed_by == decided_by:
+                raise SelfApproval(decided_by)
+            vendor = self._vendor(session, tenant_id, change.vendor_id)
+            now = datetime.now(timezone.utc)
+            if action == "approve":
+                for f in BANK_FIELDS:
+                    setattr(
+                        vendor, f"bank_{f}", getattr(change, f"proposed_{f}")
+                    )
+                vendor.bank_verified_at = now
+                vendor.bank_verified_by = decided_by
+                change.status = VendorBankChange.APPROVED
+            else:
+                change.status = VendorBankChange.REJECTED
+            change.decided_by = decided_by
+            change.decided_at = now
+            change.decision_note = note
+            session.flush()
+            return self._change_dict(change, vendor.name)
 
 
 class PgClaimStore:

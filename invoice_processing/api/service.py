@@ -126,6 +126,7 @@ _audit = None
 _corrections = None
 _claim_store = None
 _locks = None
+_vendors = None
 _rules = None
 _tenant_settings = None
 _claims_writer = None
@@ -277,37 +278,59 @@ def get_locks():
     # read as safety everywhere else. Postgres or nothing is the honest pair.
     """
     global _locks
-    if _locks is None and _database_configured() and _lock_table_exists():
+    if (
+        _locks is None
+        and _database_configured()
+        and _table_exists("record_locks", "editing")
+    ):
         from ..db.repositories import PgRecordLocks  # noqa: PLC0415
 
         _locks = PgRecordLocks()
     return _locks
 
 
-def _lock_table_exists() -> bool:
-    """Whether the schema this feature needs is actually there.
+def _table_exists(name: str, unprotected: str) -> bool:
+    """Whether the schema a feature needs is actually there.
 
     A database can be configured and unmigrated -- an in-memory one in a test,
     or a deployment with `RUN_MIGRATIONS=0`. Asking the database beats assuming
-    either way: assuming the table exists turns every edit into a 500, and
-    assuming it does not would disable locking on a real deployment. Said out
-    loud when it is missing, because silence is how the storage and RLS gaps in
-    this codebase's own audit stayed invisible.
+    either way: assuming the table exists turns every request into a 500, and
+    assuming it does not would disable the feature on a real deployment. Said
+    out loud when it is missing, because silence is how the storage and RLS gaps
+    in this codebase's own audit stayed invisible.
     """
     from sqlalchemy import inspect  # noqa: PLC0415
 
     from ..db.session import get_engine  # noqa: PLC0415
 
     try:
-        if inspect(get_engine()).has_table("record_locks"):
+        if inspect(get_engine()).has_table(name):
             return True
     except Exception:
-        logger.warning("Could not check for the record_locks table")
+        logger.warning("Could not check for the %s table", name)
         return False
     logger.warning(
-        "No record_locks table: editing is unprotected until migrations run"
+        "No %s table: %s is unprotected until migrations run", name, unprotected
     )
     return False
+
+
+def get_vendors():
+    """Suppliers and their verified bank details. `None` without the table.
+
+    Same reasoning as `get_locks`: a file would be private to one container,
+    and a bank-change approval the worker cannot see is no control at all.
+    """
+    global _vendors
+    if (
+        _vendors is None
+        and _database_configured()
+        and _table_exists("vendors", "vendor bank-detail control")
+    ):
+        from ..db.repositories import PgVendorRepository  # noqa: PLC0415
+
+        _vendors = PgVendorRepository()
+    return _vendors
 
 
 def get_queue():
