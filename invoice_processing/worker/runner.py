@@ -219,6 +219,12 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
         from ..tenant_settings import apply_to_pipeline  # noqa: PLC0415
 
         settings = apply_to_pipeline(ctx.tenant_id)
+        # Where the email said replies go, for the sender-domain signal in
+        # step 3.4. The pipeline reads config, not the document row, so it is
+        # handed over here. Reply-To beats From: it is what a fraudster sets.
+        settings["document_sender"] = (
+            document.get("reply_to") or document.get("sender") or None
+        )
 
         # Publish each step through the CaseRepository as the pipeline
         # reaches it. It goes through the port rather than onto local disk

@@ -135,6 +135,8 @@ def ingest_document(
     filename: str | None = None,
     source: str = "upload",
     source_ref: str | None = None,
+    sender: str | None = None,
+    reply_to: str | None = None,
     blobs=None,
     documents=None,
     audit=None,
@@ -185,6 +187,8 @@ def ingest_document(
         byte_size=len(data),
         source=source,
         source_ref=source_ref,
+        sender=sender or None,
+        reply_to=reply_to or None,
     )
     # The document did not exist when the context was built, so the id is
     # attached now -- otherwise the row that records an upload cannot say
@@ -383,6 +387,8 @@ class InboundMessage:
     message_id: str
     raw: bytes
     attachments: list[tuple[str, bytes]]
+    sender: str = ""
+    reply_to: str = ""
 
 
 def parse_inbound(
@@ -401,12 +407,15 @@ def parse_inbound(
 def _parse_mime(raw: bytes, headers: dict[str, str]) -> InboundMessage:
     recipient = headers.get("x-original-to") or ""
     message_id = ""
+    sender = reply_to = ""
     try:
         message = email.message_from_bytes(raw, policy=policy.default)
         recipient = recipient or str(
             message.get("Delivered-To") or message.get("To") or ""
         )
         message_id = str(message.get("Message-ID") or "")
+        sender = _bare_address(message.get("From"))
+        reply_to = _bare_address(message.get("Reply-To"))
     except Exception:
         pass
     return InboundMessage(
@@ -414,6 +423,8 @@ def _parse_mime(raw: bytes, headers: dict[str, str]) -> InboundMessage:
         message_id=message_id,
         raw=raw,
         attachments=extract_pdf_attachments(raw),
+        sender=sender,
+        reply_to=reply_to,
     )
 
 
@@ -448,6 +459,8 @@ def _parse_postmark(raw: bytes, headers: dict[str, str]) -> InboundMessage:
         attachments=_decode_attachments(
             body.get("Attachments"), name_key="Name", data_key="Content"
         ),
+        sender=_bare_address(body.get("FromFull") or body.get("From")),
+        reply_to=_bare_address(body.get("ReplyTo")),
     )
 
 
@@ -475,6 +488,8 @@ def _parse_sendgrid(
         message_id=str(fields.get("message-id") or ""),
         raw=raw,
         attachments=attachments,
+        sender=_bare_address(fields.get("from")),
+        reply_to=_bare_address(fields.get("reply-to") or ""),
     )
 
 
@@ -522,6 +537,16 @@ def _decode_attachments(
         if data.startswith(PDF_MAGIC):
             out.append((str(item.get(name_key) or "attachment.pdf"), data))
     return out
+
+
+def _bare_address(value) -> str:
+    """`Name <a@b>` -> `a@b`; a Postmark `FromFull` dict -> its Email."""
+    if isinstance(value, dict):
+        value = value.get("Email") or value.get("email") or ""
+    text = str(value or "").strip()
+    if "<" in text and ">" in text:
+        text = text[text.rindex("<") + 1 : text.rindex(">")]
+    return text.strip().lower()
 
 
 def _first_address(value) -> str:
@@ -589,6 +614,8 @@ async def inbound_email(request: Request) -> dict:
                     filename=filename,
                     source="email",
                     source_ref=eml_key,
+                    sender=inbound.sender,
+                    reply_to=inbound.reply_to,
                     blobs=blobs,
                 ).as_dict()
             )
@@ -602,6 +629,7 @@ async def inbound_email(request: Request) -> dict:
             "eml_key": eml_key,
             "message_id": message_id,
             "recipient": inbound.recipient,
+            "sender": inbound.sender,
             "ingested": len(results),
             "refused": len(refused),
         },

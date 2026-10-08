@@ -337,6 +337,14 @@ class TestInboundEmailAuth:
 
 
 class TestInboundEmailIngestion:
+    def test_sender_is_stored_on_the_document(self, client, wired):
+        """The sender-domain BEC signal reads it from here; the raw .eml alone
+        would mean parsing a blob on every pipeline run."""
+        _, documents, _ = wired
+        post_email(client, build_email([("a.pdf", PDF, "pdf")]))
+        assert documents.rows["doc-1"]["sender"] == "vendor@supplier.test"
+        assert documents.rows["doc-1"]["reply_to"] is None
+
     def test_an_attached_invoice_is_ingested(self, client, wired):
         _, documents, _ = wired
         body = post_email(client, build_email([("a.pdf", PDF, "pdf")])).json()
@@ -563,6 +571,46 @@ class TestProviderPayloads:
 
     def _pdf(self):
         return b"%PDF-1.4 invoice bytes"
+
+    def test_postmark_sender_and_reply_to(self):
+        body = json.dumps(
+            {
+                "OriginalRecipient": "acme@invoices.example.com",
+                "MessageID": "pm-2",
+                "FromFull": {"Email": "billing@vendor.test", "Name": "Billing"},
+                "ReplyTo": "pay-me@lookalike.test",
+                "Attachments": [],
+            }
+        ).encode()
+        parsed = ingest.parse_inbound(body, "application/json")
+        assert parsed.sender == "billing@vendor.test"
+        assert parsed.reply_to == "pay-me@lookalike.test"
+
+    def test_sendgrid_sender(self):
+        boundary = "xYzBoundary"
+        body = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="to"\r\n\r\n'
+            "acme@invoices.example.com\r\n"
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="from"\r\n\r\n'
+            "Vendor Billing <billing@vendor.test>\r\n"
+            f"--{boundary}--\r\n"
+        ).encode()
+        parsed = ingest.parse_inbound(
+            body, f"multipart/form-data; boundary={boundary}"
+        )
+        assert parsed.sender == "billing@vendor.test"
+
+    def test_raw_mime_sender_and_reply_to(self):
+        message = EmailMessage()
+        message["From"] = "Vendor <supplier@vendor.test>"
+        message["Reply-To"] = "pay-me@lookalike.test"
+        message["To"] = "acme@invoices.example.com"
+        message.set_content("x")
+        parsed = ingest.parse_inbound(message.as_bytes(), "message/rfc822")
+        assert parsed.sender == "supplier@vendor.test"
+        assert parsed.reply_to == "pay-me@lookalike.test"
 
     def test_postmark_json_with_base64_attachments(self):
         body = json.dumps(
