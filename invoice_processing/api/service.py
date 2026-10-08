@@ -842,7 +842,6 @@ def edit_fields(
         extraction["invoice"] = invoice
         get_cases().put_artifact(ctx, "extraction", extraction)
         _reproject(ctx, artifacts)
-        rerouted = _reroute_if_needed(ctx, artifacts, extraction, recorded)
         get_audit().emit(
             ctx,
             "fields_corrected",
@@ -858,6 +857,8 @@ def edit_fields(
                 "values": {r["field_path"]: r["old_value"] for r in recorded}
             },
         )
+        # After fields_corrected so the trail reads cause then effect.
+        rerouted = _reroute_if_needed(ctx, artifacts, extraction, recorded)
 
     return {
         "corrections": recorded,
@@ -875,32 +876,41 @@ ROUTING_FIELDS = {
 }
 
 
-def _reroute_if_needed(ctx, artifacts, extraction, recorded) -> bool:
+def _reroute_if_needed(ctx, artifacts, extraction, recorded) -> bool | str:
+    """True if the chain really changed, False if not, "failed" on an error.
+
+    A decided case is a no-op inside `route`, so the answer comes from
+    comparing the chain before and after rather than from having called it.
+    """
     repo = get_approvals()
-    if repo is None or not ROUTING_FIELDS & {r["field_path"] for r in recorded}:
+    fields = sorted(ROUTING_FIELDS & {r["field_path"] for r in recorded})
+    if repo is None or not fields:
         return False
+
+    def shape():
+        return [
+            (s["id"], s["status"], s["assignee_kind"], s["assignee_value"])
+            for s in repo.chain(ctx.tenant_id, ctx.case_id)
+        ]
+
     try:
-        # A no-op on a decided case, by design (see approval_flow.route).
+        before = shape()
         approval_flow.route(
             ctx,
             {**artifacts, "extraction": extraction},
             repo=repo,
             now=datetime.now(timezone.utc),
         )
-    except Exception:
-        # The correction is already stored; a failed re-route must not undo it.
+        changed = shape() != before
+    except Exception as exc:
+        # The correction is already stored; a failed re-route must not undo it,
+        # but it must not be silent either.
         logger.exception("Re-routing %s after an edit failed", ctx.case_id)
-        return False
-    get_audit().emit(
-        ctx,
-        "approval_rerouted",
-        {
-            "fields": sorted(
-                ROUTING_FIELDS & {r["field_path"] for r in recorded}
-            )
-        },
-    )
-    return True
+        get_audit().emit(ctx, "approval_reroute_failed", {"error": str(exc)})
+        return "failed"
+    if changed:
+        get_audit().emit(ctx, "approval_rerouted", {"fields": fields})
+    return changed
 
 
 def _reproject(ctx, artifacts: dict) -> None:

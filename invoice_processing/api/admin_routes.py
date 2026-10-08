@@ -257,6 +257,9 @@ def patch_user(
     """Set who a user's overdue approvals escalate to (null clears it)."""
     from . import service  # noqa: PLC0415
 
+    # Omitted and null differ: null clears the manager, omitted is a mistake.
+    if "manager_email" not in request.model_fields_set:
+        raise HTTPException(status_code=400, detail="Nothing to change.")
     try:
         with _database_required():
             record = _provisioner().set_manager(

@@ -721,3 +721,97 @@ def test_manager_patch(env):
         .status_code
         == 403
     )
+
+
+# -- fix round 1 -------------------------------------------------------------
+
+
+def edit_total(env, value=2_000_000):
+    return env["client"]("clerk").patch(
+        f"/api/invoices/{CASE}/fields",
+        json={"edits": [{"field": "invoice_total_inc_tax", "value": value}]},
+    )
+
+
+def test_editing_a_decided_invoice_reports_no_reroute(env):
+    assert act(env, "approver:anyone").status_code == 200
+    r = edit_total(env)
+    assert r.json()["approvals_rerouted"] is False
+    types = [e["event_type"] for e in env["events"]()]
+    assert "approval_rerouted" not in types
+
+
+def test_a_failed_reroute_is_reported_and_audited(env, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("db went away")
+
+    monkeypatch.setattr(approval_flow, "route", boom)
+    r = edit_total(env)
+    assert r.status_code == 200
+    assert r.json()["approvals_rerouted"] == "failed"
+    assert r.json()["count"] == 1
+    (ev,) = [
+        e
+        for e in env["events"]()
+        if e["event_type"] == "approval_reroute_failed"
+    ]
+    assert "db went away" in ev["payload"]["error"]
+
+
+def test_reroute_audit_follows_fields_corrected(env):
+    make_rule(env, match={"min_amount": 1_000_000})
+    edit_total(env)
+    types = [e["event_type"] for e in env["events"]()]
+    assert types.index("fields_corrected") < types.index("approval_rerouted")
+
+
+def test_disabling_a_rule_does_not_revalidate_its_steps(env):
+    rule = make_rule(env).json()
+    with tenant_session(TENANT, env["url"]) as session:
+        session.query(models.User).filter_by(email="a@x.test").delete()
+    r = env["client"]("admin:boss").patch(
+        f"/api/approvals/rules/{rule['id']}", json={"enabled": False}
+    )
+    assert r.status_code == 200 and r.json()["enabled"] is False
+
+
+def test_empty_manager_patch_is_refused(env):
+    users = env["client"]("admin:boss").get("/api/admin/users").json()["users"]
+    r = env["client"]("admin:boss").patch(
+        f"/api/admin/users/{users[0]['id']}", json={}
+    )
+    assert r.status_code == 400 and "Nothing to change" in r.json()["detail"]
+
+
+def test_blank_names_and_infinite_amounts_are_refused(env):
+    assert make_rule(env, name="  ").status_code == 400
+    r = env["client"]("admin:boss").post(
+        "/api/approvals/rules",
+        content=(
+            '{"name":"R","kind":"amount","match":{"min_amount":1e999},'
+            '"steps":[{"kind":"role","value":"approver"}]}'
+        ),
+        headers={"Content-Type": "application/json"},
+    )
+    assert r.status_code == 400
+
+
+def test_groups_need_members_and_rules_need_staffed_groups(env):
+    admin = env["client"]("admin:boss")
+    assert (
+        admin.post(
+            "/api/approvals/groups", json={"name": "Empty", "members": []}
+        ).status_code
+        == 400
+    )
+    g = make_group(env)
+    assert (
+        admin.patch(
+            f"/api/approvals/groups/{g['id']}", json={"members": []}
+        ).status_code
+        == 400
+    )
+    # A group emptied behind the rule's back (e.g. its members were removed).
+    env["repo"].update_group(TENANT, g["id"], members=[])
+    r = make_rule(env, steps=[{"kind": "group", "value": "Finance"}])
+    assert r.status_code == 400 and "no members" in r.json()["detail"]

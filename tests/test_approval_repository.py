@@ -670,7 +670,10 @@ class TestRouteLeavesDecidedCasesAlone:
         assert approval_flow.route(self.CTX, art, repo=repo, now=NOW) == []
         assert repo.chain(T, "c1") == []
 
-    def test_a_decided_step_closes_the_chain(self, repo):
+    def test_a_partly_approved_chain_is_rerouted_keeping_decided_steps(
+        self, repo, monkeypatch
+    ):
+        monkeypatch.setattr(approval_flow, "_sla_days", lambda t: 2)
         seed(repo, "c1", spec("role", "approver"), spec("role", "admin"))
         first = repo.chain(T, "c1")[0]
         repo.decide(
@@ -681,7 +684,23 @@ class TestRouteLeavesDecidedCasesAlone:
             sla_days=2,
             now=NOW,
         )
-        before = repo.chain(T, "c1")
-        out = approval_flow.route(self.CTX, self.ART, repo=repo, now=NOW)
-        assert out == before == repo.chain(T, "c1")
-        assert [s["status"] for s in out] == ["approved", "pending"]
+        repo.create_rule(
+            T,
+            name="Tier",
+            kind="amount",
+            match={"min_amount": 0},
+            steps=[
+                {"kind": "role", "value": "Approver"},
+                {"kind": "user", "value": "boss@x.com"},
+            ],
+        )
+        art = {
+            "extraction": {
+                "invoice": {"_routing": "REVIEW", "invoice_total_inc_tax": 50}
+            }
+        }
+        out = approval_flow.route(self.CTX, art, repo=repo, now=NOW)
+        assert [(s["status"], s["assignee_value"]) for s in out] == [
+            ("approved", "approver"),
+            ("pending", "boss@x.com"),
+        ]

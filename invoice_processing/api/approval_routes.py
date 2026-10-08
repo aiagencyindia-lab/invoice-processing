@@ -11,6 +11,7 @@ only surface later as an invoice nobody can approve.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, datetime, timezone
 from typing import Annotated
 
@@ -100,8 +101,10 @@ def _fold(email: str) -> str:
     return email.strip().casefold()
 
 
-def _need_users(tenant_id: str, emails, what: str) -> list[str]:
-    known = _tenant_emails(tenant_id)
+def _need_users(
+    tenant_id: str, emails, what: str, known: set[str] | None = None
+) -> list[str]:
+    known = _tenant_emails(tenant_id) if known is None else known
     out = [_fold(e) for e in emails]
     for e in out:
         if e not in known:
@@ -140,7 +143,8 @@ def _check_rule(repo, tenant_id: str, kind, match, steps) -> tuple[dict, list]:
         if (
             isinstance(floor, bool)
             or not isinstance(floor, int | float)
-            or not floor >= 0
+            or not math.isfinite(floor)
+            or floor < 0
         ):
             raise HTTPException(
                 400, "min_amount must be a number, zero or more."
@@ -160,6 +164,7 @@ def _check_rule(repo, tenant_id: str, kind, match, steps) -> tuple[dict, list]:
     if not steps:
         raise HTTPException(400, "A rule needs at least one approval step.")
     groups = repo.groups_map(tenant_id)
+    known = None
     clean = []
     for step in steps:
         raw = step if isinstance(step, dict) else step.model_dump()
@@ -169,9 +174,17 @@ def _check_rule(repo, tenant_id: str, kind, match, steps) -> tuple[dict, list]:
                 400, f"Unknown step kind {k!r}. Use user, group or role."
             )
         if k == "user":
-            (v,) = _need_users(tenant_id, [v], "it cannot approve a step")
+            known = _tenant_emails(tenant_id) if known is None else known
+            (v,) = _need_users(
+                tenant_id, [v], "it cannot approve a step", known
+            )
         elif k == "group" and v not in groups:
             raise HTTPException(400, f"There is no approver group {v!r}.")
+        elif k == "group" and not groups[v]:
+            raise HTTPException(
+                400,
+                f"Approver group {v!r} has no members, so nobody could approve.",
+            )
         elif k == "role" and v not in ROLE_RANK:
             raise HTTPException(
                 400,
@@ -274,6 +287,8 @@ def create_group(
     name = request.name.strip()
     if not name:
         raise HTTPException(400, "A group needs a name.")
+    if not request.members:
+        raise HTTPException(400, "A group needs at least one member.")
     members = _need_users(t, request.members, "it cannot join a group")
     _name_free(repo, t, name)
     group = repo.create_group(t, name, members)
@@ -304,6 +319,8 @@ def update_group(
                     f"Rule {named[0]!r} still names this group; "
                     "change the rule first.",
                 )
+    if request.members is not None and not request.members:
+        raise HTTPException(400, "A group needs at least one member.")
     members = (
         _need_users(t, request.members, "it cannot join a group")
         if request.members is not None
@@ -363,12 +380,15 @@ def create_rule(
     principal: Annotated[Principal, Depends(require_role("admin"))],
 ) -> dict:
     repo, t = _repo(), principal.tenant_id
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(400, "A rule needs a name.")
     match, steps = _check_rule(
         repo, t, request.kind, request.match, request.steps
     )
     rule = repo.create_rule(
         t,
-        name=request.name.strip(),
+        name=name,
         kind=request.kind,
         match=match,
         steps=steps,
@@ -388,21 +408,26 @@ def update_rule(
     before = next((r for r in repo.list_rules(t) if r["id"] == rule_id), None)
     if before is None:
         raise HTTPException(404, "Unknown rule")
-    # Validate the merged rule: changing the kind alone would leave a match
-    # that belongs to the old one.
-    kind = request.kind or before["kind"]
-    match, steps = _check_rule(
-        repo,
-        t,
-        kind,
-        request.match if request.match is not None else before["match"],
-        request.steps if request.steps is not None else before["steps"],
-    )
-    fields = {"kind": kind, "match": match, "steps": steps}
+    fields = {}
     if request.name is not None:
+        if not request.name.strip():
+            raise HTTPException(400, "A rule needs a name.")
         fields["name"] = request.name.strip()
     if request.enabled is not None:
         fields["enabled"] = request.enabled
+    # Re-validate only what the caller changed: a user who has since left must
+    # not block disabling the rule that names them. A new kind or match is
+    # checked against the merged rule so the two cannot disagree.
+    if {"kind", "match", "steps"} & request.model_fields_set:
+        kind = request.kind or before["kind"]
+        match, steps = _check_rule(
+            repo,
+            t,
+            kind,
+            request.match if request.match is not None else before["match"],
+            request.steps if request.steps is not None else before["steps"],
+        )
+        fields |= {"kind": kind, "match": match, "steps": steps}
     try:
         after = repo.update_rule(t, rule_id, **fields)
     except repos.UnknownRule:

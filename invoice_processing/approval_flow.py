@@ -32,13 +32,11 @@ def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
     on, and only an amount tier may pull such an invoice back to a person.
     """
     t = ctx.tenant_id
-    # A decided chain is closed. Re-processing (the retry endpoint) must not
-    # append a fresh pending chain after the decided steps, or an approved
-    # invoice would silently re-enter approval.
-    if (artifacts.get("workflow") or {}).get("decision") or any(
-        s["status"] in ("approved", "rejected")
-        for s in repo.chain(t, ctx.case_id)
-    ):
+    # A decided invoice is closed: re-processing (the retry endpoint) must not
+    # append a fresh pending chain after an approval or rejection. A chain that
+    # is only partly approved is still open, so a re-route keeps the decided
+    # steps and replaces the pending ones.
+    if (artifacts.get("workflow") or {}).get("decision"):
         return repo.chain(t, ctx.case_id)
     invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
     rules = repo.list_rules(t)
@@ -47,6 +45,17 @@ def route(ctx, artifacts: dict, *, repo, now: datetime) -> list[dict]:
         if approvals.needs_person(invoice, rules)
         else []
     )
+    # Someone who already approved a step is not asked again by the new chain.
+    done = {
+        (s["assignee_kind"], s["assignee_value"].casefold())
+        for s in repo.chain(t, ctx.case_id)
+        if s["status"] == "approved"
+    }
+    specs = [
+        sp
+        for sp in specs
+        if (sp.assignee.kind, sp.assignee.value.casefold()) not in done
+    ]
     return repo.replace_pending(
         t, ctx.case_id, specs, sla_days=_sla_days(t), now=now
     )
