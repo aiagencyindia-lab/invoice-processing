@@ -213,6 +213,49 @@ class TestCsvExport:
         assert response.status_code == 400
 
 
+def code_line_one(client, account="6100"):
+    """Put a GL account on case_002's first line, as the coder would."""
+    path = service._cases.root / "case_002" / "07_transformation.json"
+    data = json.loads(path.read_text())
+    data["line_items_mapped"][0]["gl_account"] = account
+    path.write_text(json.dumps(data))
+
+
+class TestGlAccountInExports:
+    def test_csv_carries_the_line_gl_accounts(self, client):
+        code_line_one(client)
+        approve(client)
+        body = client.post(
+            "/api/invoices/case_002/export", json={"target": "csv"}
+        ).json()
+        header, row = list(csv.reader(io.StringIO(body["csv"])))
+        assert dict(zip(header, row, strict=True))["gl_account"] == "6100"
+
+    def test_uncoded_invoice_has_an_empty_gl_column(self, client):
+        approve(client)
+        body = client.post(
+            "/api/invoices/case_002/export", json={"target": "csv"}
+        ).json()
+        header, row = list(csv.reader(io.StringIO(body["csv"])))
+        assert dict(zip(header, row, strict=True))["gl_account"] == ""
+
+    def test_xero_receives_the_line_gl_account(self, client, monkeypatch):
+        code_line_one(client)
+        approve(client)
+        posted = []
+
+        class Exporter:
+            def export(self, invoice, *, approved, external_id=None):
+                posted.append(invoice)
+                return ExportResult(external_id="XERO-2", status="created")
+
+        monkeypatch.setattr(service, "get_exporter", lambda tenant: Exporter())
+        client.post("/api/invoices/case_002/export", json={"target": "xero"})
+        lines = posted[0]["line_items"]
+        assert lines[0]["gl_account"] == "6100"
+        assert lines[1].get("gl_account") is None
+
+
 class TestXeroExport:
     def test_unconfigured_xero_is_503_not_500(self, client):
         """'Not connected' is a setup state, not a server fault."""
