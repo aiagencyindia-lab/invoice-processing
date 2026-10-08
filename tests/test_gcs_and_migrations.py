@@ -279,6 +279,52 @@ class TestMigration:
             "RLS must be guarded: these statements are Postgres-only"
         )
 
+    def test_approval_json_columns_are_jsonb_on_postgres(self, monkeypatch):
+        """The models declare JSONB on Postgres; a migration creating JSON
+        is drift autogenerate flags and the JSONB operators would not work."""
+        import importlib.util  # noqa: PLC0415
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        import sqlalchemy as sa  # noqa: PLC0415
+        from sqlalchemy.dialects import postgresql  # noqa: PLC0415
+
+        path = glob.glob(
+            str(
+                REPO
+                / "invoice_processing/db/migrations/versions/f2c7a19d8e43_*.py"
+            )
+        )[0]
+        spec = importlib.util.spec_from_file_location("approval_mig", path)
+        mig = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mig)
+        tables = {}
+        monkeypatch.setattr(
+            mig,
+            "op",
+            SimpleNamespace(
+                create_table=lambda name, *cols: tables.update({name: cols}),
+                create_index=lambda *a, **k: None,
+                add_column=lambda *a, **k: None,
+                get_bind=lambda: SimpleNamespace(
+                    dialect=SimpleNamespace(name="sqlite")
+                ),
+            ),
+        )
+        mig.upgrade()
+        json_cols = {
+            f"{t}.{c.name}": c.type.dialect_impl(postgresql.dialect())
+            for t, cols in tables.items()
+            for c in cols
+            if isinstance(c, sa.Column) and isinstance(c.type, sa.JSON)
+        }
+        assert set(json_cols) == {
+            "approver_groups.members",
+            "approval_rules.match",
+            "approval_rules.steps",
+        }
+        for name, impl in json_cols.items():
+            assert isinstance(impl, postgresql.JSONB), name
+
     def test_no_connection_string_is_committed(self):
         """The URL comes from DATABASE_URL, so no password reaches the repo."""
         ini = (REPO / "alembic.ini").read_text()

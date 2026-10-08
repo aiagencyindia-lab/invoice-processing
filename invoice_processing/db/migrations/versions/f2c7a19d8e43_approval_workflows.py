@@ -9,6 +9,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 from invoice_processing.db.rls import enable_rls_statements
 
@@ -25,6 +26,10 @@ RLS_TABLES = [
     "delegations",
     "approval_steps",
 ]
+
+
+# JSONB on Postgres, as the models declare (JSONType); plain JSON elsewhere.
+JSON = sa.JSON().with_variant(postgresql.JSONB(), "postgresql")
 
 
 def _tenant_id() -> sa.Column:
@@ -55,7 +60,7 @@ def upgrade() -> None:
         sa.Column("id", sa.String(36), primary_key=True),
         _tenant_id(),
         sa.Column("name", sa.String(128), nullable=False),
-        sa.Column("members", sa.JSON, nullable=False),
+        sa.Column("members", JSON, nullable=False),
         *_timestamps(),
         sa.UniqueConstraint(
             "tenant_id", "name", name="uq_approver_groups_name"
@@ -67,8 +72,8 @@ def upgrade() -> None:
         _tenant_id(),
         sa.Column("name", sa.String(128), nullable=False),
         sa.Column("kind", sa.String(16), nullable=False),
-        sa.Column("match", sa.JSON, nullable=False),
-        sa.Column("steps", sa.JSON, nullable=False),
+        sa.Column("match", JSON, nullable=False),
+        sa.Column("steps", JSON, nullable=False),
         sa.Column("enabled", sa.Boolean, nullable=False),
         *_timestamps(),
     )
