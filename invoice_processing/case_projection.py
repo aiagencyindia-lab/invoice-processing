@@ -199,6 +199,26 @@ def lines(artifacts: dict) -> list[dict]:
     Falling back to the raw extraction means a case that was rejected before
     the transformer ran still has its lines.
     """
+    return _with_gl_coding(_lines(artifacts), artifacts.get("gl_coding"))
+
+
+def _with_gl_coding(rows: list[dict], coding) -> list[dict]:
+    """A coded account (rule or person) wins over the transformer's guess.
+
+    A malformed artifact is ignored rather than losing the projection.
+    """
+    entries = coding.get("lines") if isinstance(coding, dict) else None
+    coded = {
+        entry.get("line_number"): _text(entry.get("gl_account"), 64)
+        for entry in (entries if isinstance(entries, list) else [])
+        if isinstance(entry, dict)
+    }
+    for row in rows:
+        row["gl_account"] = coded.get(row["line_number"]) or row["gl_account"]
+    return rows
+
+
+def _lines(artifacts: dict) -> list[dict]:
     mapped = (artifacts.get("transformer") or {}).get("line_items_mapped")
     if mapped:
         return [
