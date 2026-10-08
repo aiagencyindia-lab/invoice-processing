@@ -817,6 +817,7 @@ def edit_fields(
     extraction = artifacts.get("extraction") or {}
     invoice = extraction.get("invoice") or {}
 
+    rerouted = False
     recorded = []
     for edit in request.edits:
         old = invoice.get(edit.field)
@@ -841,6 +842,7 @@ def edit_fields(
         extraction["invoice"] = invoice
         get_cases().put_artifact(ctx, "extraction", extraction)
         _reproject(ctx, artifacts)
+        rerouted = _reroute_if_needed(ctx, artifacts, extraction, recorded)
         get_audit().emit(
             ctx,
             "fields_corrected",
@@ -857,7 +859,48 @@ def edit_fields(
             },
         )
 
-    return {"corrections": recorded, "count": len(recorded)}
+    return {
+        "corrections": recorded,
+        "count": len(recorded),
+        "approvals_rerouted": rerouted,
+    }
+
+
+# Fields that decide who must approve (amount tier, vendor and entity rules).
+ROUTING_FIELDS = {
+    "invoice_total_inc_tax",
+    "vendor_name",
+    "customer_name",
+    "currency",
+}
+
+
+def _reroute_if_needed(ctx, artifacts, extraction, recorded) -> bool:
+    repo = get_approvals()
+    if repo is None or not ROUTING_FIELDS & {r["field_path"] for r in recorded}:
+        return False
+    try:
+        # A no-op on a decided case, by design (see approval_flow.route).
+        approval_flow.route(
+            ctx,
+            {**artifacts, "extraction": extraction},
+            repo=repo,
+            now=datetime.now(timezone.utc),
+        )
+    except Exception:
+        # The correction is already stored; a failed re-route must not undo it.
+        logger.exception("Re-routing %s after an edit failed", ctx.case_id)
+        return False
+    get_audit().emit(
+        ctx,
+        "approval_rerouted",
+        {
+            "fields": sorted(
+                ROUTING_FIELDS & {r["field_path"] for r in recorded}
+            )
+        },
+    )
+    return True
 
 
 def _reproject(ctx, artifacts: dict) -> None:
@@ -1411,6 +1454,7 @@ def export_invoice(
 
 
 from .admin_routes import router as admin_router  # noqa: E402
+from .approval_routes import router as approval_router  # noqa: E402
 from .config_routes import router as config_router  # noqa: E402
 from .ingest import router as ingest_router  # noqa: E402
 from .rules import router as rules_router  # noqa: E402
@@ -1427,6 +1471,7 @@ app.include_router(signup_router)
 app.include_router(sheet_router)
 app.include_router(rules_router)
 app.include_router(vendor_router)
+app.include_router(approval_router)
 
 
 @app.get("/", response_class=HTMLResponse)

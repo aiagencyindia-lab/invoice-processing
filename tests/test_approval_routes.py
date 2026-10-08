@@ -3,12 +3,13 @@ last. Without rules the endpoint behaves as before: one approver, done."""
 
 import json
 import shutil
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 from golden import GOLDEN_CASES
 
+from invoice_processing import approval_flow
 from invoice_processing.adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
@@ -24,6 +25,7 @@ from invoice_processing.db.session import (
     get_engine,
     tenant_session,
 )
+from invoice_processing.ports import RunContext
 
 TENANT = "tenant-acme"
 CASE = "case_005"
@@ -84,9 +86,18 @@ def env(tmp_path, monkeypatch, scratch_db):
     def events():
         return [json.loads(x) for x in audit.read_text().splitlines()]
 
+    def add_users(*emails):
+        with tenant_session(TENANT, url) as session:
+            for email in emails:
+                session.add(models.User(tenant_id=TENANT, email=email))
+
+    add_users("a@x.test", "b@x.test", "pa@x.test", "fin1@x.test")
+
     return {
         "client": client,
+        "add_users": add_users,
         "repo": repo,
+        "url": url,
         "events": events,
         "root": root,
     }
@@ -269,3 +280,444 @@ def test_appended_editor_step_has_a_clock(env):
     )
     act(env, "approver:ed")
     assert env["repo"].current(TENANT, CASE)["due_at"] is not None
+
+
+# -- routes ------------------------------------------------------------------
+
+STEP_A = {"kind": "user", "value": "a@x.test"}
+
+
+def make_group(env, name="Finance", members=("fin1@x.test",)):
+    r = env["client"]("admin:boss").post(
+        "/api/approvals/groups", json={"name": name, "members": list(members)}
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def make_rule(env, **over):
+    body = {
+        "name": "Big",
+        "kind": "amount",
+        "match": {"min_amount": 0},
+        "steps": [STEP_A],
+        **over,
+    }
+    return env["client"]("admin:boss").post("/api/approvals/rules", json=body)
+
+
+ALL_ROUTES = [
+    ("get", "/api/approvals/mine", None),
+    ("get", f"/api/invoices/{CASE}/approvals", None),
+    ("get", "/api/approvals/groups", None),
+    ("post", "/api/approvals/groups", {"name": "G", "members": []}),
+    ("patch", "/api/approvals/groups/x", {"name": "G"}),
+    ("delete", "/api/approvals/groups/x", None),
+    ("get", "/api/approvals/rules", None),
+    (
+        "post",
+        "/api/approvals/rules",
+        {
+            "name": "R",
+            "kind": "amount",
+            "match": {"min_amount": 0},
+            "steps": [{"kind": "role", "value": "approver"}],
+        },
+    ),
+    ("patch", "/api/approvals/rules/x", {"name": "R"}),
+    ("delete", "/api/approvals/rules/x", None),
+    ("get", "/api/approvals/delegations", None),
+    (
+        "post",
+        "/api/approvals/delegations",
+        {
+            "delegator_email": "a@x.test",
+            "delegate_email": "b@x.test",
+            "starts_on": "2026-01-01",
+            "ends_on": "2026-01-02",
+        },
+    ),
+    ("delete", "/api/approvals/delegations/x", None),
+]
+
+
+@pytest.mark.parametrize(("method", "path", "body"), ALL_ROUTES)
+def test_routes_say_needs_db_without_a_database(
+    env, monkeypatch, method, path, body
+):
+    monkeypatch.setattr(service, "get_approvals", lambda: None)
+    r = env["client"]("admin:boss").request(method, path, json=body)
+    assert r.status_code == 503
+    assert "DATABASE_URL" in r.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "lowest"),
+    [
+        ("get", "/api/approvals/mine", None, "viewer"),
+        ("get", f"/api/invoices/{CASE}/approvals", None, "viewer"),
+        ("get", "/api/approvals/groups", None, "clerk"),
+        (
+            "post",
+            "/api/approvals/groups",
+            {"name": "G", "members": []},
+            "admin",
+        ),
+        ("patch", "/api/approvals/groups/x", {"name": "G"}, "admin"),
+        ("delete", "/api/approvals/groups/x", None, "admin"),
+        ("get", "/api/approvals/rules", None, "clerk"),
+        (
+            "post",
+            "/api/approvals/rules",
+            {"name": "R", "kind": "amount", "match": {}, "steps": []},
+            "admin",
+        ),
+        ("patch", "/api/approvals/rules/x", {"name": "R"}, "admin"),
+        ("delete", "/api/approvals/rules/x", None, "admin"),
+        ("get", "/api/approvals/delegations", None, "approver"),
+        (
+            "post",
+            "/api/approvals/delegations",
+            {
+                "delegator_email": "approver@x.test",
+                "delegate_email": "b@x.test",
+                "starts_on": "2026-01-01",
+                "ends_on": "2026-01-02",
+            },
+            "approver",
+        ),
+        ("delete", "/api/approvals/delegations/x", None, "approver"),
+    ],
+)
+def test_role_gate(env, method, path, body, lowest):
+    order = ["viewer", "clerk", "approver", "admin"]
+    below = order[: order.index(lowest)]
+    for role in below:
+        r = env["client"](role).request(method, path, json=body)
+        assert r.status_code == 403, (role, r.text)
+    r = env["client"](lowest).request(method, path, json=body)
+    assert r.status_code != 403
+
+
+def test_group_crud_and_member_validation(env):
+    g = make_group(env, members=["FIN1@x.test"])
+    assert g["members"] == ["fin1@x.test"]
+    bad = env["client"]("admin:boss").post(
+        "/api/approvals/groups",
+        json={"name": "Z", "members": ["ghost@x.test"]},
+    )
+    assert bad.status_code == 400 and "ghost@x.test" in bad.json()["detail"]
+    upd = env["client"]("admin:boss").patch(
+        f"/api/approvals/groups/{g['id']}", json={"members": ["a@x.test"]}
+    )
+    assert upd.json()["members"] == ["a@x.test"]
+    bad = env["client"]("admin:boss").patch(
+        f"/api/approvals/groups/{g['id']}", json={"members": ["ghost@x.test"]}
+    )
+    assert bad.status_code == 400
+    listed = env["client"]("clerk").get("/api/approvals/groups").json()
+    assert [x["name"] for x in listed["groups"]] == ["Finance"]
+    assert (
+        env["client"]("admin:boss")
+        .delete(f"/api/approvals/groups/{g['id']}")
+        .status_code
+        == 200
+    )
+    assert (
+        env["client"]("admin:boss")
+        .delete(f"/api/approvals/groups/{g['id']}")
+        .status_code
+        == 404
+    )
+    types = [e["event_type"] for e in env["events"]()]
+    assert {
+        "approval_group_created",
+        "approval_group_updated",
+        "approval_group_deleted",
+    } <= set(types)
+
+
+def test_a_group_a_rule_names_cannot_be_deleted(env):
+    g = make_group(env)
+    r = make_rule(env, steps=[{"kind": "group", "value": "Finance"}])
+    assert r.status_code == 201, r.text
+    refused = env["client"]("admin:boss").delete(
+        f"/api/approvals/groups/{g['id']}"
+    )
+    assert refused.status_code == 409
+    assert "Big" in refused.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("over", "needle"),
+    [
+        ({"kind": "bogus"}, "kind"),
+        ({"steps": []}, "step"),
+        ({"match": {"min_amount": -1}}, "min_amount"),
+        ({"match": {"min_amount": "lots"}}, "min_amount"),
+        ({"match": {"min_amount": 5, "currency": "AU"}}, "currency"),
+        ({"kind": "vendor", "match": {}}, "vendor_name"),
+        (
+            {"kind": "entity", "match": {"vendor_name": "x"}},
+            "organization_name",
+        ),
+        (
+            {"steps": [{"kind": "user", "value": "ghost@x.test"}]},
+            "ghost@x.test",
+        ),
+        ({"steps": [{"kind": "group", "value": "Nope"}]}, "Nope"),
+        ({"steps": [{"kind": "role", "value": "emperor"}]}, "emperor"),
+        ({"steps": [{"kind": "team", "value": "x"}]}, "team"),
+    ],
+)
+def test_rule_validation(env, over, needle):
+    r = make_rule(env, **over)
+    assert r.status_code == 400, r.text
+    assert needle in r.json()["detail"]
+
+
+def test_rule_crud(env):
+    r = make_rule(
+        env,
+        kind="vendor",
+        match={"vendor_name": "Acme"},
+        steps=[{"kind": "role", "value": "approver"}],
+    )
+    assert r.status_code == 201
+    rule = r.json()
+    upd = env["client"]("admin:boss").patch(
+        f"/api/approvals/rules/{rule['id']}", json={"enabled": False}
+    )
+    assert upd.json()["enabled"] is False
+    bad = env["client"]("admin:boss").patch(
+        f"/api/approvals/rules/{rule['id']}", json={"steps": []}
+    )
+    assert bad.status_code == 400
+    assert (
+        len(env["client"]("clerk").get("/api/approvals/rules").json()["rules"])
+        == 1
+    )
+    assert (
+        env["client"]("admin:boss")
+        .delete(f"/api/approvals/rules/{rule['id']}")
+        .status_code
+        == 200
+    )
+    assert (
+        env["client"]("admin:boss")
+        .patch("/api/approvals/rules/nope", json={"name": "q"})
+        .status_code
+        == 404
+    )
+    types = [e["event_type"] for e in env["events"]()]
+    assert {
+        "approval_rule_created",
+        "approval_rule_updated",
+        "approval_rule_deleted",
+    } <= set(types)
+
+
+def delegation(env, token, **over):
+    today = date.today()
+    body = {
+        "delegator_email": "a@x.test",
+        "delegate_email": "pa@x.test",
+        "starts_on": str(today - timedelta(days=1)),
+        "ends_on": str(today + timedelta(days=1)),
+        **over,
+    }
+    return env["client"](token).post("/api/approvals/delegations", json=body)
+
+
+def test_delegation_rules(env):
+    assert delegation(env, "approver:other").status_code == 403
+    ok = delegation(env, "approver:a")
+    assert ok.status_code == 201, ok.text
+    assert (
+        delegation(env, "admin:boss", delegator_email="b@x.test").status_code
+        == 201
+    )
+    selfd = delegation(env, "admin:boss", delegate_email="a@x.test")
+    assert selfd.status_code == 400
+    rng = delegation(
+        env,
+        "admin:boss",
+        starts_on=str(date.today()),
+        ends_on=str(date.today() - timedelta(days=3)),
+    )
+    assert rng.status_code == 400
+    ghost = delegation(env, "admin:boss", delegate_email="ghost@x.test")
+    assert ghost.status_code == 400 and "ghost@x.test" in ghost.json()["detail"]
+    # An approver sees only their own; an admin sees all.
+    mine = env["client"]("approver:a").get("/api/approvals/delegations").json()
+    assert [d["delegator_email"] for d in mine["delegations"]] == ["a@x.test"]
+    allofthem = env["client"]("admin:boss").get("/api/approvals/delegations")
+    assert allofthem.json()["count"] == 2
+    did = ok.json()["id"]
+    assert (
+        env["client"]("approver:b")
+        .delete(f"/api/approvals/delegations/{did}")
+        .status_code
+        == 403
+    )
+    assert (
+        env["client"]("approver:a")
+        .delete(f"/api/approvals/delegations/{did}")
+        .status_code
+        == 200
+    )
+    assert (
+        env["client"]("admin:boss")
+        .delete(f"/api/approvals/delegations/{did}")
+        .status_code
+        == 404
+    )
+    types = [e["event_type"] for e in env["events"]()]
+    assert {"delegation_created", "delegation_deleted"} <= set(types)
+
+
+def route_case(env):
+    ctx = RunContext(tenant_id=TENANT, case_id=CASE)
+    artifacts = service.get_cases().get_artifacts(ctx)
+    approval_flow.route(
+        ctx, artifacts, repo=env["repo"], now=datetime.now(timezone.utc)
+    )
+
+
+def test_mine_for_a_group_member(env):
+    make_group(env)
+    make_rule(env, steps=[{"kind": "group", "value": "Finance"}])
+    route_case(env)
+    r = env["client"]("viewer:fin1").get("/api/approvals/mine")
+    assert r.status_code == 200
+    (item,) = r.json()["items"]
+    assert r.json()["count"] == 1
+    assert item["case_id"] == CASE and item["why"] == "member of Finance"
+    assert item["position"] == 1 and item["overdue"] is False
+    assert item["vendor"] and item["total"] is not None
+    assert item["assignee"] == "group:Finance"
+    assert (
+        env["client"]("viewer:nobody")
+        .get("/api/approvals/mine")
+        .json()["items"]
+        == []
+    )
+
+
+def test_mine_marks_overdue(env):
+    make_rule(env)
+    route_case(env)
+    with tenant_session(TENANT, env["url"]) as session:
+        step = session.query(models.ApprovalStep).one()
+        step.due_at = step.due_at - timedelta(days=60)
+    (item,) = (
+        env["client"]("viewer:a").get("/api/approvals/mine").json()["items"]
+    )
+    assert item["overdue"] is True
+
+
+def test_mine_for_a_delegate_only_within_range(env):
+    make_rule(env)
+    route_case(env)
+    assert delegation(env, "approver:a").status_code == 201
+    (item,) = (
+        env["client"]("viewer:pa").get("/api/approvals/mine").json()["items"]
+    )
+    assert item["why"].startswith("delegate for")
+    delegation(
+        env,
+        "approver:a",
+        delegate_email="b@x.test",
+        starts_on=str(date.today() + timedelta(days=5)),
+        ends_on=str(date.today() + timedelta(days=9)),
+    )
+    assert (
+        env["client"]("viewer:b").get("/api/approvals/mine").json()["items"]
+        == []
+    )
+
+
+def test_invoice_chain_endpoint(env):
+    two_tier(env)
+    route_case(env)
+    r = env["client"]("viewer").get(f"/api/invoices/{CASE}/approvals")
+    body = r.json()
+    assert [s["assignee_value"] for s in body["steps"]] == [
+        "a@x.test",
+        "b@x.test",
+    ]
+    assert body["current"] == 1
+    assert (
+        env["client"]("viewer").get("/api/invoices/nope/approvals").status_code
+        == 404
+    )
+    act(env, "approver:a")
+    act(env, "approver:b")
+    done = env["client"]("viewer").get(f"/api/invoices/{CASE}/approvals").json()
+    assert done["current"] is None
+
+
+def test_editing_the_total_reroutes_to_a_higher_tier(env):
+    env["repo"].create_rule(
+        TENANT,
+        name="Over 1m",
+        kind="amount",
+        match={"min_amount": 1_000_000},
+        steps=[{"kind": "user", "value": "b@x.test"}],
+    )
+    route_case(env)
+    assert env["repo"].chain(TENANT, CASE) == []
+    r = env["client"]("clerk").patch(
+        f"/api/invoices/{CASE}/fields",
+        json={
+            "edits": [{"field": "invoice_total_inc_tax", "value": 2_000_000}]
+        },
+    )
+    assert r.json()["approvals_rerouted"] is True
+    assert [s["assignee_value"] for s in env["repo"].chain(TENANT, CASE)] == [
+        "b@x.test"
+    ]
+    assert "approval_rerouted" in [e["event_type"] for e in env["events"]()]
+    other = env["client"]("clerk").patch(
+        f"/api/invoices/{CASE}/fields",
+        json={"edits": [{"field": "invoice_number", "value": "X-1"}]},
+    )
+    assert other.json()["approvals_rerouted"] is False
+
+
+def test_manager_patch(env):
+    admin = env["client"]("admin:boss")
+    users = admin.get("/api/admin/users").json()["users"]
+    a = next(u for u in users if u["email"] == "a@x.test")
+    assert a["manager_email"] is None
+    r = admin.patch(
+        f"/api/admin/users/{a['id']}", json={"manager_email": "B@x.test"}
+    )
+    assert r.status_code == 200 and r.json()["manager_email"] == "b@x.test"
+    assert env["repo"].manager_of(TENANT, "a@x.test") == "b@x.test"
+    (event,) = [e for e in env["events"]() if e["event_type"] == "user_updated"]
+    assert event["before"]["manager_email"] is None
+    cleared = admin.patch(
+        f"/api/admin/users/{a['id']}", json={"manager_email": None}
+    )
+    assert cleared.json()["manager_email"] is None
+    selfm = admin.patch(
+        f"/api/admin/users/{a['id']}", json={"manager_email": "a@x.test"}
+    )
+    assert selfm.status_code == 400
+    ghost = admin.patch(
+        f"/api/admin/users/{a['id']}", json={"manager_email": "g@x.test"}
+    )
+    assert ghost.status_code == 400
+    assert (
+        admin.patch(
+            "/api/admin/users/nope", json={"manager_email": None}
+        ).status_code
+        == 404
+    )
+    assert (
+        env["client"]("approver")
+        .patch(f"/api/admin/users/{a['id']}", json={"manager_email": None})
+        .status_code
+        == 403
+    )
