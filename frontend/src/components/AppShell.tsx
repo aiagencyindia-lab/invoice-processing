@@ -37,6 +37,7 @@ const NAV = [
   { href: "/activity", label: "Activity", glyph: "≡" },
   { href: "/rules", label: "Rules", glyph: "◇", min: "approver" },
   { href: "/purchase-orders", label: "Purchase orders", glyph: "◈", min: "clerk" },
+  { href: "/vendors", label: "Vendors", glyph: "◆", min: "clerk" },
   { href: "/settings", label: "Settings", glyph: "⚙", min: "admin" },
   { href: "/admin", label: "Admin", glyph: "✦", min: "admin" },
 ];

@@ -176,6 +176,7 @@ test("every sidebar view opens", async ({ page }) => {
     "Documents",
     "Activity",
     "Purchase orders",
+    "Vendors",
     "Settings",
     "Admin",
   ]) {
@@ -186,6 +187,13 @@ test("every sidebar view opens", async ({ page }) => {
       .click();
     await expect(page.getByRole("heading", { name: label })).toBeVisible();
   }
+});
+
+test("the vendors page explains it needs a database for bank changes", async ({ page }) => {
+  await goto(page, "/vendors");
+  await expect(page.getByRole("heading", { name: "Vendors" })).toBeVisible();
+  // e2e runs on file stores; the page must say so rather than show a broken queue.
+  await expect(page.getByText(/needs a database/)).toBeVisible();
 });
 
 test("Xero reports whether it is configured", async ({ page }) => {
