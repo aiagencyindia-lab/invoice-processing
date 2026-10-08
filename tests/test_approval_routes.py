@@ -872,6 +872,8 @@ def test_unreadable_routing_table_is_503_not_unrouted(env, monkeypatch):
     assert r.status_code == 503
     assert r.json()["detail"] == "Approval routing is unavailable."
     assert not (env["root"] / CASE / "workflow.json").exists()
+    mine = env["client"]("approver:anyone").get("/api/approvals/mine")
+    assert mine.status_code == 503
 
 
 def test_people_who_approve_must_hold_an_approving_role(env):

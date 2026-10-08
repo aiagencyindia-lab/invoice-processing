@@ -79,7 +79,11 @@ class DelegationIn(BaseModel):
 def _repo():
     from . import service  # noqa: PLC0415
 
-    repo = service.get_approvals()
+    try:
+        repo = service.get_approvals()
+    except Exception:
+        logger.exception("Approval routing could not be reached")
+        raise HTTPException(503, "Approval routing is unavailable.") from None
     if repo is None:
         raise HTTPException(503, approval_flow.NEEDS_DB)
     return repo
