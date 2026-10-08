@@ -90,7 +90,12 @@ class TestTheFlowHasControls:
         from "the rulebook is missing a rule"."""
         invoices = page("invoices")
         assert "reason_category: reasonCategory" in invoices
-        assert "REASON_CATEGORIES.map" in invoices
+        # The dialog is shared with /approvals, so it lives in a component.
+        dialog = (FRONTEND / "components" / "DecisionDialog.tsx").read_text(
+            encoding="utf-8"
+        )
+        assert "REASON_CATEGORIES.map" in dialog
+        assert "DecisionDialog" in invoices
 
     def test_export_has_a_control(self):
         assert "onClick={exportCsv}" in page("invoices")

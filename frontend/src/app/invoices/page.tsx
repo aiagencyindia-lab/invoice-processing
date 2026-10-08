@@ -7,7 +7,9 @@ import {
   ApiError,
   can,
   objectUrl,
-  REASON_CATEGORIES,
+  type ActionResult,
+  type ApprovalChain,
+  type ApprovalStep,
   type Correction,
   type DocumentList,
   type Finding,
@@ -15,8 +17,10 @@ import {
   type InvoiceField,
   type InvoiceList,
   type Me,
+  type MyApproval,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
+import { DecisionDialog } from "@/components/DecisionDialog";
 
 /** The queue refreshes on its own so an invoice a worker just finished shows
  *  up, but slowly: this screen is where someone is typing, and a fast poll
@@ -122,6 +126,20 @@ function InvoicesWorkbench() {
     };
   }, [current]);
 
+  // Both 503 without a database; the panel then simply does not appear.
+  const { data: chain, reload: reloadChain } = usePoll<ApprovalChain>(
+    current ? `/api/invoices/${current}/approvals` : null,
+  );
+  const { data: mine, reload: reloadMine } = usePoll<{ items: MyApproval[] }>(
+    "/api/approvals/mine",
+  );
+  const currentStep = chain?.steps.find((s) => s.position === chain.current);
+  // Only a hint: the buttons stay enabled and the server decides.
+  const notMine =
+    currentStep && !(mine?.items ?? []).some((i) => i.case_id === current)
+      ? currentStep
+      : null;
+
   const canEdit = can(me, "clerk");
   const canAct = can(me, "approver");
   const dirty = Object.keys(edits).length;
@@ -167,17 +185,33 @@ function InvoicesWorkbench() {
       action: "approve" | "reject",
       reason: string | null = null,
       reasonCategory = "other",
+      overrideReason: string | null = null,
     ) => {
       if (!detail) return;
       try {
-        await api(`/api/invoices/${detail.case_id}/actions`, {
-          method: "POST",
-          body: JSON.stringify({
-            action,
-            reason,
-            reason_category: reasonCategory,
-          }),
-        });
+        const result = await api<ActionResult>(
+          `/api/invoices/${detail.case_id}/actions`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              action,
+              reason,
+              reason_category: reasonCategory,
+              ...(overrideReason ? { override_reason: overrideReason } : {}),
+            }),
+          },
+        );
+        reloadChain();
+        reloadMine();
+        if (result.completed === false) {
+          // More people still have to sign: stay here, the queue has not moved.
+          const next = result.next
+            ? `${result.next.assignee_kind}:${result.next.assignee_value}`
+            : "no one";
+          say(`Step ${result.step} approved; waiting on ${next}`);
+          reloadDetail();
+          return;
+        }
         say(`${action === "approve" ? "Approved" : "Rejected"} ${detail.case_id}`);
         reloadQueue();
         if (index >= 0 && index < queue.length - 1) open(queue[index + 1].case_id);
@@ -186,7 +220,7 @@ function InvoicesWorkbench() {
         say(caught instanceof ApiError ? caught.friendly : String(caught));
       }
     },
-    [detail, index, queue, open, say, reloadQueue, reloadDetail],
+    [detail, index, queue, open, say, reloadQueue, reloadDetail, reloadChain, reloadMine],
   );
 
   const exportCsv = useCallback(async () => {
@@ -413,6 +447,20 @@ function InvoicesWorkbench() {
                         >
                           Reject<kbd>r</kbd>
                         </button>
+                        {can(me, "admin") && currentStep ? (
+                          <button
+                            type="button"
+                            className="btn-chip"
+                            onClick={() => {
+                              const why = window.prompt(
+                                "Why does this approval override the routing rule?",
+                              );
+                              if (why?.trim()) act("approve", null, "other", why.trim());
+                            }}
+                          >
+                            Override…
+                          </button>
+                        ) : null}
                       </>
                     ) : null}
                     <button
@@ -424,6 +472,13 @@ function InvoicesWorkbench() {
                     </button>
                   </div>
                 </div>
+
+                {canAct && notMine ? (
+                  <span className="muted" style={{ fontSize: 12.5 }}>
+                    Step {notMine.position} is assigned to {notMine.assignee_kind}:
+                    {notMine.assignee_value}
+                  </span>
+                ) : null}
 
                 {dirty ? (
                   <span className="muted" style={{ fontSize: 12 }}>
@@ -472,6 +527,9 @@ function InvoicesWorkbench() {
 
                 <LineItems items={detail.line_items} />
                 <Findings findings={detail.findings} />
+                {chain && chain.steps.length > 0 ? (
+                  <ApprovalPanel chain={chain} />
+                ) : null}
                 <BankChangeShortcut detail={detail} me={me} onDone={say} />
                 <Corrections corrections={detail.corrections} />
               </>
@@ -516,82 +574,50 @@ function InvoicesWorkbench() {
   );
 }
 
-/** Why this decision, in one small form.
- *
- *  It replaces a `window.prompt`, which could ask for one line of free text
- *  and nothing else. The category is what the system can act on -- only
- *  "policy exception" describes a rule the rulebook is missing -- and the note
- *  is what a person reads, and what a rule writer would be given to work from.
- */
-function DecisionDialog({
-  action,
-  onCancel,
-  onConfirm,
-}: {
-  action: "approve" | "reject";
-  onCancel: () => void;
-  onConfirm: (reason: string, category: string) => void;
-}) {
-  const [category, setCategory] = useState("policy_exception");
-  const [reason, setReason] = useState("");
-  const rejecting = action === "reject";
-  // The API refuses a reasonless rejection, so the button does too rather than
-  // letting someone press it and read an error.
-  const ready = !rejecting || reason.trim().length > 0;
-
+/** Who has to sign, in order. The current step is outlined; delegation and
+ *  override are shown because an auditor asks "who really approved this". */
+function ApprovalPanel({ chain }: { chain: ApprovalChain }) {
+  const badge = (step: ApprovalStep) =>
+    step.status === "approved"
+      ? "badge-ok"
+      : step.status === "rejected"
+        ? "badge-error"
+        : step.status === "pending"
+          ? "badge-warn"
+          : "badge-neutral";
   return (
-    <div className="dialog-scrim" role="presentation" onClick={onCancel}>
-      <div
-        className="panel dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={rejecting ? "Reject invoice" : "Approve invoice"}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <h2 style={{ margin: "0 0 4px" }}>
-          {rejecting ? "Reject this invoice" : "Approve this invoice"}
-        </h2>
-        <label className="stack" style={{ gap: 4 }}>
-          <span className="eyebrow">Why</span>
-          <select
-            className="input-field"
-            value={category}
-            autoFocus
-            onChange={(event) => setCategory(event.target.value)}
-          >
-            {REASON_CATEGORIES.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="stack" style={{ gap: 4 }}>
-          <span className="eyebrow">
-            Note {rejecting ? "(required)" : "(optional)"}
-          </span>
-          <textarea
-            className="input-field"
-            rows={3}
-            value={reason}
-            placeholder="What a colleague would need to know in six months."
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </label>
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button type="button" className="btn-secondary" onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={!ready}
-            onClick={() => onConfirm(reason.trim(), category)}
-          >
-            {rejecting ? "Reject" : "Approve"}
-          </button>
-        </div>
+    <div>
+      <div className="eyebrow" style={{ marginBottom: 6 }}>
+        Approvals
       </div>
+      {chain.steps.map((step) => (
+        <div
+          key={step.id}
+          className="finding"
+          aria-current={step.position === chain.current}
+          style={
+            step.position === chain.current
+              ? { outline: "2px solid var(--ink)" }
+              : undefined
+          }
+        >
+          <div className="row-between" style={{ font: "600 12px var(--font-ui)" }}>
+            <span>
+              Step {step.position} · {step.assignee_kind}:{step.assignee_value}
+            </span>
+            <span className={`badge ${badge(step)}`}>{step.status}</span>
+          </div>
+          <div className="evidence">
+            {step.decided_by
+              ? `${step.decided_by}${step.acting_for ? ` (as delegate for ${step.acting_for})` : ""}`
+              : null}
+            {step.due_at ? ` due ${new Date(step.due_at).toLocaleDateString()}` : ""}
+            {step.escalated_to ? ` escalated to ${step.escalated_to}` : ""}
+            {step.override_reason ? ` override: ${step.override_reason}` : ""}
+            {step.note ? ` note: ${step.note}` : ""}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

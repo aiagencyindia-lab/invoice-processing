@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import {
   api,
@@ -23,6 +24,7 @@ export default function AdminPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [managers, setManagers] = useState<Record<string, string>>({});
 
   // A role refusal is the whole page rather than one control, so it is said
   // once at the top instead of on every panel. Anything else -- an
@@ -82,6 +84,31 @@ export default function AdminPage() {
     }
   }
 
+  async function saveManager(target: User) {
+    setNotice(null);
+    setProblem(null);
+    const value = (managers[target.email] ?? "").trim();
+    try {
+      await api(`/api/admin/users/${target.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ manager_email: value || null }),
+      });
+      setNotice(
+        value
+          ? `${target.email}'s overdue approvals now escalate to ${value}.`
+          : `${target.email} has no manager; overdue approvals go to an admin.`,
+      );
+      setManagers((all) => {
+        const rest = { ...all };
+        delete rest[target.email];
+        return rest;
+      });
+      reload();
+    } catch (caught) {
+      setProblem(caught instanceof ApiError ? caught.friendly : String(caught));
+    }
+  }
+
   if (refused) {
     return (
       <div className="stack" style={{ gap: 16 }}>
@@ -93,7 +120,10 @@ export default function AdminPage() {
 
   return (
     <div className="stack" style={{ gap: 20, maxWidth: 860 }}>
-      <h1>Admin</h1>
+      <div className="row-between">
+        <h1>Admin</h1>
+        <Link href="/admin/approvals">Approval setup</Link>
+      </div>
 
       {problem ? (
         <div
@@ -173,6 +203,7 @@ export default function AdminPage() {
                   <th>Name</th>
                   <th>Role</th>
                   <th>Can sign in</th>
+                  <th>Manager</th>
                   <th />
                 </tr>
               </thead>
@@ -190,6 +221,27 @@ export default function AdminPage() {
                       ) : (
                         <span className="badge badge-warn">not linked</span>
                       )}
+                    </td>
+                    <td>
+                      <input
+                        className="input-field"
+                        type="email"
+                        aria-label={`Manager of ${user.email}`}
+                        placeholder="none"
+                        value={managers[user.email] ?? user.manager_email ?? ""}
+                        onChange={(event) =>
+                          setManagers({ ...managers, [user.email]: event.target.value })
+                        }
+                      />
+                      {user.email in managers ? (
+                        <button
+                          type="button"
+                          className="btn-chip"
+                          onClick={() => saveManager(user)}
+                        >
+                          Save
+                        </button>
+                      ) : null}
                     </td>
                     <td>
                       {user.uid ? null : (

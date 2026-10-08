@@ -638,3 +638,7 @@ button.tile:hover { background: var(--surface-alt); }
   gap: 12px;
   padding: 18px;
 }
+
+/* The phone-sized approvals queue: one card per column row. */
+.card-list { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.btn-big { padding: 14px 18px; font-size: 15px; width: 100%; }
