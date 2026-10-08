@@ -37,10 +37,14 @@ from invoice_processing.api import (
     config_routes,
     service,
     system,
+    vendor_routes,
 )
 from invoice_processing.api.service import app
 from invoice_processing.db.models import Base, Invoice, Tenant
-from invoice_processing.db.repositories import PgRuleRepository
+from invoice_processing.db.repositories import (
+    PgRuleRepository,
+    PgVendorRepository,
+)
 from invoice_processing.db.session import (
     create_all,
     get_engine,
@@ -251,21 +255,30 @@ class TestWritesDoNotCross:
         globex = clients("globex").get("/api/settings").json()["settings"]
         assert "Acme Pty Ltd" not in (globex["organization_names"] or [])
 
-    def test_vendors_do_not_cross_tenants(self, clients, tmp_path, monkeypatch):
+    @pytest.fixture
+    def vendor_db(self, scratch_db, monkeypatch):
+        url = scratch_db("iso-vendors.db")
+        Base.metadata.drop_all(get_engine(url))
+        create_all(url)
+        for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
+            with db_session(tid, url) as session:
+                session.add(
+                    Tenant(id=tid, name=slug, slug=slug, status="active")
+                )
+        monkeypatch.setattr(service, "_vendors", PgVendorRepository(url))
+        monkeypatch.setenv("DATABASE_URL", url)
+
+    def test_vendors_do_not_cross_tenants(self, clients, vendor_db):
         """A supplier list is a customer's commercial relationships, and the
         tax IDs beside it are what step 3.2 trusts. One tenant reading or
         overwriting another's would leak the first and corrupt the second."""
-        monkeypatch.setattr(paths, "VENDOR_MASTER_DIR", tmp_path / "vendors")
-
         clients("acme").put(
             "/api/vendors",
             json={
                 "vendors": [{"name": "Acme Supplier", "tax_id": "51824753556"}]
             },
         )
-        globex = clients("globex").get("/api/vendors").json()
-        assert globex["vendors"] == []
-
+        assert clients("globex").get("/api/vendors").json()["vendors"] == []
         clients("globex").put(
             "/api/vendors",
             json={
@@ -276,6 +289,69 @@ class TestWritesDoNotCross:
         )
         acme = clients("acme").get("/api/vendors").json()["vendors"]
         assert [v["name"] for v in acme] == ["Acme Supplier"]
+
+    def test_bank_changes_do_not_cross_tenants(self, clients, vendor_db):
+        """A vendor id guessed from another tenant must be a 404, and the other
+        tenant's queue must stay empty: an attacker who could propose into
+        someone else's queue has half of a payment redirection."""
+        clients("acme").put(
+            "/api/vendors",
+            json={
+                "vendors": [{"name": "Acme Supplier", "tax_id": "51824753556"}]
+            },
+        )
+        vendor_id = (
+            clients("acme").get("/api/vendors").json()["vendors"][0]["id"]
+        )
+        body = {
+            "bank_account_number": "123456789",
+            "bank_code": "X",
+            "reason": "r",
+        }
+        foreign_clerk = clients("globex", "clerk")
+        assert (
+            foreign_clerk.post(
+                f"/api/vendors/{vendor_id}/bank-changes", json=body
+            ).status_code
+            == 404
+        )
+        assert (
+            clients("globex")
+            .patch(f"/api/vendors/{vendor_id}", json={"email_domain": "x"})
+            .status_code
+            == 404
+        )
+        change = (
+            clients("acme", "clerk")
+            .post(f"/api/vendors/{vendor_id}/bank-changes", json=body)
+            .json()
+        )
+        assert (
+            foreign_clerk.get("/api/vendors/bank-changes").json()["changes"]
+            == []
+        )
+        decide = clients("globex", "approver").post(
+            f"/api/vendors/bank-changes/{change['id']}/decide",
+            json={"action": "approve"},
+        )
+        assert decide.status_code == 404
+        # And the owner's change is still pending, untouched by the attempt.
+        (pending,) = (
+            clients("acme")
+            .get("/api/vendors/bank-changes?status=pending")
+            .json()["changes"]
+        )
+        assert pending["id"] == change["id"]
+
+    def test_invoice_bank_change_shortcut_does_not_cross_tenants(
+        self, clients, vendor_db
+    ):
+        """case_005 belongs to ACME in the `clients` fixture; a guessed id must
+        not let another tenant raise a bank change from its invoice."""
+        response = clients("globex", "clerk").post(
+            "/api/invoices/case_005/bank-change", json={"reason": "r"}
+        )
+        assert response.status_code == 404
 
     def test_work_authorizations_do_not_cross_tenants(
         self, clients, tmp_path, monkeypatch
@@ -810,6 +886,11 @@ class TestCoverage:
         "/api/settings",
         "/api/purchase-orders",
         "/api/vendors",
+        "/api/vendors/{vendor_id}",
+        "/api/vendors/{vendor_id}/bank-changes",
+        "/api/vendors/bank-changes",
+        "/api/vendors/bank-changes/{change_id}/decide",
+        "/api/invoices/{case_id}/bank-change",
         "/api/work-authorizations",
         "/api/admin/tenants",
         "/api/admin/users",
@@ -862,7 +943,7 @@ class TestCoverage:
 
     def test_no_endpoint_reads_a_tenant_from_the_request(self):
         """The complement: a tenant must not arrive in a body or query either."""
-        for module in (admin_routes, config_routes, system):
+        for module in (admin_routes, config_routes, system, vendor_routes):
             source = pathlib.Path(module.__file__).read_text(encoding="utf-8")
             assert "request.tenant_id" not in source, module.__name__
             assert "tenant_id: str = Query" not in source, module.__name__

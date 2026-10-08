@@ -1074,6 +1074,61 @@ def act(
     }
 
 
+class BankChangeFromInvoice(BaseModel):
+    reason: str = ""
+
+
+@app.post("/api/invoices/{case_id}/bank-change", status_code=201)
+def propose_bank_change_from_invoice(
+    case_id: str,
+    request: BankChangeFromInvoice,
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+) -> dict:
+    """Raise a vendor bank change from the details printed on this invoice.
+
+    A reviewer holding an invoice on a bank signal has the new details in
+    front of them; retyping them on another page is where transcription errors
+    come from. Still only a proposal: a second person approves.
+    """
+    from . import vendor_routes  # noqa: PLC0415
+
+    repo = get_vendors()
+    if repo is None:
+        raise HTTPException(status_code=503, detail=vendor_routes.NEEDS_DB)
+    ctx = principal.context(case_id)
+    artifacts = get_cases().get_artifacts(ctx)
+    if not artifacts:
+        raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
+    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+    vendor = repo.find_by_name(
+        principal.tenant_id, invoice.get("vendor_name") or ""
+    )
+    if vendor is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{invoice.get('vendor_name') or 'This vendor'} is not in the "
+                "vendor master. Add it first."
+            ),
+        )
+    if not (invoice.get("bank_account_number") or invoice.get("bank_iban")):
+        raise HTTPException(
+            status_code=409,
+            detail="This invoice prints no bank details to propose.",
+        )
+    proposal = vendor_routes.BankChangeProposal(
+        bank_account_name=invoice.get("bank_account_name"),
+        bank_account_number=invoice.get("bank_account_number"),
+        bank_code=invoice.get("bank_code"),
+        bank_iban=invoice.get("bank_iban"),
+        reason=request.reason
+        or "Bank details printed on invoice "
+        f"{invoice.get('invoice_number') or case_id}",
+        source_case_id=case_id,
+    )
+    return vendor_routes.propose_change(principal, vendor["id"], proposal)
+
+
 @app.get("/api/stats")
 def stats(principal: Annotated[Principal, Depends(current_principal)]) -> dict:
     """The numbers a pilot is judged on."""
@@ -1270,6 +1325,7 @@ from .rules import router as rules_router  # noqa: E402
 from .sheet import router as sheet_router  # noqa: E402
 from .signup import router as signup_router  # noqa: E402
 from .system import router as system_router  # noqa: E402
+from .vendor_routes import router as vendor_router  # noqa: E402
 
 app.include_router(ingest_router)
 app.include_router(system_router)
@@ -1278,6 +1334,7 @@ app.include_router(admin_router)
 app.include_router(signup_router)
 app.include_router(sheet_router)
 app.include_router(rules_router)
+app.include_router(vendor_router)
 
 
 @app.get("/", response_class=HTMLResponse)
