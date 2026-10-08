@@ -26,10 +26,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ponytail: kind names and match keys are duplicated from approvals.py's
-# engine; if a fourth rule kind appears, derive both from one table.
+# engine; if a fifth rule kind appears, derive both from one table.
 MATCH_KEYS = {
     "vendor": {"vendor_name"},
     "entity": {"organization_name"},
+    "gl": {"gl_prefix"},
     "amount": {"min_amount", "currency"},
 }
 STEP_KINDS = ("user", "group", "role")
@@ -151,7 +152,8 @@ def _rules_naming(repo, tenant_id: str, group_name: str) -> list[str]:
 def _check_rule(repo, tenant_id: str, kind, match, steps) -> tuple[dict, list]:
     if kind not in MATCH_KEYS:
         raise HTTPException(
-            400, f"Unknown rule kind {kind!r}. Use vendor, entity or amount."
+            400,
+            f"Unknown rule kind {kind!r}. Use vendor, entity, gl or amount.",
         )
     allowed = MATCH_KEYS[kind]
     stray = set(match) - allowed
@@ -180,6 +182,14 @@ def _check_rule(repo, tenant_id: str, kind, match, steps) -> tuple[dict, list]:
                 400, "currency must be a three-letter code such as AUD."
             )
         match = {k: v for k, v in match.items() if v is not None}
+    elif kind == "gl":
+        prefix = match.get("gl_prefix")
+        prefix = prefix.strip() if isinstance(prefix, str) else ""
+        if not 1 <= len(prefix) <= 64:
+            raise HTTPException(
+                400, "A gl rule needs a gl_prefix of 1 to 64 characters."
+            )
+        match = {"gl_prefix": prefix}
     else:
         (key,) = allowed
         if not (isinstance(match.get(key), str) and match[key].strip()):
