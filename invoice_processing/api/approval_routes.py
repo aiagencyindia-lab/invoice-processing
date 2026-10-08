@@ -18,7 +18,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import approval_flow, approvals
+from .. import approval_flow
 from ..db import repositories as repos
 from .auth import ROLE_RANK, Principal, require_role
 
@@ -245,25 +245,23 @@ def my_queue(
         groups_map=repo.groups_map(t),
         delegators_of=repo.active_delegators_of(t, principal.email, now.date()),
     )
-    # The queue offers only what the caller could actually decide: the
-    # uploader of an invoice, or someone who decided an earlier step of it,
-    # would be refused by act, so listing it is a promise the server breaks.
-    # ponytail: two lookups per waiting case; batch them if queues grow large.
+    # The queue offers only what the caller could actually decide, by the same
+    # test act and the chain endpoint apply (assess), so the three never
+    # disagree about who may decide.
+    # ponytail: one chain + uploader lookup per waiting case; batch them if
+    # queues grow large.
     documents = service.get_documents()
     steps = [
         s
         for s in steps
-        if approvals.refusal(
-            principal.email,
-            uploader=approval_flow.uploader_of(
-                principal.context(s["case_id"]), documents
-            ),
-            previous_deciders=[
-                x["decided_by"]
-                for x in repo.chain(t, s["case_id"])
-                if x["status"] == "approved"
-            ],
-        )
+        if approval_flow.assess(
+            principal.context(s["case_id"]),
+            principal,
+            repo.chain(t, s["case_id"]),
+            repo=repo,
+            documents=documents,
+            now=now,
+        )[1]
         is None
     ]
     cases = service.read_cases(
