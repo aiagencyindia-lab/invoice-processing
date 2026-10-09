@@ -234,6 +234,20 @@ export type Finding = {
   evidence: string | null;
   rejection_template: string | null;
   signals?: string[] | null;
+  lines?: ThreeWayLine[] | null;
+};
+
+export type ThreeWayLine = {
+  line_number: number;
+  description: string;
+  po_line_number: number | null;
+  paired_by: "item_code" | "line_number" | "description" | null;
+  quantity: number;
+  unit_price: number;
+  billed: number;
+  received: number;
+  signals: string[];
+  evidence: string;
 };
 
 export type Correction = {
@@ -347,6 +361,45 @@ export type PurchaseOrder = {
   currency: string | null;
   status: string | null;
   open: boolean;
+  line_count?: number;
+  received_total?: number;
+  billed_total?: number;
+};
+
+export type PoLine = {
+  line_number: number;
+  item_code: string | null;
+  description: string | null;
+  qty_ordered: number;
+  unit_price: number | null;
+  uom: string | null;
+  receipt_required: boolean;
+  received: number;
+  billed: number;
+  remaining: number;
+};
+
+export type Grn = {
+  grn_number: string;
+  received_on: string;
+  reason: string | null;
+  recorded_by: string | null;
+  lines: { line_number: number; qty_received: number }[];
+};
+
+// The order's receipts come back under `receipts` (po_routes.read_purchase_order).
+export type PurchaseOrderDetail = PurchaseOrder & {
+  lines: PoLine[];
+  receipts: Grn[];
+};
+
+export type ImportResult = {
+  created?: number;
+  updated?: number;
+  lines?: number;
+  recorded?: number;
+  skipped_duplicates?: number;
+  rematch_queued?: number;
 };
 
 export type PurchaseOrderList = {
