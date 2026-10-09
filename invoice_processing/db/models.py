@@ -150,6 +150,9 @@ class Document(Base, TenantMixin, TimestampMixin):
     sender: Mapped[str | None] = mapped_column(String(320))
     reply_to: Mapped[str | None] = mapped_column(String(320))
     malware_status: Mapped[str] = mapped_column(String(32), default="pending")
+    # NULL is an invoice; purchase_order / goods_receipt are scanned supporting
+    # documents (see SupportingDocument).
+    kind: Mapped[str | None] = mapped_column(String(16))
 
     invoices: Mapped[list[Invoice]] = relationship(back_populates="document")
 
@@ -740,6 +743,9 @@ class PurchaseOrder(Base, TenantMixin, TimestampMixin):
         DateTime(timezone=True), nullable=False, default=_now
     )
     uploaded_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    document_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("documents.id")
+    )
 
     lines: Mapped[list[PoLine]] = relationship(
         back_populates="order",
@@ -799,6 +805,9 @@ class GoodsReceipt(Base, TenantMixin):
         DateTime(timezone=True), nullable=False, default=_now
     )
     recorded_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    document_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("documents.id")
+    )
 
     lines: Mapped[list[GrnLine]] = relationship(cascade="all, delete-orphan")
 
@@ -814,6 +823,42 @@ class GrnLine(Base, TenantMixin):
         String(36), ForeignKey("po_lines.id"), nullable=False, index=True
     )
     qty_received: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+
+
+class SupportingDocument(Base, TenantMixin, TimestampMixin):
+    """A scanned PO or GRN awaiting a person's confirmation. Nothing here
+    feeds the match until status is accepted and a real order/receipt exists."""
+
+    __tablename__ = "supporting_documents"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "document_id", name="uq_supporting_documents_document"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("documents.id"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )  # purchase_order | goods_receipt
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending"
+    )  # pending | blocked | accepted | rejected
+    extracted: Mapped[dict] = mapped_column(
+        JSONType, nullable=False, default=dict
+    )
+    po_number: Mapped[str | None] = mapped_column(
+        String(128), index=True
+    )  # normalised
+    blocked_reason: Mapped[str | None] = mapped_column(String(500))
+    extraction_error: Mapped[str | None] = mapped_column(String(500))
+    reviewed_by: Mapped[str | None] = mapped_column(String(320))
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    note: Mapped[str | None] = mapped_column(String(500))
 
 
 TENANT_TABLES = (
@@ -841,4 +886,5 @@ TENANT_TABLES = (
     "po_lines",
     "goods_receipts",
     "grn_lines",
+    "supporting_documents",
 )
