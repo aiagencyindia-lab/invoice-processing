@@ -1374,3 +1374,45 @@ identical line for line.
 
 **Regression status.** All 9 gates green (2037 tests, 21/21, 27/27, eval gate,
 lint, tsc, 22 e2e).
+
+---
+
+## 2026-10-09 — Three-way match: no benchmark decision moves; planted set 6/6
+
+**Problem.** Step 2.3 (invoice lines against PO lines and goods received) needed
+two measurements: that it never moves a benchmark decision, and that it catches
+receipt faults the benchmark never planted.
+
+**Root cause.** None for the guard. The benchmark tenant has no purchase-order
+book, so the check has nothing to match against and stays out of the replay.
+
+**Result, guard (today's code replayed over the run at `ecb9bbd`,
+`replay-three-way`).** Against `replay-approvals`: posted untouched 40 of 45
+clean -> 40 of 45; posted untouched wrongly 1 -> 1; decision accuracy 98.0% ->
+98.0%; `results.csv` byte-identical.
+
+**Result, planted set (`tests/fixtures/three_way/planted.json`).** The 19
+Company B PO invoices the run accepted, with PO lines rebuilt from ground truth
+and every line fully received. Six faults planted (short received x2, not
+received, price over PO, over ordered, unpaired line): caught 6/6, and no
+planted record raised a signal beyond its fault plus its own baseline. Three
+split-delivery controls (invoice quantity halved, receipt matches) add no
+signal.
+
+**Known gap, reported and not tuned: description pairing.** Only 5 of 104
+lines on the 10 unplanted records paired by description (4.8%); 1 of 10 passed
+clean. Pairing never guesses between near ties, and Company B invoices repeat
+the same description on several lines at different prices (e.g. MFG-INV-019 has
+14 lines over 3 descriptions, MFG-INV-029 two identical "Masterbatch black"
+lines), so those lines are left unpaired and hold as `unpaired_line`. Extracted
+text also differs from ground truth in small ways (hyphen vs en dash). No
+order-based fallback exists by design, and none was added. Holding is the safe
+direction; the cost is that a PO invoice with repeated descriptions needs an
+item code or PO line number on the invoice to clear. MFG-INV-033 additionally
+raises `unreadable_line` (two lines extracted without a price or quantity).
+
+**Second gap.** MFG-INV-035 was extracted with no line items, and a match over
+zero invoice lines passes. Not changed here; worth a hold.
+
+**Files.** `tests/fixtures/three_way/planted.json`,
+`tests/test_three_way_planted.py`.

@@ -1,0 +1,4048 @@
+{
+ "source": "Built from benchmark/runs/after-ecb9bbd/raw/B.jsonl (stored extractions, line_items and po_number only) and benchmark/dataset/ground_truth.json: the 19 Company B INVOICE records with final_decision ACCEPT and a po_number. PO lines come from ground-truth lines (description, quantity, unit_price; receipt_required true, no item codes); received = quantity, billed = 0 on every line. expected_signals is the observed result of the clean record (known pairing gaps included), plus the planted fault on the first paired line; split_delivery halves that line's invoice quantity and receipts the same, so it must add nothing. One-off script, not committed.",
+ "records": [
+  {
+   "invoice_id": "MFG-INV-029",
+   "extracted": {
+    "po_number": "PO-2026-4065",
+    "line_items": [
+     {
+      "description": "Masterbatch black 40% (25kg)",
+      "quantity": 20.0,
+      "unit": "bag",
+      "unit_price": 4521.0,
+      "amount_ex_tax": 81378.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3204",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Masterbatch black 40% (25kg)",
+      "quantity": 10.0,
+      "unit": "bag",
+      "unit_price": 4275.0,
+      "amount_ex_tax": 40612.5,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3204",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 6.0,
+      "unit": "bag",
+      "unit_price": 2873.0,
+      "amount_ex_tax": 34476.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4065",
+    "vendor_name": "Kalinga Polymers Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Masterbatch black 40% (25kg)",
+      "qty_ordered": 20,
+      "unit_price": 4521.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "Masterbatch black 40% (25kg)",
+      "qty_ordered": 10,
+      "unit_price": 4275.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 12,
+      "unit_price": 2873.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 20,
+    "2": 10,
+    "3": 6.0
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0
+   },
+   "vendor_kind": "goods",
+   "fault": "split_delivery",
+   "expected_signals": [
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-015",
+   "extracted": {
+    "po_number": "PO-2026-4057",
+    "line_items": [
+     {
+      "description": "Spindle bearing set",
+      "quantity": 10.0,
+      "unit": "set",
+      "unit_price": 51224.0,
+      "amount_ex_tax": 486628.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 100.0,
+      "unit": "nos",
+      "unit_price": 48784.0,
+      "amount_ex_tax": 4780832.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 25.0,
+      "unit": "nos",
+      "unit_price": 51931.0,
+      "amount_ex_tax": 1168447.5,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Spindle bearing set",
+      "quantity": 2.0,
+      "unit": "set",
+      "unit_price": 51510.0,
+      "amount_ex_tax": 103020.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 50.0,
+      "unit": "nos",
+      "unit_price": 60017.0,
+      "amount_ex_tax": 3000850.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 6.0,
+      "unit": "nos",
+      "unit_price": 116351.0,
+      "amount_ex_tax": 698106.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Spindle bearing set",
+      "quantity": 20.0,
+      "unit": "set",
+      "unit_price": 47579.0,
+      "amount_ex_tax": 951580.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 8.0,
+      "unit": "nos",
+      "unit_price": 93217.0,
+      "amount_ex_tax": 730821.28,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 6.0,
+      "unit": "nos",
+      "unit_price": 103584.0,
+      "amount_ex_tax": 621504.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Annual maintenance visit - machine tools",
+      "quantity": 1.0,
+      "unit": "visit",
+      "unit_price": 25153.0,
+      "amount_ex_tax": 23895.35,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "998717",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 4.0,
+      "unit": "nos",
+      "unit_price": 84638.0,
+      "amount_ex_tax": 338552.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 100.0,
+      "unit": "nos",
+      "unit_price": 110677.0,
+      "amount_ex_tax": 9960930.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4057",
+    "vendor_name": "Marudhar Machine Tools Pvt Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Spindle bearing set",
+      "qty_ordered": 10,
+      "unit_price": 51224.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 100,
+      "unit_price": 48784.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 25,
+      "unit_price": 51931.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "Spindle bearing set",
+      "qty_ordered": 2,
+      "unit_price": 51510.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 5,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 50,
+      "unit_price": 60017.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 6,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 6,
+      "unit_price": 116351.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 7,
+      "description": "Spindle bearing set",
+      "qty_ordered": 20,
+      "unit_price": 47579.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 8,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 8,
+      "unit_price": 93217.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 9,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 6,
+      "unit_price": 103584.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 10,
+      "description": "Annual maintenance visit \u2013 machine tools",
+      "qty_ordered": 1,
+      "unit_price": 25153.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 11,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 4,
+      "unit_price": 84638.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 12,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 100,
+      "unit_price": 110677.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 10,
+    "2": 100,
+    "3": 25,
+    "4": 2,
+    "5": 50,
+    "6": 6,
+    "7": 20,
+    "8": 8,
+    "9": 6,
+    "10": 1,
+    "11": 4,
+    "12": 100
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 0,
+    "11": 0,
+    "12": 0
+   },
+   "vendor_kind": "goods",
+   "fault": null,
+   "expected_signals": [
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-047",
+   "extracted": {
+    "po_number": "PO-2026-4068",
+    "line_items": [
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 20.0,
+      "unit": "bag",
+      "unit_price": 2664.0,
+      "amount_ex_tax": 47952.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 20.0,
+      "unit": "bag",
+      "unit_price": 2653.0,
+      "amount_ex_tax": 53060.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Masterbatch black 40% (25kg)",
+      "quantity": 50.0,
+      "unit": "bag",
+      "unit_price": 4635.0,
+      "amount_ex_tax": 463500.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3204",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "PP copolymer granules (25kg bag)",
+      "quantity": 4.0,
+      "unit": "bag",
+      "unit_price": 2959.0,
+      "amount_ex_tax": 11244.2,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3902",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 25.0,
+      "unit": "bag",
+      "unit_price": 2853.0,
+      "amount_ex_tax": 64192.5,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "PP copolymer granules (25kg bag)",
+      "quantity": 20.0,
+      "unit": "bag",
+      "unit_price": 3091.0,
+      "amount_ex_tax": 61820.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3902",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "PP copolymer granules (25kg bag)",
+      "quantity": 25.0,
+      "unit": "bag",
+      "unit_price": 3296.0,
+      "amount_ex_tax": 82400.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3902",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 50.0,
+      "unit": "bag",
+      "unit_price": 2899.0,
+      "amount_ex_tax": 144950.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 8.0,
+      "unit": "bag",
+      "unit_price": 2678.0,
+      "amount_ex_tax": 21424.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 2.0,
+      "unit": "bag",
+      "unit_price": 2805.0,
+      "amount_ex_tax": 5610.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4068",
+    "vendor_name": "Kalinga Polymers Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 20,
+      "unit_price": 2664.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 20,
+      "unit_price": 2653.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "Masterbatch black 40% (25kg)",
+      "qty_ordered": 100,
+      "unit_price": 4635.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "PP copolymer granules (25kg bag)",
+      "qty_ordered": 4,
+      "unit_price": 2959.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 5,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 25,
+      "unit_price": 2853.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 6,
+      "description": "PP copolymer granules (25kg bag)",
+      "qty_ordered": 20,
+      "unit_price": 3091.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 7,
+      "description": "PP copolymer granules (25kg bag)",
+      "qty_ordered": 25,
+      "unit_price": 3296.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 8,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 50,
+      "unit_price": 2899.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 9,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 8,
+      "unit_price": 2678.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 10,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 2,
+      "unit_price": 2805.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 20,
+    "2": 20,
+    "3": 50.0,
+    "4": 4,
+    "5": 25,
+    "6": 20,
+    "7": 25,
+    "8": 50,
+    "9": 8,
+    "10": 2
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 0
+   },
+   "vendor_kind": "goods",
+   "fault": "split_delivery",
+   "expected_signals": [
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-019",
+   "extracted": {
+    "po_number": "PO-2026-4075",
+    "line_items": [
+     {
+      "description": "Freight - Vadodara to Ludhiana, 20ft",
+      "quantity": 2.0,
+      "unit": "trip",
+      "unit_price": 44747.0,
+      "amount_ex_tax": 85019.3,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "Freight - Vadodara to Ludhiana, 20ft",
+      "quantity": 2.0,
+      "unit": "trip",
+      "unit_price": 45136.0,
+      "amount_ex_tax": 81244.8,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Freight - Vadodara to Rajkot, 32ft MXL",
+      "quantity": 10.0,
+      "unit": "trip",
+      "unit_price": 17168.0,
+      "amount_ex_tax": 171680.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Local material movement (per day)",
+      "quantity": 12.0,
+      "unit": "day",
+      "unit_price": 6635.0,
+      "amount_ex_tax": 79620.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Local material movement (per day)",
+      "quantity": 15.0,
+      "unit": "day",
+      "unit_price": 5292.0,
+      "amount_ex_tax": 71442.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Local material movement (per day)",
+      "quantity": 12.0,
+      "unit": "day",
+      "unit_price": 5873.0,
+      "amount_ex_tax": 70476.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Freight - Vadodara to Rajkot, 32ft MXL",
+      "quantity": 3.0,
+      "unit": "trip",
+      "unit_price": 15015.0,
+      "amount_ex_tax": 45045.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Freight - Vadodara to Ludhiana, 20ft",
+      "quantity": 1.0,
+      "unit": "trip",
+      "unit_price": 44333.0,
+      "amount_ex_tax": 44333.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Freight - Vadodara to Rajkot, 32ft MXL",
+      "quantity": 2.0,
+      "unit": "trip",
+      "unit_price": 15500.0,
+      "amount_ex_tax": 31000.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Local material movement (per day)",
+      "quantity": 12.0,
+      "unit": "day",
+      "unit_price": 5627.0,
+      "amount_ex_tax": 67524.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Freight - Vadodara to Rajkot, 32ft MXL",
+      "quantity": 2.0,
+      "unit": "trip",
+      "unit_price": 14564.0,
+      "amount_ex_tax": 29128.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Freight - Vadodara to Rajkot, 32ft MXL",
+      "quantity": 5.0,
+      "unit": "trip",
+      "unit_price": 15690.0,
+      "amount_ex_tax": 78450.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Freight - Vadodara to Ludhiana, 20ft",
+      "quantity": 10.0,
+      "unit": "trip",
+      "unit_price": 40298.0,
+      "amount_ex_tax": 402980.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Freight - Vadodara to Rajkot, 32ft MXL",
+      "quantity": 15.0,
+      "unit": "trip",
+      "unit_price": 15449.0,
+      "amount_ex_tax": 231735.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "996511",
+      "tax_rate": 0.12,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4075",
+    "vendor_name": "Greenline Logistics Pvt Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Freight \u2013 Vadodara to Ludhiana, 20ft",
+      "qty_ordered": 2,
+      "unit_price": 44747.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "Freight \u2013 Vadodara to Ludhiana, 20ft",
+      "qty_ordered": 2,
+      "unit_price": 45136.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "Freight \u2013 Vadodara to Rajkot, 32ft MXL",
+      "qty_ordered": 10,
+      "unit_price": 17168.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "Local material movement (per day)",
+      "qty_ordered": 12,
+      "unit_price": 6635.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 5,
+      "description": "Local material movement (per day)",
+      "qty_ordered": 15,
+      "unit_price": 5292.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 6,
+      "description": "Local material movement (per day)",
+      "qty_ordered": 12,
+      "unit_price": 5873.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 7,
+      "description": "Freight \u2013 Vadodara to Rajkot, 32ft MXL",
+      "qty_ordered": 3,
+      "unit_price": 15015.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 8,
+      "description": "Freight \u2013 Vadodara to Ludhiana, 20ft",
+      "qty_ordered": 1,
+      "unit_price": 44333.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 9,
+      "description": "Freight \u2013 Vadodara to Rajkot, 32ft MXL",
+      "qty_ordered": 2,
+      "unit_price": 15500.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 10,
+      "description": "Local material movement (per day)",
+      "qty_ordered": 12,
+      "unit_price": 5627.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 11,
+      "description": "Freight \u2013 Vadodara to Rajkot, 32ft MXL",
+      "qty_ordered": 2,
+      "unit_price": 14564.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 12,
+      "description": "Freight \u2013 Vadodara to Rajkot, 32ft MXL",
+      "qty_ordered": 5,
+      "unit_price": 15690.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 13,
+      "description": "Freight \u2013 Vadodara to Ludhiana, 20ft",
+      "qty_ordered": 10,
+      "unit_price": 40298.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 14,
+      "description": "Freight \u2013 Vadodara to Rajkot, 32ft MXL",
+      "qty_ordered": 15,
+      "unit_price": 15449.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 2,
+    "2": 2,
+    "3": 10,
+    "4": 12,
+    "5": 15,
+    "6": 12,
+    "7": 3,
+    "8": 1,
+    "9": 2,
+    "10": 12,
+    "11": 2,
+    "12": 5,
+    "13": 10,
+    "14": 15
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 0,
+    "11": 0,
+    "12": 0,
+    "13": 0,
+    "14": 0
+   },
+   "vendor_kind": "goods",
+   "fault": null,
+   "expected_signals": [
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-049",
+   "extracted": {
+    "po_number": "PO-2026-4044",
+    "line_items": [
+     {
+      "description": "HR coil IS 2062 E250, 3.0mm",
+      "quantity": 200.0,
+      "unit": "MT",
+      "unit_price": 55249.0,
+      "amount_ex_tax": 11049800.0,
+      "tax_code": "GST",
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7208",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "MS round bar 25mm",
+      "quantity": 15.0,
+      "unit": "MT",
+      "unit_price": 57925.0,
+      "amount_ex_tax": 781987.5,
+      "tax_code": "GST",
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7214",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4044",
+    "vendor_name": "Shakti Steel & Alloys Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "HR coil IS 2062 E250, 3.0mm",
+      "qty_ordered": 200,
+      "unit_price": 55249.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "MS round bar 25mm",
+      "qty_ordered": 15,
+      "unit_price": 57925.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 199.0,
+    "2": 15
+   },
+   "billed": {
+    "1": 0,
+    "2": 0
+   },
+   "vendor_kind": "goods",
+   "fault": "short_received",
+   "expected_signals": [
+    "short_received"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-045",
+   "extracted": {
+    "po_number": "PO-2026-4058",
+    "line_items": [
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 2.0,
+      "unit": "nos",
+      "unit_price": 60618.0,
+      "amount_ex_tax": 121236.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Annual maintenance visit - machine tools",
+      "quantity": 3.0,
+      "unit": "visit",
+      "unit_price": 25307.0,
+      "amount_ex_tax": 75921.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "998717",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Annual maintenance visit - machine tools",
+      "quantity": 15.0,
+      "unit": "visit",
+      "unit_price": 23712.0,
+      "amount_ex_tax": 320112.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "998717",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Annual maintenance visit - machine tools",
+      "quantity": 12.0,
+      "unit": "visit",
+      "unit_price": 18635.0,
+      "amount_ex_tax": 219147.6,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "998717",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 6.0,
+      "unit": "nos",
+      "unit_price": 62319.0,
+      "amount_ex_tax": 336522.6,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 2.0,
+      "unit": "nos",
+      "unit_price": 86597.0,
+      "amount_ex_tax": 169730.12,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 50.0,
+      "unit": "nos",
+      "unit_price": 50758.0,
+      "amount_ex_tax": 2284110.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Spindle bearing set",
+      "quantity": 8.0,
+      "unit": "set",
+      "unit_price": 41070.0,
+      "amount_ex_tax": 328560.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Annual maintenance visit - machine tools",
+      "quantity": 5.0,
+      "unit": "visit",
+      "unit_price": 20866.0,
+      "amount_ex_tax": 99113.5,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "998717",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 2.0,
+      "unit": "nos",
+      "unit_price": 113741.0,
+      "amount_ex_tax": 227482.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 15.0,
+      "unit": "nos",
+      "unit_price": 59256.0,
+      "amount_ex_tax": 871063.2,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Spindle bearing set",
+      "quantity": 12.0,
+      "unit": "set",
+      "unit_price": 43395.0,
+      "amount_ex_tax": 510325.2,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4058",
+    "vendor_name": "Marudhar Machine Tools Pvt Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 2,
+      "unit_price": 60618.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "Annual maintenance visit \u2013 machine tools",
+      "qty_ordered": 3,
+      "unit_price": 25307.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "Annual maintenance visit \u2013 machine tools",
+      "qty_ordered": 15,
+      "unit_price": 23712.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "Annual maintenance visit \u2013 machine tools",
+      "qty_ordered": 12,
+      "unit_price": 18635.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 5,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 6,
+      "unit_price": 62319.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 6,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 2,
+      "unit_price": 86597.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 7,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 50,
+      "unit_price": 50758.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 8,
+      "description": "Spindle bearing set",
+      "qty_ordered": 8,
+      "unit_price": 41070.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 9,
+      "description": "Annual maintenance visit \u2013 machine tools",
+      "qty_ordered": 5,
+      "unit_price": 20866.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 10,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 2,
+      "unit_price": 113741.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 11,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 15,
+      "unit_price": 59256.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 12,
+      "description": "Spindle bearing set",
+      "qty_ordered": 12,
+      "unit_price": 43395.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 2,
+    "2": 3,
+    "3": 15,
+    "4": 12,
+    "5": 6,
+    "6": 2,
+    "7": 50,
+    "8": 8,
+    "9": 5,
+    "10": 2,
+    "11": 15,
+    "12": 12
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 0,
+    "11": 0,
+    "12": 0
+   },
+   "vendor_kind": "goods",
+   "fault": null,
+   "expected_signals": [
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-035",
+   "extracted": {
+    "po_number": null,
+    "line_items": []
+   },
+   "po": {
+    "po_number": "PO-2026-4043",
+    "vendor_name": "Shakti Steel & Alloys Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "qty_ordered": 1,
+      "unit_price": 64181.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "HR coil IS 2062 E250, 3.0mm",
+      "qty_ordered": 15,
+      "unit_price": 55713.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "HR coil IS 2062 E250, 3.0mm",
+      "qty_ordered": 15,
+      "unit_price": 55185.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "qty_ordered": 5,
+      "unit_price": 68200.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 5,
+      "description": "MS round bar 25mm",
+      "qty_ordered": 8,
+      "unit_price": 57449.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 6,
+      "description": "MS round bar 25mm",
+      "qty_ordered": 8,
+      "unit_price": 57601.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 7,
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "qty_ordered": 15,
+      "unit_price": 63718.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 8,
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "qty_ordered": 12,
+      "unit_price": 69595.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 1,
+    "2": 15,
+    "3": 15,
+    "4": 5,
+    "5": 8,
+    "6": 8,
+    "7": 15,
+    "8": 12
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0
+   },
+   "vendor_kind": "goods",
+   "fault": null,
+   "expected_signals": []
+  },
+  {
+   "invoice_id": "MFG-INV-025",
+   "extracted": {
+    "po_number": "PO-2026-4040",
+    "line_items": [
+     {
+      "description": "Taper roller\nbearing\n30208",
+      "quantity": 100.0,
+      "unit": "nos",
+      "unit_price": 690.0,
+      "amount_ex_tax": 69000.0,
+      "tax_code": "GST",
+      "tax_amount": 12420.0,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Bearing\nhousing\nSNL 512",
+      "quantity": 15.0,
+      "unit": "nos",
+      "unit_price": 2820.0,
+      "amount_ex_tax": 40185.0,
+      "tax_code": "GST",
+      "tax_amount": 7233.3,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "Lock nut\nKM 12",
+      "quantity": 15.0,
+      "unit": "nos",
+      "unit_price": 102.0,
+      "amount_ex_tax": 1530.0,
+      "tax_code": "GST",
+      "tax_amount": 275.4,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Lock nut\nKM 12",
+      "quantity": 12.0,
+      "unit": "nos",
+      "unit_price": 126.0,
+      "amount_ex_tax": 1512.0,
+      "tax_code": "GST",
+      "tax_amount": 272.16,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Bearing\nhousing\nSNL 512",
+      "quantity": 4.0,
+      "unit": "nos",
+      "unit_price": 3247.0,
+      "amount_ex_tax": 12988.0,
+      "tax_code": "GST",
+      "tax_amount": 2337.84,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Taper roller\nbearing\n30208",
+      "quantity": 12.0,
+      "unit": "nos",
+      "unit_price": 672.0,
+      "amount_ex_tax": 7902.72,
+      "tax_code": "GST",
+      "tax_amount": 1422.49,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Deep\ngroove ball\nbearing\n6205-2RS",
+      "quantity": 15.0,
+      "unit": "nos",
+      "unit_price": 259.0,
+      "amount_ex_tax": 3885.0,
+      "tax_code": "GST",
+      "tax_amount": 699.3,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Taper roller\nbearing\n30208",
+      "quantity": 5.0,
+      "unit": "nos",
+      "unit_price": 528.0,
+      "amount_ex_tax": 2640.0,
+      "tax_code": "GST",
+      "tax_amount": 475.2,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4040",
+    "vendor_name": "Apex Industrial Components Pvt Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Taper roller bearing 30208",
+      "qty_ordered": 100,
+      "unit_price": 690.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "Bearing housing SNL 512",
+      "qty_ordered": 15,
+      "unit_price": 2820.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "Lock nut KM 12",
+      "qty_ordered": 15,
+      "unit_price": 102.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "Lock nut KM 12",
+      "qty_ordered": 12,
+      "unit_price": 126.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 5,
+      "description": "Bearing housing SNL 512",
+      "qty_ordered": 4,
+      "unit_price": 3247.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 6,
+      "description": "Taper roller bearing 30208",
+      "qty_ordered": 12,
+      "unit_price": 672.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 7,
+      "description": "Deep groove ball bearing 6205-2RS",
+      "qty_ordered": 15,
+      "unit_price": 259.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 8,
+      "description": "Taper roller bearing 30208",
+      "qty_ordered": 5,
+      "unit_price": 528.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 100,
+    "2": 15,
+    "3": 15,
+    "4": 12,
+    "5": 4,
+    "6": 12,
+    "7": 15,
+    "8": 5
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0
+   },
+   "vendor_kind": "goods",
+   "fault": null,
+   "expected_signals": [
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-033",
+   "extracted": {
+    "po_number": "PO-2026-4071",
+    "line_items": [
+     {
+      "description": "PLC I/O module 16DI",
+      "quantity": 200.0,
+      "unit": "nos",
+      "unit_price": 12937.0,
+      "amount_ex_tax": 2587400.0,
+      "tax_code": null,
+      "tax_amount": 465732.0,
+      "amount_inc_tax": null,
+      "hsn_sac": "8537",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "PLC I/O module 16DI",
+      "quantity": 15.0,
+      "unit": "nos",
+      "unit_price": 15110.0,
+      "amount_ex_tax": 226650.0,
+      "tax_code": null,
+      "tax_amount": 40797.0,
+      "amount_inc_tax": null,
+      "hsn_sac": "8537",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "VFD 15kW 415V",
+      "quantity": 25.0,
+      "unit": "nos",
+      "unit_price": 40452.0,
+      "amount_ex_tax": 1011300.0,
+      "tax_code": null,
+      "tax_amount": 182034.0,
+      "amount_inc_tax": null,
+      "hsn_sac": "8504",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "MCC panel feeder 63A",
+      "quantity": 25.0,
+      "unit": "nos",
+      "unit_price": null,
+      "amount_ex_tax": 805625.0,
+      "tax_code": null,
+      "tax_amount": 145012.5,
+      "amount_inc_tax": null,
+      "hsn_sac": "8537",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "VFD 15kW 415V",
+      "quantity": null,
+      "unit": "nos",
+      "unit_price": 50573.0,
+      "amount_ex_tax": 1239038.5,
+      "tax_code": null,
+      "tax_amount": 223026.93,
+      "amount_inc_tax": null,
+      "hsn_sac": "8504",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Contactor 3-pole 40A",
+      "quantity": 1.0,
+      "unit": "nos",
+      "unit_price": 1848.0,
+      "amount_ex_tax": 1755.6,
+      "tax_code": null,
+      "tax_amount": 316.01,
+      "amount_inc_tax": null,
+      "hsn_sac": "8536",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "VFD 15kW 415V",
+      "quantity": 10.0,
+      "unit": "nos",
+      "unit_price": 48051.0,
+      "amount_ex_tax": 480510.0,
+      "tax_code": null,
+      "tax_amount": 86491.8,
+      "amount_inc_tax": null,
+      "hsn_sac": "8504",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "VFD 15kW 415V",
+      "quantity": 5.0,
+      "unit": "nos",
+      "unit_price": 45001.0,
+      "amount_ex_tax": 220504.9,
+      "tax_code": null,
+      "tax_amount": 39690.88,
+      "amount_inc_tax": null,
+      "hsn_sac": "8504",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Contactor 3-pole 40A",
+      "quantity": 100.0,
+      "unit": "nos",
+      "unit_price": 1965.0,
+      "amount_ex_tax": 186675.0,
+      "tax_code": null,
+      "tax_amount": 33601.5,
+      "amount_inc_tax": null,
+      "hsn_sac": "8536",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "MCC panel feeder 63A",
+      "quantity": 50.0,
+      "unit": "nos",
+      "unit_price": 28857.0,
+      "amount_ex_tax": 1370707.5,
+      "tax_code": null,
+      "tax_amount": 246727.35,
+      "amount_inc_tax": null,
+      "hsn_sac": "8537",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4071",
+    "vendor_name": "Surya Electricals & Automation Pvt Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "PLC I/O module 16DI",
+      "qty_ordered": 200,
+      "unit_price": 12937.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "PLC I/O module 16DI",
+      "qty_ordered": 15,
+      "unit_price": 15110.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "VFD 15kW 415V",
+      "qty_ordered": 25,
+      "unit_price": 40452.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "MCC panel feeder 63A",
+      "qty_ordered": 25,
+      "unit_price": 32225.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 5,
+      "description": "VFD 15kW 415V",
+      "qty_ordered": 25,
+      "unit_price": 50573.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 6,
+      "description": "Contactor 3-pole 40A",
+      "qty_ordered": 1,
+      "unit_price": 1848.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 7,
+      "description": "VFD 15kW 415V",
+      "qty_ordered": 10,
+      "unit_price": 48051.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 8,
+      "description": "VFD 15kW 415V",
+      "qty_ordered": 5,
+      "unit_price": 45001.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 9,
+      "description": "Contactor 3-pole 40A",
+      "qty_ordered": 100,
+      "unit_price": 1965.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 10,
+      "description": "MCC panel feeder 63A",
+      "qty_ordered": 50,
+      "unit_price": 28857.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 200,
+    "2": 15,
+    "3": 25,
+    "4": 25,
+    "5": 25,
+    "6": 1,
+    "7": 10,
+    "8": 5,
+    "9": 100,
+    "10": 50
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 0
+   },
+   "vendor_kind": "goods",
+   "fault": null,
+   "expected_signals": [
+    "unpaired_line",
+    "unreadable_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-053",
+   "extracted": {
+    "po_number": "PO-2026-4050",
+    "line_items": [
+     {
+      "description": "Spring washer M12 (box of 500)",
+      "quantity": 2.0,
+      "unit": "box",
+      "unit_price": 666.0,
+      "amount_ex_tax": 1198.8,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Allen cap screw M8x25 (box of 200)",
+      "quantity": 4.0,
+      "unit": "box",
+      "unit_price": 1742.0,
+      "amount_ex_tax": 6619.6,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "Spring washer M12 (box of 500)",
+      "quantity": 10.0,
+      "unit": "box",
+      "unit_price": 787.0,
+      "amount_ex_tax": 7712.6,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "quantity": 6.0,
+      "unit": "box",
+      "unit_price": 838.0,
+      "amount_ex_tax": 5028.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "quantity": 4.0,
+      "unit": "box",
+      "unit_price": 1616.0,
+      "amount_ex_tax": 5817.6,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "quantity": 4.0,
+      "unit": "box",
+      "unit_price": 1789.0,
+      "amount_ex_tax": 7012.88,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "quantity": 5.0,
+      "unit": "box",
+      "unit_price": 878.0,
+      "amount_ex_tax": 4390.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Spring washer M12 (box of 500)",
+      "quantity": 50.0,
+      "unit": "box",
+      "unit_price": 764.0,
+      "amount_ex_tax": 34380.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "quantity": 2.0,
+      "unit": "box",
+      "unit_price": 1613.0,
+      "amount_ex_tax": 2903.4,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Allen cap screw M8x25 (box of 200)",
+      "quantity": 25.0,
+      "unit": "box",
+      "unit_price": 1370.0,
+      "amount_ex_tax": 34250.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Spring washer M12 (box of 500)",
+      "quantity": 2.0,
+      "unit": "box",
+      "unit_price": 674.0,
+      "amount_ex_tax": 1348.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "quantity": 6.0,
+      "unit": "box",
+      "unit_price": 1777.0,
+      "amount_ex_tax": 10662.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4050",
+    "vendor_name": "Bharat Fasteners Corporation",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Spring washer M12 (box of 500)",
+      "qty_ordered": 2,
+      "unit_price": 666.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "Allen cap screw M8x25 (box of 200)",
+      "qty_ordered": 4,
+      "unit_price": 1742.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "Spring washer M12 (box of 500)",
+      "qty_ordered": 10,
+      "unit_price": 787.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "qty_ordered": 6,
+      "unit_price": 838.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 5,
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "qty_ordered": 4,
+      "unit_price": 1616.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 6,
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "qty_ordered": 4,
+      "unit_price": 1789.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 7,
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "qty_ordered": 5,
+      "unit_price": 878.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 8,
+      "description": "Spring washer M12 (box of 500)",
+      "qty_ordered": 50,
+      "unit_price": 764.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 9,
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "qty_ordered": 2,
+      "unit_price": 1613.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 10,
+      "description": "Allen cap screw M8x25 (box of 200)",
+      "qty_ordered": 25,
+      "unit_price": 1370.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 11,
+      "description": "Spring washer M12 (box of 500)",
+      "qty_ordered": 2,
+      "unit_price": 674.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 12,
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "qty_ordered": 6,
+      "unit_price": 1777.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 2,
+    "2": 4,
+    "3": 10,
+    "4": 6,
+    "5": 4,
+    "6": 4,
+    "7": 5,
+    "8": 50,
+    "9": 2,
+    "10": 25,
+    "11": 2,
+    "12": 6
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 0,
+    "11": 0,
+    "12": 0
+   },
+   "vendor_kind": "goods",
+   "fault": null,
+   "expected_signals": [
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-044",
+   "extracted": {
+    "po_number": "PO-2026-4049",
+    "line_items": [
+     {
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "quantity": 50.0,
+      "unit": "box",
+      "unit_price": 1656.0,
+      "amount_ex_tax": 74520.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Anchor fastener M16x150",
+      "quantity": 50.0,
+      "unit": "nos",
+      "unit_price": 86.0,
+      "amount_ex_tax": 3870.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "quantity": 20.0,
+      "unit": "box",
+      "unit_price": 929.0,
+      "amount_ex_tax": 16722.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Spring washer M12 (box of 500)",
+      "quantity": 5.0,
+      "unit": "box",
+      "unit_price": 709.0,
+      "amount_ex_tax": 3545.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Spring washer M12 (box of 500)",
+      "quantity": 10.0,
+      "unit": "box",
+      "unit_price": 791.0,
+      "amount_ex_tax": 7910.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Allen cap screw M8x25 (box of 200)",
+      "quantity": 20.0,
+      "unit": "box",
+      "unit_price": 1744.0,
+      "amount_ex_tax": 34880.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "quantity": 4.0,
+      "unit": "box",
+      "unit_price": 1018.0,
+      "amount_ex_tax": 3990.56,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "quantity": 5.0,
+      "unit": "box",
+      "unit_price": 1852.0,
+      "amount_ex_tax": 9260.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4049",
+    "vendor_name": "Bharat Fasteners Corporation",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "qty_ordered": 50,
+      "unit_price": 1656.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "Anchor fastener M16x150",
+      "qty_ordered": 50,
+      "unit_price": 86.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "qty_ordered": 20,
+      "unit_price": 929.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "Spring washer M12 (box of 500)",
+      "qty_ordered": 5,
+      "unit_price": 709.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 5,
+      "description": "Spring washer M12 (box of 500)",
+      "qty_ordered": 10,
+      "unit_price": 791.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 6,
+      "description": "Allen cap screw M8x25 (box of 200)",
+      "qty_ordered": 20,
+      "unit_price": 1744.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 7,
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "qty_ordered": 4,
+      "unit_price": 1018.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 8,
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "qty_ordered": 5,
+      "unit_price": 1852.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 50,
+    "2": 50,
+    "3": 20,
+    "4": 5,
+    "5": 10,
+    "6": 20,
+    "7": 4,
+    "8": 5
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0
+   },
+   "vendor_kind": "goods",
+   "fault": null,
+   "expected_signals": [
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-006",
+   "extracted": {
+    "po_number": "PO-2026-4063",
+    "line_items": [
+     {
+      "description": "Preventive maintenance - Plant 2 - July 2026",
+      "quantity": 54.0,
+      "unit": "hour",
+      "unit_price": 957.0,
+      "amount_ex_tax": 51678.0,
+      "tax_code": "GST",
+      "tax_amount": 9302.04,
+      "amount_inc_tax": null,
+      "hsn_sac": "998717",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4063",
+    "vendor_name": "Trident Industrial Maintenance Services",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Preventive maintenance \u2013 Plant 2 \u2013 July 2026",
+      "qty_ordered": 54,
+      "unit_price": 861.3,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 54
+   },
+   "billed": {
+    "1": 0
+   },
+   "vendor_kind": "goods",
+   "fault": "price_over_po",
+   "expected_signals": [
+    "price_over_po"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-058",
+   "extracted": {
+    "po_number": "PO-2026-4058",
+    "line_items": [
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 2.0,
+      "unit": "nos",
+      "unit_price": 60618.0,
+      "amount_ex_tax": 109112.4,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 15.0,
+      "unit": "nos",
+      "unit_price": 86970.0,
+      "amount_ex_tax": 1304550.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Spindle bearing set",
+      "quantity": 6.0,
+      "unit": "set",
+      "unit_price": 49851.0,
+      "amount_ex_tax": 299106.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 2.0,
+      "unit": "nos",
+      "unit_price": 57689.0,
+      "amount_ex_tax": 103840.2,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 10.0,
+      "unit": "nos",
+      "unit_price": 103306.0,
+      "amount_ex_tax": 981407.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "Spindle bearing set",
+      "quantity": 12.0,
+      "unit": "set",
+      "unit_price": 40403.0,
+      "amount_ex_tax": 436352.4,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 4.0,
+      "unit": "nos",
+      "unit_price": 51344.0,
+      "amount_ex_tax": 205376.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Spindle bearing set",
+      "quantity": 5.0,
+      "unit": "set",
+      "unit_price": 44778.0,
+      "amount_ex_tax": 219412.2,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Spindle bearing set",
+      "quantity": 8.0,
+      "unit": "set",
+      "unit_price": 46908.0,
+      "amount_ex_tax": 375264.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 5.0,
+      "unit": "nos",
+      "unit_price": 57008.0,
+      "amount_ex_tax": 285040.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 50.0,
+      "unit": "nos",
+      "unit_price": 117035.0,
+      "amount_ex_tax": 5851750.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Annual maintenance visit machine tools",
+      "quantity": 10.0,
+      "unit": "visit",
+      "unit_price": 24508.0,
+      "amount_ex_tax": 245080.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "998717",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 4.0,
+      "unit": "nos",
+      "unit_price": 110666.0,
+      "amount_ex_tax": 433810.72,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 5.0,
+      "unit": "nos",
+      "unit_price": 112888.0,
+      "amount_ex_tax": 553151.2,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4058",
+    "vendor_name": "Marudhar Machine Tools Pvt Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 2,
+      "unit_price": 60618.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 15,
+      "unit_price": 86970.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "Spindle bearing set",
+      "qty_ordered": 6,
+      "unit_price": 49851.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 2,
+      "unit_price": 57689.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 5,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 10,
+      "unit_price": 103306.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 6,
+      "description": "Spindle bearing set",
+      "qty_ordered": 12,
+      "unit_price": 40403.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 7,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 4,
+      "unit_price": 51344.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 8,
+      "description": "Spindle bearing set",
+      "qty_ordered": 5,
+      "unit_price": 44778.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 9,
+      "description": "Spindle bearing set",
+      "qty_ordered": 8,
+      "unit_price": 46908.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 10,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 5,
+      "unit_price": 57008.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 11,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 50,
+      "unit_price": 117035.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 12,
+      "description": "Annual maintenance visit \u2013 machine tools",
+      "qty_ordered": 10,
+      "unit_price": 24508.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 13,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 4,
+      "unit_price": 110666.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 14,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 5,
+      "unit_price": 112888.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 2,
+    "2": 15,
+    "3": 6,
+    "4": 2,
+    "5": 10,
+    "6": 12,
+    "7": 4,
+    "8": 5,
+    "9": 8,
+    "10": 5,
+    "11": 50,
+    "12": 10,
+    "13": 4,
+    "14": 5
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 0,
+    "11": 0,
+    "12": 0,
+    "13": 0,
+    "14": 0
+   },
+   "vendor_kind": "goods",
+   "fault": null,
+   "expected_signals": [
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-056",
+   "extracted": {
+    "po_number": "PO-2026-4058",
+    "line_items": [
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 2.0,
+      "unit": "nos",
+      "unit_price": 60618.0,
+      "amount_ex_tax": 121236.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "CNC turning centre spare - turret index motor",
+      "quantity": 15.0,
+      "unit": "nos",
+      "unit_price": 101589.0,
+      "amount_ex_tax": 1523835.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4058",
+    "vendor_name": "Marudhar Machine Tools Pvt Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 2,
+      "unit_price": 60618.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 15,
+      "unit_price": 101589.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 0,
+    "2": 15
+   },
+   "billed": {
+    "1": 0,
+    "2": 0
+   },
+   "vendor_kind": "goods",
+   "fault": "not_received",
+   "expected_signals": [
+    "not_received"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-048",
+   "extracted": {
+    "po_number": "PO-2026-4050",
+    "line_items": [
+     {
+      "description": "Spring washer M12 (box of 500)",
+      "quantity": 2.0,
+      "unit": "box",
+      "unit_price": 666.0,
+      "amount_ex_tax": 1305.36,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Anchor fastener M16x150",
+      "quantity": 15.0,
+      "unit": "nos",
+      "unit_price": 83.0,
+      "amount_ex_tax": 1245.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "quantity": 8.0,
+      "unit": "box",
+      "unit_price": 794.0,
+      "amount_ex_tax": 6352.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Anchor fastener M16x150",
+      "quantity": 25.0,
+      "unit": "nos",
+      "unit_price": 80.0,
+      "amount_ex_tax": 1960.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "quantity": 25.0,
+      "unit": "box",
+      "unit_price": 1727.0,
+      "amount_ex_tax": 41016.25,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "quantity": 1.0,
+      "unit": "box",
+      "unit_price": 828.0,
+      "amount_ex_tax": 828.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "quantity": 1.0,
+      "unit": "box",
+      "unit_price": 809.0,
+      "amount_ex_tax": 768.55,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "Allen cap screw M8x25 (box of 200)",
+      "quantity": 12.0,
+      "unit": "box",
+      "unit_price": 1658.0,
+      "amount_ex_tax": 18901.2,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "quantity": 15.0,
+      "unit": "box",
+      "unit_price": 844.0,
+      "amount_ex_tax": 12660.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "quantity": 1.0,
+      "unit": "box",
+      "unit_price": 1476.0,
+      "amount_ex_tax": 1476.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "7318",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4050",
+    "vendor_name": "Bharat Fasteners Corporation",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Spring washer M12 (box of 500)",
+      "qty_ordered": 1.0,
+      "unit_price": 666.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "Anchor fastener M16x150",
+      "qty_ordered": 15,
+      "unit_price": 83.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "qty_ordered": 8,
+      "unit_price": 794.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "Anchor fastener M16x150",
+      "qty_ordered": 25,
+      "unit_price": 80.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 5,
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "qty_ordered": 25,
+      "unit_price": 1727.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 6,
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "qty_ordered": 1,
+      "unit_price": 828.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 7,
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "qty_ordered": 1,
+      "unit_price": 809.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 8,
+      "description": "Allen cap screw M8x25 (box of 200)",
+      "qty_ordered": 12,
+      "unit_price": 1658.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 9,
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "qty_ordered": 15,
+      "unit_price": 844.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 10,
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "qty_ordered": 1,
+      "unit_price": 1476.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 2,
+    "2": 15,
+    "3": 8,
+    "4": 25,
+    "5": 25,
+    "6": 1,
+    "7": 1,
+    "8": 12,
+    "9": 15,
+    "10": 1
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 0
+   },
+   "vendor_kind": "goods",
+   "fault": "over_ordered",
+   "expected_signals": [
+    "over_ordered",
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-046",
+   "extracted": {
+    "po_number": "PO-2026-4065",
+    "line_items": [
+     {
+      "description": "Masterbatch black 40% (25kg)",
+      "quantity": 20.0,
+      "unit": "bag",
+      "unit_price": 4521.0,
+      "amount_ex_tax": 81378.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3204",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 4.0,
+      "unit": "bag",
+      "unit_price": 2655.0,
+      "amount_ex_tax": 10620.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 50.0,
+      "unit": "bag",
+      "unit_price": 2794.0,
+      "amount_ex_tax": 139700.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "PP copolymer granules (25kg bag)",
+      "quantity": 12.0,
+      "unit": "bag",
+      "unit_price": 3075.0,
+      "amount_ex_tax": 36162.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3902",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "Masterbatch black 40% (25kg)",
+      "quantity": 15.0,
+      "unit": "bag",
+      "unit_price": 4705.0,
+      "amount_ex_tax": 63517.5,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3204",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Masterbatch black 40% (25kg)",
+      "quantity": 25.0,
+      "unit": "bag",
+      "unit_price": 4758.0,
+      "amount_ex_tax": 118950.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3204",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Masterbatch black 40% (25kg)",
+      "quantity": 10.0,
+      "unit": "bag",
+      "unit_price": 4949.0,
+      "amount_ex_tax": 48500.2,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3204",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "PP copolymer granules (25kg bag)",
+      "quantity": 3.0,
+      "unit": "bag",
+      "unit_price": 3161.0,
+      "amount_ex_tax": 9293.34,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3902",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "PP copolymer granules (25kg bag)",
+      "quantity": 5.0,
+      "unit": "bag",
+      "unit_price": 2943.0,
+      "amount_ex_tax": 13243.5,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3902",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Masterbatch black 40% (25kg)",
+      "quantity": 12.0,
+      "unit": "bag",
+      "unit_price": 4402.0,
+      "amount_ex_tax": 52824.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3204",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "PP copolymer granules (25kg bag)",
+      "quantity": 1.0,
+      "unit": "bag",
+      "unit_price": 2918.0,
+      "amount_ex_tax": 2859.64,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3902",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.02,
+      "has_discount": true
+     },
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 10.0,
+      "unit": "bag",
+      "unit_price": 2881.0,
+      "amount_ex_tax": 28810.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 25.0,
+      "unit": "bag",
+      "unit_price": 2821.0,
+      "amount_ex_tax": 70525.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Masterbatch black 40% (25kg)",
+      "quantity": 6.0,
+      "unit": "bag",
+      "unit_price": 4301.0,
+      "amount_ex_tax": 25806.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3204",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4065",
+    "vendor_name": "Kalinga Polymers Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Masterbatch black 40% (25kg)",
+      "qty_ordered": 20,
+      "unit_price": 4521.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 4,
+      "unit_price": 2655.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 50,
+      "unit_price": 2794.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "PP copolymer granules (25kg bag)",
+      "qty_ordered": 12,
+      "unit_price": 3075.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 5,
+      "description": "Masterbatch black 40% (25kg)",
+      "qty_ordered": 15,
+      "unit_price": 4705.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 6,
+      "description": "Masterbatch black 40% (25kg)",
+      "qty_ordered": 25,
+      "unit_price": 4758.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 7,
+      "description": "Masterbatch black 40% (25kg)",
+      "qty_ordered": 10,
+      "unit_price": 4949.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 8,
+      "description": "PP copolymer granules (25kg bag)",
+      "qty_ordered": 3,
+      "unit_price": 3161.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 9,
+      "description": "PP copolymer granules (25kg bag)",
+      "qty_ordered": 5,
+      "unit_price": 2943.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 10,
+      "description": "Masterbatch black 40% (25kg)",
+      "qty_ordered": 12,
+      "unit_price": 4402.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 11,
+      "description": "PP copolymer granules (25kg bag)",
+      "qty_ordered": 1,
+      "unit_price": 2918.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 12,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 10,
+      "unit_price": 2881.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 13,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 25,
+      "unit_price": 2821.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 14,
+      "description": "Masterbatch black 40% (25kg)",
+      "qty_ordered": 6,
+      "unit_price": 4301.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 20,
+    "2": 4,
+    "3": 50,
+    "4": 12,
+    "5": 15,
+    "6": 25,
+    "7": 10,
+    "8": 3,
+    "9": 5,
+    "10": 12,
+    "11": 1,
+    "12": 10,
+    "13": 25,
+    "14": 6
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    "6": 0,
+    "7": 0,
+    "8": 0,
+    "9": 0,
+    "10": 0,
+    "11": 0,
+    "12": 0,
+    "13": 0,
+    "14": 0
+   },
+   "vendor_kind": "goods",
+   "fault": null,
+   "expected_signals": [
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-017",
+   "extracted": {
+    "po_number": "PO-2026-4066",
+    "line_items": [
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 100.0,
+      "unit": "bag",
+      "unit_price": 3095.0,
+      "amount_ex_tax": 309500.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 2.0,
+      "unit": "bag",
+      "unit_price": 2721.0,
+      "amount_ex_tax": 4897.8,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.1,
+      "has_discount": true
+     },
+     {
+      "description": "Masterbatch black 40% (25kg)",
+      "quantity": 2.0,
+      "unit": "bag",
+      "unit_price": 5071.0,
+      "amount_ex_tax": 10142.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3204",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "HDPE granules injection grade (25kg bag)",
+      "quantity": 3.0,
+      "unit": "bag",
+      "unit_price": 2889.0,
+      "amount_ex_tax": 8667.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "3901",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4066",
+    "vendor_name": "Kalinga Polymers Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 100,
+      "unit_price": 3095.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 2,
+      "unit_price": 2721.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "Masterbatch black 40% (25kg)",
+      "qty_ordered": 2,
+      "unit_price": 5071.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 4,
+      "description": "HDPE granules injection grade (25kg bag)",
+      "qty_ordered": 3,
+      "unit_price": 2889.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 100,
+    "2": 2,
+    "3": 1.0,
+    "4": 3
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0
+   },
+   "vendor_kind": "goods",
+   "fault": "short_received",
+   "expected_signals": [
+    "short_received",
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-027",
+   "extracted": {
+    "po_number": "PO-2026-4058",
+    "line_items": [
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 2.0,
+      "unit": "nos",
+      "unit_price": 60618.0,
+      "amount_ex_tax": 121236.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "CNC turning centre spare - turret index\nmotor",
+      "quantity": 4.0,
+      "unit": "nos",
+      "unit_price": 112796.0,
+      "amount_ex_tax": 857249.6,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8466",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": 0.05,
+      "has_discount": true
+     },
+     {
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 25.0,
+      "unit": "nos",
+      "unit_price": 55756.0,
+      "amount_ex_tax": 1393900.0,
+      "tax_code": null,
+      "tax_amount": null,
+      "amount_inc_tax": null,
+      "hsn_sac": "8483",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4058",
+    "vendor_name": "Marudhar Machine Tools Pvt Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 2,
+      "unit_price": 60618.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 2,
+      "description": "CNC turning centre spare \u2013 turret index motor",
+      "qty_ordered": 8,
+      "unit_price": 112796.0,
+      "receipt_required": true,
+      "item_code": null
+     },
+     {
+      "line_number": 3,
+      "description": "Ball screw assembly 32mm x 1200",
+      "qty_ordered": 25,
+      "unit_price": 55756.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 2,
+    "2": 4.0,
+    "3": 25
+   },
+   "billed": {
+    "1": 0,
+    "2": 0,
+    "3": 0
+   },
+   "vendor_kind": "goods",
+   "fault": "split_delivery",
+   "expected_signals": [
+    "unpaired_line"
+   ]
+  },
+  {
+   "invoice_id": "MFG-INV-042",
+   "extracted": {
+    "po_number": "PO-2026-4039",
+    "line_items": [
+     {
+      "description": "Taper roller\nbearing\n30208",
+      "quantity": 50.0,
+      "unit": "nos",
+      "unit_price": 557.0,
+      "amount_ex_tax": 27850.0,
+      "tax_code": null,
+      "tax_amount": 5013.0,
+      "amount_inc_tax": null,
+      "hsn_sac": "8482",
+      "tax_rate": 0.18,
+      "line_discount": null,
+      "line_discount_pct": null,
+      "has_discount": false
+     },
+     {
+      "description": "Handling surcharge",
+      "quantity": 1.0,
+      "unit": "nos",
+      "unit_price": 500.0,
+      "amount_ex_tax": 500.0
+     }
+    ]
+   },
+   "po": {
+    "po_number": "PO-2026-4039",
+    "vendor_name": "Apex Industrial Components Pvt Ltd",
+    "currency": "INR",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Taper roller bearing 30208",
+      "qty_ordered": 50,
+      "unit_price": 557.0,
+      "receipt_required": true,
+      "item_code": null
+     }
+    ]
+   },
+   "received": {
+    "1": 50
+   },
+   "billed": {
+    "1": 0
+   },
+   "vendor_kind": "goods",
+   "fault": "unpaired_line",
+   "expected_signals": [
+    "unpaired_line"
+   ]
+  }
+ ]
+}
