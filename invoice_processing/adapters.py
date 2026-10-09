@@ -18,7 +18,7 @@ import json
 import os
 import tempfile
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -164,6 +164,26 @@ class FsCaseRepository:
         path = self._case_dir(ctx) / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def update_artifact(
+        self, ctx: RunContext, key: str, mutate: Callable[[dict | None], dict]
+    ) -> dict:
+        """Read, mutate, and write one artifact under a lock beside the case.
+
+        The lock file sits next to the case directory, not in it, so it is
+        never read back as an artifact; `iter_case_ids` lists directories only.
+        """
+        # ponytail: fcntl is POSIX only, as in migrate.py; a lock across
+        # hosts sharing this directory would need the database instead.
+        import fcntl  # noqa: PLC0415
+
+        case_dir = self._case_dir(ctx)
+        case_dir.parent.mkdir(parents=True, exist_ok=True)
+        with open(case_dir.with_name(f".{case_dir.name}.lock"), "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            value = mutate(self.get_artifacts(ctx).get(key))
+            self.put_artifact(ctx, key, value)
+            return value
 
     def iter_case_ids(self, tenant_id: str = "default") -> Iterator[str]:
         """Sorted, so impact assessment walks cases in a stable order."""

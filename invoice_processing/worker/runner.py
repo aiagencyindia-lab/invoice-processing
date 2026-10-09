@@ -195,8 +195,8 @@ def _code_gl(ctx: RunContext, cases, artifacts: dict) -> dict:
     """Code each line from this tenant's GL rules and store the coding.
 
     Informational, so a failure logs and keeps whatever coding was stored
-    rather than failing the invoice. A line a person coded is kept: the stored
-    record's coding is passed as `previous`. A decided invoice keeps its
+    rather than failing the invoice. A line a person coded is kept: the coding
+    stored at write time is passed as `previous`. A decided invoice keeps its
     coding as signed off: the account an approver approved is the one exported.
     """
     from .. import case_projection, gl_coding  # noqa: PLC0415
@@ -212,13 +212,18 @@ def _code_gl(ctx: RunContext, cases, artifacts: dict) -> dict:
         repo = service.get_gl_rules()
         if repo is None:
             return kept
-        coding = gl_coding.code_lines(
-            case_projection.extraction(artifacts),
-            case_projection.lines(artifacts),
-            repo.list_rules(ctx.tenant_id),
-            previous=previous,
+        invoice = case_projection.extraction(artifacts)
+        lines = case_projection.lines(artifacts)
+        rules = repo.list_rules(ctx.tenant_id)
+        # Recoded from the coding stored at write time, not the one read
+        # above: a line a person coded meanwhile is kept.
+        coding = cases.update_artifact(
+            ctx,
+            "gl_coding",
+            lambda current: gl_coding.code_lines(
+                invoice, lines, rules, previous=current
+            ),
         )
-        cases.put_artifact(ctx, "gl_coding", coding)
     except Exception as exc:
         logger.warning("Lines of %s not GL coded: %s", ctx.case_id, exc)
         return {"gl_coding": previous} if isinstance(previous, dict) else {}

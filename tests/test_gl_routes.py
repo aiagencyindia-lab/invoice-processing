@@ -3,13 +3,14 @@ call, closed once the invoice is decided, and every change is on the trail."""
 
 import json
 import shutil
+import threading
 from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 from golden import GOLDEN_CASES
 
-from invoice_processing import approval_flow
+from invoice_processing import approval_flow, gl_coding
 from invoice_processing.adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
@@ -21,6 +22,7 @@ from invoice_processing.api.service import app
 from invoice_processing.db import models
 from invoice_processing.db.repositories import (
     PgApprovalRepository,
+    PgCaseRepository,
     PgGlRuleRepository,
     entity_type_for,
 )
@@ -417,3 +419,85 @@ def test_field_edits_cannot_reach_lines_or_internals(env, field):
     )
     assert r.status_code == 400
     assert path.read_text() == before
+
+
+def _use_store(monkeypatch, store, scratch_db):
+    """Serve the case from the database instead of files, when asked."""
+    if store == "database":
+        files = service.get_cases()
+        cases = PgCaseRepository(scratch_db("gl.db"))
+        ctx = RunContext(tenant_id=TENANT, case_id=CASE)
+        for key, value in files.get_artifacts(ctx).items():
+            cases.put_artifact(ctx, key, value)
+        monkeypatch.setattr(service, "_cases", cases)
+
+
+@pytest.mark.parametrize("store", ["files", "database"])
+def test_two_people_coding_different_lines_at_once_both_land(
+    env, monkeypatch, store, scratch_db
+):
+    """Each PATCH read the whole coding, changed its line, and wrote it all
+    back, so the second writer erased the first writer's line."""
+    _use_store(monkeypatch, store, scratch_db)
+
+    # The first clerk's edit is mid-way (coding read, not yet written) when
+    # the second clerk's edit for line 2 arrives.
+    real, fired = gl_coding.valid_entries, threading.Event()
+
+    def interleave(coding):
+        if not fired.is_set():
+            fired.set()
+            other = threading.Thread(
+                target=code,
+                args=(env,),
+                kwargs={"line": 2, "gl_account": "7200"},
+            )
+            other.start()
+            # Fixed code holds a lock here, so the other edit waits for this
+            # one rather than finishing inside it.
+            other.join(timeout=1)
+            interleave.other = other
+        return real(coding)
+
+    monkeypatch.setattr(gl_coding, "valid_entries", interleave)
+    assert code(env, gl_account="6100").status_code == 200
+    interleave.other.join(timeout=10)
+
+    stored = service.get_cases().get_artifacts(
+        RunContext(tenant_id=TENANT, case_id=CASE)
+    )["gl_coding"]
+    got = {x["line_number"]: x["gl_account"] for x in stored["lines"]}
+    assert got == {1: "6100", 2: "7200"}
+
+
+@pytest.mark.parametrize("store", ["files", "database"])
+def test_two_people_editing_different_fields_at_once_both_land(
+    env, monkeypatch, store, scratch_db
+):
+    """edit_fields had the same read-modify-write on the extraction."""
+    _use_store(monkeypatch, store, scratch_db)
+
+    def edit(field, value):
+        return env["client"]("clerk").patch(
+            f"/api/invoices/{CASE}/fields",
+            json={"edits": [{"field": field, "value": value}]},
+        )
+
+    corrections = service.get_corrections()
+    real, fired = corrections.record, threading.Event()
+
+    def interleave(ctx, record):
+        # Between the first edit's read and its write, a second one lands.
+        if not fired.is_set():
+            fired.set()
+            assert edit("invoice_number", "INV-B").status_code == 200
+        return real(ctx, record)
+
+    monkeypatch.setattr(corrections, "record", interleave)
+    assert edit("invoice_date", "2026-01-31").status_code == 200
+
+    invoice = service.get_cases().get_artifacts(
+        RunContext(tenant_id=TENANT, case_id=CASE)
+    )["extraction"]["invoice"]
+    assert invoice["invoice_date"] == "2026-01-31"
+    assert invoice["invoice_number"] == "INV-B"

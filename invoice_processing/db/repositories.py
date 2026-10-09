@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import and_, delete, exists, func, or_, select
+from sqlalchemy import and_, delete, exists, func, or_, select, text
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
@@ -109,6 +109,35 @@ class PgCaseRepository:
             # Reassign rather than mutate: SQLAlchemy does not track in-place
             # edits to a JSON column, so a mutation would silently not persist.
             invoice.fields = {**(invoice.fields or {}), key: payload}
+
+    def update_artifact(self, ctx: RunContext, key: str, mutate) -> dict:
+        """Read, mutate, and write one artifact in one locked transaction.
+
+        Postgres locks the invoice row (FOR UPDATE), so a second writer waits
+        and then reads this one's result. SQLite ignores FOR UPDATE; BEGIN
+        IMMEDIATE takes its database write lock before the read instead.
+        """
+        with tenant_session(ctx.tenant_id, self.url) as session:
+            if session.get_bind().dialect.name == "sqlite":
+                session.execute(text("BEGIN IMMEDIATE"))
+            invoice = session.scalar(
+                select(Invoice)
+                .where(
+                    Invoice.tenant_id == ctx.tenant_id,
+                    Invoice.case_id == ctx.case_id,
+                )
+                .with_for_update()
+            )
+            if invoice is None:
+                # ponytail: no row to lock yet; every caller updates a case
+                # the worker already stored, so a racing create is not a path.
+                invoice = Invoice(
+                    tenant_id=ctx.tenant_id, case_id=ctx.case_id, fields={}
+                )
+                session.add(invoice)
+            value = mutate((invoice.fields or {}).get(key))
+            invoice.fields = {**(invoice.fields or {}), key: value}
+            return value
 
     def project_case(self, ctx: RunContext, artifacts: dict) -> None:
         """Mirror a finished case into the columns and tables that answer
