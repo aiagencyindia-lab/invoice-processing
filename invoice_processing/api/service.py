@@ -1430,7 +1430,7 @@ def _record_workflow(ctx, **changes) -> dict:
 # Export
 # ---------------------------------------------------------------------------
 
-CSV_COLUMNS = [
+INVOICE_COLUMNS = [
     "case_id",
     "vendor_name",
     "vendor_tax_id",
@@ -1443,8 +1443,19 @@ CSV_COLUMNS = [
     "total_inc_tax",
     "po_number",
     "payment_terms",
+]
+# One row per line, the shape AP bill imports (Xero's among them) expect, so
+# each line's account sits beside that line rather than in a joined cell.
+LINE_COLUMNS = [
+    "line_number",
+    "line_description",
+    "quantity",
+    "unit_price",
+    "line_amount_ex_tax",
+    "line_tax",
     "gl_account",
 ]
+CSV_COLUMNS = INVOICE_COLUMNS + LINE_COLUMNS
 
 
 def _with_gl(ctx, invoice: dict, artifacts: dict) -> dict:
@@ -1484,8 +1495,26 @@ def _with_gl(ctx, invoice: dict, artifacts: dict) -> dict:
     }
 
 
-def _csv_row(case_id: str, invoice: dict) -> list[str]:
-    mapping = {
+def _csv_safe(value) -> str:
+    """A cell Excel will show as text, not run as a formula.
+
+    Extraction text is untrusted: a description of "=HYPERLINK(...)" would
+    otherwise execute when the file is opened. Numbers (a credit's -85.0)
+    are left alone so they stay numbers.
+    """
+    text = "" if value is None else str(value)
+    if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        try:
+            float(text)
+        except ValueError:
+            return "'" + text
+    return text
+
+
+def _csv_rows(case_id: str, invoice: dict) -> list[list[str]]:
+    """One row per line, each repeating the invoice; a line-less invoice is
+    still one row, with the line cells empty."""
+    head = {
         "case_id": case_id,
         "vendor_name": invoice.get("vendor_name"),
         "vendor_tax_id": invoice.get("vendor_tax_id"),
@@ -1498,17 +1527,26 @@ def _csv_row(case_id: str, invoice: dict) -> list[str]:
         "total_inc_tax": invoice.get("invoice_total_inc_tax"),
         "po_number": invoice.get("po_number"),
         "payment_terms": invoice.get("payment_terms"),
-        # One row per invoice, so the lines' accounts share a cell: distinct,
-        # in line order.
-        "gl_account": "; ".join(
-            dict.fromkeys(
-                line["gl_account"]
-                for line in invoice.get("line_items") or []
-                if line.get("gl_account")
-            )
-        ),
     }
-    return ["" if mapping[c] is None else str(mapping[c]) for c in CSV_COLUMNS]
+    lines = [
+        line if isinstance(line, dict) else {}
+        for line in invoice.get("line_items") or []
+    ]
+    rows = [
+        {
+            **head,
+            # Numbered as the Xero connector numbers them: position, from 1.
+            "line_number": number,
+            "line_description": line.get("description"),
+            "quantity": line.get("quantity"),
+            "unit_price": line.get("unit_price"),
+            "line_amount_ex_tax": line.get("amount_ex_tax"),
+            "line_tax": line.get("tax_amount"),
+            "gl_account": line.get("gl_account"),
+        }
+        for number, line in enumerate(lines, start=1)
+    ] or [head]
+    return [[_csv_safe(row.get(c)) for c in CSV_COLUMNS] for row in rows]
 
 
 @app.post("/api/invoices/{case_id}/export")
@@ -1553,7 +1591,7 @@ def export_invoice(
         buffer = io.StringIO()
         writer = csv.writer(buffer)
         writer.writerow(CSV_COLUMNS)
-        writer.writerow(_csv_row(case_id, invoice))
+        writer.writerows(_csv_rows(case_id, invoice))
         get_audit().emit(ctx, "invoice_exported", {"target": "csv"})
         return {
             "case_id": case_id,

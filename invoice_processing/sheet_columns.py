@@ -176,6 +176,8 @@ FILTER_FLAGS: dict[str, str] = {**QUALITY_FLAGS, **COMPOSITE_FLAGS}
 # its own way. The two must describe the same fields or a finance team gets two
 # different answers for one invoice, so the correspondence is written down here
 # and `test_sheet_api.py` fails when either side gains or renames a column.
+# Only the CSV's invoice-level columns appear: it is one row per line, a sheet
+# row is one invoice, so its line columns have no equivalent here.
 CSV_EQUIVALENT: dict[str, str] = {
     "case_id": "case_id",
     "vendor_name": "vendor_name",

@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event
 
 from invoice_processing.api import auth, service
-from invoice_processing.api.service import CSV_COLUMNS, app
+from invoice_processing.api.service import CSV_COLUMNS, LINE_COLUMNS, app
 from invoice_processing.db.models import (
     Base,
     Correction,
@@ -986,10 +986,10 @@ class TestTheTwoExportsDescribeTheSameInvoice:
     """
 
     def test_every_csv_column_names_a_catalogue_column(self):
-        # gl_account is line-level coding; the sheet has one row per invoice
-        # and no line columns, so it has no equivalent there.
+        # The CSV is one row per line; the sheet is one row per invoice and
+        # has no line columns, so only the invoice-level ones correspond.
         assert list(CSV_EQUIVALENT) == [
-            c for c in CSV_COLUMNS if c != "gl_account"
+            c for c in CSV_COLUMNS if c not in LINE_COLUMNS
         ]
         missing = [key for key in CSV_EQUIVALENT.values() if key not in BY_KEY]
         assert missing == []
