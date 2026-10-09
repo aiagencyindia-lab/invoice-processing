@@ -49,7 +49,7 @@ from .auth import Principal, require_role
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-NEEDS_DB = "Purchase orders need a database. Configure DATABASE_URL."
+NEEDS_DB = "Purchase-order matching needs a database. Configure DATABASE_URL."
 MAX_IMPORT_BYTES = 5 * 1024 * 1024
 TOO_BIG = "Import is over 5 MB."
 
@@ -86,11 +86,17 @@ def Text(n: int, min_length: int = 0):
     return Annotated[str, Field(min_length=min_length, max_length=n)]
 
 
-Amount = Annotated[float, Field(ge=0, allow_inf_nan=False)]
-Quantity = Annotated[float, Field(allow_inf_nan=False)]
+# Numeric(18, 4) holds 14 integer digits; Integer is 32-bit. Beyond either
+# Postgres refuses the insert, so the row is refused here, by name.
+MAX_NUMBER = 99_999_999_999_999
+MAX_LINE = 2**31 - 1
+Amount = Annotated[float, Field(ge=0, le=MAX_NUMBER, allow_inf_nan=False)]
+Quantity = Annotated[
+    float, Field(ge=-MAX_NUMBER, le=MAX_NUMBER, allow_inf_nan=False)
+]
 IsoDate = Annotated[str, Field(max_length=10), AfterValidator(_iso_date)]
 PoNumber = Annotated[str, Field(max_length=128), AfterValidator(_po_number)]
-LineNumber = Annotated[int, Field(gt=0)]
+LineNumber = Annotated[int, Field(gt=0, le=MAX_LINE)]
 
 
 class _Row(BaseModel):
@@ -152,6 +158,12 @@ def _say(err: dict) -> str:
         return f"{field} must be at most {err['ctx']['max_length']} characters"
     if kind == "string_too_short":
         return f"{field} must not be blank"
+    if kind == "less_than_equal":
+        if field == "line_number":
+            return f"{field} must be a whole number from 1 to {MAX_LINE}"
+        return f"{field} must be at most {MAX_NUMBER}"
+    if kind == "greater_than_equal" and field == "qty_received":
+        return f"{field} must be at least -{MAX_NUMBER}"
     if kind in _NUMBER:
         return f"{field} must be a number" + (
             "" if field == "qty_received" else " ≥ 0"
@@ -333,6 +345,21 @@ def parse_grn_csv(text: str) -> list[dict]:
     return _group(text, "grn_number", GRN_HEADER, GRN_LINE)
 
 
+def _public(item):
+    if not isinstance(item, dict):
+        return item
+    out = {k: v for k, v in item.items() if not str(k).startswith("_")}
+    if isinstance(out.get("lines"), list):
+        out["lines"] = [_public(ln) for ln in out["lines"]]
+    return out
+
+
+def without_internal_keys(records: list) -> list:
+    """JSON records minus `_row`/`_conflicts`: only the CSV parser sets them,
+    and a caller's own values would be trusted as row numbers and errors."""
+    return [_public(r) for r in records]
+
+
 async def _read_upload(request: Request, field: str, parse_csv) -> list:
     """The records in a JSON body or an uploaded .csv/.json file; 413 over
     the cap, 400 when it cannot be read."""
@@ -369,6 +396,7 @@ async def _read_upload(request: Request, field: str, parse_csv) -> list:
         records = body.get(field) if isinstance(body, dict) else body
         if not isinstance(records, list):
             raise HTTPException(400, f"{field} must be a list.")
+        records = without_internal_keys(records)
     if not records:
         raise HTTPException(
             400, f"The upload has no {field.replace('_', ' ')}."

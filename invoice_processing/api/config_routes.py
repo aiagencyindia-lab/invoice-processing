@@ -263,7 +263,12 @@ def replace_purchase_orders(
     if repo is not None:
         from . import po_routes, service  # noqa: PLC0415
 
-        po_routes.store_orders(repo, principal, records, replace=True)
+        po_routes.store_orders(
+            repo,
+            principal,
+            po_routes.without_internal_keys(records),
+            replace=True,
+        )
         service.get_audit().emit(
             principal.context(),
             "purchase_orders_replaced",

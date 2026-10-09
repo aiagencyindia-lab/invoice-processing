@@ -353,14 +353,14 @@ def test_503_without_database(tmp_path, monkeypatch):
         c.post("/api/goods-receipts/import", json={"goods_receipts": [GRN]}),
         c.get("/api/goods-receipts"),
     ):
-        assert r.status_code == 503 and "need a database" in r.json()["detail"]
+        assert r.status_code == 503 and "needs a database" in r.json()["detail"]
 
 
 def test_503_when_the_database_has_no_tables(tmp_path, monkeypatch):
     """DATABASE_URL set (conftest's sqlite://) but unmigrated."""
     _auth(tmp_path, monkeypatch)
     r = _client("clerk").get("/api/goods-receipts")
-    assert r.status_code == 503 and "need a database" in r.json()["detail"]
+    assert r.status_code == 503 and "needs a database" in r.json()["detail"]
 
 
 def test_put_replace_all_writes_the_database(env):
@@ -417,3 +417,55 @@ def test_put_validation_names_every_row(env):
     assert r.status_code == 400
     assert "row 1: po_number" in r.json()["detail"]
     assert "row 2: vendor_name" in r.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("change", "said"),
+    [
+        ({"total_amount": 1e20}, "row 1: total_amount must be at most"),
+        (
+            {"lines": [{**ORDER["lines"][0], "qty_ordered": 1e20}]},
+            "row 1: qty_ordered must be at most",
+        ),
+        (
+            {"lines": [{**ORDER["lines"][0], "line_number": 3_000_000_000}]},
+            "row 1: line_number must be a whole number from 1 to 2147483647",
+        ),
+    ],
+)
+def test_numbers_beyond_the_columns_are_refused_by_row(env, change, said):
+    r = po_import(env, {"purchase_orders": [{**ORDER, **change}]})
+    assert r.status_code == 400 and said in r.json()["detail"]
+
+
+def test_a_grn_quantity_beyond_the_column_is_refused_by_row(env):
+    po_import(env, {"purchase_orders": [ORDER]})
+    for qty in (1e20, -1e20):
+        line = {"line_number": 1, "qty_received": qty}
+        r = grn_import(
+            env, {"goods_receipts": [{**GRN, "reason": "x", "lines": [line]}]}
+        )
+        assert r.status_code == 400
+        assert "row 1: qty_received must be" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("junk", [5, [{}], "x", None])
+def test_internal_keys_in_a_json_body_are_ignored(env, junk):
+    """`_row`/`_conflicts` only ever come from the CSV parser."""
+    order = {
+        **ORDER,
+        "_row": junk,
+        "_conflicts": junk,
+        "lines": [{**ln, "_row": junk} for ln in ORDER["lines"]],
+    }
+    r = po_import(env, {"purchase_orders": [order]})
+    assert r.status_code == 201, r.text
+    bad = {**order, "po_number": "PO-2", "vendor_name": ""}
+    r = po_import(env, {"purchase_orders": [bad]})
+    assert r.status_code == 400 and "row 1: vendor_name" in r.json()["detail"]
+    grn = {**GRN, "_row": junk, "_conflicts": junk}
+    assert grn_import(env, {"goods_receipts": [grn]}).status_code == 200
+    r = env["client"]("admin").put(
+        "/api/purchase-orders", json={"purchase_orders": [order]}
+    )
+    assert r.status_code == 200, r.text

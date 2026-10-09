@@ -487,21 +487,24 @@ class TestWritesDoNotCross:
             ).status_code
             == 400
         )
-        # Same GRN number in another tenant is its own receipt, not a dup.
+        # Globex's own PO-9001 and GRN-1 are its own, not ACME's or a dup.
+        assert (
+            globex.post(
+                "/api/purchase-orders/import",
+                json={"purchase_orders": [{**order, "vendor_name": "Globex"}]},
+            ).json()["created"]
+            == 1
+        )
         assert (
             globex.post(
                 "/api/goods-receipts/import", json={"goods_receipts": [grn]}
-            ).status_code
-            == 400
+            ).json()["recorded"]
+            == 1
         )
         assert (
             globex.put(
                 "/api/purchase-orders",
-                json={
-                    "purchase_orders": [
-                        {**order, "vendor_name": "Globex", "lines": []}
-                    ]
-                },
+                json={"purchase_orders": [{**order, "vendor_name": "Globex"}]},
             ).status_code
             == 200
         )
@@ -510,7 +513,9 @@ class TestWritesDoNotCross:
         assert kept["vendor_name"] == "Acme Pty Ltd"
         assert [ln["received"] for ln in kept["lines"]] == [4.0]
         assert [r["grn_number"] for r in po_db.list_receipts(ACME)] == ["GRN-1"]
-        assert po_db.get_order(GLOBEX, "PO-9001")["lines"] == []
+        theirs = po_db.get_order(GLOBEX, "PO-9001")
+        assert theirs["vendor_name"] == "Globex"
+        assert [ln["received"] for ln in theirs["lines"]] == [4.0]
 
     def test_manager_cannot_be_set_across_tenants(self, clients, approvals_db):
         acme_user = next(
