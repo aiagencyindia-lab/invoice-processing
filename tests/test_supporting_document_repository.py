@@ -231,6 +231,18 @@ def test_revert_to_pending_restores_the_reading(env):
         repo.revert_to_pending("t1", a["id"], extracted={})
 
 
+def test_revert_puts_a_blocked_row_back_to_blocked(env):
+    _, _, ids, repo = env
+    a = _up(repo, "t1", ids["t1"][0], blocked_reason="PO-1 not on file")
+    repo.mark(
+        "t1", a["id"], status="accepted", reviewed_by="c",
+        expect=("pending", "blocked"),
+    )  # fmt: skip
+    back = repo.revert_to_pending("t1", a["id"], extracted={}, status="blocked")
+    assert back["status"] == "blocked"
+    assert back["blocked_reason"] == "PO-1 not on file"
+
+
 def test_a_concurrent_po_insert_is_a_conflict(env, monkeypatch):
     url, _, _, _ = env
     po = PgPurchaseOrderRepository(url)

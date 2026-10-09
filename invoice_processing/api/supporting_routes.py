@@ -16,7 +16,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from .. import supporting_docs
+from .. import po_matching, supporting_docs
 from ..ports import ConcurrentWrite, StatusChanged, UploadOwned
 from ..supporting_docs import GOODS_RECEIPT, PURCHASE_ORDER
 from . import po_routes
@@ -59,6 +59,8 @@ Record = Annotated[dict[Key, Value], Field(max_length=32)]
 class AcceptIn(BaseModel):
     fields: Record = {}
     lines: Annotated[list[Record], Field(max_length=2000)] = []
+    # The clerk picked the PO lines again after changing the PO number.
+    lines_rechosen: bool = False
 
 
 class RejectIn(BaseModel):
@@ -98,8 +100,9 @@ def _found(supporting, principal: Principal, row_id: str) -> dict:
     return row
 
 
-ACCEPTABLE = ("pending",)
-# A receipt blocked on a misread PO number would otherwise wait forever.
+# A receipt blocked on a misread PO number would otherwise wait forever: the
+# clerk corrects the number, and the store still refuses a PO not on file.
+ACCEPTABLE = ("pending", "blocked")
 REJECTABLE = ("pending", "blocked")
 
 
@@ -145,6 +148,29 @@ def _pairing(orders, principal: Principal, row: dict):
             (row["extracted"] or {}).get("lines") or [], order["lines"]
         )
     return order, paired
+
+
+def _refuse_stale_pairing(orders, principal, row, fields, lines) -> None:
+    """A PO number changed from the scan's leaves its lines paired to the old
+    PO; the store books by line number, so they would land on whatever line
+    has that number on the new one. Refused unless they pair the new PO."""
+    new = fields.get("po_number")
+    new_key = po_matching.normalize_po_number(new) if new else None
+    if new_key == row["po_number"]:
+        return
+    order = orders.get_order(principal.tenant_id, str(new)) if new else None
+    paired = (
+        supporting_docs.pair_grn_lines(lines, order["lines"])
+        if order is not None
+        else [None] * len(lines)
+    )
+    if [ln.get("po_line_number") for ln in lines] != paired:
+        was = ((row["extracted"] or {}).get("fields") or {}).get("po_number")
+        raise HTTPException(
+            400,
+            f"The PO number changed from {was or row['po_number']} to {new}; "
+            "choose the PO lines again.",
+        )
 
 
 def _one_record(message: str) -> str:
@@ -287,6 +313,8 @@ def accept_supporting_document(
     lines = [{k: ln[k] for k in kept if k in ln} for ln in body.lines]
     if kind == PURCHASE_ORDER and not lines:
         raise HTTPException(400, NO_LINES)
+    if kind == GOODS_RECEIPT and not body.lines_rechosen:
+        _refuse_stale_pairing(orders, principal, row, fields, lines)
 
     record = _without_none(
         supporting_docs.to_import_payload(kind, fields, lines)
@@ -332,8 +360,9 @@ def accept_supporting_document(
     except Exception:
         try:
             supporting.revert_to_pending(
-                principal.tenant_id, row["id"], extracted=before
-            )
+                principal.tenant_id, row["id"], extracted=before,
+                status=row["status"],
+            )  # fmt: skip
         except Exception:
             logger.exception("Scanned document %s left accepted", row["id"])
         raise

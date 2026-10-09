@@ -464,7 +464,7 @@ test("a clerk corrects a scanned receipt and it clears the held invoice", async 
     .toBe("AUTO");
 });
 
-test("a receipt for a PO not on file cannot be accepted, only rejected", async ({
+test("a receipt for a PO not on file is refused until its PO number is corrected", async ({
   page,
 }) => {
   await as(page, "alice@e2e.test:clerk");
@@ -475,7 +475,14 @@ test("a receipt for a PO not on file cannot be accepted, only rejected", async (
 
   const drawer = page.getByRole("dialog", { name: "Review scanned document" });
   await expect(drawer.getByText(/PO-NOT-YET is not on file/)).toBeVisible();
-  await expect(drawer.getByRole("button", { name: "Accept" })).toBeDisabled();
+  await expect(
+    drawer.getByText("Correct the PO number to one on file to accept."),
+  ).toBeVisible();
+  await drawer.getByRole("button", { name: "Accept" }).click();
+  await expect(drawer.getByRole("alert")).toBeVisible(); // refused, still blocked
+  // A changed PO number clears the scan's pairing: the lines are chosen again.
+  await drawer.getByLabel("Po number").fill("PO-E2E-2");
+  await expect(drawer.getByLabel("PO line for line 1")).toHaveValue("");
   await drawer.getByRole("button", { name: "Reject" }).click();
   await drawer.getByLabel("Reason for rejecting").fill("Not our purchase order");
   await drawer.getByRole("button", { name: "Confirm reject" }).click();

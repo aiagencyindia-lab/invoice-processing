@@ -78,6 +78,8 @@ export default function SupportingReview({
   const [reason, setReason] = useState("");
   const [poLines, setPoLines] = useState<number[] | null>(null);
   const [poLinesFailed, setPoLinesFailed] = useState(false);
+  // The PO number was edited: the scan's pairing no longer applies.
+  const [rechosen, setRechosen] = useState(false);
   const drawer = useRef<HTMLElement>(null);
 
   useEffect(() => drawer.current?.focus(), []);
@@ -113,6 +115,21 @@ export default function SupportingReview({
       );
   }, [id]);
 
+  const poNumber = fields.po_number?.trim() ?? "";
+  useEffect(() => {
+    if (!rechosen || !poNumber) return;
+    let live = true;
+    const t = setTimeout(() => {
+      api<PurchaseOrderDetail>(`/api/purchase-orders/${encodeURIComponent(poNumber)}`)
+        .then((po) => live && setPoLines(po.lines.map((l) => l.line_number)))
+        .catch(() => live && setPoLines([])); // not on file: nothing to choose
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [rechosen, poNumber]);
+
   async function decide(path: "accept" | "reject") {
     if (!detail) return;
     setBusy(true);
@@ -130,7 +147,11 @@ export default function SupportingReview({
         `/api/supporting-documents/${id}/accept`,
         {
           method: "POST",
-          body: JSON.stringify({ fields: convert(fields), lines: lines.map(convert) }),
+          body: JSON.stringify({
+            fields: convert(fields),
+            lines: lines.map(convert),
+            lines_rechosen: rechosen,
+          }),
         },
       );
       onDone(
@@ -194,7 +215,8 @@ export default function SupportingReview({
           <div className="stack" style={{ flex: "1 1 420px", gap: 12 }}>
             {blocked ? (
               <div role="status" className="panel" style={{ padding: 10 }}>
-                {detail.blocked_reason ?? "Its purchase order is not on file."}
+                {detail.blocked_reason ?? "Its purchase order is not on file."}{" "}
+                Correct the PO number to one on file to accept.
               </div>
             ) : null}
             <div>
@@ -207,9 +229,16 @@ export default function SupportingReview({
                     <input
                       id={`f-${key}`}
                       value={fields[key] ?? ""}
-                      onChange={(e) =>
-                        setFields({ ...fields, [key]: e.target.value })
-                      }
+                      onChange={(e) => {
+                        setFields({ ...fields, [key]: e.target.value });
+                        if (isGrn && key === "po_number") {
+                          // Paired against the old PO: the clerk picks again.
+                          setRechosen(true);
+                          setPoLines(null);
+                          setPoLinesFailed(false);
+                          setLines((all) => all.map((ln) => ({ ...ln, po_line_number: "" })));
+                        }
+                      }}
                     />
                     {check ? (
                       <div className="why">
@@ -281,7 +310,7 @@ export default function SupportingReview({
                               setLine(i, "po_line_number", e.target.value)
                             }
                           >
-                            <option value="">no match</option>
+                            <option value="">{rechosen ? "choose" : "no match"}</option>
                             {[
                               ...(poLines ?? []),
                               ...(ln.po_line_number &&
@@ -329,7 +358,7 @@ export default function SupportingReview({
                 <button
                   type="button"
                   className="btn-primary"
-                  disabled={busy || blocked}
+                  disabled={busy}
                   onClick={() => decide("accept")}
                 >
                   Accept

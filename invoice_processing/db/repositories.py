@@ -2424,10 +2424,12 @@ class PgSupportingDocumentRepository:
             return self._dict(*found)
 
     def revert_to_pending(
-        self, tenant_id: str, id: str, *, extracted: dict
-    ) -> dict:
-        """Undo an acceptance whose storage failed: pending again, with the
-        original reading and no reviewer. Only from accepted (StatusChanged)."""
+        self, tenant_id: str, id: str, *, extracted: dict,
+        status: str = "pending",
+    ) -> dict:  # fmt: skip
+        """Undo an acceptance whose storage failed: back to `status` (what it
+        was before), with the original reading and no reviewer. Only from
+        accepted (StatusChanged)."""
         with tenant_session(tenant_id, self.url) as session:
             changed = session.execute(
                 update(SupportingDocument)
@@ -2437,7 +2439,7 @@ class PgSupportingDocumentRepository:
                     SupportingDocument.status == "accepted",
                 )
                 .values(
-                    status="pending",
+                    status=status,
                     extracted=extracted,
                     reviewed_by=None,
                     reviewed_at=None,

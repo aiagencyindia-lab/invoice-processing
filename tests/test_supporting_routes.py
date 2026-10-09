@@ -290,8 +290,9 @@ def test_a_blocked_receipt_waits_until_its_po_is_imported(env):
         GRN_READ, blocked_reason="Purchase order PO-9001 is not on file"
     )
     r = _accept(row, _grn_body())
-    assert r.status_code == 409
-    assert r.json()["detail"] == "Purchase order PO-9001 is not on file"
+    assert r.status_code == 400
+    assert "'PO-9001' is not on file" in r.json()["detail"]
+    assert env["supporting"].get(TENANT, row["id"])["status"] == "blocked"
 
     imported = _client().post(
         "/api/purchase-orders/import", json={"purchase_orders": [ORDER]}
@@ -621,3 +622,83 @@ def test_a_failed_pairing_read_does_not_fail_an_accept(env, monkeypatch):
     assert r.status_code == 200 and calls
     [event] = env["events"]("supporting_document_accepted")
     assert event["payload"]["lines_changed"] is None
+
+
+ORDER_2 = {
+    **ORDER,
+    "po_number": "PO-9002",
+    "lines": [
+        {
+            "line_number": 1,
+            "item_code": "X-1",
+            "qty_ordered": 1,
+            "unit_price": 1,
+        },
+        {**ORDER["lines"][0], "line_number": 2},
+    ],
+}
+
+
+def test_a_changed_po_number_needs_its_lines_chosen_again(env):
+    """The pairing was read against the scanned PO; sent to another PO it
+    would book the receipt to whatever line has the same number there."""
+    env["orders"].upsert_orders(TENANT, [ORDER, ORDER_2], uploaded_by="u")
+    row = env["scan"](GRN_READ)
+    stale = _grn_body(po_number="PO-9002")  # still PO-9001's line 1
+    r = _accept(row, stale)
+    assert r.status_code == 400
+    assert r.json()["detail"] == (
+        "The PO number changed from PO-9001 to PO-9002; "
+        "choose the PO lines again."
+    )
+    assert env["orders"].list_receipts(TENANT) == []
+    assert env["supporting"].get(TENANT, row["id"])["status"] == "pending"
+
+    chosen = _grn_body(po_number="PO-9002")
+    chosen["lines"][0]["po_line_number"] = 2
+    r = _accept(row, {**chosen, "lines_rechosen": True})
+    assert r.status_code == 200, r.text
+    [receipt] = env["orders"].list_receipts(TENANT)
+    assert receipt["po_number"] == "PO-9002"
+    assert receipt["lines"][0]["line_number"] == 2
+
+
+def test_a_blocked_receipt_is_accepted_once_its_po_number_is_corrected(env):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    row = env["scan"](
+        {**GRN_READ, "fields": {**GRN_READ["fields"], "po_number": "PO-1"}},
+        blocked_reason="Purchase order PO-1 is not on file",
+    )
+    r = _accept(row, _grn_body(po_number="PO-1"))
+    assert r.status_code == 400
+    assert "'PO-1' is not on file" in r.json()["detail"]
+    back = env["supporting"].get(TENANT, row["id"])
+    assert back["status"] == "blocked"
+    assert back["blocked_reason"] == "Purchase order PO-1 is not on file"
+    assert env["orders"].list_receipts(TENANT) == []
+
+    # The corrected number pairs the line the clerk sent, so no re-choice.
+    r = _accept(row, _grn_body())
+    assert r.status_code == 200, r.text
+    [receipt] = env["orders"].list_receipts(TENANT)
+    assert receipt["po_number"] == "PO-9001"
+    assert env["supporting"].get(TENANT, row["id"])["status"] == "accepted"
+
+
+def test_replacing_the_po_set_keeps_scan_confirmed_orders(env):
+    row = env["scan"](PO_READ)
+    body = {"fields": PO_READ["fields"], "lines": PO_READ["lines"]}
+    assert _accept(row, body).status_code == 201
+    r = _client("admin").put(
+        "/api/purchase-orders", json={"purchase_orders": [ORDER]}
+    )
+    assert r.status_code == 200, r.text
+    assert env["orders"].get_order(TENANT, "PO-4471")["source"] == "document"
+    # Named in the export, the ERP's version replaces the scan's.
+    erp = {**ORDER, "po_number": "PO-4471"}
+    r = _client("admin").put(
+        "/api/purchase-orders", json={"purchase_orders": [erp]}
+    )
+    assert r.status_code == 200, r.text
+    assert env["orders"].get_order(TENANT, "PO-4471")["source"] == "upload"
+    assert env["orders"].get_order(TENANT, "PO-9001") is None
