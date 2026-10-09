@@ -211,3 +211,26 @@ def test_non_finite_numbers_hold_as_unreadable_never_pass():
     for inv_lines, po_lines, rec, bil in cases:
         r = match(inv_lines, po_lines, rec, bil, vendor_kind="goods")
         assert r.signals == (UNREADABLE_LINE,), (inv_lines, po_lines, rec, bil)
+
+
+def test_identical_wording_ties_break_by_price_then_line_number():
+    po_lines = [
+        po(n, "Hex bolt M8", 9, pr) for n, pr in ((1, 100), (2, 120), (3, 100))
+    ]
+    invs = [inv("Hex bolt M8", 1, pr) for pr in (120, 100, 100)]
+    assert [n for n, _ in pair(invs, po_lines)] == [2, 1, 3]
+
+
+def test_different_wording_near_ties_stay_unpaired_even_beside_identical_ones():
+    po_lines = [
+        po(1, "Hex bolt M8 zinc", 1, 1),
+        po(2, "Hex bolt M8 zinc", 1, 1),
+        po(3, "Hex bolt M10 zinc", 1, 1),
+    ]
+    assert pair([inv("Hex bolt zinc", 1, 1)], po_lines) == [(None, None)]
+
+
+def test_invoice_with_no_lines_against_a_po_with_lines_holds():
+    r = match([], [po(1, "Grease", 1, 1)], {1: 1}, {1: 0}, vendor_kind="goods")
+    assert r.signals == (UNREADABLE_LINE,)
+    assert r.evidence == ("Invoice has no line items to match.",)

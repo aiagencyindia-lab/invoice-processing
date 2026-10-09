@@ -96,8 +96,22 @@ class ThreeWay:
         return not self.signals
 
 
+def _price_gap(
+    price: float | None, po_line: dict, pct: float, abs_: float
+) -> float:
+    po_price = _num(po_line.get("unit_price"))
+    if price is None or po_price is None:
+        return math.inf
+    d = abs(price - po_price)
+    return d if d <= max(pct * po_price, abs_) else math.inf
+
+
 def pair(
-    invoice_lines: list[dict], po_lines: list[dict]
+    invoice_lines: list[dict],
+    po_lines: list[dict],
+    *,
+    price_tol_pct: float = 0.02,
+    price_tol_abs: float = 50.0,
 ) -> list[tuple[int | None, str | None]]:
     out: list[tuple[int | None, str | None]] = [(None, None)] * len(
         invoice_lines
@@ -129,18 +143,28 @@ def pair(
             continue
         words = _words(line.get("description"))
         scored = sorted(
-            (
-                (_jaccard(words, _words(p.get("description"))), n)
-                for n, p in free.items()
-            ),
-            reverse=True,
-        )
-        if (
-            scored
-            and scored[0][0] >= 0.6
-            and scored[0][0] - (scored[1][0] if len(scored) > 1 else 0.0) >= 0.2
+            (_jaccard(words, _words(p.get("description"))), n)
+            for n, p in free.items()
+        )[::-1]
+        if not scored or scored[0][0] < 0.6:
+            continue
+        best = scored[0][0]
+        # different wording that scores within 0.2 of the best is a guess, so
+        # stay unpaired; identical wording is one item on several PO lines
+        tied = sorted(n for sc, n in scored if sc == best)
+        if any(sc != best and best - sc < 0.2 for sc, _ in scored) or any(
+            _words(free[n].get("description"))
+            != _words(free[tied[0]].get("description"))
+            for n in tied
         ):
-            claim(i, scored[0][1], "description")
+            continue
+        price = _num(line.get("unit_price"))
+        gaps = {
+            n: _price_gap(price, free[n], price_tol_pct, price_tol_abs)
+            for n in tied
+        }
+        # min() keeps the first (lowest line number) among equal gaps
+        claim(i, min(tied, key=gaps.__getitem__), "description")
     return out
 
 
@@ -157,7 +181,32 @@ def match(
     grn_numbers: dict[int, list[str]] | None = None,
 ) -> ThreeWay:
     by_n = {p["line_number"]: p for p in po_lines}
-    pairs = pair(invoice_lines, po_lines)
+    pairs = pair(
+        invoice_lines,
+        po_lines,
+        price_tol_pct=price_tol_pct,
+        price_tol_abs=price_tol_abs,
+    )
+    if not invoice_lines and po_lines:
+        msg = "Invoice has no line items to match."
+        return ThreeWay(
+            (
+                LineResult(
+                    0,
+                    "",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    (UNREADABLE_LINE,),
+                    msg,
+                ),
+            ),
+            (UNREADABLE_LINE,),
+            (msg,),
+        )
     results: list[LineResult] = []
     for idx, (line, (n, how)) in enumerate(
         zip(invoice_lines, pairs, strict=True), start=1

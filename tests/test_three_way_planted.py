@@ -51,4 +51,4 @@ def test_planted_faults_are_caught_and_nothing_else_is_added():
 
 # ponytail: pinned to today's measurement so a pairing change shows as a diff
 # (clean passed, clean records, lines paired, clean lines)
-PINNED = (1, 10, 5, 104)
+PINNED = (8, 10, 104, 105)

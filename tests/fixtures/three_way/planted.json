@@ -8,7 +8,7 @@
     "line_items": [
      {
       "description": "Masterbatch black 40% (25kg)",
-      "quantity": 20.0,
+      "quantity": 10.0,
       "unit": "bag",
       "unit_price": 4521.0,
       "amount_ex_tax": 81378.0,
@@ -38,7 +38,7 @@
      },
      {
       "description": "HDPE granules injection grade (25kg bag)",
-      "quantity": 6.0,
+      "quantity": 12.0,
       "unit": "bag",
       "unit_price": 2873.0,
       "amount_ex_tax": 34476.0,
@@ -85,9 +85,9 @@
     ]
    },
    "received": {
-    "1": 20,
+    "1": 10.0,
     "2": 10,
-    "3": 6.0
+    "3": 12
    },
    "billed": {
     "1": 0,
@@ -96,9 +96,7 @@
    },
    "vendor_kind": "goods",
    "fault": "split_delivery",
-   "expected_signals": [
-    "unpaired_line"
-   ]
+   "expected_signals": []
   },
   {
    "invoice_id": "MFG-INV-015",
@@ -420,9 +418,7 @@
    },
    "vendor_kind": "goods",
    "fault": null,
-   "expected_signals": [
-    "unpaired_line"
-   ]
+   "expected_signals": []
   },
   {
    "invoice_id": "MFG-INV-047",
@@ -431,7 +427,7 @@
     "line_items": [
      {
       "description": "HDPE granules injection grade (25kg bag)",
-      "quantity": 20.0,
+      "quantity": 10.0,
       "unit": "bag",
       "unit_price": 2664.0,
       "amount_ex_tax": 47952.0,
@@ -461,7 +457,7 @@
      },
      {
       "description": "Masterbatch black 40% (25kg)",
-      "quantity": 50.0,
+      "quantity": 100.0,
       "unit": "bag",
       "unit_price": 4635.0,
       "amount_ex_tax": 463500.0,
@@ -669,9 +665,9 @@
     ]
    },
    "received": {
-    "1": 20,
+    "1": 10.0,
     "2": 20,
-    "3": 50.0,
+    "3": 100,
     "4": 4,
     "5": 25,
     "6": 20,
@@ -694,9 +690,7 @@
    },
    "vendor_kind": "goods",
    "fault": "split_delivery",
-   "expected_signals": [
-    "unpaired_line"
-   ]
+   "expected_signals": []
   },
   {
    "invoice_id": "MFG-INV-019",
@@ -1068,9 +1062,7 @@
    },
    "vendor_kind": "goods",
    "fault": null,
-   "expected_signals": [
-    "unpaired_line"
-   ]
+   "expected_signals": []
   },
   {
    "invoice_id": "MFG-INV-049",
@@ -1466,9 +1458,7 @@
    },
    "vendor_kind": "goods",
    "fault": null,
-   "expected_signals": [
-    "unpaired_line"
-   ]
+   "expected_signals": []
   },
   {
    "invoice_id": "MFG-INV-035",
@@ -1569,7 +1559,9 @@
    },
    "vendor_kind": "goods",
    "fault": null,
-   "expected_signals": []
+   "expected_signals": [
+    "unreadable_line"
+   ]
   },
   {
    "invoice_id": "MFG-INV-025",
@@ -1791,9 +1783,7 @@
    },
    "vendor_kind": "goods",
    "fault": null,
-   "expected_signals": [
-    "unpaired_line"
-   ]
+   "expected_signals": []
   },
   {
    "invoice_id": "MFG-INV-033",
@@ -2066,7 +2056,6 @@
    "vendor_kind": "goods",
    "fault": null,
    "expected_signals": [
-    "unpaired_line",
     "unreadable_line"
    ]
   },
@@ -2390,9 +2379,7 @@
    },
    "vendor_kind": "goods",
    "fault": null,
-   "expected_signals": [
-    "unpaired_line"
-   ]
+   "expected_signals": []
   },
   {
    "invoice_id": "MFG-INV-044",
@@ -2614,9 +2601,7 @@
    },
    "vendor_kind": "goods",
    "fault": null,
-   "expected_signals": [
-    "unpaired_line"
-   ]
+   "expected_signals": []
   },
   {
    "invoice_id": "MFG-INV-006",
@@ -3037,9 +3022,7 @@
    },
    "vendor_kind": "goods",
    "fault": null,
-   "expected_signals": [
-    "unpaired_line"
-   ]
+   "expected_signals": []
   },
   {
    "invoice_id": "MFG-INV-056",
@@ -3386,8 +3369,7 @@
    "vendor_kind": "goods",
    "fault": "over_ordered",
    "expected_signals": [
-    "over_ordered",
-    "unpaired_line"
+    "over_ordered"
    ]
   },
   {
@@ -3760,9 +3742,7 @@
    },
    "vendor_kind": "goods",
    "fault": null,
-   "expected_signals": [
-    "unpaired_line"
-   ]
+   "expected_signals": []
   },
   {
    "invoice_id": "MFG-INV-017",
@@ -3871,9 +3851,9 @@
     ]
    },
    "received": {
-    "1": 100,
+    "1": 99.0,
     "2": 2,
-    "3": 1.0,
+    "3": 2,
     "4": 3
    },
    "billed": {
@@ -3885,8 +3865,7 @@
    "vendor_kind": "goods",
    "fault": "short_received",
    "expected_signals": [
-    "short_received",
-    "unpaired_line"
+    "short_received"
    ]
   },
   {
@@ -3896,7 +3875,7 @@
     "line_items": [
      {
       "description": "Ball screw assembly 32mm x 1200",
-      "quantity": 2.0,
+      "quantity": 1.0,
       "unit": "nos",
       "unit_price": 60618.0,
       "amount_ex_tax": 121236.0,
@@ -3911,7 +3890,7 @@
      },
      {
       "description": "CNC turning centre spare - turret index\nmotor",
-      "quantity": 4.0,
+      "quantity": 8.0,
       "unit": "nos",
       "unit_price": 112796.0,
       "amount_ex_tax": 857249.6,
@@ -3973,8 +3952,8 @@
     ]
    },
    "received": {
-    "1": 2,
-    "2": 4.0,
+    "1": 1.0,
+    "2": 8,
     "3": 25
    },
    "billed": {
@@ -3984,9 +3963,7 @@
    },
    "vendor_kind": "goods",
    "fault": "split_delivery",
-   "expected_signals": [
-    "unpaired_line"
-   ]
+   "expected_signals": []
   },
   {
    "invoice_id": "MFG-INV-042",

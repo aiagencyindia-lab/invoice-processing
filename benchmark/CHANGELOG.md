@@ -1395,24 +1395,24 @@ clean -> 40 of 45; posted untouched wrongly 1 -> 1; decision accuracy 98.0% ->
 Company B PO invoices the run accepted, with PO lines rebuilt from ground truth
 and every line fully received. Six faults planted (short received x2, not
 received, price over PO, over ordered, unpaired line): caught 6/6, and no
-planted record raised a signal beyond its fault plus its own baseline. Three
-split-delivery controls (invoice quantity halved, receipt matches) add no
-signal.
+planted record raised a signal beyond its fault. Three split-delivery controls
+(invoice quantity halved, receipt matches) add no signal. Of the 10 unplanted
+records, 8 pass clean.
 
-**Known gap, reported and not tuned: description pairing.** Only 5 of 104
-lines on the 10 unplanted records paired by description (4.8%); 1 of 10 passed
-clean. Pairing never guesses between near ties, and Company B invoices repeat
-the same description on several lines at different prices (e.g. MFG-INV-019 has
-14 lines over 3 descriptions, MFG-INV-029 two identical "Masterbatch black"
-lines), so those lines are left unpaired and hold as `unpaired_line`. Extracted
-text also differs from ground truth in small ways (hyphen vs en dash). No
-order-based fallback exists by design, and none was added. Holding is the safe
-direction; the cost is that a PO invoice with repeated descriptions needs an
-item code or PO line number on the invoice to clear. MFG-INV-033 additionally
-raises `unreadable_line` (two lines extracted without a price or quantity).
+**Pairing fix found by the first measurement.** The first run paired only 5 of
+104 lines by description (1 of 10 clean records passed). Company B invoices
+repeat one item on several PO lines at different prices, the descriptions
+matched exactly, and identical candidates tied, so the margin rule left every
+such line unpaired. Description pairing now breaks a tie between PO lines with
+identical wording by the closest unit price within tolerance, then the lowest
+PO line number; different wording within 0.2 of the best still stays unpaired.
+Now 104 of 104 invoice lines pair on the unplanted records.
 
-**Second gap.** MFG-INV-035 was extracted with no line items, and a match over
-zero invoice lines passes. Not changed here; worth a hold.
+**Remaining gaps, reported and not tuned.** MFG-INV-033: two lines were
+extracted without a price or quantity, so it holds as `unreadable_line`.
+MFG-INV-035: the extraction has no line items; a match over zero invoice lines
+used to pass and now holds as `unreadable_line` ("Invoice has no line items to
+match.").
 
 **Files.** `tests/fixtures/three_way/planted.json`,
 `tests/test_three_way_planted.py`.
