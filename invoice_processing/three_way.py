@@ -28,6 +28,7 @@ PRICE_OVER_PO = "price_over_po"
 OVER_ORDERED = "over_ordered"
 UNPAIRED_LINE = "unpaired_line"
 UNREADABLE_LINE = "unreadable_line"
+UNCHECKED = "unchecked"  # the book could not be read; set by the caller
 DEFAULT_QTY_TOL = 0.0
 
 _UNITS = {
@@ -136,7 +137,13 @@ def pair(
             claim(i, hit, "item_code")
     for i, line in enumerate(invoice_lines):
         n = line.get("po_line_number")
-        if out[i][0] is None and n in free:
+        # True == 1 and a list is unhashable: only a real int names a line
+        if (
+            out[i][0] is None
+            and isinstance(n, int)
+            and not isinstance(n, bool)
+            and n in free
+        ):
             claim(i, n, "line_number")
     for i, line in enumerate(invoice_lines):
         if out[i][0] is not None:
@@ -180,6 +187,14 @@ def match(
     price_tol_abs: float = 50.0,
     grn_numbers: dict[int, list[str]] | None = None,
 ) -> ThreeWay:
+    for name, tol in (
+        ("qty_tol", qty_tol),
+        ("price_tol_pct", price_tol_pct),
+        ("price_tol_abs", price_tol_abs),
+    ):
+        # NaN fails every "over tolerance" comparison, so every line would pass
+        if not math.isfinite(tol):
+            raise ValueError(f"{name} must be a finite number, got {tol!r}")
     by_n = {p["line_number"]: p for p in po_lines}
     pairs = pair(
         invoice_lines,

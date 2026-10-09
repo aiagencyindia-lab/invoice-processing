@@ -259,6 +259,9 @@ def validate(payload: dict) -> dict:
             "tax_rate_tolerance_pct",
             "bank_change_recent_days",
         ):
+            # NaN slips past every comparison and inf disables the check.
+            if not math.isfinite(value):
+                raise SettingsError(f"{key} must be a finite number.")
             if value < 0:
                 raise SettingsError(f"{key} cannot be negative.")
             cleaned[key] = float(value)

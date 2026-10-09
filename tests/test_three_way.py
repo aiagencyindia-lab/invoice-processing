@@ -1,3 +1,5 @@
+import pytest
+
 from invoice_processing.three_way import (
     NOT_RECEIVED,
     OVER_ORDERED,
@@ -234,3 +236,25 @@ def test_invoice_with_no_lines_against_a_po_with_lines_holds():
     r = match([], [po(1, "Grease", 1, 1)], {1: 1}, {1: 0}, vendor_kind="goods")
     assert r.signals == (UNREADABLE_LINE,)
     assert r.evidence == ("Invoice has no line items to match.",)
+
+
+@pytest.mark.parametrize("kw", ["qty_tol", "price_tol_pct", "price_tol_abs"])
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_a_non_finite_tolerance_is_refused_not_silently_passed(kw, bad):
+    # NaN makes every "over tolerance" comparison false, so the line passes.
+    with pytest.raises(ValueError, match=kw):
+        match(
+            [inv("B", 5, 999)],
+            [po(1, "B", 1, 1)],
+            {1: 0},
+            {1: 0},
+            vendor_kind="goods",
+            **{kw: bad},
+        )
+
+
+@pytest.mark.parametrize("n", [True, [1], "1", 1.0])
+def test_only_a_whole_number_po_line_number_pairs_by_line_number(n):
+    assert pair([inv("x", 1, 1, po_line_number=n)], [po(1, "B", 1, 1)]) == [
+        (None, None)
+    ]

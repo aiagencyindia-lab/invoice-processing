@@ -154,3 +154,20 @@ def test_apply_to_pipeline_without_a_po_table_uses_the_file(monkeypatch):
     assert type(general_invoice_agent._load_purchase_orders()).__name__ == (
         "FileBook"
     )
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "po_tolerance_pct",
+        "po_tolerance_abs",
+        "high_value_threshold",
+        "tax_rate_tolerance",
+        "tax_rate_tolerance_pct",
+        "bank_change_recent_days",
+    ],
+)
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_non_finite_tolerances_are_refused(key, value):
+    with pytest.raises(tenant_settings.SettingsError, match=key):
+        tenant_settings.validate({key: value})

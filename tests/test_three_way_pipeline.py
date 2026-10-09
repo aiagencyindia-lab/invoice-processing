@@ -202,3 +202,10 @@ def test_db_book_adds_grn_numbers_per_line():
     book = po_book.DbBook(Repo(), "t1")
     assert book.find("PO-1") == HEADER
     assert book.book("PO-1")["grn_numbers"] == {1: ["G1", "G2"], 2: ["G2"]}
+
+
+def test_a_non_finite_tolerance_holds_as_unchecked(pipeline):
+    out = pipeline(received={1: 10}, three_way_qty_tolerance=float("nan"))
+    step = _step(out)
+    assert step["passed"] is False and step["signals"] == ["unchecked"]
+    assert "qty_tol must be a finite number" in step["evidence"]
