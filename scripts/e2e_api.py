@@ -44,10 +44,16 @@ SCRATCH = REPO / "frontend" / "e2e" / ".data"
 
 TENANT = "e2e"
 
-# The invoice held by step 2.3: line 1 is short one unit until a receipt.
-PO_CASE = "case_004_po"
-PO_NUMBER = "PO-E2E-1"
-PO_VENDOR = "Bearing Test Supplies"
+# Invoices held by step 2.3: line 1 is short one unit until a receipt.
+# (case, PO, vendor, the short receipt already on file). The first is cleared
+# by an imported GRN, the second by a confirmed scan, so neither test waits on
+# the other.
+HELD = (
+    ("case_004_po", "PO-E2E-1", "Bearing Test Supplies", "GRN-E2E-0"),
+    ("case_004_po2", "PO-E2E-2", "Scan Test Supplies", "GRN-E2E-20"),
+)
+# The scanned receipt for PO-E2E-2, its line 1 misread as 10 (1 arrived).
+SCAN_PO = HELD[1][1]
 
 
 def environment(port: str) -> dict[str, str]:
@@ -103,7 +109,9 @@ def seed_database() -> None:
         ):
             session.add(User(tenant_id=TENANT, email=email, role=role))
 
-    seed_purchase_order()
+    for _, po_number, vendor, grn in HELD:
+        seed_purchase_order(po_number, vendor, grn)
+    seed_scans()
 
     source = FsCaseRepository(SCRATCH / "agent_output", tenant_id=TENANT)
     target = PgCaseRepository()
@@ -120,8 +128,8 @@ def _golden_invoice() -> dict:
     return json.loads(path.read_text())["invoice"]
 
 
-def seed_purchase_order() -> None:
-    """The PO and the first, short receipt behind PO_CASE's held step 2.3."""
+def seed_purchase_order(po_number: str, vendor: str, grn: str) -> None:
+    """The PO and the first, short receipt behind a held step 2.3."""
     from invoice_processing.db.repositories import (  # noqa: PLC0415
         PgPurchaseOrderRepository,
     )
@@ -133,8 +141,8 @@ def seed_purchase_order() -> None:
         TENANT,
         [
             {
-                "po_number": PO_NUMBER,
-                "vendor_name": PO_VENDOR,
+                "po_number": po_number,
+                "vendor_name": vendor,
                 "total_amount": invoice["invoice_total_inc_tax"],
                 "currency": invoice["currency"],
                 "lines": [
@@ -161,8 +169,8 @@ def seed_purchase_order() -> None:
         TENANT,
         [
             {
-                "grn_number": "GRN-E2E-0",
-                "po_number": PO_NUMBER,
+                "grn_number": grn,
+                "po_number": po_number,
                 "received_on": "2026-10-01",
                 "lines": [
                     {"line_number": 1, "qty_received": first["quantity"] - 1}
@@ -173,16 +181,118 @@ def seed_purchase_order() -> None:
     )
 
 
-def hold_for_receipt(case: Path) -> None:
-    """Make a clone the invoice step 2.3 held against PO_NUMBER.
+def _scan(grn: str, po_number: str, quantity: float, description: str) -> dict:
+    """What `supporting_docs.extract` stores for a one-line receipt whose
+    quantity was read with low confidence."""
+    evidence = {
+        "grn_number": {"value": grn, "grounded": True, "page": 1, "confidence": 0.95},
+        "po_number": {
+            "value": po_number, "grounded": True, "page": 1, "confidence": 0.95,
+        },
+        "lines[0].quantity_received": {
+            "value": quantity, "grounded": False, "page": None, "confidence": 0.4,
+        },
+    }  # fmt: skip
+    evidence["_summary"] = {
+        "min_confidence": 0.4,
+        "fields_needing_review": ["lines[0].quantity_received"],
+        "has_text_layer": True,
+    }
+    return {
+        "kind": "goods_receipt",
+        "fields": {
+            "grn_number": grn,
+            "received_on": "2026-10-09",
+            "po_number": po_number,
+            "vendor_name": None,
+            "received_by": None,
+        },
+        "lines": [
+            {
+                "line_number": 1,
+                "item_code": None,
+                "description": description,
+                "quantity_received": quantity,
+                "unit": None,
+                "remarks": None,
+            }
+        ],
+        "_evidence": evidence,
+        "_repairs": [],
+    }
+
+
+def seed_scans() -> None:
+    """Two scanned receipts waiting on a clerk, as the worker leaves them:
+    one pending against SCAN_PO, one blocked on a PO that is not on file.
+
+    Each has a stored PDF and its `supporting_extraction` artifact, so the
+    review drawer's document pane serves bytes rather than a 404.
+    """
+    import hashlib  # noqa: PLC0415
+
+    from invoice_processing.api import service  # noqa: PLC0415
+    from invoice_processing.db.repositories import (  # noqa: PLC0415
+        PgCaseRepository,
+        PgDocumentRepository,
+        PgSupportingDocumentRepository,
+    )
+    from invoice_processing.ports import RunContext  # noqa: PLC0415
+
+    description = _golden_invoice()["line_items"][0]["description"]
+    documents = PgDocumentRepository()
+    blobs = service.get_blobs(TENANT)
+    for grn, po_number, pdf, blocked in (
+        ("GRN-E2E-21", SCAN_PO, "case_005", None),
+        (
+            "GRN-E2E-22",
+            "PO-NOT-YET",
+            "case_001",
+            "Purchase order PO-NOT-YET is not on file",
+        ),
+    ):
+        data = (
+            REPO / "invoice_processing" / "exemplary_data" / pdf / "invoice.pdf"
+        ).read_bytes()
+        sha = hashlib.sha256(data).hexdigest()
+        key = f"documents/{sha}.pdf"
+        blobs.put(key, data, "application/pdf")
+        document_id = documents.create(
+            TENANT,
+            storage_key=key,
+            sha256=sha,
+            filename=f"{grn.lower()}-scan.pdf",
+            mime_type="application/pdf",
+            byte_size=len(data),
+        )
+        documents.set_kind(TENANT, document_id, "goods_receipt")
+        extracted = _scan(grn, po_number, 10, description)
+        PgSupportingDocumentRepository().upsert_from_extraction(
+            TENANT,
+            document_id=document_id,
+            kind="goods_receipt",
+            extracted=extracted,
+            po_number=po_number,
+            blocked_reason=blocked,
+            extraction_error=None,
+        )
+        PgCaseRepository().put_artifact(
+            RunContext(tenant_id=TENANT, case_id=document_id),
+            "supporting_extraction",
+            extracted,
+        )
+
+
+def hold_for_receipt(case: Path, po_number: str, vendor: str, grn: str) -> None:
+    """Make a clone the invoice step 2.3 held against `po_number`.
 
     The 2.3 entry is what the pipeline would have stored for the seeded PO
-    and GRN-E2E-0: line 1 one unit short, line 2 a service needing no receipt.
+    and `grn`: line 1 one unit short, line 2 a service needing no receipt.
     """
     path = case / "02_extraction.json"
     extraction = json.loads(path.read_text())
     invoice = extraction["invoice"]
-    invoice["po_number"] = PO_NUMBER
+    invoice["po_number"] = po_number
     invoice["_routing"] = "REVIEW"
     invoice["_evidence"]["_summary"]["fields_needing_review"] = [
         "receipt: short_received"
@@ -193,7 +303,7 @@ def hold_for_receipt(case: Path) -> None:
     received = first["quantity"] - 1
     short = (
         f"Line 1 '{first['description']}': billed {first['quantity']:g}, "
-        f"received {received:g} (GRN-E2E-0); 1 still to arrive."
+        f"received {received:g} ({grn}); 1 still to arrive."
     )
     path = case / "04_phase2_validation.json"
     phase2 = json.loads(path.read_text())
@@ -204,8 +314,8 @@ def hold_for_receipt(case: Path) -> None:
             "passed": True,
             "implemented": True,
             "outcome": "matched",
-            "po_number": "poe2e1",
-            "evidence": f"{PO_NUMBER} is open for {PO_VENDOR}.",
+            "po_number": po_number.replace("-", "").lower(),
+            "evidence": f"{po_number} is open for {vendor}.",
         },
         {
             "step": "2.3",
@@ -269,13 +379,13 @@ def seed() -> Path:
     # More cases, so the approval-chain, rejection and GL-coding tests each
     # have an invoice nothing else in the run decides (a decided case is closed
     # to further approvals, and an edited one needs a second approver).
-    # case_004_gl and case_004_po sort before case_005, which stays the
+    # case_004_gl and the held cases sort before case_005, which stays the
     # queue's last row.
     for new, vendor in (
         ("case_003", "Chain Test Supplies"),
         ("case_004", "Returned Goods Supplies"),
         ("case_004_gl", "Ledger Test Supplies"),
-        (PO_CASE, PO_VENDOR),
+        *((case, vendor) for case, _, vendor, _ in HELD),
     ):
         clone = SCRATCH / "agent_output" / new
         shutil.copytree(GOLDEN / "case_005", clone)
@@ -285,7 +395,10 @@ def seed() -> Path:
                 .replace("case_005", new)
                 .replace("QuickFix HVAC Repairs", vendor)
             )
-    hold_for_receipt(SCRATCH / "agent_output" / PO_CASE)
+    for case, po_number, vendor, grn in HELD:
+        hold_for_receipt(
+            SCRATCH / "agent_output" / case, po_number, vendor, grn
+        )
     return SCRATCH
 
 
