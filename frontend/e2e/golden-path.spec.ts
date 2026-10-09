@@ -30,7 +30,9 @@ test("the dashboard reports the numbers a pilot is judged on", async ({
 test("a reviewer can read an invoice and why it was decided", async ({
   page,
 }) => {
-  await goto(page, "/invoices");
+  // A frozen case with its bundled PDF: the held PO invoice tops the review
+  // queue, and a seeded clone has no source document to show.
+  await goto(page, "/invoices?case=case_001");
 
   // The queue is seeded with the three frozen cases.
   const queue = page.locator(".queue-item");
@@ -252,7 +254,11 @@ test("replacing purchase orders asks first, and cancelling changes nothing", asy
   page,
 }) => {
   await goto(page, "/purchase-orders");
-  await expect(page.getByText(/No purchase orders loaded/)).toBeVisible();
+  // The run seeds PO-E2E-1 and other tests import more, so "nothing changed"
+  // is the count before and after rather than an empty list.
+  const count = page.getByText(/\d+ orders · loaded from/);
+  await expect(count).toBeVisible();
+  const before = await count.textContent();
 
   const orders = [
     { po_number: "PO-9001", vendor_name: "Smoke Supplies", total_amount: 1000 },
@@ -271,11 +277,16 @@ test("replacing purchase orders asks first, and cancelling changes nothing", asy
   });
 
   await expect.poll(() => asked).toContain("purchase orders");
-  // Cancelled means nothing was sent: the empty state is still there.
-  await expect(page.getByText(/No purchase orders loaded/)).toBeVisible();
+  // Cancelled means nothing was sent: the same orders are still there.
+  await expect(count).toHaveText(before ?? "");
+  await expect(page.getByText(/Loaded \d+ purchase orders/)).toHaveCount(0);
 });
 
-test("accepting the replacement loads the orders", async ({ page }) => {
+test("accepting a replacement cannot discard goods received", async ({
+  page,
+}) => {
+  // Receipts are evidence, so a wholesale replace that would drop the seeded
+  // PO-E2E-1 (which has GRN-E2E-0 against it) is refused, and says why.
   await goto(page, "/purchase-orders");
 
   page.once("dialog", (dialog) => dialog.accept());
@@ -293,8 +304,110 @@ test("accepting the replacement loads the orders", async ({ page }) => {
     ),
   });
 
-  await expect(page.getByText(/Loaded 1 purchase orders/)).toBeVisible();
-  await expect(page.getByRole("cell", { name: "PO-9001" })).toBeVisible();
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "PO-E2E-1 has goods received and cannot be removed" }),
+  ).toBeVisible();
+  await expect(page.getByRole("cell", { name: "PO-E2E-1" })).toBeVisible();
+});
+
+const PO_CSV_HEADER =
+  "po_number,vendor_name,total_amount,currency,status,amount_invoiced,customer_name,valid_from,valid_to,amount_basis,line_number,item_code,description,qty_ordered,unit_price,uom,receipt_required,qty_invoiced\n";
+const GRN_CSV_HEADER =
+  "grn_number,po_number,received_on,reason,line_number,item_code,qty_received\n";
+
+function csv(name: string, text: string) {
+  return { name, mimeType: "text/csv", buffer: Buffer.from(text) };
+}
+
+test("PO import shows lines and receipts", async ({ page }) => {
+  await as(page, "alice@e2e.test:clerk");
+  await goto(page, "/purchase-orders");
+
+  await page
+    .locator("#po-import")
+    .setInputFiles(
+      csv(
+        "orders.csv",
+        PO_CSV_HEADER +
+          "PO-E2E-9,Import Test Supplies,60,AUD,,,,,,,1,,E2E widget,10,5,,true,\n" +
+          "PO-E2E-9,Import Test Supplies,60,AUD,,,,,,,2,,E2E fitting service,1,10,,false,\n",
+      ),
+    );
+  await expect(
+    page.getByRole("status").filter({ hasText: "Imported 1 purchase order" }),
+  ).toBeVisible();
+
+  const row = page.getByRole("row").filter({
+    has: page.getByRole("cell", { name: "PO-E2E-9", exact: true }),
+  });
+  await row.getByRole("button", { name: "Lines & receipts" }).click();
+  // The innermost match: the detail sits in a row of the orders table too.
+  const widget = page.getByRole("row").filter({ hasText: "E2E widget" }).last();
+  await expect(widget.getByRole("cell").nth(3)).toHaveText("10"); // Ordered
+  await expect(widget.getByRole("cell").nth(4)).toHaveText("0"); // Received
+
+  await page
+    .locator("#grn-import")
+    .setInputFiles(
+      csv(
+        "receipts.csv",
+        GRN_CSV_HEADER + "GRN-E2E-9,PO-E2E-9,2026-10-09,,1,,4\n",
+      ),
+    );
+  await expect(
+    page.getByRole("status").filter({ hasText: "Recorded 1 receipt" }),
+  ).toBeVisible();
+
+  // The detail is read when opened, so open it afresh.
+  await row.getByRole("button", { name: "Hide lines" }).click();
+  await row.getByRole("button", { name: "Lines & receipts" }).click();
+  await expect(widget.getByRole("cell").nth(4)).toHaveText("4"); // Received
+  await expect(page.getByText(/GRN-E2E-9 · 2026-10-09/)).toBeVisible();
+});
+
+test("Held invoice shows the three-way panel and a GRN clears it", async ({
+  page,
+}) => {
+  await as(page, "alice@e2e.test:clerk");
+  await goto(page, "/invoices?case=case_004_po");
+  await expect(page.getByText("Three-way match")).toBeVisible();
+  await expect(
+    page.locator(".flag", { hasText: "short received" }),
+  ).toBeVisible();
+  await expect(page.getByText(/1 still to arrive/).first()).toBeVisible();
+
+  await goto(page, "/purchase-orders");
+  await page
+    .locator("#grn-import")
+    .setInputFiles(
+      csv(
+        "receipts.csv",
+        GRN_CSV_HEADER + "GRN-E2E-1,PO-E2E-1,2026-10-09,,1,,1\n",
+      ),
+    );
+  await expect(
+    page
+      .getByRole("status")
+      .filter({ hasText: "Recorded 1 receipt; 1 invoice queued for re-match" }),
+  ).toBeVisible();
+
+  // The re-match runs in the e2e stack's worker, not in the request.
+  await expect
+    .poll(
+      async () =>
+        (await (await page.request.get("/api/invoices/case_004_po")).json())
+          .routing,
+      { timeout: 10_000 },
+    )
+    .toBe("AUTO");
+
+  await goto(page, "/invoices?case=case_004_po");
+  await expect(page.locator(".finding.pass", { hasText: "2.3" })).toBeVisible();
+  await expect(
+    page.locator(".flag", { hasText: "short received" }),
+  ).toHaveCount(0);
 });
 
 test("the sign-in page is a real route", async ({ page }) => {
