@@ -1439,7 +1439,7 @@ No., date, PO No., supplier; #, Item, HSN/SAC, Ordered, Received, Unit;
 Linux. A scratch script (parameters recorded in the fixture's `source`) built
 20 GRNs — 7 clean, 7 degraded, 6 adversarial (RECEIVED stamp carrying a
 different date, watermark, handwritten note), the adversarial ones multi-line,
-about 40% of lines received short, two receiving PO lines 1 and 3 only — plus
+7 of 28 lines received short, one (GRN-06) receiving PO lines 1 and 3 only — plus
 the dataset's 6 PURCHASE_ORDER documents. One real Gemini 2.5 Pro run per PDF
 (26 calls, no retries needed) is committed as
 `tests/fixtures/supporting_docs/measured.json`; the PDFs are not.
@@ -1451,7 +1451,7 @@ the dataset's 6 PURCHASE_ORDER documents. One real Gemini 2.5 Pro run per PDF
 | GRN header (grn_number, po_number, received_on) | 56 / 60 |
 | PO header (po_number, vendor_name, total) | 17 / 18 |
 | line quantities (received on GRNs, ordered on POs) | 34 / 34 |
-| GRN lines paired to the right PO line | 27 / 28 |
+| GRN lines paired to the right PO line | 28 / 28 |
 | wrong values flagged for review (or left blank) | 3 / 5 |
 
 Every wrong value, with its reason:
@@ -1465,10 +1465,12 @@ Every wrong value, with its reason:
   no total row; the model left the total blank as the prompt asks, and truth
   is `po_master.approved_value`. Layout, not a misread.
 
-Pairing miss: GRN-06 receives PO lines 1 and 3 and prints them as GRN #1 and
-#2; `pair_grn_lines` passes the GRN's own number as the PO line number, so #2
-pairs to PO line 2 (a different item) before description matching runs. A
-partial receipt that renumbers its lines pairs wrongly; reported, not tuned.
+**Pairing fix found by the measurement.** The first scoring paired 27 of 28:
+GRN-06 receives PO lines 1 and 3 and prints them as GRN #1 and #2, and
+`pair_grn_lines` passed the GRN's own number as the PO line number, so #2
+claimed PO line 2 (a different item) before description matching ran. It
+could book a receipt to the wrong PO line. GRN lines now pair by item code,
+then description, never by their own numbering: 28 of 28.
 
 **Result, guard (today's code replayed over the run at `ecb9bbd`,
 `replay-scanned-docs`).** Against `replay-approvals`: `results.csv`
@@ -1478,8 +1480,9 @@ replay calls the phase agents from recorded classifications and never reaches
 REJECT -> SUPPORTING change. The harness was not changed.
 
 **Files.** `benchmark/dataset/generator/gen_render.py`,
+`invoice_processing/supporting_docs.py`, `tests/test_supporting_docs.py`,
 `tests/fixtures/supporting_docs/measured.json`,
 `tests/test_supporting_docs_measured.py`.
 
-**Regression status.** Full suite 2286 passed, 1 skipped; ruff check and
+**Regression status.** Full suite 2287 passed, 1 skipped; ruff check and
 format clean.

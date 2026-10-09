@@ -216,7 +216,7 @@ def test_an_unknown_kind_is_refused():
         supporting_docs.extract("x.pdf", "invoice", call=_fake(_grn()))
 
 
-def test_grn_lines_pair_by_code_then_number_then_description():
+def test_grn_lines_pair_by_code_then_description_never_by_their_own_number():
     po_lines = [
         {
             "line_number": 1,
@@ -232,7 +232,40 @@ def test_grn_lines_pair_by_code_then_number_then_description():
         {"line_number": 2, "item_code": None, "description": "anything"},
         {"line_number": 8, "item_code": None, "description": "paint"},
     ]
-    assert supporting_docs.pair_grn_lines(lines, po_lines) == [3, 1, 2, None]
+    assert supporting_docs.pair_grn_lines(lines, po_lines) == [3, 1, None, None]
+
+
+def test_a_renumbered_partial_receipt_pairs_by_description_not_its_numbering():
+    po_lines = [
+        {
+            "line_number": 1,
+            "item_code": None,
+            "description": "27-inch IPS monitor",
+        },
+        {
+            "line_number": 2,
+            "item_code": None,
+            "description": "Business laptop 14-inch",
+        },
+        {
+            "line_number": 3,
+            "item_code": None,
+            "description": "USB-C docking station",
+        },
+    ]
+    lines = [
+        {
+            "line_number": 1,
+            "item_code": None,
+            "description": "27-inch IPS monitor",
+        },
+        {
+            "line_number": 2,
+            "item_code": None,
+            "description": "USB-C docking station",
+        },
+    ]
+    assert supporting_docs.pair_grn_lines(lines, po_lines) == [1, 3]
 
 
 def test_a_purchase_order_payload_imports_cleanly(page):

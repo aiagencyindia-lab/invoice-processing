@@ -92,7 +92,7 @@ def score(records):
 # GRN lines paired to the right PO line, wrong values flagged for review.
 # ponytail: pinned to this one run of 26 documents, not a gate; turn these into
 # floors once the scan set grows enough for a rate to mean something.
-PINNED = ((56, 60), (17, 18), (34, 34), (27, 28), (3, 5))
+PINNED = ((56, 60), (17, 18), (34, 34), (28, 28), (3, 5))
 # GRN-03/09/12/15 read the RECEIVED stamp's date (OCR grounds 03 and 09, so
 # they go unflagged); SVC-INV-089 prints no total row and the total is blank.
 PINNED_WRONG = [

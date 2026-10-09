@@ -253,13 +253,13 @@ def extract(
 
 
 def pair_grn_lines(lines: list[dict], po_lines: list[dict]) -> list[int | None]:
-    """The PO line each GRN line received against, or None when unpaired."""
+    """The PO line each GRN line received against, or None when unpaired.
+
+    By item code, then description. Never by the GRN's own line number: a
+    partial receipt renumbers its lines, so GRN #2 can be PO line 3.
+    """
     probes = [
-        {
-            "description": ln.get("description"),
-            "item_code": ln.get("item_code"),
-            "po_line_number": ln.get("line_number"),
-        }
+        {"description": ln.get("description"), "item_code": ln.get("item_code")}
         for ln in lines
     ]
     return [n for n, _ in three_way.pair(probes, po_lines)]
