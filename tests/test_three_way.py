@@ -195,3 +195,19 @@ def test_line_can_carry_quantity_and_price_signals():
         [inv("B", 1, 500)], [po(1, "B", 1, 100)], {}, {}, vendor_kind="goods"
     )
     assert r.signals == (NOT_RECEIVED, PRICE_OVER_PO) and len(r.evidence) == 1
+
+
+def test_non_finite_numbers_hold_as_unreadable_never_pass():
+    free = {"receipt_required": False}
+    cases = [
+        ([inv("B", "nan", 1)], [po(1, "B", 1, 1, **free)], {}, {}),
+        ([inv("B", 1, "inf")], [po(1, "B", 1, 1, **free)], {}, {}),
+        ([inv("B", 1, "-Infinity")], [po(1, "B", 1, 1, **free)], {}, {}),
+        ([inv("B", 1, 1)], [po(1, "B", 1, "nan", **free)], {}, {}),
+        ([inv("B", 1, 1)], [po(1, "B", "nan", 1, **free)], {}, {}),
+        ([inv("B", 1, 1)], [po(1, "B", 1, 1)], {1: float("nan")}, {}),
+        ([inv("B", 1, 1)], [po(1, "B", 1, 1)], {1: 1}, {1: float("inf")}),
+    ]
+    for inv_lines, po_lines, rec, bil in cases:
+        r = match(inv_lines, po_lines, rec, bil, vendor_kind="goods")
+        assert r.signals == (UNREADABLE_LINE,), (inv_lines, po_lines, rec, bil)

@@ -15,11 +15,12 @@ once the goods turn up.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
 
-from .po_matching import _as_float as _num
+from .po_matching import _as_float
 
 NOT_RECEIVED = "not_received"
 SHORT_RECEIVED = "short_received"
@@ -33,6 +34,12 @@ _UNITS = {
     "nos", "pcs", "pc", "kg", "kgs", "ltr", "l", "m", "mm", "cm",
     "ea", "each", "unit", "units", "set", "sets", "box", "pack", "no",
 }  # fmt: skip
+
+
+def _num(v: Any) -> float | None:
+    # "nan"/"inf" parse as floats and slip past every comparison, so they count as unreadable
+    x = _as_float(v)
+    return x if x is not None and math.isfinite(x) else None
 
 
 def _code(v: Any) -> str:
@@ -157,7 +164,24 @@ def match(
     ):
         desc = str(line.get("description") or "")
         q, p = _num(line.get("quantity")), _num(line.get("unit_price"))
-        if q is None or p is None:
+        ordered, po_price = (
+            (None, None)
+            if n is None
+            else (
+                _num(by_n[n].get("qty_ordered")),
+                _num(by_n[n].get("unit_price")),
+            )
+        )
+        got, before = (
+            (None, None)
+            if n is None
+            else (_num(received.get(n, 0)), _num(billed.get(n, 0)))
+        )
+        if (
+            q is None
+            or p is None
+            or (n is not None and None in (ordered, po_price, got, before))
+        ):
             msg = f"Line {idx} '{desc}': quantity or unit price could not be read."
             results.append(
                 LineResult(
