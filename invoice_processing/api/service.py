@@ -40,7 +40,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
-from .. import approval_flow, approvals, case_projection, paths
+from .. import approval_flow, approvals, case_projection, exports, paths
 from ..adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
@@ -1496,19 +1496,7 @@ def _with_gl(ctx, invoice: dict, artifacts: dict) -> dict:
 
 
 def _csv_safe(value) -> str:
-    """A cell Excel will show as text, not run as a formula.
-
-    Extraction text is untrusted: a description of "=HYPERLINK(...)" would
-    otherwise execute when the file is opened. Numbers (a credit's -85.0)
-    are left alone so they stay numbers.
-    """
-    text = "" if value is None else str(value)
-    if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
-        try:
-            float(text)
-        except ValueError:
-            return "'" + text
-    return text
+    return exports.formula_safe("" if value is None else str(value))
 
 
 def _csv_rows(case_id: str, invoice: dict) -> list[list[str]]:
