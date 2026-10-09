@@ -44,9 +44,13 @@ from .models import (
     ExportJob,
     Finding,
     GlRule,
+    GoodsReceipt,
+    GrnLine,
     Invoice,
     InvoiceLine,
     PipelineRun,
+    PoLine,
+    PurchaseOrder,
     RecordLock,
     Rule,
     SheetView,
@@ -1717,6 +1721,400 @@ class PgGlRuleRepository:
                 return False
             session.delete(row)
             return True
+
+
+class PgPurchaseOrderRepository:
+    """Purchase orders with lines, and the goods receipts against them.
+
+    Storage plus the received/billed arithmetic; the API validates shapes.
+    Every public method is one transaction, so a refused batch stores nothing.
+    """
+
+    HEADER = (
+        "vendor_name", "total_amount", "currency", "status", "amount_invoiced",
+        "customer_name", "valid_from", "valid_to", "amount_basis",
+        "approved_quantity", "approved_unit_price", "hsn_sac",
+    )  # fmt: skip
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    @staticmethod
+    def _f(value) -> float | None:
+        return None if value is None else float(value)
+
+    @classmethod
+    def _header_dict(cls, o: PurchaseOrder) -> dict:
+        return {
+            "id": o.id,
+            "po_number": o.po_number,
+            "po_number_display": o.po_number_display,
+            "vendor_name": o.vendor_name,
+            "total_amount": cls._f(o.total_amount),
+            "currency": o.currency,
+            "status": o.status,
+            "amount_invoiced": cls._f(o.amount_invoiced),
+            "customer_name": o.customer_name,
+            "valid_from": o.valid_from,
+            "valid_to": o.valid_to,
+            "amount_basis": o.amount_basis,
+            "approved_quantity": cls._f(o.approved_quantity),
+            "approved_unit_price": cls._f(o.approved_unit_price),
+            "hsn_sac": o.hsn_sac,
+            "source": o.source,
+            "uploaded_at": _iso(o.uploaded_at),
+            "uploaded_by": o.uploaded_by,
+        }
+
+    @classmethod
+    def _line_dict(cls, line: PoLine) -> dict:
+        return {
+            "line_number": line.line_number,
+            "item_code": line.item_code,
+            "description": line.description,
+            "qty_ordered": cls._f(line.qty_ordered),
+            "unit_price": cls._f(line.unit_price),
+            "uom": line.uom,
+            "receipt_required": line.receipt_required,
+        }
+
+    @staticmethod
+    def _order(session, tenant_id: str, po_number) -> PurchaseOrder | None:
+        return session.scalar(
+            select(PurchaseOrder).where(
+                PurchaseOrder.tenant_id == tenant_id,
+                PurchaseOrder.po_number
+                == po_matching.normalize_po_number(po_number),
+            )
+        )
+
+    @staticmethod
+    def _received(session, tenant_id: str, order_id: str) -> dict[int, float]:
+        rows = session.execute(
+            select(
+                PoLine.line_number,
+                func.coalesce(func.sum(GrnLine.qty_received), 0),
+            )
+            .outerjoin(GrnLine, GrnLine.po_line_id == PoLine.id)
+            .where(
+                PoLine.tenant_id == tenant_id,
+                PoLine.purchase_order_id == order_id,
+            )
+            .group_by(PoLine.line_number)
+            .order_by(PoLine.line_number)
+        )
+        return {n: float(q) for n, q in rows}
+
+    @staticmethod
+    def _approved_since(
+        session, tenant_id: str, po_number: str, since: datetime
+    ) -> dict[int, float]:
+        """Step-2.3 quantities per PO line on invoices approved after `since`."""
+        # ponytail: scans this tenant's approved PO invoices on every match;
+        # index/materialise if a PO gathers thousands.
+        since = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+        billed: dict[int, float] = {}
+        rows = session.scalars(
+            select(Invoice).where(
+                Invoice.tenant_id == tenant_id,
+                Invoice.human_decision == "approve",
+                Invoice.po_number.is_not(None),
+            )
+        )
+        for inv in rows:
+            if po_matching.normalize_po_number(inv.po_number) != po_number:
+                continue
+            fields = inv.fields or {}
+            try:
+                decided = datetime.fromisoformat(
+                    fields["workflow"]["decided_at"]
+                )
+            except (KeyError, TypeError, ValueError):
+                continue  # no readable decision time: not counted as billed
+            if decided.tzinfo is None:
+                decided = decided.replace(tzinfo=timezone.utc)
+            if decided <= since:
+                continue
+            for v in (fields.get("phase2") or {}).get("validations") or []:
+                if v.get("step") != "2.3":
+                    continue
+                for ln in v.get("lines") or []:
+                    n, q = ln.get("po_line_number"), ln.get("quantity")
+                    if n is not None and q is not None:
+                        billed[int(n)] = billed.get(int(n), 0.0) + float(q)
+        return billed
+
+    def _billed(
+        self, session, tenant_id: str, order: PurchaseOrder
+    ) -> dict[int, float]:
+        since = self._approved_since(
+            session, tenant_id, order.po_number, order.uploaded_at
+        )
+        return {
+            ln.line_number: float(ln.qty_invoiced_opening)
+            + since.get(ln.line_number, 0.0)
+            for ln in order.lines
+        }
+
+    def upsert_orders(
+        self, tenant_id: str, orders: list[dict], *, uploaded_by: str,
+        source: str = "upload", now: datetime | None = None,
+    ) -> dict:  # fmt: skip
+        now = now or datetime.now(timezone.utc)
+        created = updated = lines = 0
+        seen: set[str] = set()
+        with tenant_session(tenant_id, self.url) as session:
+            for i, data in enumerate(orders):
+                key = po_matching.normalize_po_number(data["po_number"])
+                if key in seen:
+                    raise ValueError(
+                        f"row {i + 1}: PO {data['po_number']} appears twice in this upload"
+                    )
+                seen.add(key)
+                order = self._order(session, tenant_id, key)
+                if order is None:
+                    order = PurchaseOrder(tenant_id=tenant_id, po_number=key)
+                    session.add(order)
+                    created += 1
+                else:
+                    updated += 1
+                order.po_number_display = data["po_number"]
+                for f in self.HEADER:
+                    if f in data:
+                        setattr(order, f, data[f])
+                order.source, order.uploaded_at, order.uploaded_by = (
+                    source, now, uploaded_by,
+                )  # fmt: skip
+                session.flush()
+                # Lines update in place by number: the receipts reference them.
+                existing = {ln.line_number: ln for ln in order.lines}
+                incoming = {ln["line_number"]: ln for ln in data["lines"]}
+                for n, ln in existing.items():
+                    if n in incoming:
+                        continue
+                    if session.scalar(
+                        select(GrnLine.id).where(
+                            GrnLine.tenant_id == tenant_id,
+                            GrnLine.po_line_id == ln.id,
+                        ).limit(1)
+                    ):  # fmt: skip
+                        raise ValueError(
+                            f"row {i + 1}: PO {data['po_number']} line {n} "
+                            "has goods received and cannot be removed"
+                        )
+                    order.lines.remove(ln)
+                for n, ln in incoming.items():
+                    row = existing.get(n)
+                    if row is None:
+                        row = PoLine(tenant_id=tenant_id, line_number=n)
+                        order.lines.append(row)
+                    row.item_code = ln.get("item_code")
+                    row.description = ln.get("description") or ""
+                    row.qty_ordered = ln["qty_ordered"]
+                    row.unit_price = ln["unit_price"]
+                    row.uom = ln.get("uom")
+                    row.receipt_required = ln.get("receipt_required")
+                    row.qty_invoiced_opening = ln.get("qty_invoiced") or 0
+                lines += len(incoming)
+                session.flush()
+        return {"created": created, "updated": updated, "lines": lines}
+
+    @staticmethod
+    def _item_key(code) -> str:
+        return "".join(ch for ch in str(code).casefold() if ch.isalnum())
+
+    def record_receipts(
+        self, tenant_id: str, receipts: list[dict], *, recorded_by: str,
+        source: str = "upload", now: datetime | None = None,
+    ) -> dict:  # fmt: skip
+        now = now or datetime.now(timezone.utc)
+        recorded: list[str] = []
+        skipped: list[str] = []
+        po_numbers: list[str] = []
+        with tenant_session(tenant_id, self.url) as session:
+            for i, rc in enumerate(receipts):
+                grn = rc["grn_number"]
+                if grn in recorded or session.scalar(
+                    select(GoodsReceipt.id).where(
+                        GoodsReceipt.tenant_id == tenant_id,
+                        GoodsReceipt.grn_number == grn,
+                    )
+                ):
+                    skipped.append(grn)
+                    continue
+                order = self._order(session, tenant_id, rc["po_number"])
+                if order is None:
+                    raise ValueError(
+                        f"row {i + 1}: purchase order {rc['po_number']!r} is not on file"
+                    )
+                # Lines resolve within this PO only: the schema does not tie
+                # a grn_line's po_line to the receipt's PO, so this does.
+                by_number = {ln.line_number: ln for ln in order.lines}
+                by_code = {
+                    self._item_key(ln.item_code): ln
+                    for ln in order.lines if ln.item_code
+                }  # fmt: skip
+                receipt = GoodsReceipt(
+                    tenant_id=tenant_id,
+                    grn_number=grn,
+                    purchase_order_id=order.id,
+                    received_on=rc["received_on"],
+                    reason=rc.get("reason"),
+                    source=source,
+                    recorded_at=now,
+                    recorded_by=recorded_by,
+                )
+                for item in rc["lines"]:
+                    ref = item.get("line_number")
+                    if ref is not None:
+                        line = by_number.get(int(ref))
+                    else:
+                        ref = item.get("item_code")
+                        line = by_code.get(self._item_key(ref))
+                    if line is None:
+                        raise ValueError(
+                            f"row {i + 1}: PO {rc['po_number']} has no line {ref}"
+                        )
+                    if float(item["qty_received"]) < 0 and not rc.get("reason"):
+                        raise ValueError(
+                            f"row {i + 1}: a negative quantity needs a reason"
+                        )
+                    receipt.lines.append(
+                        GrnLine(
+                            tenant_id=tenant_id,
+                            po_line_id=line.id,
+                            qty_received=item["qty_received"],
+                        )
+                    )
+                session.add(receipt)
+                session.flush()
+                recorded.append(grn)
+                if order.po_number not in po_numbers:
+                    po_numbers.append(order.po_number)
+        return {
+            "recorded": recorded,
+            "skipped_duplicates": skipped,
+            "po_numbers": po_numbers,
+        }
+
+    def list_orders(self, tenant_id: str) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            out = []
+            for o in session.scalars(
+                select(PurchaseOrder)
+                .where(PurchaseOrder.tenant_id == tenant_id)
+                .order_by(PurchaseOrder.po_number)
+            ):
+                out.append(
+                    {
+                        **self._header_dict(o),
+                        "line_count": len(o.lines),
+                        "received_total": sum(
+                            self._received(session, tenant_id, o.id).values()
+                        ),
+                        "billed_total": sum(
+                            self._billed(session, tenant_id, o).values()
+                        ),
+                    }
+                )
+            return out
+
+    def has_orders(self, tenant_id: str) -> bool:
+        with tenant_session(tenant_id, self.url) as session:
+            return (
+                session.scalar(
+                    select(PurchaseOrder.id)
+                    .where(PurchaseOrder.tenant_id == tenant_id)
+                    .limit(1)
+                )
+                is not None
+            )
+
+    def _receipts(
+        self, session, tenant_id: str, order: PurchaseOrder | None = None
+    ):
+        stmt = (
+            select(GoodsReceipt, PurchaseOrder.po_number_display)
+            .join(PurchaseOrder, PurchaseOrder.id == GoodsReceipt.purchase_order_id)
+            .where(GoodsReceipt.tenant_id == tenant_id)
+            .order_by(
+                GoodsReceipt.received_on,
+                GoodsReceipt.recorded_at,
+                GoodsReceipt.grn_number,
+            )
+        )  # fmt: skip
+        if order is not None:
+            stmt = stmt.where(GoodsReceipt.purchase_order_id == order.id)
+        lines = {
+            ln.id: ln
+            for ln in session.scalars(
+                select(PoLine).where(PoLine.tenant_id == tenant_id)
+            )
+        }
+        return [
+            {
+                "grn_number": g.grn_number,
+                "po_number": display,
+                "received_on": g.received_on,
+                "reason": g.reason,
+                "source": g.source,
+                "recorded_at": _iso(g.recorded_at),
+                "recorded_by": g.recorded_by,
+                "lines": [
+                    {
+                        "line_number": lines[gl.po_line_id].line_number,
+                        "item_code": lines[gl.po_line_id].item_code,
+                        "qty_received": float(gl.qty_received),
+                    }
+                    for gl in g.lines
+                ],
+            }
+            for g, display in session.execute(stmt)
+        ]
+
+    def list_receipts(self, tenant_id: str, po_number=None) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            order = None
+            if po_number is not None:
+                order = self._order(session, tenant_id, po_number)
+                if order is None:
+                    return []
+            return self._receipts(session, tenant_id, order)
+
+    def get_order(self, tenant_id: str, po_number) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            o = self._order(session, tenant_id, po_number)
+            if o is None:
+                return None
+            received = self._received(session, tenant_id, o.id)
+            billed = self._billed(session, tenant_id, o)
+            return {
+                **self._header_dict(o),
+                "lines": [
+                    {
+                        **self._line_dict(ln),
+                        "received": received.get(ln.line_number, 0.0),
+                        "billed": billed[ln.line_number],
+                        "remaining": float(ln.qty_ordered)
+                        - billed[ln.line_number],
+                    }
+                    for ln in o.lines
+                ],
+                "receipts": self._receipts(session, tenant_id, o),
+            }
+
+    def book(self, tenant_id: str, po_number) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            o = self._order(session, tenant_id, po_number)
+            if o is None:
+                return None
+            return {
+                "po": self._header_dict(o),
+                "lines": [self._line_dict(ln) for ln in o.lines],
+                "received": self._received(session, tenant_id, o.id),
+                "billed": self._billed(session, tenant_id, o),
+                "uploaded_at": _iso(o.uploaded_at),
+            }
 
 
 class PgClaimStore:
