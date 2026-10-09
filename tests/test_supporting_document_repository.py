@@ -160,6 +160,19 @@ def test_document_link_and_upload_ownership(env):
     assert po.po_owned_by_upload("t2", "PO-U") is False
 
 
+def test_upload_after_a_scan_takes_ownership(env):
+    url, _, ids, _ = env
+    po = PgPurchaseOrderRepository(url)
+    po.upsert_orders(
+        "t1", [PO], uploaded_by="a", source="document", document_id=ids["t1"][0]
+    )
+    assert po.po_owned_by_upload("t1", "PO-1") is False
+    po.upsert_orders("t1", [PO], uploaded_by="a")
+    o = po.get_order("t1", "PO-1")
+    assert o["source"] == "upload" and o["document_id"] is None
+    assert po.po_owned_by_upload("t1", "PO-1") is True
+
+
 def test_json_fallback_matches_the_contract(tmp_path):
     repo = JsonSupportingDocumentRepository(tmp_path / "sd.json")
     a = _up(repo, "t1", "d1", blocked_reason="x")

@@ -2268,7 +2268,13 @@ class PgSupportingDocumentRepository:
     def _one(self, session, tenant_id: str, id: str):
         return session.execute(
             select(SupportingDocument, Document.filename)
-            .join(Document, Document.id == SupportingDocument.document_id)
+            .join(
+                Document,
+                and_(
+                    Document.id == SupportingDocument.document_id,
+                    Document.tenant_id == tenant_id,
+                ),
+            )
             .where(
                 SupportingDocument.tenant_id == tenant_id,
                 SupportingDocument.id == id,
@@ -2308,7 +2314,13 @@ class PgSupportingDocumentRepository:
         with tenant_session(tenant_id, self.url) as session:
             rows = session.execute(
                 select(SupportingDocument, Document.filename)
-                .join(Document, Document.id == SupportingDocument.document_id)
+                .join(
+                    Document,
+                    and_(
+                        Document.id == SupportingDocument.document_id,
+                        Document.tenant_id == tenant_id,
+                    ),
+                )
                 .where(
                     SupportingDocument.tenant_id == tenant_id,
                     SupportingDocument.status.in_(statuses),

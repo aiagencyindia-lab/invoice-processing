@@ -537,7 +537,7 @@ class JsonSupportingDocumentRepository:
                 "reviewed_at": None,
                 "note": None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "filename": None,
+                "filename": None,  # ponytail: no join to documents here
             }
             rows[row["id"]] = row
         elif row["status"] not in ("pending", "blocked"):
@@ -590,5 +590,6 @@ class JsonSupportingDocumentRepository:
             if r["status"] == "blocked" and r["po_number"] == po:
                 r["status"], r["blocked_reason"] = "pending", None
                 ids.append(r["id"])
-        self._write(data)
+        if ids:
+            self._write(data)
         return ids
