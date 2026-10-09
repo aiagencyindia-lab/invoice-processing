@@ -18,7 +18,7 @@ arrived before the goods.
    carries `source` (`upload` | `document`) so the match never changes.
 2. **Receipt required: per PO line, vendor as fallback.** `po_lines.receipt_required`
    true/false wins; null falls back to the vendor master `kind` (goods → yes,
-   services → no); an unknown vendor → yes (fail closed: hold).
+   "service" → no); an unknown vendor → yes (fail closed: hold).
 3. **Receipt shortfall holds for review, never rejects.** Invoices often arrive
    before goods; a later GRN re-matches and clears them automatically.
 4. **Line pairing: fixed order, fail safe.** Item code → PO line number →
@@ -155,7 +155,7 @@ audited, as for other refusals.
 `tenant_id` parameter, 503 without DB, `Field(max_length=…)` on stored strings,
 5 MB upload cap):
 - `POST /api/purchase-orders/import` (clerk+) → `{created, updated, lines}`.
-- `GET /api/purchase-orders` (existing route, extended; viewer+) → today's
+- `GET /api/purchase-orders` (existing route, extended; **clerk+** — user ruling 2026-10-09: PO data stays off the read-only viewer role) → today's
   fields plus line count and received / billed totals.
 - `GET /api/purchase-orders/{po_number}` (viewer+) → lines with ordered /
   received / billed / remaining, and the PO's GRNs.
@@ -197,7 +197,7 @@ audited, as for other refusals.
 - Migration: RLS-list test; post-upgrade forced-policy test extended to the
   four tables.
 - e2e: upload PO + GRN in the UI and see the lines; a held invoice shows the
-  three-way panel; a GRN upload clears it.
+  three-way panel; a GRN upload clears it; the e2e API starts a background thread that drains only `case.rematch` jobs from the local queue (`scripts/e2e_api.py`).
 
 **Measurement** (`benchmark/CHANGELOG.md`):
 1. Guard: replay over `after-ecb9bbd` identical to `replay-gl-coding` (the
