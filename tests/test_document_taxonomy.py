@@ -228,6 +228,8 @@ class TestKeywordFallback:
             ("RECEIPT\nPayment received with thanks", "receipt"),
             ("BILL OF SUPPLY\nComposition scheme", NON_TAX_INVOICE),
             ("TAX INVOICE\nGSTIN: 29ZOICE4828P1ZD", TAX_INVOICE),
+            # An invoice quoting the receipt it bills is still an invoice.
+            ("TAX INVOICE\nGRN No: 123", TAX_INVOICE),
         ],
     )
     def test_it_reads_the_title(self, text, expected):

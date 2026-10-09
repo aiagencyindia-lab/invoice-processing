@@ -1277,15 +1277,16 @@ Return ONLY this JSON:
         ("goods receipt", GOODS_RECEIPT),
         ("goods received note", GOODS_RECEIPT),
         ("material receipt", GOODS_RECEIPT),
-        # Whole words only (see _WHOLE_WORDS): "IMRN-2" is a reference.
-        ("grn", GOODS_RECEIPT),
-        ("mrn", GOODS_RECEIPT),
         ("purchase order", "purchase_order"),
         ("quotation", "quotation"),
         ("quote no", "quotation"),
         ("statement of account", "statement"),
         ("bill of supply", NON_TAX_INVOICE),
         ("tax invoice", TAX_INVOICE),
+        # After "tax invoice": an invoice quotes the GRN it bills. Whole
+        # words only (see _WHOLE_WORDS): "IMRN-2" is a reference.
+        ("grn", GOODS_RECEIPT),
+        ("mrn", GOODS_RECEIPT),
         ("receipt", "receipt"),
         ("invoice", NON_TAX_INVOICE),
     )
