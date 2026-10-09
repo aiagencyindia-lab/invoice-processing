@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import supporting_docs
+from ..ports import StatusChanged, UploadOwned
 from ..supporting_docs import GOODS_RECEIPT, PURCHASE_ORDER
 from . import po_routes
 from .auth import Principal, require_role
@@ -97,13 +98,53 @@ def _found(supporting, principal: Principal, row_id: str) -> dict:
     return row
 
 
-def _decidable(supporting, principal: Principal, row_id: str) -> dict:
+ACCEPTABLE = ("pending",)
+# A receipt blocked on a misread PO number would otherwise wait forever.
+REJECTABLE = ("pending", "blocked")
+
+
+def _not_decidable(status: str, blocked_reason: str | None) -> HTTPException:
+    if status == "blocked":
+        return HTTPException(
+            409, blocked_reason or "Its purchase order is not on file."
+        )
+    return HTTPException(409, f"This document was already {status}.")
+
+
+def _decidable(supporting, principal: Principal, row_id: str, allowed) -> dict:
     row = _found(supporting, principal, row_id)
-    if row["status"] == "blocked":
-        raise HTTPException(409, row["blocked_reason"])
-    if row["status"] != "pending":
-        raise HTTPException(409, f"This document was already {row['status']}.")
+    if row["status"] not in allowed:
+        raise _not_decidable(row["status"], row["blocked_reason"])
     return row
+
+
+def _mark(supporting, principal: Principal, row: dict, allowed, **decision):
+    """The decision, only if nobody decided this document meanwhile."""
+    try:
+        supporting.mark(
+            principal.tenant_id,
+            row["id"],
+            reviewed_by=principal.email,
+            expect=allowed,
+            **decision,
+        )
+    except StatusChanged as exc:
+        raise _not_decidable(exc.status, row["blocked_reason"]) from None
+
+
+def _pairing(orders, principal: Principal, row: dict):
+    """(PO on file or None, the PO line each extracted receipt line pairs to)."""
+    order = (
+        orders.get_order(principal.tenant_id, row["po_number"])
+        if row["po_number"]
+        else None
+    )
+    paired = None
+    if order is not None and row["kind"] == GOODS_RECEIPT:
+        paired = supporting_docs.pair_grn_lines(
+            (row["extracted"] or {}).get("lines") or [], order["lines"]
+        )
+    return order, paired
 
 
 def _one_record(message: str) -> str:
@@ -163,28 +204,13 @@ def read_supporting_document(
 ) -> dict:
     supporting, orders = _repos()
     row = _found(supporting, principal, row_id)
-    order = (
-        orders.get_order(principal.tenant_id, row["po_number"])
-        if row["po_number"]
-        else None
-    )
-    paired = None
-    if order is not None and row["kind"] == GOODS_RECEIPT:
-        paired = supporting_docs.pair_grn_lines(
-            (row["extracted"] or {}).get("lines") or [], order["lines"]
-        )
+    order, paired = _pairing(orders, principal, row)
     return {**_public(row), "po_on_file": order is not None, "paired": paired}
 
 
 def _store_order(orders, principal: Principal, row: dict, clean: list) -> dict:
-    shown = clean[0]["po_number"]
-    if orders.po_owned_by_upload(principal.tenant_id, shown):
-        raise HTTPException(
-            409,
-            f"PO {shown} came from your ERP upload; a scan cannot change it.",
-        )
-    # ponytail: checked then written in two transactions; an ERP upload landing
-    # between them is overwritten until that upload is repeated.
+    # The repository refuses an ERP-owned PO in the same transaction as the
+    # write, so an upload landing meanwhile is never overwritten.
     try:
         return orders.upsert_orders(
             principal.tenant_id,
@@ -194,6 +220,8 @@ def _store_order(orders, principal: Principal, row: dict, clean: list) -> dict:
             document_id=row["document_id"],
             replace=False,
         )
+    except UploadOwned as exc:
+        raise HTTPException(409, str(exc)) from None
     except ValueError as exc:
         raise _refused([str(exc)]) from None
 
@@ -226,7 +254,7 @@ def accept_supporting_document(
     """Confirm the corrected document into the match. Body: `{fields, lines}`
     in the extraction's shape; a receipt line carries `po_line_number`."""
     supporting, orders = _repos()
-    row = _decidable(supporting, principal, row_id)
+    row = _decidable(supporting, principal, row_id, ACCEPTABLE)
     kind = row["kind"]
     field_keys, line_keys = _SHAPE[kind]
     before = row["extracted"] or {}
@@ -260,13 +288,22 @@ def accept_supporting_document(
         stored = _store_receipt(orders, principal, row, clean)
         number = clean[0]["grn_number"]
 
-    supporting.mark(
-        principal.tenant_id,
-        row["id"],
+    # ponytail: stored before marked; a reject racing between the two leaves
+    # the PO/receipt stored and answers 409. One transaction across both
+    # repositories would close it.
+    _mark(
+        supporting, principal, row, ACCEPTABLE,
         status="accepted",
-        reviewed_by=principal.email,
         extracted={**before, "fields": fields, "lines": lines},
-    )
+    )  # fmt: skip
+    # What the clerk changed in the lines, the PO line they chose included.
+    read = before.get("lines") or []
+    if kind == GOODS_RECEIPT:
+        _, paired = _pairing(orders, principal, row)
+        read = [
+            {**ln, "po_line_number": p}
+            for ln, p in zip(read, paired or [None] * len(read), strict=True)
+        ]
     po_routes._audit().emit(
         principal.context(),
         "supporting_document_accepted",
@@ -276,9 +313,7 @@ def accept_supporting_document(
             "kind": kind,
             "number": number,
             "changed": _changed(before.get("fields") or {}, fields),
-            "lines_changed": _lines_changed(
-                before.get("lines"), lines, line_keys
-            ),
+            "lines_changed": _lines_changed(read, lines, kept),
         },
     )
     if kind == PURCHASE_ORDER:
@@ -299,14 +334,11 @@ def reject_supporting_document(
     principal: Annotated[Principal, Depends(require_role("clerk"))],
 ) -> dict:
     supporting, _ = _repos()
-    row = _decidable(supporting, principal, row_id)
-    supporting.mark(
-        principal.tenant_id,
-        row["id"],
-        status="rejected",
-        reviewed_by=principal.email,
-        note=body.reason,
-    )
+    row = _decidable(supporting, principal, row_id, REJECTABLE)
+    _mark(
+        supporting, principal, row, REJECTABLE,
+        status="rejected", note=body.reason,
+    )  # fmt: skip
     po_routes._audit().emit(
         principal.context(),
         "supporting_document_rejected",

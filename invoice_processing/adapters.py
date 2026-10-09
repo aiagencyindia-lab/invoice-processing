@@ -24,7 +24,7 @@ from pathlib import Path
 
 from . import paths
 from .po_matching import normalize_po_number
-from .ports import RuleBaseConflict, RunContext
+from .ports import RuleBaseConflict, RunContext, StatusChanged
 
 # ---------------------------------------------------------------------------
 # Blob storage
@@ -571,13 +571,21 @@ class JsonSupportingDocumentRepository:
     def get(self, tenant_id, id) -> dict | None:
         return self._read().get(tenant_id, {}).get(id)
 
+    def for_documents(self, tenant_id, document_ids) -> list[dict]:
+        wanted = set(document_ids)
+        rows = self._read().get(tenant_id, {}).values()
+        return [r for r in rows if r["document_id"] in wanted]
+
     def mark(
-        self, tenant_id, id, *, status, reviewed_by, note=None, extracted=None
+        self, tenant_id, id, *, status, reviewed_by, note=None, extracted=None,
+        expect=None,
     ) -> dict:  # fmt: skip
         data = self._read()
         row = data.get(tenant_id, {}).get(id)
         if row is None:
             raise KeyError(id)
+        if expect is not None and row["status"] not in expect:
+            raise StatusChanged(row["status"])
         row.update(
             status=status,
             reviewed_by=reviewed_by,

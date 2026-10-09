@@ -48,7 +48,6 @@ UNKNOWN = "unknown"
 # A scanned PO or receipt waits for a person rather than a worker.
 AWAITING_CONFIRMATION = "awaiting_confirmation"
 BLOCKED = "blocked"
-_REVIEW_STATUSES = ("pending", "blocked", "accepted", "rejected")
 
 
 # ---------------------------------------------------------------------------
@@ -307,13 +306,18 @@ def _review_stage(row: dict) -> tuple[str, str]:
 
 def _reviews(tenant_id: str, listing: list[dict]) -> dict[str, dict]:
     """Review rows of the scanned documents in `listing`, by document id."""
-    if not any(d.get("kind") not in (None, "invoice") for d in listing):
+    scanned = [
+        str(d.get("id"))
+        for d in listing
+        if d.get("kind") not in (None, "invoice")
+    ]
+    if not scanned:
         return {}
     from . import service  # noqa: PLC0415
 
     rows = _safe(
-        lambda: service.get_supporting_documents().list(
-            tenant_id, _REVIEW_STATUSES
+        lambda: service.get_supporting_documents().for_documents(
+            tenant_id, scanned
         ),
         default=[],
     )

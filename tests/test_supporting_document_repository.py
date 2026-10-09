@@ -34,6 +34,8 @@ from invoice_processing.db.repositories import (  # noqa: E402
     PgDocumentRepository,
     PgPurchaseOrderRepository,
     PgSupportingDocumentRepository,
+    StatusChanged,
+    UploadOwned,
 )
 from invoice_processing.db.session import tenant_session  # noqa: E402
 
@@ -173,6 +175,56 @@ def test_upload_after_a_scan_takes_ownership(env):
     assert po.po_owned_by_upload("t1", "PO-1") is True
 
 
+def test_a_scan_cannot_overwrite_an_uploaded_po(env):
+    url, _, ids, _ = env
+    po = PgPurchaseOrderRepository(url)
+    po.upsert_orders("t1", [PO], uploaded_by="erp")
+    scanned = {**PO, "vendor_name": "Scanned"}
+    with pytest.raises(UploadOwned) as refused:
+        po.upsert_orders(
+            "t1", [scanned], uploaded_by="c", source="document",
+            document_id=ids["t1"][0],
+        )  # fmt: skip
+    assert refused.value.po_number == "PO-1"
+    o = po.get_order("t1", "PO-1")
+    assert o["vendor_name"] == "V" and o["source"] == "upload"
+    assert o["document_id"] is None
+    # A scan may still update a scanned PO, and the other tenant's own.
+    po.upsert_orders("t2", [scanned], uploaded_by="c", source="document")
+    po.upsert_orders("t2", [scanned], uploaded_by="c", source="document")
+    assert po.get_order("t2", "PO-1")["vendor_name"] == "Scanned"
+
+
+def test_mark_is_compare_and_set(env):
+    _, _, ids, repo = env
+    a = _up(repo, "t1", ids["t1"][0])
+    done = repo.mark(
+        "t1", a["id"], status="accepted", reviewed_by="first",
+        expect=("pending",),
+    )  # fmt: skip
+    assert done["status"] == "accepted"
+    with pytest.raises(StatusChanged) as late:
+        repo.mark(
+            "t1", a["id"], status="rejected", reviewed_by="second",
+            expect=("pending", "blocked"),
+        )  # fmt: skip
+    assert late.value.status == "accepted"
+    kept = repo.get("t1", a["id"])
+    assert kept["status"] == "accepted" and kept["reviewed_by"] == "first"
+    with pytest.raises(KeyError):
+        repo.mark("t1", "nope", status="x", reviewed_by="y", expect=("a",))
+
+
+def test_for_documents_reads_only_those_documents(env):
+    _, _, ids, repo = env
+    a = _up(repo, "t1", ids["t1"][0])
+    _up(repo, "t1", ids["t1"][1])
+    _up(repo, "t2", ids["t2"][0])
+    got = repo.for_documents("t1", [ids["t1"][0], ids["t2"][0]])
+    assert [r["id"] for r in got] == [a["id"]]
+    assert repo.for_documents("t1", []) == []
+
+
 def test_json_fallback_matches_the_contract(tmp_path):
     repo = JsonSupportingDocumentRepository(tmp_path / "sd.json")
     a = _up(repo, "t1", "d1", blocked_reason="x")
@@ -185,6 +237,14 @@ def test_json_fallback_matches_the_contract(tmp_path):
         "t1", a["id"], status="rejected", reviewed_by="c", extracted={"q": 1}
     )
     assert m["extracted"] == {"q": 1}
+    with pytest.raises(StatusChanged):
+        repo.mark(
+            "t1", a["id"], status="x", reviewed_by="c", expect=("pending",)
+        )
+    assert repo.get("t1", a["id"])["status"] == "rejected"
+    assert [r["id"] for r in repo.for_documents("t1", ["d1", "d2"])] == [
+        a["id"]
+    ]
     assert _up(repo, "t1", "d1") is None
     assert repo.list("t2", ("rejected",)) == []
     assert [r["id"] for r in repo.list("t1", ("rejected",))] == [a["id"]]

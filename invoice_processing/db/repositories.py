@@ -18,13 +18,19 @@ from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import and_, delete, exists, func, or_, select, text
+from sqlalchemy import and_, delete, exists, func, or_, select, text, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from .. import approvals, gl_coding, po_matching
-from ..ports import LockHeld, RuleBaseConflict, RunContext
+from ..ports import (
+    LockHeld,
+    RuleBaseConflict,
+    RunContext,
+    StatusChanged,
+    UploadOwned,
+)
 from ..sheet_columns import (
     ATTENTION_FLAGS,
     BY_KEY,
@@ -1861,14 +1867,15 @@ class PgPurchaseOrderRepository:
         }
 
     @staticmethod
-    def _order(session, tenant_id: str, po_number) -> PurchaseOrder | None:
-        return session.scalar(
-            select(PurchaseOrder).where(
-                PurchaseOrder.tenant_id == tenant_id,
-                PurchaseOrder.po_number
-                == po_matching.normalize_po_number(po_number),
-            )
+    def _order(
+        session, tenant_id: str, po_number, *, lock: bool = False
+    ) -> PurchaseOrder | None:
+        stmt = select(PurchaseOrder).where(
+            PurchaseOrder.tenant_id == tenant_id,
+            PurchaseOrder.po_number
+            == po_matching.normalize_po_number(po_number),
         )
+        return session.scalar(stmt.with_for_update() if lock else stmt)
 
     @staticmethod
     def _received(session, tenant_id: str, order_id: str) -> dict[int, float]:
@@ -1957,6 +1964,11 @@ class PgPurchaseOrderRepository:
         created = updated = lines = 0
         seen: set[str] = set()
         with tenant_session(tenant_id, self.url) as session:
+            # The owner check and the write share this transaction: Postgres
+            # locks the PO row, SQLite takes its write lock before the read,
+            # so an upload cannot land between them (ERP upload wins).
+            if session.get_bind().dialect.name == "sqlite":
+                session.execute(text("BEGIN IMMEDIATE"))
             for i, data in enumerate(orders):
                 key = po_matching.normalize_po_number(data["po_number"])
                 if key in seen:
@@ -1964,7 +1976,13 @@ class PgPurchaseOrderRepository:
                         f"row {i + 1}: PO {data['po_number']} appears twice in this upload"
                     )
                 seen.add(key)
-                order = self._order(session, tenant_id, key)
+                order = self._order(session, tenant_id, key, lock=True)
+                if (
+                    source == "document"
+                    and order is not None
+                    and order.source == "upload"
+                ):
+                    raise UploadOwned(data["po_number"])
                 if order is None:
                     order = PurchaseOrder(tenant_id=tenant_id, po_number=key)
                     session.add(order)
@@ -2279,8 +2297,9 @@ class PgSupportingDocumentRepository:
             "filename": filename,
         }
 
-    def _one(self, session, tenant_id: str, id: str):
-        return session.execute(
+    @staticmethod
+    def _select(tenant_id: str):
+        return (
             select(SupportingDocument, Document.filename)
             .join(
                 Document,
@@ -2289,10 +2308,13 @@ class PgSupportingDocumentRepository:
                     Document.tenant_id == tenant_id,
                 ),
             )
-            .where(
-                SupportingDocument.tenant_id == tenant_id,
-                SupportingDocument.id == id,
-            )
+            .where(SupportingDocument.tenant_id == tenant_id)
+            .order_by(SupportingDocument.created_at, SupportingDocument.id)
+        )
+
+    def _one(self, session, tenant_id: str, id: str):
+        return session.execute(
+            self._select(tenant_id).where(SupportingDocument.id == id)
         ).first()
 
     def upsert_from_extraction(
@@ -2327,19 +2349,21 @@ class PgSupportingDocumentRepository:
     def list(self, tenant_id: str, statuses: tuple[str, ...]) -> list[dict]:
         with tenant_session(tenant_id, self.url) as session:
             rows = session.execute(
-                select(SupportingDocument, Document.filename)
-                .join(
-                    Document,
-                    and_(
-                        Document.id == SupportingDocument.document_id,
-                        Document.tenant_id == tenant_id,
-                    ),
+                self._select(tenant_id).where(
+                    SupportingDocument.status.in_(statuses)
                 )
-                .where(
-                    SupportingDocument.tenant_id == tenant_id,
-                    SupportingDocument.status.in_(statuses),
+            ).all()
+            return [self._dict(r, f) for r, f in rows]
+
+    def for_documents(self, tenant_id: str, document_ids) -> list[dict]:
+        """The review rows of these documents (any status)."""
+        if not document_ids:
+            return []
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.execute(
+                self._select(tenant_id).where(
+                    SupportingDocument.document_id.in_(list(document_ids))
                 )
-                .order_by(SupportingDocument.created_at, SupportingDocument.id)
             ).all()
             return [self._dict(r, f) for r, f in rows]
 
@@ -2351,17 +2375,36 @@ class PgSupportingDocumentRepository:
     def mark(
         self, tenant_id: str, id: str, *, status: str, reviewed_by: str,
         note: str | None = None, extracted: dict | None = None,
+        expect: tuple[str, ...] | None = None,
     ) -> dict:  # fmt: skip
+        """Record the decision. With `expect`, only while the row is still in
+        one of those statuses (one conditional UPDATE, so two reviewers
+        cannot both decide); otherwise StatusChanged."""
+        values = {
+            "status": status,
+            "reviewed_by": reviewed_by,
+            "note": note,
+            "reviewed_at": datetime.now(timezone.utc),
+        }
+        if extracted is not None:
+            values["extracted"] = extracted  # the clerk's corrected version
+        stmt = update(SupportingDocument).where(
+            SupportingDocument.tenant_id == tenant_id,
+            SupportingDocument.id == id,
+        )
+        if expect is not None:
+            stmt = stmt.where(SupportingDocument.status.in_(expect))
         with tenant_session(tenant_id, self.url) as session:
+            changed = session.execute(
+                stmt.values(**values).execution_options(
+                    synchronize_session=False
+                )
+            ).rowcount
             found = self._one(session, tenant_id, id)
             if found is None:
                 raise KeyError(id)
-            row = found[0]
-            row.status, row.reviewed_by, row.note = status, reviewed_by, note
-            row.reviewed_at = datetime.now(timezone.utc)
-            if extracted is not None:
-                row.extracted = extracted  # the clerk's corrected version
-            session.flush()
+            if not changed:
+                raise StatusChanged(found[0].status)
             return self._dict(*found)
 
     def unblock(self, tenant_id: str, po_number) -> list[str]:

@@ -66,6 +66,24 @@ class RuleBaseConflict(RuntimeError):
     """The rule base changed since it was read. Re-read and retry."""
 
 
+class StatusChanged(RuntimeError):
+    """A scanned document's review was decided by someone else meanwhile."""
+
+    def __init__(self, status: str):
+        super().__init__(f"already {status}")
+        self.status = status
+
+
+class UploadOwned(ValueError):
+    """The ERP upload owns this PO; a scan may not change it."""
+
+    def __init__(self, po_number: str):
+        super().__init__(
+            f"PO {po_number} came from your ERP upload; a scan cannot change it."
+        )
+        self.po_number = po_number
+
+
 class LockHeld(RuntimeError):
     """Someone else is editing this record. Carries the lock, so the refusal
     can say who and until when -- "locked" without a name is unactionable."""

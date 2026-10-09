@@ -469,3 +469,69 @@ def test_review_events_name_the_supporting_document():
         "supporting_document_unblock_failed",
     ):
         assert entity_type_for(name) == "supporting_document", name
+
+
+def test_a_scan_cannot_take_a_po_an_upload_just_stored(env, monkeypatch):
+    """The ERP upload lands after any pre-check would have passed: the
+    refusal has to come from the write itself."""
+    _client().post(
+        "/api/purchase-orders/import",
+        json={"purchase_orders": [{**ORDER, "po_number": "PO-4471"}]},
+    )
+    monkeypatch.setattr(env["orders"], "po_owned_by_upload", lambda *a: False)
+    row = env["scan"](PO_READ)
+    r = _accept(row, {"fields": PO_READ["fields"], "lines": PO_READ["lines"]})
+    assert r.status_code == 409
+    assert r.json()["detail"] == (
+        "PO PO-4471 came from your ERP upload; a scan cannot change it."
+    )
+    order = env["orders"].get_order(TENANT, "PO-4471")
+    assert (
+        order["source"] == "upload" and order["vendor_name"] == "Acme Pty Ltd"
+    )
+    assert env["supporting"].get(TENANT, row["id"])["status"] == "pending"
+
+
+def test_a_blocked_document_can_be_rejected(env):
+    row = env["scan"](
+        GRN_READ, blocked_reason="Purchase order PO-X is not on file"
+    )
+    r = _client().post(
+        f"/api/supporting-documents/{row['id']}/reject",
+        json={"reason": "Not ours"},
+    )
+    assert r.status_code == 200
+    assert env["supporting"].get(TENANT, row["id"])["status"] == "rejected"
+
+
+def test_a_decision_racing_another_is_refused(env, monkeypatch):
+    row = env["scan"](PO_READ)
+    stale = env["supporting"].get(TENANT, row["id"])
+    env["supporting"].mark(
+        TENANT, row["id"], status="accepted", reviewed_by="other"
+    )
+    monkeypatch.setattr(env["supporting"], "get", lambda *a: dict(stale))
+    r = _client().post(
+        f"/api/supporting-documents/{row['id']}/reject", json={"reason": "x"}
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == "This document was already accepted."
+    monkeypatch.undo()
+    assert env["supporting"].get(TENANT, row["id"])["reviewed_by"] == "other"
+
+
+def test_a_changed_po_line_counts_as_a_changed_line(env):
+    order = {
+        **ORDER,
+        "lines": [
+            *ORDER["lines"],
+            {"line_number": 2, "qty_ordered": 1, "unit_price": 1},
+        ],
+    }
+    env["orders"].upsert_orders(TENANT, [order], uploaded_by="u")
+    row = env["scan"](GRN_READ)
+    body = _grn_body()
+    body["lines"][0]["po_line_number"] = 2  # pairing said 1
+    assert _accept(row, body).status_code == 200
+    [event] = env["events"]("supporting_document_accepted")
+    assert event["payload"]["lines_changed"] == 1
