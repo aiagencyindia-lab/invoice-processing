@@ -165,6 +165,7 @@ jobs:
                         tests/test_vendor_routes.py \
                         tests/test_approval_routes.py \
                         tests/test_gl_routes.py \
+                        tests/test_po_routes.py \
                         tests/test_tenant_isolation_api.py \
                         "tests/test_gcs_and_migrations.py::TestMigration::test_new_tenant_tables_have_forced_isolation_policies_after_upgrade" -q
 

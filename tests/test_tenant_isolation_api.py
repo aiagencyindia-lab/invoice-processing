@@ -38,6 +38,7 @@ from invoice_processing.api import (
     auth,
     config_routes,
     gl_routes,
+    po_routes,
     service,
     system,
     vendor_routes,
@@ -47,6 +48,7 @@ from invoice_processing.db.models import Base, Invoice, Tenant, User
 from invoice_processing.db.repositories import (
     PgApprovalRepository,
     PgGlRuleRepository,
+    PgPurchaseOrderRepository,
     PgRuleRepository,
     PgVendorRepository,
 )
@@ -424,6 +426,91 @@ class TestWritesDoNotCross:
         assert gl_db.list_rules(GLOBEX) == []
         detail = acme.get("/api/invoices/case_005").json()
         assert detail["gl_coding"] is None
+
+    @pytest.fixture
+    def po_db(self, scratch_db, monkeypatch):
+        url = scratch_db("iso-po.db")
+        Base.metadata.drop_all(get_engine(url))
+        create_all(url)
+        for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
+            with db_session(tid, url) as session:
+                session.add(
+                    Tenant(id=tid, name=slug, slug=slug, status="active")
+                )
+        repo = PgPurchaseOrderRepository(url)
+        monkeypatch.setattr(service, "_purchase_orders", repo)
+        monkeypatch.setenv("DATABASE_URL", url)
+        return repo
+
+    def test_purchase_orders_do_not_cross_tenants(self, clients, po_db):
+        """Another tenant's PO number is unknown on every route: not readable,
+        not receivable against, not listed, and not deleted by a replace."""
+        order = {
+            "po_number": "PO-9001",
+            "vendor_name": "Acme Pty Ltd",
+            "total_amount": 1000,
+            "lines": [{"line_number": 1, "qty_ordered": 10, "unit_price": 100}],
+        }
+        acme = clients("acme")
+        assert (
+            acme.post(
+                "/api/purchase-orders/import", json={"purchase_orders": [order]}
+            ).status_code
+            == 201
+        )
+        grn = {
+            "grn_number": "GRN-1",
+            "po_number": "PO-9001",
+            "received_on": "2026-10-01",
+            "lines": [{"line_number": 1, "qty_received": 4}],
+        }
+        assert (
+            acme.post(
+                "/api/goods-receipts/import", json={"goods_receipts": [grn]}
+            ).json()["recorded"]
+            == 1
+        )
+        globex = clients("globex")
+        assert globex.get("/api/purchase-orders/PO-9001").status_code == 404
+        assert globex.get("/api/purchase-orders").json()["count"] == 0
+        assert globex.get("/api/goods-receipts").json()["goods_receipts"] == []
+        assert (
+            globex.get("/api/goods-receipts?po_number=PO-9001").json()[
+                "goods_receipts"
+            ]
+            == []
+        )
+        other = {**grn, "grn_number": "GRN-X"}
+        assert (
+            globex.post(
+                "/api/goods-receipts/import", json={"goods_receipts": [other]}
+            ).status_code
+            == 400
+        )
+        # Same GRN number in another tenant is its own receipt, not a dup.
+        assert (
+            globex.post(
+                "/api/goods-receipts/import", json={"goods_receipts": [grn]}
+            ).status_code
+            == 400
+        )
+        assert (
+            globex.put(
+                "/api/purchase-orders",
+                json={
+                    "purchase_orders": [
+                        {**order, "vendor_name": "Globex", "lines": []}
+                    ]
+                },
+            ).status_code
+            == 200
+        )
+        # Nothing of ACME's was damaged by the probes.
+        kept = po_db.get_order(ACME, "PO-9001")
+        assert kept["vendor_name"] == "Acme Pty Ltd"
+        assert [ln["received"] for ln in kept["lines"]] == [4.0]
+        assert [r["grn_number"] for r in po_db.list_receipts(ACME)] == ["GRN-1"]
+        assert po_db.get_order(GLOBEX, "PO-9001")["lines"] == []
 
     def test_manager_cannot_be_set_across_tenants(self, clients, approvals_db):
         acme_user = next(
@@ -1084,6 +1171,10 @@ class TestCoverage:
         "/api/signup",
         "/api/settings",
         "/api/purchase-orders",
+        "/api/purchase-orders/import",
+        "/api/purchase-orders/{po_number}",
+        "/api/goods-receipts/import",
+        "/api/goods-receipts",
         "/api/vendors",
         "/api/vendors/{vendor_id}",
         "/api/vendors/{vendor_id}/bank-changes",
@@ -1159,6 +1250,7 @@ class TestCoverage:
             approval_routes,
             config_routes,
             gl_routes,
+            po_routes,
             system,
             vendor_routes,
         ):

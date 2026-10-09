@@ -19,6 +19,7 @@ internals.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Annotated, Any
 
@@ -34,6 +35,7 @@ from .. import (
 )
 from .auth import Principal, current_principal, require_role
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -187,11 +189,28 @@ def list_purchase_orders(
     """Purchase orders the two-way match can see.
 
     An empty list is the answer to "why does every PO come back not found?",
-    so it is reported explicitly rather than as an absent file.
+    so it is reported explicitly rather than as an absent file. With a
+    database the rows also carry `line_count`, `received_total` and
+    `billed_total`.
     """
+    repo = _po_repo()
+    if repo is not None:
+        records = [
+            {**row, "po_number": row["po_number_display"]}
+            for row in repo.list_orders(principal.tenant_id)
+        ]
+        source = "database"
+    else:
+        records = _read_purchase_orders(principal.tenant_id)
+        source = str(_po_path(principal.tenant_id).name)
     out = []
-    for record in _read_purchase_orders(principal.tenant_id):
+    for record in records:
         order = po_matching.PurchaseOrder.from_dict(record)
+        extra = {
+            k: record[k]
+            for k in ("line_count", "received_total", "billed_total")
+            if k in record
+        }
         out.append(
             {
                 "po_number": record.get("po_number"),
@@ -202,13 +221,23 @@ def list_purchase_orders(
                 "currency": order.currency,
                 "status": order.status,
                 "open": order.status in po_matching.OPEN_STATUSES,
+                **extra,
             }
         )
-    return {
-        "purchase_orders": out,
-        "count": len(out),
-        "source": str(_po_path(principal.tenant_id).name),
-    }
+    return {"purchase_orders": out, "count": len(out), "source": source}
+
+
+def _po_repo():
+    """The database's purchase orders, None in file mode; 503 when a
+    configured database cannot be asked (never a silent fall back to a file
+    the pipeline is not reading)."""
+    from . import service  # noqa: PLC0415
+
+    try:
+        return service.get_purchase_orders()
+    except Exception:
+        logger.exception("Purchase orders could not be reached")
+        raise HTTPException(503, "Purchase orders are unavailable.") from None
 
 
 @router.put("/api/purchase-orders")
@@ -230,6 +259,20 @@ def replace_purchase_orders(
         raise HTTPException(
             status_code=400, detail="purchase_orders must be a list."
         )
+    repo = _po_repo()
+    if repo is not None:
+        from . import po_routes, service  # noqa: PLC0415
+
+        po_routes.store_orders(repo, principal, records, replace=True)
+        service.get_audit().emit(
+            principal.context(),
+            "purchase_orders_replaced",
+            {"count": len(records)},
+        )
+        return {
+            "count": len(records),
+            "message": f"Loaded {len(records)} purchase orders.",
+        }
 
     seen: set[str] = set()
     for index, record in enumerate(records):

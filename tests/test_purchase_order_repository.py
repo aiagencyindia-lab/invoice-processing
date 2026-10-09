@@ -257,3 +257,19 @@ def test_billed_counts_only_invoices_approved_after_upload(repo):
     assert book["po"]["vendor_name"] == "Acme Pty Ltd" and [
         x["line_number"] for x in book["lines"]
     ] == [1, 2]
+
+
+def test_replace_deletes_absent_orders_but_never_received_ones(repo):
+    r, _ = repo
+    other = {**ORDER, "po_number": "PO-2", "lines": []}
+    r.upsert_orders("t1", [ORDER, other], uploaded_by="a@x")
+    r.upsert_orders("t2", [ORDER], uploaded_by="b@x")
+    out = r.upsert_orders("t1", [ORDER], uploaded_by="a@x", replace=True)
+    assert out["deleted"] == 1
+    assert [o["po_number"] for o in r.list_orders("t1")] == ["PO9001"]
+    assert r.has_orders("t2")  # another tenant's orders are not "absent"
+    r.record_receipts("t1", [GRN], recorded_by="a@x")
+    with pytest.raises(ValueError, match="goods received"):
+        r.upsert_orders("t1", [other], uploaded_by="a@x", replace=True)
+    # Refused whole: PO-2 was not created, PO-9001 is still there.
+    assert [o["po_number"] for o in r.list_orders("t1")] == ["PO9001"]

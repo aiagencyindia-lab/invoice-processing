@@ -651,6 +651,7 @@ _ENTITY_TYPES = {
     "approval": "approval",
     "delegation": "delegation",
     "gl_rule": "gl_rule",
+    "goods_receipt": "goods_receipt",
 }
 
 
@@ -1859,7 +1860,11 @@ class PgPurchaseOrderRepository:
     def upsert_orders(
         self, tenant_id: str, orders: list[dict], *, uploaded_by: str,
         source: str = "upload", now: datetime | None = None,
+        replace: bool = False,
     ) -> dict:  # fmt: skip
+        """Upsert by PO number. `replace` also deletes the tenant's POs absent
+        from `orders`, in the same transaction -- refused for a PO with goods
+        received, since receipts are evidence and are never deleted."""
         now = now or datetime.now(timezone.utc)
         created = updated = lines = 0
         seen: set[str] = set()
@@ -1917,7 +1922,31 @@ class PgPurchaseOrderRepository:
                     row.qty_invoiced_opening = ln.get("qty_invoiced") or 0
                 lines += len(incoming)
                 session.flush()
-        return {"created": created, "updated": updated, "lines": lines}
+            if not replace:
+                return {"created": created, "updated": updated, "lines": lines}
+            deleted = 0
+            for gone in session.scalars(
+                select(PurchaseOrder).where(
+                    PurchaseOrder.tenant_id == tenant_id,
+                    PurchaseOrder.po_number.not_in(seen),
+                )
+            ).all():
+                if session.scalar(
+                    select(GoodsReceipt.id).where(
+                        GoodsReceipt.tenant_id == tenant_id,
+                        GoodsReceipt.purchase_order_id == gone.id,
+                    ).limit(1)
+                ):  # fmt: skip
+                    raise ValueError(
+                        f"PO {gone.po_number_display} has goods received "
+                        "and cannot be removed"
+                    )
+                session.delete(gone)
+                deleted += 1
+        return {
+            "created": created, "updated": updated, "lines": lines,
+            "deleted": deleted,
+        }  # fmt: skip
 
     @staticmethod
     def _item_key(code) -> str:
