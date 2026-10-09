@@ -607,6 +607,19 @@ def test_mine_for_a_group_member(env):
     )
 
 
+def test_mine_offers_only_what_assess_allows(env, monkeypatch):
+    # The queue must apply the very test decide() applies, so a refusal added
+    # to assess() reaches the queue without a second copy to keep in step.
+    make_group(env)
+    make_rule(env, steps=[{"kind": "group", "value": "Finance"}])
+    route_case(env)
+    monkeypatch.setattr(
+        approval_flow, "assess", lambda *a, **k: (None, "refused for test")
+    )
+    r = env["client"]("viewer:fin1").get("/api/approvals/mine")
+    assert r.json()["items"] == []
+
+
 def test_mine_marks_overdue(env):
     make_rule(env)
     route_case(env)
