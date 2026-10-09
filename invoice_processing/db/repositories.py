@@ -1772,6 +1772,9 @@ class PgGlRuleRepository:
             return True
 
 
+AMBIGUOUS = object()  # an item code shared by several lines of one PO
+
+
 class PgPurchaseOrderRepository:
     """Purchase orders with lines, and the goods receipts against them.
 
@@ -1863,15 +1866,22 @@ class PgPurchaseOrderRepository:
         # index/materialise if a PO gathers thousands.
         since = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
         billed: dict[int, float] = {}
+        # The record, not the projected columns: a projection that failed
+        # after an approval must not drop that approval from billed.
         rows = session.scalars(
             select(Invoice).where(
                 Invoice.tenant_id == tenant_id,
-                Invoice.human_decision == "approve",
-                Invoice.po_number.is_not(None),
+                _workflow_value("decision") == "approve",
             )
         )
         for inv in rows:
-            if po_matching.normalize_po_number(inv.po_number) != po_number:
+            stored = ((inv.fields or {}).get("extraction") or {}).get(
+                "invoice"
+            ) or {}
+            if (
+                po_matching.normalize_po_number(stored.get("po_number"))
+                != po_number
+            ):
                 continue
             fields = inv.fields or {}
             try:
@@ -1935,9 +1945,13 @@ class PgPurchaseOrderRepository:
                 for f in self.HEADER:
                     if f in data:
                         setattr(order, f, data[f])
-                order.source, order.uploaded_at, order.uploaded_by = (
-                    source, now, uploaded_by,
-                )  # fmt: skip
+                # uploaded_at is the billed counting point and keeps its first
+                # value: a re-upload must never drop approvals made since from
+                # billed. The opening still resets from this upload, so an
+                # opening that already includes them over-counts -- a hold,
+                # never a silent pass.
+                order.source, order.uploaded_by = source, uploaded_by
+                order.uploaded_at = order.uploaded_at or now
                 session.flush()
                 # Lines update in place by number: the receipts reference them.
                 existing = {ln.line_number: ln for ln in order.lines}
@@ -2027,10 +2041,12 @@ class PgPurchaseOrderRepository:
                 # Lines resolve within this PO only: the schema does not tie
                 # a grn_line's po_line to the receipt's PO, so this does.
                 by_number = {ln.line_number: ln for ln in order.lines}
-                by_code = {
-                    self._item_key(ln.item_code): ln
-                    for ln in order.lines if ln.item_code
-                }  # fmt: skip
+                by_code: dict = {}
+                for ln in order.lines:
+                    if ln.item_code:
+                        key = self._item_key(ln.item_code)
+                        # Two lines, one code: which one is a guess, so ask.
+                        by_code[key] = AMBIGUOUS if key in by_code else ln
                 receipt = GoodsReceipt(
                     tenant_id=tenant_id,
                     grn_number=grn,
@@ -2048,6 +2064,11 @@ class PgPurchaseOrderRepository:
                     else:
                         ref = item.get("item_code")
                         line = by_code.get(self._item_key(ref))
+                        if line is AMBIGUOUS:
+                            raise ValueError(
+                                f"row {i + 1}: item code {ref} matches several "
+                                f"lines of PO {rc['po_number']}; give line_number"
+                            )
                     if line is None:
                         raise ValueError(
                             f"row {i + 1}: PO {rc['po_number']} has no line {ref}"

@@ -187,8 +187,9 @@ class BookUnavailable(Refused):
     """The PO book could not be read to re-check the match (503)."""
 
 
-def over_billed(ctx, artifacts: dict) -> str | None:
-    """Why approving now would bill more than was received or ordered.
+def over_billed(ctx, artifacts: dict) -> tuple[str | None, dict | None]:
+    """Why approving now would bill more than was received or ordered, and
+    the step-2.3 entry to store if the approval goes through.
 
     Step 2.3 counts only invoices already approved, so two invoices matched
     side by side can each pass against the same units; the final approval is
@@ -197,6 +198,10 @@ def over_billed(ctx, artifacts: dict) -> str | None:
     hold the stored entry already carried was accepted by whoever approved it
     and is not raised again. Raises BookUnavailable when the book cannot be
     read: this check fails closed.
+
+    A stored entry the pipeline could not check ("unchecked") accepted
+    nothing and has no lines to bill, so it is matched live in full: any hold
+    refuses, and on approval the live entry is stored so billed counts it.
     """
     from . import (  # noqa: PLC0415
         paths,
@@ -211,8 +216,11 @@ def over_billed(ctx, artifacts: dict) -> str | None:
     )
 
     stored = rematch.three_way_validation(artifacts.get("phase2"))
-    if not stored or not stored.get("lines"):
-        return None
+    unchecked = bool(stored) and three_way.UNCHECKED in (
+        stored.get("signals") or []
+    )
+    if not stored or not (unchecked or stored.get("lines")):
+        return None, None
     t = ctx.tenant_id
     invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
     try:
@@ -220,7 +228,7 @@ def over_billed(ctx, artifacts: dict) -> str | None:
         if orders is None:
             # ponytail: a file book has no record of approved invoices, so
             # there is nothing cumulative to re-check against.
-            return None
+            return None, None
         # Read once and handed to the matcher, so the ordered quantity named
         # below is the one the match used.
         snapshot = po_book.DbBook(orders, t).book(invoice.get("po_number"))
@@ -246,8 +254,14 @@ def over_billed(ctx, artifacts: dict) -> str | None:
     }
     accepted = {
         ln.get("line_number"): set(ln.get("signals") or [])
-        for ln in stored["lines"]
+        for ln in stored.get("lines") or []
     }
+    store = None
+    if unchecked:
+        accepted = {}  # nobody saw a match, so nobody accepted a hold
+        store = dict(live)
+        if "routing_before" in stored:
+            store["routing_before"] = stored["routing_before"]
     for ln in live.get("lines") or []:
         new = (set(ln["signals"]) & holds) - accepted.get(
             ln["line_number"], set()
@@ -267,8 +281,13 @@ def over_billed(ctx, artifacts: dict) -> str | None:
         return (
             f"Line {ln['line_number']} would bill {total:g} of {of}; the "
             "purchase order changed since this was checked."
-        )
-    return None
+        ), store
+    if unchecked and not live.get("passed", True):
+        return (
+            "Purchase-order lines were not checked when this invoice was "
+            f"processed, and checking them now holds it: {live['evidence']}"
+        ), store
+    return None, store
 
 
 @dataclass
@@ -278,6 +297,8 @@ class Decision:
     why: str
     overridden: bool
     appended_second: bool
+    # Step 2.3 matched live for an "unchecked" hold, to store on approval.
+    three_way: dict | None = None
 
 
 def decide(
@@ -333,10 +354,11 @@ def decide(
     if refusal and not (principal.can("admin") and override_reason):
         raise Refused(refusal)
     pending = [s for s in repo.chain(t, case) if s["status"] == "pending"]
+    recheck = None
     if approve and pending and pending[-1]["id"] == current["id"]:
         # Only the decision that would complete the chain is re-checked:
         # that is when the invoice starts counting as billed.
-        over = over_billed(ctx, artifacts)
+        over, recheck = over_billed(ctx, artifacts)
         if over and not (principal.can("admin") and override_reason):
             raise OverBilled(over)
         overridden = overridden or bool(over and override_reason)
@@ -389,7 +411,9 @@ def decide(
             t, case, approvals.ROLE_FALLBACK, sla_days=sla, now=now
         )
         completed, second = False, True
-    return Decision(step, completed, why or "override", overridden, second)
+    return Decision(
+        step, completed, why or "override", overridden, second, recheck
+    )
 
 
 def escalate_overdue(repo, audit, *, now: datetime) -> int:

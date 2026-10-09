@@ -245,6 +245,7 @@ def test_billed_counts_only_invoices_approved_after_upload(repo):
                     min_confidence=1,
                     human_decision=decision,
                     fields={
+                        "extraction": {"invoice": {"po_number": "po 9001"}},
                         "workflow": {"decision": decision, "decided_at": when},
                         "phase2": {
                             "validations": [{"step": "2.3", "lines": lines23}]
@@ -273,3 +274,87 @@ def test_replace_deletes_absent_orders_but_never_received_ones(repo):
         r.upsert_orders("t1", [other], uploaded_by="a@x", replace=True)
     # Refused whole: PO-2 was not created, PO-9001 is still there.
     assert [o["po_number"] for o in r.list_orders("t1")] == ["PO9001"]
+
+
+def approved(url, case, when, *, po="PO-9001", quantity=3):
+    """An invoice approved on the record only: no projected columns."""
+    with tenant_session("t1", url) as s:
+        s.add(
+            models.Invoice(
+                tenant_id="t1",
+                case_id=case,
+                fields={
+                    "extraction": {"invoice": {"po_number": po}},
+                    "workflow": {"decision": "approve", "decided_at": when},
+                    "phase2": {
+                        "validations": [
+                            {
+                                "step": "2.3",
+                                "lines": [
+                                    {
+                                        "line_number": 1,
+                                        "po_line_number": 1,
+                                        "quantity": quantity,
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                },
+            )
+        )
+
+
+def test_billed_reads_the_record_not_the_projected_columns(repo):
+    r, url = repo
+    r.upsert_orders(
+        "t1",
+        [ORDER],
+        uploaded_by="a@x",
+        now=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    approved(url, "c-unprojected", "2026-10-02T00:00:00+00:00")
+    approved(url, "c-other-po", "2026-10-02T00:00:00+00:00", po="PO-2")
+    assert r.book("t1", "PO-9001")["billed"][1] == 5.0  # 2 opening + 3
+
+
+def test_a_reupload_never_moves_the_billed_counting_point(repo):
+    r, url = repo
+    r.upsert_orders(
+        "t1",
+        [ORDER],
+        uploaded_by="a@x",
+        now=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    approved(url, "c-before", "2026-10-02T00:00:00+00:00")
+    for replace in (False, True):
+        r.upsert_orders(
+            "t1",
+            [ORDER],
+            uploaded_by="b@x",
+            now=datetime(2026, 10, 5, tzinfo=timezone.utc),
+            replace=replace,
+        )
+        # Opening still comes from the upload; the approval still counts.
+        assert r.book("t1", "PO-9001")["billed"][1] == 5.0
+    assert r.get_order("t1", "PO-9001")["uploaded_at"].startswith("2026-10-01")
+
+
+def test_an_item_code_on_two_po_lines_needs_a_line_number(repo):
+    r, _ = repo
+    twice = {
+        **ORDER,
+        "lines": [
+            {**ORDER["lines"][0], "line_number": 1},
+            {**ORDER["lines"][0], "line_number": 2, "item_code": "b6205"},
+        ],
+    }
+    r.upsert_orders("t1", [twice], uploaded_by="a@x")
+    by_code = {**GRN, "lines": [{"item_code": "B-6205", "qty_received": 1}]}
+    with pytest.raises(
+        ValueError,
+        match="row 1: item code B-6205 matches several lines of PO PO-9001; "
+        "give line_number",
+    ):
+        r.record_receipts("t1", [by_code], recorded_by="c@x")
+    assert r.list_receipts("t1") == []

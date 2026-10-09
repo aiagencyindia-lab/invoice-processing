@@ -2086,7 +2086,7 @@ def _three_way_step(invoice: dict, config: dict) -> dict:
             **_three_way_base(),
             "passed": False,
             "evidence": f"Purchase-order lines could not be checked: {exc}",
-            "signals": ["unchecked"],
+            "signals": [three_way.UNCHECKED],
         }
 
 

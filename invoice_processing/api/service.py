@@ -1343,6 +1343,14 @@ def act(
             get_audit().emit(
                 ctx, "approval_chain_completed", {"action": request.action}
             )
+            if outcome.three_way is not None:
+                # An "unchecked" hold, matched live by the approval: stored
+                # before the workflow decision is written, under the PO lock,
+                # so billed counts this invoice's lines once it is approved.
+                artifacts = {
+                    **artifacts,
+                    "phase2": _store_three_way(ctx, outcome.three_way),
+                }
         state = _record_workflow(
             ctx,
             decision=request.action,
@@ -1487,6 +1495,20 @@ def _workflow(ctx) -> dict:
     is where that fact lives.
     """
     return (get_cases().get_artifacts(ctx) or {}).get(WORKFLOW_ARTIFACT) or {}
+
+
+def _store_three_way(ctx, entry: dict) -> dict:
+    """Swap the stored step-2.3 entry for `entry`; the new phase2."""
+
+    def swap(current: dict) -> dict:
+        phase2 = current.get("phase2") or {}
+        validations = [
+            entry if v.get("step") == "2.3" else v
+            for v in phase2.get("validations") or []
+        ]
+        return {"phase2": {**phase2, "validations": validations}}
+
+    return get_cases().update_artifacts(ctx, swap)["phase2"]
 
 
 def _record_workflow(ctx, **changes) -> dict:

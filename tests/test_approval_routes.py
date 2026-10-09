@@ -1220,6 +1220,7 @@ def consume_six(env, quantity=6):
                 min_confidence=1,
                 human_decision="approve",
                 fields={
+                    "extraction": {"invoice": {"po_number": "PO-9001"}},
                     "workflow": {
                         "decision": "approve",
                         "decided_at": "2026-10-02T00:00:00+00:00",
@@ -1360,3 +1361,117 @@ def test_two_final_approvals_cannot_both_consume_the_same_units(
     assert results["case_a"].status_code == 200
     assert results["case_b"].status_code == 409
     assert "would bill 12 of 10 received" in results["case_b"].json()["detail"]
+
+
+UNCHECKED_23 = {
+    "step": "2.3",
+    "passed": False,
+    "signals": ["unchecked"],
+    "evidence": "Purchase-order lines could not be checked: db down",
+    "lines": [],
+}
+
+
+def mark_unchecked(env, case=CASE):
+    p2_path = env["root"] / case / "04_phase2_validation.json"
+    p2 = json.loads(p2_path.read_text())
+    p2["validations"][-1] = dict(UNCHECKED_23)
+    p2_path.write_text(json.dumps(p2))
+
+
+def stored_23(cases, case):
+    ctx = RunContext(tenant_id=TENANT, case_id=case)
+    phase2 = cases.get_artifacts(ctx)["phase2"]
+    return next(v for v in phase2["validations"] if v["step"] == "2.3")
+
+
+def on_db_cases(env, monkeypatch, *names):
+    """The fixture's case copied into the database store under `names`."""
+    cases = PgCaseRepository(env["url"])
+    monkeypatch.setattr(service, "_cases", cases)
+    fs = FsCaseRepository(env["root"], tenant_id=TENANT)
+    base = fs.get_artifacts(RunContext(tenant_id=TENANT, case_id=CASE))
+    for case in names:
+        ctx = RunContext(tenant_id=TENANT, case_id=case)
+        for key, value in base.items():
+            if key != "workflow":
+                cases.put_artifact(ctx, key, value)
+        cases.project_case(ctx, cases.get_artifacts(ctx))
+    return cases
+
+
+def test_billed_counts_an_approval_whose_projection_failed(po_env, monkeypatch):
+    cases = on_db_cases(po_env, monkeypatch, "case_a", "case_b")
+
+    real = cases.project_case
+
+    def broken(ctx, artifacts):
+        raise RuntimeError("projection down")
+
+    monkeypatch.setattr(cases, "project_case", broken)
+    assert act(po_env, "approver:anyone", case="case_a").status_code == 200
+    monkeypatch.setattr(cases, "project_case", real)
+    r = act(po_env, "approver:anyone", case="case_b")
+    assert r.status_code == 409
+    assert "would bill 12 of 10 received" in r.json()["detail"]
+
+
+def test_approving_an_unchecked_hold_rechecks_the_live_book(po_env):
+    mark_unchecked(po_env)
+    consume_six(po_env)
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 409
+    assert r.json()["detail"].startswith("Line 1 would bill 12 of 10 received")
+    assert not (po_env["root"] / CASE / "workflow.json").exists()
+
+
+def test_an_admin_may_override_an_unchecked_hold(po_env):
+    mark_unchecked(po_env)
+    consume_six(po_env)
+    r = act(po_env, "admin:boss", override_reason="Rest is on the dock")
+    assert r.status_code == 200
+    assert "approval_overridden" in [
+        e["event_type"] for e in po_env["events"]()
+    ]
+
+
+def test_an_unchecked_hold_with_the_book_down_is_503(po_env, monkeypatch):
+    mark_unchecked(po_env)
+
+    def broken(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(service._purchase_orders, "book", broken)
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 503
+    assert r.json()["detail"] == approval_flow.BOOK_DOWN
+
+
+def test_an_approved_unchecked_hold_is_stored_with_lines_and_billed(
+    po_env, monkeypatch
+):
+    mark_unchecked(po_env)
+    cases = on_db_cases(po_env, monkeypatch, "case_a", "case_b")
+    assert act(po_env, "approver:anyone", case="case_a").status_code == 200
+    entry = stored_23(cases, "case_a")
+    assert entry["passed"] is True
+    assert [
+        (ln["po_line_number"], ln["quantity"]) for ln in entry["lines"]
+    ] == [(1, 6.0)]
+    # case_b was unchecked too; case_a's 6 now count, so 12 of 10 received.
+    r = act(po_env, "approver:anyone", case="case_b")
+    assert r.status_code == 409
+    assert "would bill 12 of 10 received" in r.json()["detail"]
+
+
+def test_an_unchecked_hold_refuses_on_any_live_hold_not_only_quantity(po_env):
+    mark_unchecked(po_env)
+    ext_path = po_env["root"] / CASE / "02_extraction.json"
+    ext = json.loads(ext_path.read_text())
+    ext["invoice"]["line_items"][0]["unit_price"] = 500
+    ext_path.write_text(json.dumps(ext))
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 409
+    assert r.json()["detail"].startswith(
+        "Purchase-order lines were not checked when this invoice was processed"
+    )
