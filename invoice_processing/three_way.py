@@ -189,24 +189,7 @@ def match(
     )
     if not invoice_lines and po_lines:
         msg = "Invoice has no line items to match."
-        return ThreeWay(
-            (
-                LineResult(
-                    0,
-                    "",
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    (UNREADABLE_LINE,),
-                    msg,
-                ),
-            ),
-            (UNREADABLE_LINE,),
-            (msg,),
-        )
+        return ThreeWay((), (UNREADABLE_LINE,), (msg,))
     results: list[LineResult] = []
     for idx, (line, (n, how)) in enumerate(
         zip(invoice_lines, pairs, strict=True), start=1

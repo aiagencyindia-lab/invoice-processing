@@ -1416,3 +1416,7 @@ match.").
 
 **Files.** `tests/fixtures/three_way/planted.json`,
 `tests/test_three_way_planted.py`.
+
+**Regression status.** Full suite 2167 passed, 1 skipped; ruff check and format
+clean. Description pairing is counted as lines paired by description: 104 of
+104 on the unplanted records (MFG-INV-035 has no lines to count).
