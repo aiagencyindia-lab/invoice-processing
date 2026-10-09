@@ -538,6 +538,7 @@ function InvoicesWorkbench() {
                 {chain && chain.steps.length > 0 ? (
                   <ApprovalPanel chain={chain} />
                 ) : null}
+                <ThreeWayPanel detail={detail} />
                 <BankChangeShortcut detail={detail} me={me} onDone={say} />
                 <Corrections corrections={detail.corrections} />
               </>
@@ -797,6 +798,51 @@ function LineItems({
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+/** Step 2.3: each invoice line against the PO line it was paired with. */
+function ThreeWayPanel({ detail }: { detail: InvoiceDetail }) {
+  const lines = detail.findings.find((f) => f.step === "2.3")?.lines;
+  if (!lines || lines.length === 0) return null;
+  return (
+    <div className="panel" style={{ padding: 16 }}>
+      <div className="eyebrow" style={{ marginBottom: 6 }}>
+        Three-way match
+      </div>
+      {lines.map((ln) => (
+        <div
+          key={ln.line_number}
+          style={{ padding: "8px 0", borderTop: "1px solid var(--border)" }}
+        >
+          <div className="row-between" style={{ gap: 12, flexWrap: "wrap" }}>
+            <span>
+              #{ln.line_number} {ln.description}
+            </span>
+            <span className="muted" style={{ fontSize: 12.5 }}>
+              {ln.po_line_number === null
+                ? "unpaired"
+                : `PO line ${ln.po_line_number} (by ${(ln.paired_by ?? "").replace(/_/g, " ")})`}
+              {" · "}billed {ln.billed} · received {ln.received} · @ {ln.unit_price}
+            </span>
+          </div>
+          {ln.signals.length > 0 ? (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+              {ln.signals.map((signal) => (
+                <span key={signal} className="flag">
+                  {signal.replace(/_/g, " ")}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {ln.evidence ? (
+            <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+              {ln.evidence}
+            </div>
+          ) : null}
+        </div>
+      ))}
     </div>
   );
 }

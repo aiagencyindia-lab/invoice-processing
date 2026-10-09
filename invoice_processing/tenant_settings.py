@@ -20,6 +20,7 @@ Two properties make this safe to expose over an API:
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     "disabled_checks": list,
     "po_tolerance_pct": (int, float),
     "po_tolerance_abs": (int, float),
+    "three_way_qty_tolerance": (int, float),
     "high_value_threshold": (int, float),
     "rules_binding": bool,
     # The tax identifier suppliers in this country carry. Settable because it
@@ -107,6 +109,10 @@ DESCRIPTIONS: dict[str, str] = {
     ),
     "po_tolerance_pct": "Permitted over-billing against a PO, as a fraction (0.02 = 2%).",
     "po_tolerance_abs": "Permitted over-billing against a PO, as a flat amount.",
+    "three_way_qty_tolerance": (
+        "Units an invoice line may exceed the quantity received before it is "
+        "held. 0 holds any shortfall."
+    ),
     "high_value_threshold": (
         "Invoices at or above this amount are flagged as high value on the "
         "approved-invoices sheet, so they can be filtered and reviewed as a "
@@ -253,9 +259,21 @@ def validate(payload: dict) -> dict:
             "tax_rate_tolerance_pct",
             "bank_change_recent_days",
         ):
+            # NaN slips past every comparison and inf disables the check.
+            if not math.isfinite(value):
+                raise SettingsError(f"{key} must be a finite number.")
             if value < 0:
                 raise SettingsError(f"{key} cannot be negative.")
             cleaned[key] = float(value)
+        elif key == "three_way_qty_tolerance":
+            # NaN slips past every comparison and inf disables the hold, so
+            # both are refused along with negatives.
+            if not math.isfinite(value) or value < 0:
+                raise SettingsError(
+                    "three_way_qty_tolerance must be a finite number of units, "
+                    "0 or more."
+                )
+            cleaned[key] = value
         elif key == "approval_sla_days":
             if value < 1:
                 raise SettingsError(
@@ -380,7 +398,7 @@ def apply_to_pipeline(tenant_id: str, store=None) -> dict:
     """
     # Imported lazily: the acting agent pulls in the whole ADK and Vertex
     # stack, which every consumer of this module would otherwise pay for.
-    from . import paths  # noqa: PLC0415
+    from . import paths, po_book  # noqa: PLC0415
     from .shared_libraries.acting import (  # noqa: PLC0415
         general_invoice_agent as agent,
     )
@@ -401,6 +419,14 @@ def apply_to_pipeline(tenant_id: str, store=None) -> dict:
     vendors = service.get_vendors()
     config["vendor_master_records"] = (
         vendors.load_records(tenant_id) if vendors else None
+    )
+    # Purchase orders the same way: the database book where this tenant has
+    # orders there, else None and _load_purchase_orders reads the file above.
+    orders = service.get_purchase_orders()
+    config["purchase_order_book"] = (
+        po_book.DbBook(orders, tenant_id)
+        if orders is not None and orders.has_orders(tenant_id)
+        else None
     )
     config["work_authorization_file"] = str(
         paths.work_authorization_file(tenant_id)

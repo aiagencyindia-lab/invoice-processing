@@ -327,7 +327,8 @@ class TestMigration:
             assert isinstance(impl, postgresql.JSONB), name
 
     @pytest.mark.parametrize(
-        ("revision", "count"), [("f2c7a19d8e43", 4), ("b21ac023e07e", 1)]
+        ("revision", "count"),
+        [("f2c7a19d8e43", 4), ("b21ac023e07e", 1), ("c4d7e8f91a02", 4)],
     )
     def test_migration_protects_exactly_the_tables_it_creates(
         self, revision, count
@@ -396,6 +397,10 @@ class TestMigration:
                 "delegations",
                 "approval_steps",
                 "gl_rules",
+                "purchase_orders",
+                "po_lines",
+                "goods_receipts",
+                "grn_lines",
             ]
             with engine.connect() as c:
                 policies = {

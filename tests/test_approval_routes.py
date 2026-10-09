@@ -3,6 +3,7 @@ last. Without rules the endpoint behaves as before: one approver, done."""
 
 import json
 import shutil
+import threading
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -20,7 +21,11 @@ from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
 from invoice_processing.db import models
 from invoice_processing.db import session as db_session
-from invoice_processing.db.repositories import PgApprovalRepository
+from invoice_processing.db.repositories import (
+    PgApprovalRepository,
+    PgCaseRepository,
+    PgPurchaseOrderRepository,
+)
 from invoice_processing.db.session import (
     create_all,
     get_engine,
@@ -1129,3 +1134,344 @@ def test_gl_rule_needs_a_short_prefix(env, prefix):
 def test_unknown_kind_lists_gl(env):
     r = make_rule(env, kind="bogus")
     assert "gl" in r.json()["detail"].split("Use ")[1]
+
+
+# Approval-time re-check: two invoices cannot both consume the same received
+# units. The match is re-run at the final step against the live book.
+PO_ORDER = {
+    "po_number": "PO-9001",
+    "vendor_name": "QuickFix HVAC Repairs",
+    "total_amount": 2000,
+    "currency": "AUD",
+    "lines": [
+        {
+            "line_number": 1,
+            "item_code": "B-6205",
+            "description": "Ball bearing 6205",
+            "qty_ordered": 20,
+            "unit_price": 100,
+        }
+    ],
+}
+LINE_23 = {"line_number": 1, "po_line_number": 1, "quantity": 6, "signals": []}
+
+
+@pytest.fixture
+def po_env(env, monkeypatch):
+    orders = PgPurchaseOrderRepository(env["url"])
+    monkeypatch.setattr(service, "_purchase_orders", orders)
+    orders.upsert_orders(
+        TENANT,
+        [PO_ORDER],
+        uploaded_by="a@x.test",
+        now=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    orders.record_receipts(
+        TENANT,
+        [
+            {
+                "grn_number": "GRN-1",
+                "po_number": "PO-9001",
+                "received_on": "2026-10-01",
+                "lines": [{"line_number": 1, "qty_received": 10}],
+            }
+        ],
+        recorded_by="a@x.test",
+    )
+    case = env["root"] / CASE
+    ext_path = case / "02_extraction.json"
+    ext = json.loads(ext_path.read_text())
+    ext["invoice"]["po_number"] = "PO-9001"
+    ext["invoice"]["line_items"] = [
+        {
+            "item_code": "B-6205",
+            "description": "Ball bearing 6205",
+            "quantity": 6,
+            "unit_price": 100,
+        }
+    ]
+    ext_path.write_text(json.dumps(ext))
+    p2_path = case / "04_phase2_validation.json"
+    p2 = json.loads(p2_path.read_text())
+    p2["validations"].append(
+        {"step": "2.3", "passed": True, "signals": [], "lines": [LINE_23]}
+    )
+    p2_path.write_text(json.dumps(p2))
+    return env
+
+
+def consume_six(env, quantity=6):
+    """Another invoice on the same PO line, approved since this was matched."""
+    with tenant_session(TENANT, env["url"]) as s:
+        s.add(
+            models.Invoice(
+                tenant_id=TENANT,
+                case_id="case_other",
+                vendor_name="QuickFix HVAC Repairs",
+                invoice_number="INV-77",
+                invoice_date="2026-10-01",
+                currency="AUD",
+                total_ex_tax=600,
+                tax_amount=0,
+                total_inc_tax=600,
+                po_number="PO-9001",
+                vendor_tax_id="x",
+                due_date="2026-11-01",
+                min_confidence=1,
+                human_decision="approve",
+                fields={
+                    "extraction": {"invoice": {"po_number": "PO-9001"}},
+                    "workflow": {
+                        "decision": "approve",
+                        "decided_at": "2026-10-02T00:00:00+00:00",
+                    },
+                    "phase2": {
+                        "validations": [
+                            {
+                                "step": "2.3",
+                                "lines": [{**LINE_23, "quantity": quantity}],
+                            }
+                        ]
+                    },
+                },
+            )
+        )
+
+
+def test_approve_within_received_succeeds(po_env):
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 200 and r.json()["completed"] is True
+
+
+def test_approve_after_the_units_are_consumed_is_409(po_env):
+    consume_six(po_env)
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 409
+    assert r.json()["detail"] == (
+        "Line 1 would bill 12 of 10 received; the purchase order changed "
+        "since this was checked."
+    )
+    assert not (po_env["root"] / CASE / "workflow.json").exists()
+    assert po_env["repo"].current(TENANT, CASE)["status"] == "pending"
+
+
+def test_reject_is_not_rechecked(po_env):
+    consume_six(po_env)
+    r = act(po_env, "approver:anyone", action="reject", reason="Wrong qty")
+    assert r.status_code == 200
+    assert workflow(po_env)["decision"] == "reject"
+
+
+def test_admin_override_approves_over_billed_and_is_audited(po_env):
+    consume_six(po_env)
+    r = act(po_env, "admin:boss", override_reason="Second delivery is here")
+    assert r.status_code == 200 and r.json()["completed"] is True
+    (event,) = [
+        e
+        for e in po_env["events"]()
+        if e["event_type"] == "approval_overridden"
+    ]
+    assert event["payload"]["override_reason"] == "Second delivery is here"
+
+
+def test_unreadable_book_at_approval_is_503(po_env, monkeypatch):
+    def broken(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(service._purchase_orders, "book", broken)
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 503
+    assert r.json()["detail"] == approval_flow.BOOK_DOWN
+    assert not (po_env["root"] / CASE / "workflow.json").exists()
+
+
+def test_only_the_final_step_is_rechecked(po_env):
+    two_tier(po_env)
+    consume_six(po_env)
+    first = act(po_env, "approver:a")
+    assert first.status_code == 200 and first.json()["completed"] is False
+    assert act(po_env, "approver:b").status_code == 409
+
+
+def test_over_ordered_names_the_ordered_quantity(po_env):
+    consume_six(po_env, quantity=15)
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 409
+    assert r.json()["detail"].startswith("Line 1 would bill 21 of 20 ordered;")
+
+
+def test_a_hold_already_accepted_is_not_raised_again(po_env):
+    p2_path = po_env["root"] / CASE / "04_phase2_validation.json"
+    p2 = json.loads(p2_path.read_text())
+    p2["validations"][-1] = {
+        "step": "2.3",
+        "passed": False,
+        "signals": ["short_received"],
+        "lines": [{**LINE_23, "signals": ["short_received"]}],
+    }
+    p2_path.write_text(json.dumps(p2))
+    consume_six(po_env)
+    assert act(po_env, "approver:anyone").status_code == 200
+
+
+def test_two_final_approvals_cannot_both_consume_the_same_units(
+    po_env, monkeypatch
+):
+    """Each invoice fits the 10 received alone; together they bill 12."""
+    cases = PgCaseRepository(po_env["url"])
+    monkeypatch.setattr(service, "_cases", cases)
+    fs = FsCaseRepository(po_env["root"], tenant_id=TENANT)
+    base = fs.get_artifacts(RunContext(tenant_id=TENANT, case_id=CASE))
+    for case in ("case_a", "case_b"):
+        ctx = RunContext(tenant_id=TENANT, case_id=case)
+        for key, value in base.items():
+            if key != "workflow":
+                cases.put_artifact(ctx, key, value)
+        cases.project_case(ctx, cases.get_artifacts(ctx))
+
+    # The first approval pauses inside its re-check. Without the lock the
+    # second re-checks meanwhile, before the first is billed, and passes.
+    real = approval_flow.over_billed
+    a_inside, b_inside, go = (threading.Event() for _ in range(3))
+
+    def paused(ctx, artifacts):
+        out = real(ctx, artifacts)
+        if ctx.case_id == "case_a":
+            a_inside.set()
+            go.wait(5)
+        else:
+            b_inside.set()
+        return out
+
+    monkeypatch.setattr(approval_flow, "over_billed", paused)
+    results = {}
+
+    def approve(case):
+        results[case] = act(po_env, "approver:anyone", case=case)
+
+    a = threading.Thread(target=approve, args=("case_a",))
+    b = threading.Thread(target=approve, args=("case_b",))
+    a.start()
+    assert a_inside.wait(5)
+    b.start()
+    b_inside.wait(0.5)  # set at once without the lock; never while held
+    go.set()
+    a.join(10)
+    b.join(10)
+    assert results["case_a"].status_code == 200
+    assert results["case_b"].status_code == 409
+    assert "would bill 12 of 10 received" in results["case_b"].json()["detail"]
+
+
+UNCHECKED_23 = {
+    "step": "2.3",
+    "passed": False,
+    "signals": ["unchecked"],
+    "evidence": "Purchase-order lines could not be checked: db down",
+    "lines": [],
+}
+
+
+def mark_unchecked(env, case=CASE):
+    p2_path = env["root"] / case / "04_phase2_validation.json"
+    p2 = json.loads(p2_path.read_text())
+    p2["validations"][-1] = dict(UNCHECKED_23)
+    p2_path.write_text(json.dumps(p2))
+
+
+def stored_23(cases, case):
+    ctx = RunContext(tenant_id=TENANT, case_id=case)
+    phase2 = cases.get_artifacts(ctx)["phase2"]
+    return next(v for v in phase2["validations"] if v["step"] == "2.3")
+
+
+def on_db_cases(env, monkeypatch, *names):
+    """The fixture's case copied into the database store under `names`."""
+    cases = PgCaseRepository(env["url"])
+    monkeypatch.setattr(service, "_cases", cases)
+    fs = FsCaseRepository(env["root"], tenant_id=TENANT)
+    base = fs.get_artifacts(RunContext(tenant_id=TENANT, case_id=CASE))
+    for case in names:
+        ctx = RunContext(tenant_id=TENANT, case_id=case)
+        for key, value in base.items():
+            if key != "workflow":
+                cases.put_artifact(ctx, key, value)
+        cases.project_case(ctx, cases.get_artifacts(ctx))
+    return cases
+
+
+def test_billed_counts_an_approval_whose_projection_failed(po_env, monkeypatch):
+    cases = on_db_cases(po_env, monkeypatch, "case_a", "case_b")
+
+    real = cases.project_case
+
+    def broken(ctx, artifacts):
+        raise RuntimeError("projection down")
+
+    monkeypatch.setattr(cases, "project_case", broken)
+    assert act(po_env, "approver:anyone", case="case_a").status_code == 200
+    monkeypatch.setattr(cases, "project_case", real)
+    r = act(po_env, "approver:anyone", case="case_b")
+    assert r.status_code == 409
+    assert "would bill 12 of 10 received" in r.json()["detail"]
+
+
+def test_approving_an_unchecked_hold_rechecks_the_live_book(po_env):
+    mark_unchecked(po_env)
+    consume_six(po_env)
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 409
+    assert r.json()["detail"].startswith("Line 1 would bill 12 of 10 received")
+    assert not (po_env["root"] / CASE / "workflow.json").exists()
+
+
+def test_an_admin_may_override_an_unchecked_hold(po_env):
+    mark_unchecked(po_env)
+    consume_six(po_env)
+    r = act(po_env, "admin:boss", override_reason="Rest is on the dock")
+    assert r.status_code == 200
+    assert "approval_overridden" in [
+        e["event_type"] for e in po_env["events"]()
+    ]
+
+
+def test_an_unchecked_hold_with_the_book_down_is_503(po_env, monkeypatch):
+    mark_unchecked(po_env)
+
+    def broken(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(service._purchase_orders, "book", broken)
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 503
+    assert r.json()["detail"] == approval_flow.BOOK_DOWN
+
+
+def test_an_approved_unchecked_hold_is_stored_with_lines_and_billed(
+    po_env, monkeypatch
+):
+    mark_unchecked(po_env)
+    cases = on_db_cases(po_env, monkeypatch, "case_a", "case_b")
+    assert act(po_env, "approver:anyone", case="case_a").status_code == 200
+    entry = stored_23(cases, "case_a")
+    assert entry["passed"] is True
+    assert [
+        (ln["po_line_number"], ln["quantity"]) for ln in entry["lines"]
+    ] == [(1, 6.0)]
+    # case_b was unchecked too; case_a's 6 now count, so 12 of 10 received.
+    r = act(po_env, "approver:anyone", case="case_b")
+    assert r.status_code == 409
+    assert "would bill 12 of 10 received" in r.json()["detail"]
+
+
+def test_an_unchecked_hold_refuses_on_any_live_hold_not_only_quantity(po_env):
+    mark_unchecked(po_env)
+    ext_path = po_env["root"] / CASE / "02_extraction.json"
+    ext = json.loads(ext_path.read_text())
+    ext["invoice"]["line_items"][0]["unit_price"] = 500
+    ext_path.write_text(json.dumps(ext))
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 409
+    assert r.json()["detail"].startswith(
+        "Purchase-order lines were not checked when this invoice was processed"
+    )

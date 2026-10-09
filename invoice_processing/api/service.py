@@ -32,7 +32,7 @@ import io
 import json
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
@@ -40,7 +40,14 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
-from .. import approval_flow, approvals, case_projection, exports, paths
+from .. import (
+    approval_flow,
+    approvals,
+    case_projection,
+    exports,
+    paths,
+    po_matching,
+)
 from ..adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
@@ -129,6 +136,7 @@ _locks = None
 _vendors = None
 _approvals = None
 _gl_rules = None
+_purchase_orders = None
 _rules = None
 _tenant_settings = None
 _claims_writer = None
@@ -379,6 +387,29 @@ def get_gl_rules():
     return _gl_rules
 
 
+def get_purchase_orders():
+    """Purchase orders, their lines and goods receipts. `None` without the table.
+
+    Raises when a configured database cannot be asked, like `get_gl_rules`:
+    None means "no orders here", and the pipeline would then match against
+    the file instead of the orders the tenant actually uploaded.
+    """
+    global _purchase_orders
+    if (
+        _purchase_orders is None
+        and _database_configured()
+        and _table_exists(
+            "purchase_orders", "Purchase orders", raise_on_error=True
+        )
+    ):
+        from ..db.repositories import (  # noqa: PLC0415
+            PgPurchaseOrderRepository,
+        )
+
+        _purchase_orders = PgPurchaseOrderRepository()
+    return _purchase_orders
+
+
 def get_queue():
     """The work queue. Pub/Sub when configured, a local directory otherwise."""
     from ..worker.queue import get_queue as _resolve  # noqa: PLC0415
@@ -592,13 +623,14 @@ class ExportRequest(BaseModel):
 # vendor, no fields, and "no validation records".
 PROGRESS_KEY = "progress"
 ATTEMPTS_KEY = "attempts"
+REMATCH_ATTEMPTS_KEY = "rematch_attempts"
 
 # The worker's own bookkeeping, stored beside the artifacts because that store
 # is the only thing every container reaches. None of it is pipeline output, and
 # a reader that counts it as such reports a document nobody has processed yet
 # as a finished invoice -- which is exactly how an in-flight upload came to sit
 # in the workbench with no vendor and no validation records.
-INTERNAL_KEYS = (PROGRESS_KEY, ATTEMPTS_KEY)
+INTERNAL_KEYS = (PROGRESS_KEY, ATTEMPTS_KEY, REMATCH_ATTEMPTS_KEY)
 
 
 def read_case(cases, ctx) -> tuple[dict, dict]:
@@ -675,6 +707,7 @@ def _findings(artifacts: dict) -> list[dict]:
                     "evidence": validation.get("evidence"),
                     "rejection_template": validation.get("rejection_template"),
                     "signals": validation.get("signals"),
+                    "lines": validation.get("lines"),
                 }
             )
     # The rules that fired, so a corrected decision can say what corrected it.
@@ -1180,6 +1213,26 @@ def _propose_rule_if_warranted(
     )
 
 
+def _final_approval_lock(tenant_id: str, artifacts: dict, action: str):
+    """`db.po_lock` for an approval of an invoice quoting a PO, else nothing."""
+    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+    po_number = invoice.get("po_number")
+    if action != "approve" or not po_matching.normalize_po_number(po_number):
+        return nullcontext()
+    try:
+        orders = get_purchase_orders()
+    except Exception:
+        logger.exception("Purchase orders could not be reached at approval")
+        raise HTTPException(
+            status_code=503, detail=approval_flow.BOOK_DOWN
+        ) from None
+    if orders is None:
+        return nullcontext()  # no DB book: nothing cumulative to protect
+    from ..db.po_lock import po_lock  # noqa: PLC0415
+
+    return po_lock(tenant_id, po_number, orders.url)
+
+
 @app.post("/api/invoices/{case_id}/actions")
 def act(
     case_id: str,
@@ -1217,78 +1270,100 @@ def act(
 
     # From the artifacts already in hand rather than a second read.
     previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
-    try:
-        repo = get_approvals()
-    except Exception:
-        logger.exception("Approval routing could not be reached")
-        raise HTTPException(
-            status_code=503, detail="Approval routing is unavailable."
-        ) from None
-    if repo is not None:
-        if previous.get("decision"):
-            raise HTTPException(
-                status_code=409, detail="This invoice was already decided."
-            )
+    # Held from the re-check to the projection that bills this invoice, so
+    # two final approvals on one PO cannot both pass against the same units.
+    with _final_approval_lock(principal.tenant_id, artifacts, request.action):
         try:
-            outcome = approval_flow.decide(
+            repo = get_approvals()
+        except Exception:
+            logger.exception("Approval routing could not be reached")
+            raise HTTPException(
+                status_code=503, detail="Approval routing is unavailable."
+            ) from None
+        if repo is not None:
+            if previous.get("decision"):
+                raise HTTPException(
+                    status_code=409, detail="This invoice was already decided."
+                )
+            try:
+                outcome = approval_flow.decide(
+                    ctx,
+                    principal,
+                    artifacts,
+                    repo=repo,
+                    documents=get_documents(),
+                    corrections=get_corrections(),
+                    approve=request.action == "approve",
+                    note=request.reason,
+                    override_reason=request.override_reason,
+                    now=datetime.now(timezone.utc),
+                )
+            except (
+                approval_flow.AlreadyDecided,
+                approval_flow.OverBilled,
+            ) as exc:
+                raise HTTPException(
+                    status_code=409, detail=exc.detail
+                ) from None
+            except approval_flow.BookUnavailable as exc:
+                raise HTTPException(
+                    status_code=503, detail=exc.detail
+                ) from None
+            except approval_flow.Refused as exc:
+                raise HTTPException(
+                    status_code=403, detail=exc.detail
+                ) from None
+            step = outcome.step
+            get_audit().emit(
                 ctx,
-                principal,
-                artifacts,
-                repo=repo,
-                documents=get_documents(),
-                corrections=get_corrections(),
-                approve=request.action == "approve",
-                note=request.reason,
-                override_reason=request.override_reason,
-                now=datetime.now(timezone.utc),
+                "approval_overridden"
+                if outcome.overridden
+                else "approval_step_decided",
+                {
+                    "step": step["position"],
+                    "assignee": f"{step['assignee_kind']}:{step['assignee_value']}",
+                    "action": request.action,
+                    "why": outcome.why,
+                    "acting_for": step.get("acting_for"),
+                    **(
+                        {"override_reason": request.override_reason}
+                        if outcome.overridden
+                        else {}
+                    ),
+                },
             )
-        except approval_flow.AlreadyDecided as exc:
-            raise HTTPException(status_code=409, detail=exc.detail) from None
-        except approval_flow.Refused as exc:
-            raise HTTPException(status_code=403, detail=exc.detail) from None
-        step = outcome.step
-        get_audit().emit(
+            if not outcome.completed:
+                return {
+                    "case_id": case_id,
+                    "action": request.action,
+                    "completed": False,
+                    "step": step["position"],
+                    "next": repo.current(principal.tenant_id, case_id),
+                }
+            get_audit().emit(
+                ctx, "approval_chain_completed", {"action": request.action}
+            )
+            if outcome.three_way is not None:
+                # An "unchecked" hold, matched live by the approval: stored
+                # before the workflow decision is written, under the PO lock,
+                # so billed counts this invoice's lines once it is approved.
+                artifacts = {
+                    **artifacts,
+                    "phase2": _store_three_way(ctx, outcome.three_way),
+                }
+        state = _record_workflow(
             ctx,
-            "approval_overridden"
-            if outcome.overridden
-            else "approval_step_decided",
-            {
-                "step": step["position"],
-                "assignee": f"{step['assignee_kind']}:{step['assignee_value']}",
-                "action": request.action,
-                "why": outcome.why,
-                "acting_for": step.get("acting_for"),
-                **(
-                    {"override_reason": request.override_reason}
-                    if outcome.overridden
-                    else {}
-                ),
-            },
+            decision=request.action,
+            decided_by=principal.email,
+            decided_at=datetime.now(timezone.utc).isoformat(),
+            reason=request.reason,
+            reason_category=category,
         )
-        if not outcome.completed:
-            return {
-                "case_id": case_id,
-                "action": request.action,
-                "completed": False,
-                "step": step["position"],
-                "next": repo.current(principal.tenant_id, case_id),
-            }
-        get_audit().emit(
-            ctx, "approval_chain_completed", {"action": request.action}
-        )
-    state = _record_workflow(
-        ctx,
-        decision=request.action,
-        decided_by=principal.email,
-        decided_at=datetime.now(timezone.utc).isoformat(),
-        reason=request.reason,
-        reason_category=category,
-    )
-    # The columns as well as the artifact. "Show me every invoice where a
-    # person overruled the pipeline" is the question this whole feature is
-    # built on, and answering it by scanning a JSON path over every row is the
-    # wrong answer to it.
-    _reproject(ctx, {**artifacts, WORKFLOW_ARTIFACT: state})
+        # The columns as well as the artifact. "Show me every invoice where a
+        # person overruled the pipeline" is the question this whole feature is
+        # built on, and answering it by scanning a JSON path over every row is the
+        # wrong answer to it.
+        _reproject(ctx, {**artifacts, WORKFLOW_ARTIFACT: state})
     agreement = case_projection.agreement(
         {**artifacts, WORKFLOW_ARTIFACT: state}
     )
@@ -1420,6 +1495,20 @@ def _workflow(ctx) -> dict:
     is where that fact lives.
     """
     return (get_cases().get_artifacts(ctx) or {}).get(WORKFLOW_ARTIFACT) or {}
+
+
+def _store_three_way(ctx, entry: dict) -> dict:
+    """Swap the stored step-2.3 entry for `entry`; the new phase2."""
+
+    def swap(current: dict) -> dict:
+        phase2 = current.get("phase2") or {}
+        validations = [
+            entry if v.get("step") == "2.3" else v
+            for v in phase2.get("validations") or []
+        ]
+        return {"phase2": {**phase2, "validations": validations}}
+
+    return get_cases().update_artifacts(ctx, swap)["phase2"]
 
 
 def _record_workflow(ctx, **changes) -> dict:
@@ -1656,6 +1745,7 @@ from .approval_routes import router as approval_router  # noqa: E402
 from .config_routes import router as config_router  # noqa: E402
 from .gl_routes import router as gl_router  # noqa: E402
 from .ingest import router as ingest_router  # noqa: E402
+from .po_routes import router as po_router  # noqa: E402
 from .rules import router as rules_router  # noqa: E402
 from .sheet import router as sheet_router  # noqa: E402
 from .signup import router as signup_router  # noqa: E402
@@ -1672,6 +1762,7 @@ app.include_router(rules_router)
 app.include_router(vendor_router)
 app.include_router(approval_router)
 app.include_router(gl_router)
+app.include_router(po_router)
 
 
 @app.get("/", response_class=HTMLResponse)

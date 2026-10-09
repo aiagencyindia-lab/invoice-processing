@@ -791,6 +791,8 @@ class TestTheTrailCanAnswerWhatChanged:
         assert entity_type_for("invoice_approved") == "invoice"
         assert entity_type_for("settings_changed") == "settings"
         assert entity_type_for("tenant_self_provisioned") == "tenant"
+        assert entity_type_for("goods_receipt_recorded") == "goods_receipt"
+        assert entity_type_for("purchase_orders_imported") == "purchase_order"
 
     def test_a_document_event_is_not_labelled_an_invoice(self, db):
         """It was, whenever a case id happened to be present."""

@@ -1374,3 +1374,49 @@ identical line for line.
 
 **Regression status.** All 9 gates green (2037 tests, 21/21, 27/27, eval gate,
 lint, tsc, 22 e2e).
+
+---
+
+## 2026-10-09 — Three-way match: no benchmark decision moves; planted set 6/6
+
+**Problem.** Step 2.3 (invoice lines against PO lines and goods received) needed
+two measurements: that it never moves a benchmark decision, and that it catches
+receipt faults the benchmark never planted.
+
+**Root cause.** None for the guard. The benchmark tenant has no purchase-order
+book, so the check has nothing to match against and stays out of the replay.
+
+**Result, guard (today's code replayed over the run at `ecb9bbd`,
+`replay-three-way`).** Against `replay-approvals`: posted untouched 40 of 45
+clean -> 40 of 45; posted untouched wrongly 1 -> 1; decision accuracy 98.0% ->
+98.0%; `results.csv` byte-identical.
+
+**Result, planted set (`tests/fixtures/three_way/planted.json`).** The 19
+Company B PO invoices the run accepted, with PO lines rebuilt from ground truth
+and every line fully received. Six faults planted (short received x2, not
+received, price over PO, over ordered, unpaired line): caught 6/6, and no
+planted record raised a signal beyond its fault. Three split-delivery controls
+(invoice quantity halved, receipt matches) add no signal. Of the 10 unplanted
+records, 8 pass clean.
+
+**Pairing fix found by the first measurement.** The first run paired only 5 of
+104 lines by description (1 of 10 clean records passed). Company B invoices
+repeat one item on several PO lines at different prices, the descriptions
+matched exactly, and identical candidates tied, so the margin rule left every
+such line unpaired. Description pairing now breaks a tie between PO lines with
+identical wording by the closest unit price within tolerance, then the lowest
+PO line number; different wording within 0.2 of the best still stays unpaired.
+Now 104 of 104 invoice lines pair on the unplanted records.
+
+**Remaining gaps, reported and not tuned.** MFG-INV-033: two lines were
+extracted without a price or quantity, so it holds as `unreadable_line`.
+MFG-INV-035: the extraction has no line items; a match over zero invoice lines
+used to pass and now holds as `unreadable_line` ("Invoice has no line items to
+match.").
+
+**Files.** `tests/fixtures/three_way/planted.json`,
+`tests/test_three_way_planted.py`.
+
+**Regression status.** Full suite 2167 passed, 1 skipped; ruff check and format
+clean. Description pairing is counted as lines paired by description: 104 of
+104 on the unplanted records (MFG-INV-035 has no lines to count).

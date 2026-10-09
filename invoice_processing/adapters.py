@@ -185,6 +185,22 @@ class FsCaseRepository:
             self.put_artifact(ctx, key, value)
             return value
 
+    def update_artifacts(
+        self, ctx: RunContext, mutate: Callable[[dict], dict | None]
+    ) -> dict | None:
+        """Several keys under the same lock: `mutate(artifacts)` returns the
+        keys to write, or None to write nothing."""
+        import fcntl  # noqa: PLC0415
+
+        case_dir = self._case_dir(ctx)
+        case_dir.parent.mkdir(parents=True, exist_ok=True)
+        with open(case_dir.with_name(f".{case_dir.name}.lock"), "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            updates = mutate(self.get_artifacts(ctx))
+            for key, value in (updates or {}).items():
+                self.put_artifact(ctx, key, value)
+            return updates
+
     def iter_case_ids(self, tenant_id: str = "default") -> Iterator[str]:
         """Sorted, so impact assessment walks cases in a stable order."""
         if not self.serves(tenant_id) or not self.root.exists():
@@ -196,6 +212,22 @@ class FsCaseRepository:
                 if d.is_dir() and not d.name.startswith(".")
             )
         )
+
+    def held_by_receipt(self, tenant_id: str, po_number: str) -> list[str]:
+        """Undecided cases quoting this PO that step 2.3 held (a full scan:
+        the filesystem store is the single-process dev fallback)."""
+        from .rematch import is_held_by_receipt  # noqa: PLC0415
+
+        return [
+            case_id
+            for case_id in self.iter_case_ids(tenant_id)
+            if is_held_by_receipt(
+                self.get_artifacts(
+                    RunContext(tenant_id=tenant_id, case_id=case_id)
+                ),
+                po_number,
+            )
+        ]
 
     def project_case(self, ctx: RunContext, artifacts: dict) -> None:
         """Nothing to do: on a filesystem the artifacts are the query surface.
