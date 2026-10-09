@@ -51,6 +51,11 @@ function typed(key: string, raw: string): Cell {
   return Number.isFinite(n) ? n : raw;
 }
 
+const confidenceOf = (ev: unknown) => {
+  const c = (ev as Evidence | undefined)?.confidence;
+  return typeof c === "number" ? ` · confidence ${Math.round(c * 100)}%` : "";
+};
+
 const convert = (rec: Record<string, string>): Record<string, Cell> =>
   Object.fromEntries(Object.entries(rec).map(([k, v]) => [k, typed(k, v)]));
 
@@ -209,9 +214,7 @@ export default function SupportingReview({
                     {check ? (
                       <div className="why">
                         check this
-                        {typeof ev?.confidence === "number"
-                          ? ` · confidence ${Math.round(ev.confidence * 100)}%`
-                          : ""}
+                        {confidenceOf(ev)}
                       </div>
                     ) : null}
                   </div>
@@ -237,16 +240,38 @@ export default function SupportingReview({
                 <tbody>
                   {lines.map((ln, i) => (
                     <tr key={i}>
-                      {columns.map(([key, name]) => (
-                        <td key={key}>
+                      {columns.map(([key, name]) => {
+                        const evKey = `lines[${i}].${key}`;
+                        const check = flagged.has(evKey);
+                        const input = (
                           <input
                             aria-label={`${name}, line ${i + 1}`}
+                            aria-describedby={check ? `why-${evKey}` : undefined}
                             value={ln[key] ?? ""}
                             onChange={(e) => setLine(i, key, e.target.value)}
                             style={{ width: "100%", minWidth: 60 }}
                           />
-                        </td>
-                      ))}
+                        );
+                        return (
+                          <td key={key}>
+                            {check ? (
+                              // The same bar and hint as a flagged header field.
+                              <div
+                                className="field flagged"
+                                style={{ margin: 0, padding: "0 0 0 8px", borderBottom: "none" }}
+                              >
+                                {input}
+                                <div className="why" id={`why-${evKey}`}>
+                                  check this
+                                  {confidenceOf(evidence[evKey])}
+                                </div>
+                              </div>
+                            ) : (
+                              input
+                            )}
+                          </td>
+                        );
+                      })}
                       {isGrn ? (
                         <td>
                           <select

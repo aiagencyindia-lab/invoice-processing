@@ -131,7 +131,9 @@ test("an edit is recorded as a correction", async ({ page }) => {
 test("an upload is received and queued, and says so", async ({ page }) => {
   // Not empty: the seeded receipt scans are documents too.
   await goto(page, "/documents");
-  await expect(page.getByRole("heading", { name: "Documents" })).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "grn-e2e-21-scan.pdf" }),
+  ).toBeVisible();
 
   await page.locator("#upload").setInputFiles({
     name: "smoke-invoice.pdf",
@@ -439,6 +441,7 @@ test("a clerk corrects a scanned receipt and it clears the held invoice", async 
   );
   const quantity = drawer.getByLabel("Quantity received, line 1");
   await expect(quantity).toHaveValue("10"); // the misread
+  await expect(quantity).toHaveAccessibleDescription(/check this/);
   await expect(drawer.getByLabel("PO line for line 1")).toHaveValue("1");
   await quantity.fill("1");
   await drawer.getByRole("button", { name: "Accept" }).click();
@@ -486,7 +489,11 @@ test("a receipt for a PO not on file cannot be accepted, only rejected", async (
 test("the documents page names a scanned receipt as one", async ({ page }) => {
   await goto(page, "/documents");
   const row = page.getByRole("row").filter({ hasText: "grn-e2e-21-scan.pdf" });
-  await expect(row.getByRole("cell").nth(2)).toHaveText("Goods receipt");
+  await expect(row).toBeVisible();
+  const headers = await page.getByRole("columnheader").allTextContents();
+  await expect(row.getByRole("cell").nth(headers.indexOf("Kind"))).toHaveText(
+    "Goods receipt",
+  );
 });
 
 test("the sign-in page is a real route", async ({ page }) => {
