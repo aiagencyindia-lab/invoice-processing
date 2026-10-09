@@ -11,8 +11,13 @@ from invoice_processing.adapters import JsonlAuditSink
 from invoice_processing.api import auth, po_routes, service
 from invoice_processing.api.service import app
 from invoice_processing.db import models
-from invoice_processing.db.repositories import PgPurchaseOrderRepository
+from invoice_processing.db.repositories import (
+    PgCaseRepository,
+    PgPurchaseOrderRepository,
+)
 from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.ports import RunContext
+from invoice_processing.worker.queue import LocalQueue
 
 TENANT = "tenant-acme"
 
@@ -469,3 +474,41 @@ def test_internal_keys_in_a_json_body_are_ignored(env, junk):
         "/api/purchase-orders", json={"purchase_orders": [order]}
     )
     assert r.status_code == 200, r.text
+
+
+def test_grn_import_queues_a_rematch_per_held_case(env, tmp_path, monkeypatch):
+    cases = PgCaseRepository(env["repo"].url)
+    queue = LocalQueue(tmp_path / "q")
+    monkeypatch.setattr(service, "_cases", cases)
+    monkeypatch.setattr(service, "get_queue", lambda: queue)
+
+    def seed(case_id, po_number, passed, workflow=None):
+        ctx = RunContext(tenant_id=TENANT, case_id=case_id)
+        cases.put_artifact(
+            ctx,
+            "extraction",
+            {"invoice": {"po_number": po_number, "_routing": "REVIEW"}},
+        )
+        cases.put_artifact(
+            ctx, "phase2", {"validations": [{"step": "2.3", "passed": passed}]}
+        )
+        if workflow:
+            cases.put_artifact(ctx, "workflow", workflow)
+        cases.project_case(ctx, cases.get_artifacts(ctx))
+
+    seed("held", "po 9001", False)
+    seed("passing", "PO-9001", True)
+    seed("decided", "PO-9001", False, {"decision": "rejected"})
+    seed("other-po", "PO-9002", False)
+
+    po_import(env, {"purchase_orders": [ORDER]})
+    r = grn_import(env, {"goods_receipts": [GRN]})
+    assert r.status_code == 200 and r.json()["rematch_queued"] == 1
+    assert queue.depth() == 1
+    [message] = queue.pull()
+    assert message.payload == {
+        "type": "case.rematch",
+        "tenant_id": TENANT,
+        "case_id": "held",
+        "po_number": "PO9001",  # as the receipt store reports it, normalised
+    }

@@ -197,6 +197,22 @@ class FsCaseRepository:
             )
         )
 
+    def held_by_receipt(self, tenant_id: str, po_number: str) -> list[str]:
+        """Undecided cases quoting this PO that step 2.3 held (a full scan:
+        the filesystem store is the single-process dev fallback)."""
+        from .rematch import is_held_by_receipt  # noqa: PLC0415
+
+        return [
+            case_id
+            for case_id in self.iter_case_ids(tenant_id)
+            if is_held_by_receipt(
+                self.get_artifacts(
+                    RunContext(tenant_id=tenant_id, case_id=case_id)
+                ),
+                po_number,
+            )
+        ]
+
     def project_case(self, ctx: RunContext, artifacts: dict) -> None:
         """Nothing to do: on a filesystem the artifacts are the query surface.
 

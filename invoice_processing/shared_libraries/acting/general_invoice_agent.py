@@ -2017,11 +2017,8 @@ def _load_purchase_orders() -> "po_book.PurchaseOrderBook":
     )
 
 
-def _three_way_step(invoice: dict, config: dict) -> dict:
-    """The step 2.3 entry for an invoice whose PO step 2.2 has passed."""
-    from ...checks import disabled_from  # noqa: PLC0415
-
-    step = {
+def _three_way_base() -> dict:
+    return {
         "step": "2.3",
         "rule": "Invoice lines match PO lines and goods received",
         "passed": True,
@@ -2031,42 +2028,42 @@ def _three_way_step(invoice: dict, config: dict) -> dict:
         "lines": [],
         "rejection_template": None,
     }
+
+
+def three_way_entry(invoice: dict, orders, config: dict, vendors) -> dict:
+    """The step 2.3 entry for an invoice whose PO step 2.2 has passed.
+
+    One implementation for the pipeline and the re-match job (rematch.py).
+    Raises when the book or the vendors cannot be read: the pipeline holds
+    that as "unchecked", the re-match job retries it.
+    """
+    from ...checks import disabled_from  # noqa: PLC0415
+
+    step = _three_way_base()
     if "2.3" in disabled_from(config):
         # Recorded so _settle can mark it skipped; nothing is read or held.
         return step
-    try:
-        book = _load_purchase_orders().book(invoice["po_number"])
-        if book is None or not book.get("lines"):
-            # The matcher would call every line unpaired against no lines.
-            return {
-                **step,
-                "evidence": "No PO lines on file; header match only.",
-            }
-        vendor = _load_vendors().find(invoice.get("vendor_name"))
-        result = three_way.match(
-            invoice.get("line_items") or [],
-            book["lines"],
-            book["received"],
-            book["billed"],
-            # Unknown kind is treated as receipt-required by the matcher.
-            vendor_kind=(vendor.kind or None) if vendor else None,
-            qty_tol=float(config.get("three_way_qty_tolerance") or 0),
-            price_tol_pct=config.get(
-                "po_tolerance_pct", po_matching.DEFAULT_TOLERANCE_PCT
-            ),
-            price_tol_abs=config.get(
-                "po_tolerance_abs", po_matching.DEFAULT_TOLERANCE_ABS
-            ),
-            grn_numbers=book.get("grn_numbers"),
-        )
-    except Exception as exc:
-        # A book that cannot be read holds; it never passes silently.
-        return {
-            **step,
-            "passed": False,
-            "evidence": f"Purchase-order lines could not be checked: {exc}",
-            "signals": ["unchecked"],
-        }
+    book = orders.book(invoice["po_number"])
+    if book is None or not book.get("lines"):
+        # The matcher would call every line unpaired against no lines.
+        return {**step, "evidence": "No PO lines on file; header match only."}
+    vendor = vendors.find(invoice.get("vendor_name"))
+    result = three_way.match(
+        invoice.get("line_items") or [],
+        book["lines"],
+        book["received"],
+        book["billed"],
+        # Unknown kind is treated as receipt-required by the matcher.
+        vendor_kind=(vendor.kind or None) if vendor else None,
+        qty_tol=float(config.get("three_way_qty_tolerance") or 0),
+        price_tol_pct=config.get(
+            "po_tolerance_pct", po_matching.DEFAULT_TOLERANCE_PCT
+        ),
+        price_tol_abs=config.get(
+            "po_tolerance_abs", po_matching.DEFAULT_TOLERANCE_ABS
+        ),
+        grn_numbers=book.get("grn_numbers"),
+    )
     return {
         **step,
         "passed": result.passed,
@@ -2075,6 +2072,22 @@ def _three_way_step(invoice: dict, config: dict) -> dict:
         "signals": list(result.signals),
         "lines": [line.to_dict() for line in result.lines],
     }
+
+
+def _three_way_step(invoice: dict, config: dict) -> dict:
+    """Step 2.3 in the pipeline, where a book that cannot be read holds."""
+    try:
+        return three_way_entry(
+            invoice, _load_purchase_orders(), config, _load_vendors()
+        )
+    except Exception as exc:
+        # A book that cannot be read holds; it never passes silently.
+        return {
+            **_three_way_base(),
+            "passed": False,
+            "evidence": f"Purchase-order lines could not be checked: {exc}",
+            "signals": ["unchecked"],
+        }
 
 
 def _load_vendors() -> "vendor_master.VendorMaster":

@@ -50,6 +50,8 @@ MAX_ATTEMPTS = 3
 ESCALATION_SCAN_SECONDS = 60
 
 DOCUMENT_INGESTED = "document.ingested"
+# A goods receipt arrived for a PO a held case quotes; see rematch.py.
+REMATCH = "case.rematch"
 
 
 class ProcessingFailed(RuntimeError):
@@ -665,6 +667,10 @@ class Worker:
         ended in none of them would leave the message to be redelivered on lease
         expiry, which looks like a hang.
         """
+        if message.payload.get("type") == REMATCH:
+            # No document and no claim: re-matching twice is idempotent.
+            return self._handle_rematch(message)
+
         tenant_id = str(message.payload.get("tenant_id") or "")
         document_id = str(message.payload.get("document_id") or "")
 
@@ -717,6 +723,49 @@ class Worker:
         self.queue.ack(message)
         self._emit(tenant_id, document_id, "document_processed", result or {})
         return "done"
+
+    def _handle_rematch(self, message: Message) -> str:
+        """Match one held case again with the tenant's book and settings."""
+        tenant_id = str(message.payload.get("tenant_id") or "")
+        case_id = str(message.payload.get("case_id") or "")
+        if not tenant_id or not case_id:
+            self._dead_letter(
+                message, "Re-match message is missing tenant_id or case_id"
+            )
+            return "dead-lettered:malformed"
+        try:
+            from .. import rematch, tenant_settings  # noqa: PLC0415
+            from ..api import service  # noqa: PLC0415
+            from ..shared_libraries.acting import (  # noqa: PLC0415
+                general_invoice_agent as agent,
+            )
+
+            config = tenant_settings.apply_to_pipeline(tenant_id)
+            rematch.rematch_case(
+                RunContext(
+                    tenant_id=tenant_id,
+                    case_id=case_id,
+                    run_id=message.id,
+                    actor="worker",
+                ),
+                service.get_cases(),
+                # The tenant's file when it has no orders in the database.
+                config.get("purchase_order_book")
+                or agent._load_purchase_orders(),
+                vendors=agent._load_vendors(),
+                config=config,
+                audit=self.audit or service.get_audit(),
+            )
+        except Exception as exc:
+            attempt = self._count_failure(tenant_id, case_id, message, exc)
+            if attempt >= self.max_attempts:
+                self._dead_letter(message, f"Failed {attempt} times: {exc}")
+                return "dead-lettered:exhausted"
+            self.queue.nack(message)
+            return "retry"
+        self._clear_failures(tenant_id, case_id)
+        self.queue.ack(message)
+        return "rematched"
 
     # -- loop --------------------------------------------------------------
 
@@ -842,7 +891,11 @@ class Worker:
             self.queue.ack(message)
         self._emit(
             str(message.payload.get("tenant_id") or ""),
-            str(message.payload.get("document_id") or ""),
+            str(
+                message.payload.get("document_id")
+                or message.payload.get("case_id")
+                or ""
+            ),
             "document_dead_lettered",
             {"reason": reason, "message_id": message.id},
         )
@@ -883,4 +936,19 @@ def enqueue_document(queue: Queue, ctx: RunContext, result: Any) -> str:
             "storage_key": result.storage_key,
         },
         tenant_id=ctx.tenant_id,
+    )
+
+
+def enqueue_rematch(
+    queue: Queue, tenant_id: str, case_id: str, po_number: str
+) -> str:
+    """Publish a re-match of one held case after a goods receipt."""
+    return queue.publish(
+        {
+            "type": REMATCH,
+            "tenant_id": tenant_id,
+            "case_id": case_id,
+            "po_number": po_number,
+        },
+        tenant_id=tenant_id,
     )

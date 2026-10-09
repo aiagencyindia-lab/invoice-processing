@@ -259,6 +259,28 @@ class PgCaseRepository:
             ).all()
             return {row.case_id: dict(row.fields or {}) for row in rows}
 
+    def held_by_receipt(self, tenant_id: str, po_number: str) -> list[str]:
+        """Undecided cases quoting this PO that step 2.3 held."""
+        from ..rematch import is_held_by_receipt  # noqa: PLC0415
+
+        # ponytail: PO numbers normalise in Python, so every REVIEW row of the
+        # tenant is read; a normalised po_number column if that grows large.
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(Invoice)
+                .where(
+                    Invoice.tenant_id == tenant_id,
+                    Invoice.routing == "REVIEW",
+                    Invoice.case_id.is_not(None),
+                )
+                .order_by(Invoice.case_id)
+            ).all()
+            return [
+                row.case_id
+                for row in rows
+                if is_held_by_receipt(dict(row.fields or {}), po_number)
+            ]
+
 
 class PgRuleRepository:
     """The ALF rule base, per tenant, with optimistic concurrency.

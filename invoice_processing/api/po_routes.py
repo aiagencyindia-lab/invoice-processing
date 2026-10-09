@@ -446,10 +446,29 @@ def store_orders(repo, principal: Principal, records, *, replace=False) -> dict:
 def queue_rematches(principal: Principal, po_numbers: list[str]) -> int:
     """Held invoices quoting these POs, queued to be matched again.
 
-    Re-matching lands with the worker's re-match job; until then nothing is
-    queued and the count says so.
+    The receipts are already stored, so a failure here is logged and audited
+    rather than refused; the invoices simply stay held.
     """
-    return 0
+    from ..worker.runner import enqueue_rematch  # noqa: PLC0415
+    from . import service  # noqa: PLC0415
+
+    queued = 0
+    try:
+        cases, queue = service.get_cases(), service.get_queue()
+        for po_number in po_numbers:
+            for case_id in cases.held_by_receipt(
+                principal.tenant_id, po_number
+            ):
+                enqueue_rematch(queue, principal.tenant_id, case_id, po_number)
+                queued += 1
+    except Exception as exc:
+        logger.exception("Re-match jobs could not be queued")
+        _audit().emit(
+            principal.context(),
+            "three_way_rematch_enqueue_failed",
+            {"po_numbers": po_numbers, "queued": queued, "error": str(exc)},
+        )
+    return queued
 
 
 def _audit():

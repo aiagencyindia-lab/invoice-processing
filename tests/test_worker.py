@@ -19,7 +19,7 @@ from typing import ClassVar
 
 import pytest
 
-from invoice_processing import approval_flow, tenant_settings
+from invoice_processing import approval_flow, rematch, tenant_settings
 from invoice_processing.api import service
 from invoice_processing.core.config import ARTIFACT_MAP
 from invoice_processing.db import models
@@ -1088,3 +1088,91 @@ class TestEscalationTimer:
         with pytest.raises(StopIteration):
             worker.run_forever(sleep=stop)
         assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Re-match jobs
+# ---------------------------------------------------------------------------
+
+
+class TestRematchJobs:
+    """A goods receipt queues a re-match per held case; no claim, no document."""
+
+    @pytest.fixture
+    def rematched(self, monkeypatch):
+        calls = []
+
+        def fake(ctx, cases, book, **kwargs):
+            calls.append((ctx, book, kwargs))
+            if fake.fail:
+                raise RuntimeError("db down")
+            return {"before": [], "after": [], "cleared": True}
+
+        fake.fail = False
+        monkeypatch.setattr(rematch, "rematch_case", fake)
+        monkeypatch.setattr(
+            tenant_settings,
+            "apply_to_pipeline",
+            lambda tenant_id: {"purchase_order_book": f"book-{tenant_id}"},
+        )
+        fake.calls = calls
+        return fake
+
+    def test_a_rematch_message_is_handled_and_acked(
+        self, queue, claims, clock, audit, rematched
+    ):
+        runner.enqueue_rematch(queue, "tenant-acme", "case-7", "PO-1")
+        handler = Handler()
+        worker = worker_for(queue, claims, handler, audit)
+        assert worker.run_once() == ["rematched"]
+        [(ctx, book, kwargs)] = rematched.calls
+        assert (ctx.tenant_id, ctx.case_id, ctx.actor) == (
+            "tenant-acme",
+            "case-7",
+            "worker",
+        )
+        assert book == "book-tenant-acme"
+        assert kwargs["audit"] is audit
+        assert handler.calls == 0
+        assert claims.state("tenant-acme", "case-7") is None
+        clock.advance(10_000)
+        assert queue.pull() == [], "the message was not acked"
+
+    def test_the_message_names_tenant_case_and_po(self, queue):
+        runner.enqueue_rematch(queue, "tenant-acme", "case-7", "PO-1")
+        [message] = queue.pull()
+        assert message.payload == {
+            "type": runner.REMATCH,
+            "tenant_id": "tenant-acme",
+            "case_id": "case-7",
+            "po_number": "PO-1",
+        }
+        assert runner.REMATCH == "case.rematch"
+
+    def test_a_malformed_rematch_is_dead_lettered(
+        self, queue, claims, rematched
+    ):
+        queue.publish({"type": runner.REMATCH, "tenant_id": "tenant-acme"})
+        assert worker_for(queue, claims, Handler()).run_once() == [
+            "dead-lettered:malformed"
+        ]
+        assert rematched.calls == []
+
+    def test_a_failing_rematch_retries_then_dead_letters(
+        self, queue, claims, rematched
+    ):
+        rematched.fail = True
+        runner.enqueue_rematch(queue, "tenant-acme", "case-7", "PO-1")
+        worker = worker_for(queue, claims, Handler(), max_attempts=2)
+        assert worker.run_once() == ["retry"]
+        assert worker.run_once() == ["dead-lettered:exhausted"]
+        [record] = queue.dead_letters()
+        assert "db down" in record["dead_letter_reason"]
+
+    def test_a_document_message_still_goes_through_claims(
+        self, queue, claims, rematched
+    ):
+        queue.publish(work_message())
+        assert worker_for(queue, claims, Handler()).run_once() == ["done"]
+        assert claims.state("tenant-acme", "doc-1") == "done"
+        assert rematched.calls == []
