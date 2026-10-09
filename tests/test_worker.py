@@ -606,7 +606,15 @@ class TestLinesAreGlCoded:
     """The worker codes each line from the tenant's GL rules before the
     projection, keeps what a person coded, and never loses an invoice to it."""
 
-    def run(self, tmp_path, monkeypatch, rules, previous=None, workflow=None):
+    def run(
+        self,
+        tmp_path,
+        monkeypatch,
+        rules,
+        previous=None,
+        workflow=None,
+        stored=None,
+    ):
         output = tmp_path / "case-1"
         output.mkdir(parents=True)
         (output / "02_extraction.json").write_text(
@@ -622,7 +630,7 @@ class TestLinesAreGlCoded:
                 }
             )
         )
-        stored: dict[str, dict] = {}
+        stored = {} if stored is None else stored
         if previous is not None:
             stored["gl_coding"] = previous
         if workflow is not None:
@@ -632,6 +640,10 @@ class TestLinesAreGlCoded:
         class Verbatim:
             def put_artifact(self, ctx, key, payload):
                 stored[key] = payload
+
+            def update_artifact(self, ctx, key, mutate):
+                stored[key] = mutate(stored.get(key))
+                return stored[key]
 
             def get_artifacts(self, ctx):
                 return dict(stored)
@@ -684,6 +696,33 @@ class TestLinesAreGlCoded:
         )
         assert stored["gl_coding"]["lines"][1] == manual
         assert stored["gl_coding"]["lines"][0]["gl_account"] == "6100"
+
+    def test_a_line_coded_while_the_worker_codes_survives(
+        self, tmp_path, monkeypatch
+    ):
+        """The worker read the stored coding, fetched rules, then wrote its
+        result from that earlier read: a person's line coded in between was
+        overwritten by a rule."""
+        manual = {
+            "line_number": 2,
+            "gl_account": "5000",
+            "source": "manual",
+            "rule_id": None,
+            "coded_by": "c@x.test",
+            "coded_at": "2026-01-02T00:00:00",
+        }
+        stored: dict = {}
+
+        class Repo:
+            def list_rules(self, tenant_id):
+                # A clerk's PATCH lands between the worker's read and write.
+                stored["gl_coding"] = {"lines": [manual]}
+                return [GL_RULE]
+
+        _, projected = self.run(tmp_path, monkeypatch, Repo, stored=stored)
+        assert stored["gl_coding"]["lines"][1] == manual
+        assert stored["gl_coding"]["lines"][0]["gl_account"] == "6100"
+        assert projected[0]["gl_coding"] == stored["gl_coding"]
 
     def test_without_rules_storage_nothing_is_coded(
         self, tmp_path, monkeypatch

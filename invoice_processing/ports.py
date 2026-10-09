@@ -27,7 +27,7 @@ engines can be moved onto it incrementally without a big-bang migration.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -119,6 +119,15 @@ class CaseRepository(Protocol):
     def put_artifact(
         self, ctx: RunContext, key: str, payload: dict
     ) -> None: ...
+
+    def update_artifact(
+        self, ctx: RunContext, key: str, mutate: Callable[[dict | None], dict]
+    ) -> dict:
+        """Store `mutate(current value)` under one lock and return it.
+
+        For any read-modify-write: two writers that each read, change, and
+        put the whole artifact lose whichever wrote first.
+        """
 
     def iter_case_ids(self, tenant_id: str) -> Iterator[str]:
         """Deterministic, stable ordering."""

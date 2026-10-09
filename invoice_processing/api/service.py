@@ -913,8 +913,20 @@ def edit_fields(
         get_corrections().record(ctx, record)
 
     if recorded:
-        extraction["invoice"] = invoice
-        get_cases().put_artifact(ctx, "extraction", extraction)
+        # Only these fields, onto the extraction as stored now, so an edit to
+        # another field that landed meanwhile is kept.
+        # ponytail: old_value comes from the read above; under a race it can
+        # name the value before the other edit. Exact if corrections matter.
+        edits = {r["field_path"]: r["new_value"] for r in recorded}
+        extraction = get_cases().update_artifact(
+            ctx,
+            "extraction",
+            lambda cur: {
+                **(cur or {}),
+                "invoice": {**((cur or {}).get("invoice") or {}), **edits},
+            },
+        )
+        artifacts["extraction"] = extraction
         _reproject(ctx, artifacts)
         get_audit().emit(
             ctx,

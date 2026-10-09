@@ -231,44 +231,48 @@ def code_line(
             )
         repo = _repo()
 
-    # ponytail: read-modify-write of the whole artifact; two people coding
-    # different lines at once can lose one edit (as edit_fields can). Upgrade:
-    # SELECT ... FOR UPDATE on the case row around the read and the write.
-    stored = artifacts.get("gl_coding")
-    coding = (
-        stored
-        if isinstance(stored, dict) and isinstance(stored.get("lines"), list)
-        else gl_coding.code_lines(invoice, lines, [])
-    )
-    entries = [
-        e
-        for e in gl_coding.valid_entries(coding)
-        if e["line_number"] != line_number
-    ]
-    entries.append(
-        {
-            "line_number": line_number,
-            "gl_account": account,
-            "source": "manual",
-            "rule_id": None,
-            "coded_by": principal.email,
-            "coded_at": datetime.now(timezone.utc).isoformat(),
-        }
-    )
-    entries.sort(key=lambda e: e["line_number"])
-    coding = {**coding, "lines": entries}
+    before: dict = {}
 
-    artifacts["gl_coding"] = coding
-    service.get_cases().put_artifact(ctx, "gl_coding", coding)
+    def set_line(stored):
+        """This one line on the coding as stored now, so a line someone else
+        coded meanwhile is kept."""
+        coding = (
+            stored
+            if isinstance(stored, dict)
+            and isinstance(stored.get("lines"), list)
+            else gl_coding.code_lines(invoice, lines, [])
+        )
+        entries = []
+        for e in gl_coding.valid_entries(coding):
+            if e["line_number"] == line_number:
+                before["gl_account"] = e.get("gl_account")
+            else:
+                entries.append(e)
+        entries.append(
+            {
+                "line_number": line_number,
+                "gl_account": account,
+                "source": "manual",
+                "rule_id": None,
+                "coded_by": principal.email,
+                "coded_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        entries.sort(key=lambda e: e["line_number"])
+        return {**coding, "lines": entries}
+
+    coding = service.get_cases().update_artifact(ctx, "gl_coding", set_line)
+    old = before.get("gl_account")
+    artifacts = service.get_cases().get_artifacts(ctx)
     service._reproject(ctx, artifacts)
     service.get_audit().emit(
         ctx,
         "gl_line_coded",
         {"line_number": line_number, "gl_account": account},
-        before={"line_number": line_number, "gl_account": line["gl_account"]},
+        before={"line_number": line_number, "gl_account": old},
     )
     # After gl_line_coded so the trail reads cause then effect.
-    if account != line["gl_account"]:
+    if account != old:
         service.reroute(ctx, artifacts, ["gl_account"])
     if repo is not None:
         _remember(repo, principal, vendor, account)
