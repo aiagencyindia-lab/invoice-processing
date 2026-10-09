@@ -342,6 +342,22 @@ class TestQualityFlags:
         assert listed["corrected_fields"] == 1
         assert "edited" in listed["quality_flags"]
 
+    def test_gl_accounts_come_from_the_line_coding(self, db, client):
+        coding = {
+            "lines": [
+                {"line_number": 1, "gl_account": "6100", "source": "rule"},
+                {"line_number": 2, "gl_account": None, "source": "none"},
+                {"line_number": 3, "gl_account": "6100", "source": "manual"},
+                {"line_number": 4, "gl_account": "7200", "source": "rule"},
+            ]
+        }
+        with tenant_session(TENANT, db) as session:
+            invoice(
+                session, fields={"workflow": approved(), "gl_coding": coding}
+            )
+
+        assert rows(client)["rows"][0]["gl_accounts"] == ["6100", "7200"]
+
     def test_low_confidence_is_flagged(self, db, client):
         with tenant_session(TENANT, db) as session:
             invoice(session, min_confidence=0.3)

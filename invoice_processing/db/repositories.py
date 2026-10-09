@@ -23,7 +23,7 @@ from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
-from .. import approvals, po_matching
+from .. import approvals, gl_coding, po_matching
 from ..ports import LockHeld, RuleBaseConflict, RunContext
 from ..sheet_columns import (
     ATTENTION_FLAGS,
@@ -2217,6 +2217,18 @@ class SheetRepository:
                 row[key] = workflow.get(WORKFLOW_PATHS[key])
 
         row["corrected_fields"] = edits
+        accounts = [
+            e.get("gl_account")
+            for e in sorted(
+                gl_coding.valid_entries(
+                    (invoice.fields or {}).get("gl_coding")
+                ),
+                key=lambda e: e["line_number"],
+            )
+        ]
+        row["gl_accounts"] = list(
+            dict.fromkeys(a for a in accounts if isinstance(a, str) and a)
+        )
         row["quality_flags"] = self._flags_for(
             invoice, row, filters, failed_steps, duplicate
         )

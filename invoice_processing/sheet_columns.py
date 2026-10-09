@@ -90,6 +90,17 @@ COLUMNS: tuple[Column, ...] = (
         sortable=False,
         default=True,
     ),
+    # The distinct GL accounts the invoice's lines are coded to, in line order,
+    # so the Export centre carries coding too (the per-invoice CSV has it per
+    # line).
+    Column(
+        "gl_accounts",
+        "GL accounts",
+        "list",
+        "derived",
+        sortable=False,
+        filterable=False,
+    ),
     Column(
         "corrected_fields",
         "Edited",
