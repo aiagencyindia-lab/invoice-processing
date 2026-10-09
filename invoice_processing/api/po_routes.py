@@ -477,9 +477,47 @@ def _audit():
     return service.get_audit()
 
 
+def unblock_receipts(principal: Principal, po_numbers) -> list[str]:
+    """Scanned receipts that were waiting for these POs, now confirmable.
+
+    The POs are already stored, so a failure here is logged and audited
+    rather than refused; the receipts simply stay blocked.
+    """
+    from . import service  # noqa: PLC0415
+
+    wanted = {po_matching.normalize_po_number(p) for p in po_numbers if p}
+    ids: list[str] = []
+    try:
+        supporting = service.get_supporting_documents()
+        if supporting is None:
+            return ids
+        # One read of what is blocked, so a 1,000-PO import is not 1,000 queries.
+        waiting = {
+            r["po_number"]
+            for r in supporting.list(principal.tenant_id, ("blocked",))
+        }
+        for po in sorted(wanted & waiting):
+            for row_id in supporting.unblock(principal.tenant_id, po):
+                ids.append(row_id)
+                _audit().emit(
+                    principal.context(),
+                    "supporting_document_unblocked",
+                    {"id": row_id, "po_number": po},
+                )
+    except Exception as exc:
+        logger.exception("Blocked scanned receipts could not be released")
+        _audit().emit(
+            principal.context(),
+            "supporting_document_unblock_failed",
+            {"po_numbers": sorted(wanted), "error": str(exc)},
+        )
+    return ids
+
+
 def _import_orders(principal: Principal, records: list) -> dict:
     out = store_orders(_repo(), principal, records)
     _audit().emit(principal.context(), "purchase_orders_imported", out)
+    unblock_receipts(principal, [r.get("po_number") for r in records])
     return out
 
 

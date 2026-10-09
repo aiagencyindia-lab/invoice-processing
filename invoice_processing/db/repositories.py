@@ -728,6 +728,7 @@ _ENTITY_TYPES = {
     "gl_rule": "gl_rule",
     "goods_receipt": "goods_receipt",
     "supporting_document": "supporting_document",
+    "supporting": "supporting_document",
 }
 
 

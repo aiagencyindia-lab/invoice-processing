@@ -1822,6 +1822,7 @@ from .po_routes import router as po_router  # noqa: E402
 from .rules import router as rules_router  # noqa: E402
 from .sheet import router as sheet_router  # noqa: E402
 from .signup import router as signup_router  # noqa: E402
+from .supporting_routes import router as supporting_router  # noqa: E402
 from .system import router as system_router  # noqa: E402
 from .vendor_routes import router as vendor_router  # noqa: E402
 
@@ -1836,6 +1837,7 @@ app.include_router(vendor_router)
 app.include_router(approval_router)
 app.include_router(gl_router)
 app.include_router(po_router)
+app.include_router(supporting_router)
 
 
 @app.get("/", response_class=HTMLResponse)

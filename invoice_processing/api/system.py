@@ -45,6 +45,10 @@ PROCESSING = "processing"
 DONE = "done"
 FAILED = "failed"
 UNKNOWN = "unknown"
+# A scanned PO or receipt waits for a person rather than a worker.
+AWAITING_CONFIRMATION = "awaiting_confirmation"
+BLOCKED = "blocked"
+_REVIEW_STATUSES = ("pending", "blocked", "accepted", "rejected")
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +293,33 @@ def _progress_sentence(progress: dict | None) -> str:
     )
 
 
+def _review_stage(row: dict) -> tuple[str, str]:
+    """Stage and explanation of a scanned PO or receipt, from its review."""
+    status = row.get("status")
+    if status == "blocked":
+        return BLOCKED, f"Blocked: {row.get('blocked_reason')}"
+    if status == "accepted":
+        return DONE, "Confirmed."
+    if status == "rejected":
+        return DONE, "Rejected."
+    return AWAITING_CONFIRMATION, "Awaiting confirmation on Purchase orders."
+
+
+def _reviews(tenant_id: str, listing: list[dict]) -> dict[str, dict]:
+    """Review rows of the scanned documents in `listing`, by document id."""
+    if not any(d.get("kind") not in (None, "invoice") for d in listing):
+        return {}
+    from . import service  # noqa: PLC0415
+
+    rows = _safe(
+        lambda: service.get_supporting_documents().list(
+            tenant_id, _REVIEW_STATUSES
+        ),
+        default=[],
+    )
+    return {r["document_id"]: r for r in rows or []}
+
+
 def _ctx_for(tenant_id: str, case_id: str):
     from ..ports import RunContext  # noqa: PLC0415
 
@@ -326,22 +357,29 @@ def list_documents(
         default={},
     )
 
+    reviews = _reviews(principal.tenant_id, listing)
+
     out: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
     for document in listing:
-        stage, explanation, progress = document_stage(
-            document,
-            principal.tenant_id,
-            queued,
-            dead,
-            cases,
-            read.get(str(document.get("id") or "")),
-        )
+        review = reviews.get(str(document.get("id") or ""))
+        if review is not None:
+            (stage, explanation), progress = _review_stage(review), None
+        else:
+            stage, explanation, progress = document_stage(
+                document,
+                principal.tenant_id,
+                queued,
+                dead,
+                cases,
+                read.get(str(document.get("id") or "")),
+            )
         counts[stage] = counts.get(stage, 0) + 1
         out.append(
             {
                 "document_id": document.get("id"),
                 "filename": document.get("filename"),
+                "kind": document.get("kind"),
                 "source": document.get("source"),
                 "byte_size": document.get("byte_size"),
                 "sha256": document.get("sha256"),
