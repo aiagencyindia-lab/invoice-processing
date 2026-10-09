@@ -1420,3 +1420,66 @@ match.").
 **Regression status.** Full suite 2167 passed, 1 skipped; ruff check and format
 clean. Description pairing is counted as lines paired by description: 104 of
 104 on the unplanted records (MFG-INV-035 has no lines to count).
+
+---
+
+## 2026-10-09 — Scanned GRN/PO extraction: first measurement
+
+**Problem.** Scanned purchase orders and goods receipt notes are now read by
+`supporting_docs.extract` for a clerk to confirm, and nothing had measured how
+often that reading is right, or whether a wrong value reaches the clerk
+flagged.
+
+**Root cause.** None; this is the first measurement, not a fix. No gate.
+
+**What was done.** `gen_render.render_grn` renders a goods receipt note (GRN
+No., date, PO No., supplier; #, Item, HSN/SAC, Ordered, Received, Unit;
+"Received by") from `po_master.csv` rows, scanned with the existing
+`degrade()`. `FONTDIR` now honours `DEJAVU_FONTDIR` so the generator runs off
+Linux. A scratch script (parameters recorded in the fixture's `source`) built
+20 GRNs — 7 clean, 7 degraded, 6 adversarial (RECEIVED stamp carrying a
+different date, watermark, handwritten note), the adversarial ones multi-line,
+about 40% of lines received short, two receiving PO lines 1 and 3 only — plus
+the dataset's 6 PURCHASE_ORDER documents. One real Gemini 2.5 Pro run per PDF
+(26 calls, no retries needed) is committed as
+`tests/fixtures/supporting_docs/measured.json`; the PDFs are not.
+
+**Result, scan set (`tests/test_supporting_docs_measured.py`, pinned).**
+
+| measure | correct |
+|---|---|
+| GRN header (grn_number, po_number, received_on) | 56 / 60 |
+| PO header (po_number, vendor_name, total) | 17 / 18 |
+| line quantities (received on GRNs, ordered on POs) | 34 / 34 |
+| GRN lines paired to the right PO line | 27 / 28 |
+| wrong values flagged for review (or left blank) | 3 / 5 |
+
+Every wrong value, with its reason:
+
+- GRN-03, GRN-09 (adversarial) `received_on`: the model took the RECEIVED
+  stamp's date (2026-09-02, 2026-09-04) over the printed GRN date. The stamp
+  date is on the page, so OCR grounds it and it reaches the clerk **unflagged**.
+- GRN-12, GRN-15 (adversarial) `received_on`: the same stamp misread; OCR did
+  not find the stamp date, so both were flagged.
+- SVC-INV-089 (PO, text layer) `total`: the page prints only the line amount,
+  no total row; the model left the total blank as the prompt asks, and truth
+  is `po_master.approved_value`. Layout, not a misread.
+
+Pairing miss: GRN-06 receives PO lines 1 and 3 and prints them as GRN #1 and
+#2; `pair_grn_lines` passes the GRN's own number as the PO line number, so #2
+pairs to PO line 2 (a different item) before description matching runs. A
+partial receipt that renumbers its lines pairs wrongly; reported, not tuned.
+
+**Result, guard (today's code replayed over the run at `ecb9bbd`,
+`replay-scanned-docs`).** Against `replay-approvals`: `results.csv`
+byte-identical. The 6 PURCHASE_ORDER records stay REJECT in the replay: the
+replay calls the phase agents from recorded classifications and never reaches
+`process_invoice`, where the SUPPORTING branch lives, so it cannot show the
+REJECT -> SUPPORTING change. The harness was not changed.
+
+**Files.** `benchmark/dataset/generator/gen_render.py`,
+`tests/fixtures/supporting_docs/measured.json`,
+`tests/test_supporting_docs_measured.py`.
+
+**Regression status.** Full suite 2286 passed, 1 skipped; ruff check and
+format clean.
