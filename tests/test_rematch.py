@@ -244,3 +244,12 @@ def test_a_decision_landing_mid_rematch_leaves_the_case_untouched(
     assert after.pop("workflow") == {"decision": "approved"}
     assert after == before
     assert audit.events == []
+
+
+def test_a_first_hold_by_rematch_remembers_the_routing_it_found(cases, held):
+    # Matched clean at extraction (no routing_before), routed REVIEW by
+    # something else; a receipt correction later makes 2.3 hold.
+    held(received={1: 10}, routing="REVIEW")
+    assert "routing_before" not in _step(cases)
+    _run(cases, {1: 2}, FakeAudit())
+    assert _step(cases)["routing_before"] == "REVIEW"

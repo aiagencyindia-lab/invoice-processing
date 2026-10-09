@@ -157,11 +157,11 @@ audited, as for other refusals.
 - `POST /api/purchase-orders/import` (clerk+) → `{created, updated, lines}`.
 - `GET /api/purchase-orders` (existing route, extended; **clerk+** — user ruling 2026-10-09: PO data stays off the read-only viewer role) → today's
   fields plus line count and received / billed totals.
-- `GET /api/purchase-orders/{po_number}` (viewer+) → lines with ordered /
+- `GET /api/purchase-orders/{po_number}` (**clerk+**, as the PO list) → lines with ordered /
   received / billed / remaining, and the PO's GRNs.
 - `POST /api/goods-receipts/import` (clerk+) → `{recorded, skipped_duplicates,
   rematch_queued}`.
-- `GET /api/goods-receipts?po_number=` (viewer+).
+- `GET /api/goods-receipts?po_number=` (**clerk+**, as the PO list).
 
 **UI**:
 - `/purchase-orders`: upload buttons (PO file, GRN file; CSV or JSON);

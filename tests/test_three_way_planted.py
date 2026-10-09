@@ -1,6 +1,6 @@
 """Planted receipt faults over real extractions: PO lines are rebuilt from the
-benchmark ground truth for the 19 clean Company B PO invoices, then one fault
-is planted per record (see "source" in the fixture). The assertions are the
+benchmark ground truth for the 19 Company B PO invoices (10 clean, 9 with one
+planted fault; see "source" in the fixture). The assertions are the
 score; `expected_signals` for an unplanted record is the observed result, which
 records the known gaps rather than hiding them: MFG-INV-033 (two lines
 extracted without a price or quantity) and MFG-INV-035 (no extracted lines)

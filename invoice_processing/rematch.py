@@ -72,7 +72,11 @@ def rematch_case(ctx, cases, book, *, vendors, config: dict, audit) -> dict:
             if "routing_before" in old:
                 new["routing_before"] = old["routing_before"]
             elif not new["passed"]:
-                new["routing_before"] = "AUTO"
+                # First hold: whatever routing the invoice has now is the
+                # routing a later clear must restore.
+                new["routing_before"] = (
+                    (current.get("extraction") or {}).get("invoice") or {}
+                ).get("_routing") or "AUTO"
             i = next(
                 (
                     i
