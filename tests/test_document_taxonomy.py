@@ -223,6 +223,8 @@ class TestKeywordFallback:
             ("GRN No.: GRN-88\nReceived in good condition", "goods_receipt"),
             ("GOODS RECEIVED NOTE\nStores", "goods_receipt"),
             ("MATERIAL RECEIPT NOTE\nMRN-12", "goods_receipt"),
+            # A whole word only: "IMRN-2" is a reference, not a receipt note.
+            ("INVOICE\nRef: IMRN-2", NON_TAX_INVOICE),
             ("RECEIPT\nPayment received with thanks", "receipt"),
             ("BILL OF SUPPLY\nComposition scheme", NON_TAX_INVOICE),
             ("TAX INVOICE\nGSTIN: 29ZOICE4828P1ZD", TAX_INVOICE),

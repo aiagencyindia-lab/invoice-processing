@@ -160,6 +160,44 @@ class TestQueue:
         assert counts["needs_review"] + counts["auto"] == counts["total"]
 
 
+class TestScannedDocumentsAreNotInvoices:
+    """A PO or receipt's case can be reached by id; it must not be read,
+    edited or decided as an invoice."""
+
+    @pytest.fixture
+    def grn(self, client, tmp_path, monkeypatch):
+        documents = JsonDocumentRepository(tmp_path / "documents.json")
+        grn = documents.create(TENANT, storage_key="k", sha256="s")
+        documents.set_kind(TENANT, grn, "goods_receipt")
+        monkeypatch.setattr(service, "_documents", documents)
+        service.get_cases().put_artifact(
+            RunContext(tenant_id=TENANT, case_id=grn),
+            "supporting_extraction",
+            {"kind": "goods_receipt", "fields": {}, "lines": []},
+        )
+        return grn
+
+    SAYS = (
+        "This document is a scanned goods receipt; review it on Purchase "
+        "orders."
+    )
+
+    def test_the_detail_is_not_found(self, client, grn):
+        response = client.get(f"/api/invoices/{grn}")
+        assert response.status_code == 404
+        assert response.json()["detail"] == self.SAYS
+
+    def test_it_cannot_be_approved(self, client, grn):
+        response = client.post(
+            f"/api/invoices/{grn}/actions", json={"action": "approve"}
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"] == self.SAYS
+
+    def test_an_invoice_is_still_found(self, client, grn):
+        assert client.get("/api/invoices/case_001").status_code == 200
+
+
 class TestDetail:
     def test_returns_fields_lines_and_findings(self, client):
         body = client.get("/api/invoices/case_005").json()

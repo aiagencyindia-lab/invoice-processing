@@ -637,6 +637,7 @@ class PgDocumentRepository:
                 "sha256": d.sha256,
                 "sender": d.sender,
                 "reply_to": d.reply_to,
+                "kind": d.kind,
             }
 
     def create(self, tenant_id: str, **fields) -> str:

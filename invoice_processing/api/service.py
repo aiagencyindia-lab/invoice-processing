@@ -448,6 +448,33 @@ def non_invoice_ids(tenant_id: str) -> set[str]:
         return set()
 
 
+_SCANNED = {
+    "purchase_order": "purchase order",
+    "goods_receipt": "goods receipt",
+}
+
+
+def require_invoice_case(tenant_id: str, case_id: str) -> None:
+    """404 a case whose document is a scanned PO or receipt.
+
+    Its case holds an extraction awaiting confirmation; reading, editing or
+    deciding it as an invoice would act on something that is not a payable.
+    """
+    try:
+        document = get_documents().get(tenant_id, case_id) or {}
+    except Exception as exc:
+        # ponytail: unreadable kind lets the route run; the case then has no
+        # invoice extraction to act on. Fail closed if that ever matters.
+        logger.warning("Document kind of %s not read: %s", case_id, exc)
+        return
+    if (label := _SCANNED.get(document.get("kind"))) is not None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"This document is a scanned {label}; review it on "
+            "Purchase orders.",
+        )
+
+
 def get_queue():
     """The work queue. Pub/Sub when configured, a local directory otherwise."""
     from ..worker.queue import get_queue as _resolve  # noqa: PLC0415
@@ -802,6 +829,7 @@ def list_invoices(
 def get_invoice(
     case_id: str, principal: Annotated[Principal, Depends(current_principal)]
 ) -> dict:
+    require_invoice_case(principal.tenant_id, case_id)
     artifacts, _ = read_case(get_cases(), principal.context(case_id))
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
@@ -930,6 +958,7 @@ def edit_fields(
                 detail=f"{edit.field} is not an editable field; edit the "
                 "invoice's header fields here.",
             )
+    require_invoice_case(principal.tenant_id, case_id)
     _require_unlocked(principal, case_id)
     ctx = principal.context(case_id)
     artifacts = get_cases().get_artifacts(ctx)
@@ -1305,6 +1334,7 @@ def act(
             detail="Only an admin can override an approval rule.",
         )
 
+    require_invoice_case(principal.tenant_id, case_id)
     _require_unlocked(principal, case_id)
     ctx = principal.context(case_id)
     artifacts = get_cases().get_artifacts(ctx)

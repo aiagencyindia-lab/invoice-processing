@@ -191,6 +191,7 @@ def code_line(
             "Only an admin can remember an account for a vendor: the rule "
             "codes every future invoice from them.",
         )
+    service.require_invoice_case(principal.tenant_id, case_id)
     service._require_unlocked(principal, case_id)
     ctx = principal.context(case_id)
     artifacts = service.get_cases().get_artifacts(ctx)

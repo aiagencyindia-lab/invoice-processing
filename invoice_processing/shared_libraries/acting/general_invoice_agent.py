@@ -1126,6 +1126,10 @@ class ClassifierAgent(BaseAgent):
 
         files_info = {}
         summary = {"invoice_count": 0, "waf_count": 0, "document_type": ""}
+        # Whether the model or the keyword fallback decided. Only the model
+        # may divert a document from the invoice path: the fallback reads the
+        # whole page, so an invoice quoting its GRN or PO reads as one.
+        self.fell_back = False
         invoice_sources = []
         waf_sources = []
 
@@ -1181,6 +1185,7 @@ class ClassifierAgent(BaseAgent):
         files_info["invoice_sources"] = invoice_sources
         files_info["waf_sources"] = waf_sources
 
+        summary["classified_by"] = "keyword" if self.fell_back else "model"
         output = self.create_output(
             {
                 "source_folder": source_folder.name,
@@ -1257,6 +1262,7 @@ Return ONLY this JSON:
             raise  # the service, not the document: see llm_guard
         except Exception as e:
             print(f"    Warning: Document analysis failed: {e}")
+            self.fell_back = True
             return self._classify_by_keyword(content)
 
     # Titles, most specific first: "proforma invoice" and "tax invoice" both
@@ -1271,9 +1277,7 @@ Return ONLY this JSON:
         ("goods receipt", GOODS_RECEIPT),
         ("goods received note", GOODS_RECEIPT),
         ("material receipt", GOODS_RECEIPT),
-        # ponytail: bare substrings, so a payable quoting "GRN No." in its
-        # body reads as a receipt -- the fallback only runs when the model
-        # call failed; word boundaries if that ever bites.
+        # Whole words only (see _WHOLE_WORDS): "IMRN-2" is a reference.
         ("grn", GOODS_RECEIPT),
         ("mrn", GOODS_RECEIPT),
         ("purchase order", "purchase_order"),
@@ -1286,6 +1290,8 @@ Return ONLY this JSON:
         ("invoice", NON_TAX_INVOICE),
     )
 
+    _WHOLE_WORDS: ClassVar[frozenset[str]] = frozenset({"grn", "mrn"})
+
     def _classify_by_keyword(self, content: str) -> DocumentContent:
         """What can be told from the text when the model call fails.
 
@@ -1294,8 +1300,17 @@ Return ONLY this JSON:
         code and is right about the documents that matter.
         """
         lowered = content.lower()
+        words = set(re.findall(r"[a-z]+", lowered))
         document_type = next(
-            (kind for marker, kind in self._TITLE_MARKERS if marker in lowered),
+            (
+                kind
+                for marker, kind in self._TITLE_MARKERS
+                if (
+                    marker in words
+                    if marker in self._WHOLE_WORDS
+                    else marker in lowered
+                )
+            ),
             "unreadable" if not lowered.strip() else "other",
         )
         if document_type == NON_TAX_INVOICE and "gstin" in lowered:
@@ -3223,7 +3238,11 @@ def _run_pipeline(
     # holds an invoice is still an invoice.
     summary = classification.get("summary") or {}
     document_type = summary.get("document_type")
-    if document_type in SUPPORTING_TYPES and not summary.get("invoice_count"):
+    if (
+        document_type in SUPPORTING_TYPES
+        and not summary.get("invoice_count")
+        and summary.get("classified_by") == "model"
+    ):
         files = classification.get("files") or {}
         pdf = next(
             (
