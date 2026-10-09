@@ -423,3 +423,15 @@ def test_findings_carry_validation_signals():
         }
     }
     assert _findings(artifacts)[0]["signals"] == ["recent_bank_change"]
+
+
+def test_findings_carry_three_way_lines():
+    from invoice_processing.api.service import _findings  # noqa: PLC0415
+
+    line = {
+        "line_number": 1,
+        "po_line_number": 1,
+        "signals": ["short_received"],
+    }
+    artifacts = {"phase2": {"validations": [{"step": "2.3", "lines": [line]}]}}
+    assert _findings(artifacts)[0]["lines"] == [line]

@@ -707,6 +707,7 @@ def _findings(artifacts: dict) -> list[dict]:
                     "evidence": validation.get("evidence"),
                     "rejection_template": validation.get("rejection_template"),
                     "signals": validation.get("signals"),
+                    "lines": validation.get("lines"),
                 }
             )
     # The rules that fired, so a corrected decision can say what corrected it.
