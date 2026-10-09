@@ -3,6 +3,7 @@ last. Without rules the endpoint behaves as before: one approver, done."""
 
 import json
 import shutil
+import threading
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -22,6 +23,7 @@ from invoice_processing.db import models
 from invoice_processing.db import session as db_session
 from invoice_processing.db.repositories import (
     PgApprovalRepository,
+    PgCaseRepository,
     PgPurchaseOrderRepository,
 )
 from invoice_processing.db.session import (
@@ -1198,7 +1200,7 @@ def po_env(env, monkeypatch):
     return env
 
 
-def consume_six(env):
+def consume_six(env, quantity=6):
     """Another invoice on the same PO line, approved since this was matched."""
     with tenant_session(TENANT, env["url"]) as s:
         s.add(
@@ -1223,7 +1225,12 @@ def consume_six(env):
                         "decided_at": "2026-10-02T00:00:00+00:00",
                     },
                     "phase2": {
-                        "validations": [{"step": "2.3", "lines": [LINE_23]}]
+                        "validations": [
+                            {
+                                "step": "2.3",
+                                "lines": [{**LINE_23, "quantity": quantity}],
+                            }
+                        ]
                     },
                 },
             )
@@ -1239,7 +1246,10 @@ def test_approve_after_the_units_are_consumed_is_409(po_env):
     consume_six(po_env)
     r = act(po_env, "approver:anyone")
     assert r.status_code == 409
-    assert "Line 1 would bill 12 of 10 received" in r.json()["detail"]
+    assert r.json()["detail"] == (
+        "Line 1 would bill 12 of 10 received; the purchase order changed "
+        "since this was checked."
+    )
     assert not (po_env["root"] / CASE / "workflow.json").exists()
     assert po_env["repo"].current(TENANT, CASE)["status"] == "pending"
 
@@ -1280,3 +1290,73 @@ def test_only_the_final_step_is_rechecked(po_env):
     first = act(po_env, "approver:a")
     assert first.status_code == 200 and first.json()["completed"] is False
     assert act(po_env, "approver:b").status_code == 409
+
+
+def test_over_ordered_names_the_ordered_quantity(po_env):
+    consume_six(po_env, quantity=15)
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 409
+    assert r.json()["detail"].startswith("Line 1 would bill 21 of 20 ordered;")
+
+
+def test_a_hold_already_accepted_is_not_raised_again(po_env):
+    p2_path = po_env["root"] / CASE / "04_phase2_validation.json"
+    p2 = json.loads(p2_path.read_text())
+    p2["validations"][-1] = {
+        "step": "2.3",
+        "passed": False,
+        "signals": ["short_received"],
+        "lines": [{**LINE_23, "signals": ["short_received"]}],
+    }
+    p2_path.write_text(json.dumps(p2))
+    consume_six(po_env)
+    assert act(po_env, "approver:anyone").status_code == 200
+
+
+def test_two_final_approvals_cannot_both_consume_the_same_units(
+    po_env, monkeypatch
+):
+    """Each invoice fits the 10 received alone; together they bill 12."""
+    cases = PgCaseRepository(po_env["url"])
+    monkeypatch.setattr(service, "_cases", cases)
+    fs = FsCaseRepository(po_env["root"], tenant_id=TENANT)
+    base = fs.get_artifacts(RunContext(tenant_id=TENANT, case_id=CASE))
+    for case in ("case_a", "case_b"):
+        ctx = RunContext(tenant_id=TENANT, case_id=case)
+        for key, value in base.items():
+            if key != "workflow":
+                cases.put_artifact(ctx, key, value)
+        cases.project_case(ctx, cases.get_artifacts(ctx))
+
+    # The first approval pauses inside its re-check. Without the lock the
+    # second re-checks meanwhile, before the first is billed, and passes.
+    real = approval_flow.over_billed
+    a_inside, b_inside, go = (threading.Event() for _ in range(3))
+
+    def paused(ctx, artifacts):
+        out = real(ctx, artifacts)
+        if ctx.case_id == "case_a":
+            a_inside.set()
+            go.wait(5)
+        else:
+            b_inside.set()
+        return out
+
+    monkeypatch.setattr(approval_flow, "over_billed", paused)
+    results = {}
+
+    def approve(case):
+        results[case] = act(po_env, "approver:anyone", case=case)
+
+    a = threading.Thread(target=approve, args=("case_a",))
+    b = threading.Thread(target=approve, args=("case_b",))
+    a.start()
+    assert a_inside.wait(5)
+    b.start()
+    b_inside.wait(0.5)  # set at once without the lock; never while held
+    go.set()
+    a.join(10)
+    b.join(10)
+    assert results["case_a"].status_code == 200
+    assert results["case_b"].status_code == 409
+    assert "would bill 12 of 10 received" in results["case_b"].json()["detail"]

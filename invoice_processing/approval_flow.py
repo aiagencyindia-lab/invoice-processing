@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from types import SimpleNamespace
 
 from . import approvals, tenant_settings
 from .db.repositories import StepNotPending
@@ -191,9 +192,11 @@ def over_billed(ctx, artifacts: dict) -> str | None:
 
     Step 2.3 counts only invoices already approved, so two invoices matched
     side by side can each pass against the same units; the final approval is
-    the last place to catch it. A hold the stored entry already carried was
-    accepted by whoever approved it and is not raised again. Raises
-    BookUnavailable when the book cannot be read: this check fails closed.
+    the last place to catch it. The caller holds `db.po_lock` around this and
+    the write that bills the invoice, so two approvals cannot both pass. A
+    hold the stored entry already carried was accepted by whoever approved it
+    and is not raised again. Raises BookUnavailable when the book cannot be
+    read: this check fails closed.
     """
     from . import (  # noqa: PLC0415
         paths,
@@ -207,7 +210,7 @@ def over_billed(ctx, artifacts: dict) -> str | None:
         general_invoice_agent as agent,
     )
 
-    stored = rematch._three_way(artifacts.get("phase2"))
+    stored = rematch.three_way_validation(artifacts.get("phase2"))
     if not stored or not stored.get("lines"):
         return None
     t = ctx.tenant_id
@@ -218,13 +221,16 @@ def over_billed(ctx, artifacts: dict) -> str | None:
             # ponytail: a file book has no record of approved invoices, so
             # there is nothing cumulative to re-check against.
             return None
+        # Read once and handed to the matcher, so the ordered quantity named
+        # below is the one the match used.
+        snapshot = po_book.DbBook(orders, t).book(invoice.get("po_number"))
         vendors = service.get_vendors()
         records = vendors.load_records(t) if vendors else None
         # Built here, not via apply_to_pipeline: that rewrites the agent's
         # process-wide config, which an approval must not do.
         live = agent.three_way_entry(
             invoice,
-            po_book.DbBook(orders, t),
+            SimpleNamespace(book=lambda _po: snapshot),
             {**agent.DEFAULT_CONFIG, **tenant_settings.effective(t)},
             vendor_master.VendorMaster(records=records)
             if records
@@ -249,14 +255,18 @@ def over_billed(ctx, artifacts: dict) -> str | None:
         if not new:
             continue
         total = (ln["billed"] or 0) + (ln["quantity"] or 0)
-        of = (
-            ", more than was ordered"
-            if three_way.OVER_ORDERED in new
-            else f" of {ln['received'] or 0:g} received"
-        )
+        if three_way.OVER_ORDERED in new:
+            ordered = next(
+                p.get("qty_ordered")
+                for p in snapshot["lines"]
+                if p["line_number"] == ln["po_line_number"]
+            )
+            of = f"{float(ordered or 0):g} ordered"
+        else:
+            of = f"{ln['received'] or 0:g} received"
         return (
-            f"Line {ln['line_number']} would bill {total:g}{of}; another "
-            "invoice was approved for this PO line since this was checked."
+            f"Line {ln['line_number']} would bill {total:g} of {of}; the "
+            "purchase order changed since this was checked."
         )
     return None
 

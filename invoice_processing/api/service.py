@@ -32,7 +32,7 @@ import io
 import json
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
@@ -40,7 +40,14 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
-from .. import approval_flow, approvals, case_projection, exports, paths
+from .. import (
+    approval_flow,
+    approvals,
+    case_projection,
+    exports,
+    paths,
+    po_matching,
+)
 from ..adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
@@ -1205,6 +1212,26 @@ def _propose_rule_if_warranted(
     )
 
 
+def _final_approval_lock(tenant_id: str, artifacts: dict, action: str):
+    """`db.po_lock` for an approval of an invoice quoting a PO, else nothing."""
+    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+    po_number = invoice.get("po_number")
+    if action != "approve" or not po_matching.normalize_po_number(po_number):
+        return nullcontext()
+    try:
+        orders = get_purchase_orders()
+    except Exception:
+        logger.exception("Purchase orders could not be reached at approval")
+        raise HTTPException(
+            status_code=503, detail=approval_flow.BOOK_DOWN
+        ) from None
+    if orders is None:
+        return nullcontext()  # no DB book: nothing cumulative to protect
+    from ..db.po_lock import po_lock  # noqa: PLC0415
+
+    return po_lock(tenant_id, po_number, orders.url)
+
+
 @app.post("/api/invoices/{case_id}/actions")
 def act(
     case_id: str,
@@ -1242,80 +1269,92 @@ def act(
 
     # From the artifacts already in hand rather than a second read.
     previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
-    try:
-        repo = get_approvals()
-    except Exception:
-        logger.exception("Approval routing could not be reached")
-        raise HTTPException(
-            status_code=503, detail="Approval routing is unavailable."
-        ) from None
-    if repo is not None:
-        if previous.get("decision"):
-            raise HTTPException(
-                status_code=409, detail="This invoice was already decided."
-            )
+    # Held from the re-check to the projection that bills this invoice, so
+    # two final approvals on one PO cannot both pass against the same units.
+    with _final_approval_lock(principal.tenant_id, artifacts, request.action):
         try:
-            outcome = approval_flow.decide(
+            repo = get_approvals()
+        except Exception:
+            logger.exception("Approval routing could not be reached")
+            raise HTTPException(
+                status_code=503, detail="Approval routing is unavailable."
+            ) from None
+        if repo is not None:
+            if previous.get("decision"):
+                raise HTTPException(
+                    status_code=409, detail="This invoice was already decided."
+                )
+            try:
+                outcome = approval_flow.decide(
+                    ctx,
+                    principal,
+                    artifacts,
+                    repo=repo,
+                    documents=get_documents(),
+                    corrections=get_corrections(),
+                    approve=request.action == "approve",
+                    note=request.reason,
+                    override_reason=request.override_reason,
+                    now=datetime.now(timezone.utc),
+                )
+            except (
+                approval_flow.AlreadyDecided,
+                approval_flow.OverBilled,
+            ) as exc:
+                raise HTTPException(
+                    status_code=409, detail=exc.detail
+                ) from None
+            except approval_flow.BookUnavailable as exc:
+                raise HTTPException(
+                    status_code=503, detail=exc.detail
+                ) from None
+            except approval_flow.Refused as exc:
+                raise HTTPException(
+                    status_code=403, detail=exc.detail
+                ) from None
+            step = outcome.step
+            get_audit().emit(
                 ctx,
-                principal,
-                artifacts,
-                repo=repo,
-                documents=get_documents(),
-                corrections=get_corrections(),
-                approve=request.action == "approve",
-                note=request.reason,
-                override_reason=request.override_reason,
-                now=datetime.now(timezone.utc),
+                "approval_overridden"
+                if outcome.overridden
+                else "approval_step_decided",
+                {
+                    "step": step["position"],
+                    "assignee": f"{step['assignee_kind']}:{step['assignee_value']}",
+                    "action": request.action,
+                    "why": outcome.why,
+                    "acting_for": step.get("acting_for"),
+                    **(
+                        {"override_reason": request.override_reason}
+                        if outcome.overridden
+                        else {}
+                    ),
+                },
             )
-        except (approval_flow.AlreadyDecided, approval_flow.OverBilled) as exc:
-            raise HTTPException(status_code=409, detail=exc.detail) from None
-        except approval_flow.BookUnavailable as exc:
-            raise HTTPException(status_code=503, detail=exc.detail) from None
-        except approval_flow.Refused as exc:
-            raise HTTPException(status_code=403, detail=exc.detail) from None
-        step = outcome.step
-        get_audit().emit(
+            if not outcome.completed:
+                return {
+                    "case_id": case_id,
+                    "action": request.action,
+                    "completed": False,
+                    "step": step["position"],
+                    "next": repo.current(principal.tenant_id, case_id),
+                }
+            get_audit().emit(
+                ctx, "approval_chain_completed", {"action": request.action}
+            )
+        state = _record_workflow(
             ctx,
-            "approval_overridden"
-            if outcome.overridden
-            else "approval_step_decided",
-            {
-                "step": step["position"],
-                "assignee": f"{step['assignee_kind']}:{step['assignee_value']}",
-                "action": request.action,
-                "why": outcome.why,
-                "acting_for": step.get("acting_for"),
-                **(
-                    {"override_reason": request.override_reason}
-                    if outcome.overridden
-                    else {}
-                ),
-            },
+            decision=request.action,
+            decided_by=principal.email,
+            decided_at=datetime.now(timezone.utc).isoformat(),
+            reason=request.reason,
+            reason_category=category,
         )
-        if not outcome.completed:
-            return {
-                "case_id": case_id,
-                "action": request.action,
-                "completed": False,
-                "step": step["position"],
-                "next": repo.current(principal.tenant_id, case_id),
-            }
-        get_audit().emit(
-            ctx, "approval_chain_completed", {"action": request.action}
-        )
-    state = _record_workflow(
-        ctx,
-        decision=request.action,
-        decided_by=principal.email,
-        decided_at=datetime.now(timezone.utc).isoformat(),
-        reason=request.reason,
-        reason_category=category,
-    )
-    # The columns as well as the artifact. "Show me every invoice where a
-    # person overruled the pipeline" is the question this whole feature is
-    # built on, and answering it by scanning a JSON path over every row is the
-    # wrong answer to it.
-    _reproject(ctx, {**artifacts, WORKFLOW_ARTIFACT: state})
+        # The columns as well as the artifact. "Show me every invoice where a
+        # person overruled the pipeline" is the question this whole feature is
+        # built on, and answering it by scanning a JSON path over every row is the
+        # wrong answer to it.
+        _reproject(ctx, {**artifacts, WORKFLOW_ARTIFACT: state})
     agreement = case_projection.agreement(
         {**artifacts, WORKFLOW_ARTIFACT: state}
     )

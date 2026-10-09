@@ -14,7 +14,7 @@ from . import po_matching
 RECEIPT = "receipt: "
 
 
-def _three_way(phase2) -> dict | None:
+def three_way_validation(phase2) -> dict | None:
     for entry in (phase2 or {}).get("validations") or []:
         if entry.get("step") == "2.3":
             return entry
@@ -32,7 +32,7 @@ def is_held_by_receipt(artifacts: dict, po_number) -> bool:
         or po_matching.normalize_po_number(invoice.get("po_number")) != key
     ):
         return False
-    entry = _three_way(artifacts.get("phase2"))
+    entry = three_way_validation(artifacts.get("phase2"))
     return entry is not None and entry.get("passed") is False
 
 
@@ -65,7 +65,7 @@ def rematch_case(ctx, cases, book, *, vendors, config: dict, audit) -> dict:
                 return None
             phase2 = current.get("phase2") or {}
             validations = list(phase2.get("validations") or [])
-            old = _three_way(phase2) or {}
+            old = three_way_validation(phase2) or {}
             new = dict(entry)
             # Carried forward even on a pass, so the routing the invoice had
             # before 2.3 first held it is never lost to a later re-match.
