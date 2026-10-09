@@ -1363,8 +1363,9 @@ cost of a tier, not a regression, and the threshold is the tenant's to choose.
 export, so it had to be shown not to move any benchmark number.
 
 **Root cause.** None; this is a guard, not a fix. GL coding is informational:
-it never feeds a validation check, a decision or routing, and the benchmark
-tenant has no GL rules, so every line stays uncoded.
+it never feeds a validation check or a decision, and it reaches approval
+routing only through `gl` approval rules. The benchmark tenant has no GL rules
+of either kind, so every line stays uncoded and no chain changes.
 
 **Result (today's code replayed over the run at `ecb9bbd`, `replay-gl-coding`).**
 Against `replay-approvals`: posted untouched 40 of 45 clean -> 40 of 45; posted

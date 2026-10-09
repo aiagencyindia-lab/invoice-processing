@@ -360,7 +360,9 @@ class TestMigration:
         not (os.getenv("TEST_DATABASE_URL") or "").startswith("postgresql"),
         reason="RLS policies exist only on Postgres",
     )
-    def test_approval_tables_have_forced_isolation_policies_after_upgrade(self):
+    def test_new_tenant_tables_have_forced_isolation_policies_after_upgrade(
+        self,
+    ):
         """Checked on a database alembic built, not one create_all rebuilt."""
         import uuid  # noqa: PLC0415
 
@@ -393,6 +395,7 @@ class TestMigration:
                 "approval_rules",
                 "delegations",
                 "approval_steps",
+                "gl_rules",
             ]
             with engine.connect() as c:
                 policies = {

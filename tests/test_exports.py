@@ -208,6 +208,22 @@ class TestWriters:
         assert isinstance(sheet["C2"].value, (int, float))
         assert sheet["C2"].value == 1100.5
 
+    def test_extraction_text_cannot_become_a_formula(self):
+        """Vendor names and descriptions are untrusted: "=HYPERLINK(...)"
+        would run when the file is opened. Numbers stay numbers."""
+        rows = [{"vendor_name": '=HYPERLINK("x")', "total_inc_tax": -85.0}]
+        raw = exports.write_csv(self.COLUMNS, rows, self.LABELS)
+        parsed = list(csv.reader(io.StringIO(raw.decode("utf-8-sig"))))
+        assert parsed[1][0] == '\'=HYPERLINK("x")'
+        assert parsed[1][2] == "-85.0"
+
+        sheet = openpyxl.load_workbook(
+            io.BytesIO(exports.write_xlsx(self.COLUMNS, rows, self.LABELS))
+        ).active
+        assert sheet["A2"].value == '\'=HYPERLINK("x")'
+        assert sheet["A2"].data_type == "s"
+        assert sheet["C2"].value == -85.0
+
     def test_xlsx_freezes_the_header(self):
         raw = exports.write_xlsx(self.COLUMNS, self.ROWS, self.LABELS)
         sheet = openpyxl.load_workbook(io.BytesIO(raw)).active

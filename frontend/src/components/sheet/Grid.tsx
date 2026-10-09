@@ -28,6 +28,7 @@ function formatCell(
   currency: string | null,
 ): string {
   if (value === null || value === undefined || value === "") return "—";
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "—";
   if (column.type === "money") {
     const amount = Number(value).toLocaleString(undefined, {
       minimumFractionDigits: 2,

@@ -172,23 +172,91 @@ class TestPermissions:
         assert response.status_code == 404
 
 
+def export_csv(client) -> list[dict]:
+    body = client.post(
+        "/api/invoices/case_002/export", json={"target": "csv"}
+    ).json()
+    header, *rows = list(csv.reader(io.StringIO(body["csv"])))
+    assert header == service.CSV_COLUMNS
+    return [dict(zip(header, row, strict=True)) for row in rows]
+
+
+def rewrite_extraction(edit):
+    path = service._cases.root / "case_002" / "02_extraction.json"
+    data = json.loads(path.read_text())
+    edit(data["invoice"])
+    path.write_text(json.dumps(data))
+
+
 class TestCsvExport:
-    def test_returns_a_parseable_row(self, client):
+    def test_header_is_invoice_columns_then_line_columns(self):
+        assert service.CSV_COLUMNS == [
+            "case_id",
+            "vendor_name",
+            "vendor_tax_id",
+            "invoice_number",
+            "invoice_date",
+            "due_date",
+            "currency",
+            "subtotal_ex_tax",
+            "tax_total",
+            "total_inc_tax",
+            "po_number",
+            "payment_terms",
+            "line_number",
+            "line_description",
+            "quantity",
+            "unit_price",
+            "line_amount_ex_tax",
+            "line_tax",
+            "gl_account",
+        ]
+
+    def test_one_row_per_line_repeating_the_invoice(self, client):
         approve(client)
-        body = client.post(
-            "/api/invoices/case_002/export", json={"target": "csv"}
-        ).json()
-        rows = list(csv.reader(io.StringIO(body["csv"])))
-        assert rows[0] == service.CSV_COLUMNS
-        assert len(rows) == 2
+        rows = export_csv(client)
+        assert [r["line_number"] for r in rows] == ["1", "2", "3"]
+        assert {r["invoice_number"] for r in rows} == {
+            rows[0]["invoice_number"]
+        }
+        assert (
+            rows[1]["line_description"] == "Air filter replacement (x2 units)"
+        )
+        assert (rows[1]["quantity"], rows[1]["unit_price"]) == ("2.0", "45.0")
+        assert (rows[1]["line_amount_ex_tax"], rows[1]["line_tax"]) == (
+            "90.0",
+            "9.0",
+        )
+
+    def test_an_invoice_without_lines_is_one_row(self, client):
+        rewrite_extraction(lambda inv: inv.update(line_items=[]))
+        approve(client)
+        rows = export_csv(client)
+        assert len(rows) == 1
+        assert rows[0]["invoice_number"]
+        assert all(rows[0][c] == "" for c in service.LINE_COLUMNS)
+
+    def test_formula_like_text_is_neutralised(self, client):
+        """Descriptions are untrusted extraction text; a cell starting with
+        = + - @ is a formula to Excel."""
+
+        def edit(inv):
+            inv["vendor_name"] = "=HYPERLINK(1)"
+            inv["line_items"][0]["description"] = "@SUM(A1)"
+            inv["line_items"][1]["description"] = "-2+3"
+            inv["line_items"][2]["amount_ex_tax"] = -85.0
+
+        rewrite_extraction(edit)
+        approve(client)
+        rows = export_csv(client)
+        assert rows[0]["vendor_name"] == "'=HYPERLINK(1)"
+        assert rows[0]["line_description"] == "'@SUM(A1)"
+        assert rows[1]["line_description"] == "'-2+3"
+        assert rows[2]["line_amount_ex_tax"] == "-85.0"
 
     def test_carries_the_fields_an_accountant_needs(self, client):
         approve(client)
-        body = client.post(
-            "/api/invoices/case_002/export", json={"target": "csv"}
-        ).json()
-        header, row = list(csv.reader(io.StringIO(body["csv"])))
-        record = dict(zip(header, row, strict=True))
+        record = export_csv(client)[0]
         assert record["vendor_name"]
         assert record["invoice_number"]
         assert record["total_inc_tax"]
@@ -222,22 +290,14 @@ def code_line_one(client, account="6100"):
 
 
 class TestGlAccountInExports:
-    def test_csv_carries_the_line_gl_accounts(self, client):
+    def test_each_csv_row_carries_its_own_lines_account(self, client):
         code_line_one(client)
         approve(client)
-        body = client.post(
-            "/api/invoices/case_002/export", json={"target": "csv"}
-        ).json()
-        header, row = list(csv.reader(io.StringIO(body["csv"])))
-        assert dict(zip(header, row, strict=True))["gl_account"] == "6100"
+        assert [r["gl_account"] for r in export_csv(client)] == ["6100", "", ""]
 
-    def test_uncoded_invoice_has_an_empty_gl_column(self, client):
+    def test_uncoded_invoice_has_empty_gl_cells(self, client):
         approve(client)
-        body = client.post(
-            "/api/invoices/case_002/export", json={"target": "csv"}
-        ).json()
-        header, row = list(csv.reader(io.StringIO(body["csv"])))
-        assert dict(zip(header, row, strict=True))["gl_account"] == ""
+        assert [r["gl_account"] for r in export_csv(client)] == ["", "", ""]
 
     def test_xero_receives_the_line_gl_account(self, client, monkeypatch):
         code_line_one(client)
@@ -260,20 +320,18 @@ class TestGlAccountInExports:
         """Lines replaced after coding no longer match the projected lines;
         exporting the old accounts against them would post to the wrong GL."""
         code_line_one(client)
-        path = service._cases.root / "case_002" / "02_extraction.json"
-        data = json.loads(path.read_text())
-        items = data["invoice"]["line_items"]
-        if change == "description":
-            items[0]["description"] = "Something else entirely"
-        else:
-            items.append({"description": "Extra"})
-        path.write_text(json.dumps(data))
+
+        def edit(inv):
+            if change == "description":
+                inv["line_items"][0]["description"] = "Something else entirely"
+            else:
+                inv["line_items"].append({"description": "Extra"})
+
+        rewrite_extraction(edit)
         approve(client)
-        body = client.post(
-            "/api/invoices/case_002/export", json={"target": "csv"}
-        ).json()
-        header, row = list(csv.reader(io.StringIO(body["csv"])))
-        assert dict(zip(header, row, strict=True))["gl_account"] == ""
+        rows = export_csv(client)
+        assert len(rows) == (3 if change == "description" else 4)
+        assert {r["gl_account"] for r in rows} == {""}
         events = [
             json.loads(line)
             for line in (tmp_path / "audit.jsonl").read_text().splitlines()

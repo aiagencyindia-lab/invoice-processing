@@ -54,14 +54,32 @@ class ExportFailed(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
+def formula_safe(text: str) -> str:
+    """Text a spreadsheet will show, not run as a formula.
+
+    Extraction text is untrusted: a vendor or description of
+    "=HYPERLINK(...)" would otherwise execute when the file is opened. A
+    numeric string (a credit's "-85.0") is left alone so it stays a number.
+    """
+    if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        try:
+            float(text)
+        except ValueError:
+            return "'" + text
+    return text
+
+
 def _cell(value: Any) -> Any:
     """One value, as a spreadsheet should carry it.
 
     Lists become a comma-separated string because a cell holds one value; a
-    quality-flag column is read, not computed on.
+    quality-flag column is read, not computed on. Strings are made
+    formula-safe; numbers pass through so totals can still be summed.
     """
     if isinstance(value, list):
-        return ", ".join(str(item) for item in value)
+        value = ", ".join(str(item) for item in value)
+    if isinstance(value, str):
+        return formula_safe(value)
     return value
 
 
