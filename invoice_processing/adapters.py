@@ -469,6 +469,13 @@ class JsonDocumentRepository:
                 self._write(data)
                 return
 
+    def non_invoice_ids(self, tenant_id: str) -> set[str]:
+        return {
+            d["id"]
+            for d in self._read().get(tenant_id, {}).values()
+            if d.get("kind") not in (None, "invoice")
+        }
+
     def tenant_id_for_slug(self, slug: str) -> str | None:
         """Resolve an inbound-email local part to a tenant, or refuse.
 

@@ -133,6 +133,27 @@ class TestQueue:
         assert "still-extracting" not in listed
         assert client.get("/api/invoices/still-extracting").status_code == 404
 
+    def test_a_scanned_receipt_is_not_an_invoice(
+        self, client, tmp_path, monkeypatch
+    ):
+        """A GRN's case holds its extraction for confirmation; it belongs on
+        the purchase-orders page, not in the invoice queue."""
+        documents = JsonDocumentRepository(tmp_path / "documents.json")
+        grn = documents.create(TENANT, storage_key="k", sha256="s")
+        documents.set_kind(TENANT, grn, "goods_receipt")
+        monkeypatch.setattr(service, "_documents", documents)
+        service.get_cases().put_artifact(
+            RunContext(tenant_id=TENANT, case_id=grn),
+            "supporting_extraction",
+            {"kind": "goods_receipt", "fields": {}, "lines": []},
+        )
+
+        listed = {
+            i["case_id"] for i in client.get("/api/invoices").json()["invoices"]
+        }
+        assert grn not in listed
+        assert "case_001" in listed
+
     def test_counts_are_consistent(self, client):
         body = client.get("/api/invoices").json()
         counts = body["counts"]

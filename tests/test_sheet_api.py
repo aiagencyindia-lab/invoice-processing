@@ -19,6 +19,7 @@ from invoice_processing.api.service import CSV_COLUMNS, LINE_COLUMNS, app
 from invoice_processing.db.models import (
     Base,
     Correction,
+    Document,
     Finding,
     Invoice,
     Tenant,
@@ -145,6 +146,25 @@ class TestOnlyApprovedByDefault:
         assert rows(client, status="rejected")["total"] == 1
         assert rows(client, status="pending")["total"] == 1
         assert rows(client, status="all")["total"] == 3
+
+    def test_a_scanned_receipt_is_never_a_row(self, db, client):
+        """Its case row holds an extraction awaiting confirmation, not an
+        invoice: undecided, so "pending" and "all" would otherwise list it."""
+        with tenant_session(TENANT, db) as session:
+            for kind in ("goods_receipt", "invoice", None):
+                document = Document(
+                    tenant_id=TENANT,
+                    storage_key=f"k-{kind}",
+                    sha256=f"s-{kind}",
+                    source="upload",
+                    kind=kind,
+                )
+                session.add(document)
+                session.flush()
+                invoice(session, case_id=document.id, fields={})
+
+        assert rows(client, status="pending")["total"] == 2
+        assert rows(client, status="all")["total"] == 2
 
     def test_approval_details_come_from_the_workflow_artifact(self, db, client):
         """Nothing was written for the sheet -- it reads what approval wrote."""

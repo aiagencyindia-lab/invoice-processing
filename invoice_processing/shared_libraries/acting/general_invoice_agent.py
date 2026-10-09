@@ -615,11 +615,17 @@ NON_PAYABLE_TYPES = frozenset(
         "proforma_invoice",
         "credit_note",
         "purchase_order",
+        "goods_receipt",
         "delivery_challan",
         "statement",
         "unreadable",
     }
 )
+GOODS_RECEIPT = "goods_receipt"
+# Not payables, but evidence for the three-way match: when a file holds one of
+# these and no invoice, it goes to a person to confirm rather than through
+# invoice validation.
+SUPPORTING_TYPES = frozenset({"purchase_order", GOODS_RECEIPT})
 DOCUMENT_TYPES = (
     TAX_INVOICE,
     NON_TAX_INVOICE,
@@ -1222,6 +1228,9 @@ invoice" settles it:
   tax invoice.
 - "credit_note": reverses an earlier invoice.
 - "purchase_order": the buyer's own order document.
+- "goods_receipt": a goods receipt note (GRN) or material receipt note (MRN)
+  recording what the buyer's stores received, usually quoting the purchase
+  order. Not a delivery challan, which is the supplier's dispatch note.
 - "delivery_challan": a delivery or dispatch note, usually without prices.
 - "statement": a statement of account listing several invoices.
 - "unreadable": nothing legible could be recovered from the page.
@@ -1258,6 +1267,15 @@ Return ONLY this JSON:
         ("credit note", "credit_note"),
         ("delivery challan", "delivery_challan"),
         ("delivery note", "delivery_challan"),
+        # Before "purchase order": a receipt note quotes the PO it receives.
+        ("goods receipt", GOODS_RECEIPT),
+        ("goods received note", GOODS_RECEIPT),
+        ("material receipt", GOODS_RECEIPT),
+        # ponytail: bare substrings, so a payable quoting "GRN No." in its
+        # body reads as a receipt -- the fallback only runs when the model
+        # call failed; word boundaries if that ever bites.
+        ("grn", GOODS_RECEIPT),
+        ("mrn", GOODS_RECEIPT),
         ("purchase order", "purchase_order"),
         ("quotation", "quotation"),
         ("quote no", "quotation"),
@@ -3200,6 +3218,26 @@ def _run_pipeline(
     report(1)
     classifier = ClassifierAgent()
     classification = classifier.run(source_folder, output_folder)
+
+    # A PO or GRN on its own goes to a person to confirm; a bundle that also
+    # holds an invoice is still an invoice.
+    summary = classification.get("summary") or {}
+    document_type = summary.get("document_type")
+    if document_type in SUPPORTING_TYPES and not summary.get("invoice_count"):
+        files = classification.get("files") or {}
+        pdf = next(
+            (
+                name
+                for name, info in files.items()
+                if isinstance(info, dict) and info.get("type") == "pdf"
+            ),
+            "",
+        )
+        return {
+            "decision": "SUPPORTING",
+            "document_type": document_type,
+            "pdf": str(source_folder / pdf) if pdf else "",
+        }
 
     # Agent 2: Extraction
     report(2)

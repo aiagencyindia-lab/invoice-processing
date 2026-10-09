@@ -53,6 +53,7 @@ from ..adapters import (
     JsonDocumentRepository,
     JsonlAuditSink,
     JsonlCorrectionStore,
+    JsonSupportingDocumentRepository,
     LocalBlobStore,
 )
 from ..ports import LockHeld
@@ -137,6 +138,7 @@ _vendors = None
 _approvals = None
 _gl_rules = None
 _purchase_orders = None
+_supporting_documents = None
 _rules = None
 _tenant_settings = None
 _claims_writer = None
@@ -408,6 +410,42 @@ def get_purchase_orders():
 
         _purchase_orders = PgPurchaseOrderRepository()
     return _purchase_orders
+
+
+def get_supporting_documents():
+    """Scanned POs and receipts awaiting confirmation.
+
+    A file without a database, so single-process development still works;
+    `None` when a database is configured without the table, and raises when
+    it cannot be asked -- the worker then retries rather than dropping a scan.
+    """
+    global _supporting_documents
+    if _supporting_documents is None:
+        if not _database_configured():
+            _supporting_documents = JsonSupportingDocumentRepository()
+        elif _table_exists(
+            "supporting_documents", "Scanned documents", raise_on_error=True
+        ):
+            from ..db.repositories import (  # noqa: PLC0415
+                PgSupportingDocumentRepository,
+            )
+
+            _supporting_documents = PgSupportingDocumentRepository()
+    return _supporting_documents
+
+
+def non_invoice_ids(tenant_id: str) -> set[str]:
+    """Documents classified as something other than an invoice.
+
+    Cases are keyed by document id, so these are the cases to leave out of
+    invoice listings. A lookup that fails hides nothing: a stray row in a
+    list beats a list that will not load.
+    """
+    try:
+        return get_documents().non_invoice_ids(tenant_id)
+    except Exception as exc:
+        logger.warning("Document kinds not read for %s: %s", tenant_id, exc)
+        return set()
 
 
 def get_queue():
@@ -730,7 +768,12 @@ def list_invoices(
     need a human at the top; a chronological queue buries them.
     """
     cases = get_cases()
-    case_ids = list(cases.iter_case_ids(principal.tenant_id))
+    skip = non_invoice_ids(principal.tenant_id)
+    case_ids = [
+        case_id
+        for case_id in cases.iter_case_ids(principal.tenant_id)
+        if case_id not in skip
+    ]
     read = read_cases(cases, principal.tenant_id, case_ids)
     items = []
     for case_id in case_ids:

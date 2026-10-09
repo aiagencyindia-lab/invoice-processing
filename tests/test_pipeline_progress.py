@@ -62,3 +62,65 @@ def test_a_broken_reporter_cannot_fail_a_run(stub_agents, tmp_path: Path):
         tmp_path, tmp_path, 0.0, on_step=explode
     )
     assert result["decision"] == "ACCEPT"
+
+
+def _classifier_saying(document_type, invoice_count):
+    class Classifier(_StubAgent):
+        def run(self, source_folder, output_folder):
+            return {
+                "files": {"scan.pdf": {"type": "pdf"}},
+                "summary": {
+                    "document_type": document_type,
+                    "invoice_count": invoice_count,
+                },
+            }
+
+    return Classifier
+
+
+@pytest.mark.parametrize("document_type", ["purchase_order", "goods_receipt"])
+def test_a_supporting_document_stops_after_the_classifier(
+    stub_agents, monkeypatch, tmp_path: Path, document_type
+):
+    """A PO or GRN goes to confirmation, not through invoice validation."""
+    monkeypatch.setattr(
+        general_invoice_agent,
+        "ClassifierAgent",
+        _classifier_saying(document_type, 0),
+    )
+
+    class Refuses(_StubAgent):
+        def run(self, *args, **kwargs):
+            raise AssertionError("no agent runs after the classifier")
+
+    monkeypatch.setattr(general_invoice_agent, "ExtractorAgent", Refuses)
+    seen = []
+
+    result = general_invoice_agent._run_pipeline(
+        tmp_path, tmp_path, 0.0, on_step=seen.append
+    )
+
+    assert result == {
+        "decision": "SUPPORTING",
+        "document_type": document_type,
+        "pdf": str(tmp_path / "scan.pdf"),
+    }
+    assert [record["step"] for record in seen] == [1]
+
+
+def test_a_bundle_with_an_invoice_stays_on_the_invoice_path(
+    stub_agents, monkeypatch, tmp_path: Path
+):
+    monkeypatch.setattr(
+        general_invoice_agent,
+        "ClassifierAgent",
+        _classifier_saying("goods_receipt", 1),
+    )
+    seen = []
+
+    result = general_invoice_agent._run_pipeline(
+        tmp_path, tmp_path, 0.0, on_step=seen.append
+    )
+
+    assert result["decision"] == "ACCEPT"
+    assert len(seen) == 9

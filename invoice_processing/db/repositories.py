@@ -671,7 +671,7 @@ class PgDocumentRepository:
             ]
 
     def set_kind(self, tenant_id: str, document_id: str, kind) -> None:
-        """Mark a file as a purchase_order / goods_receipt (None = invoice)."""
+        """invoice / purchase_order / goods_receipt; None = not classified yet."""
         with tenant_session(tenant_id, self.url) as session:
             d = session.scalar(
                 select(Document).where(
@@ -681,6 +681,18 @@ class PgDocumentRepository:
             )
             if d is not None:
                 d.kind = kind
+
+    def non_invoice_ids(self, tenant_id: str) -> set[str]:
+        with tenant_session(tenant_id, self.url) as session:
+            return set(
+                session.scalars(
+                    select(Document.id).where(
+                        Document.tenant_id == tenant_id,
+                        Document.kind.is_not(None),
+                        Document.kind != "invoice",
+                    )
+                )
+            )
 
     def tenant_id_for_slug(self, slug: str) -> str | None:
         """Resolve an inbound-email local part to a tenant.
@@ -2585,7 +2597,19 @@ class SheetRepository:
 
     def _base(self, tenant_id: str, filters: dict):
 
-        conditions = [Invoice.tenant_id == tenant_id]
+        conditions = [
+            Invoice.tenant_id == tenant_id,
+            # A scanned PO or receipt's case holds an extraction awaiting
+            # confirmation, never an invoice.
+            ~exists(
+                select(Document.id).where(
+                    Document.tenant_id == tenant_id,
+                    Document.id == Invoice.case_id,
+                    Document.kind.is_not(None),
+                    Document.kind != "invoice",
+                )
+            ),
+        ]
 
         status = (filters.get("status") or "approved").lower()
         decision = _workflow_value("decision")

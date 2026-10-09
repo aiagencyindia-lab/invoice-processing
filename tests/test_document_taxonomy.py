@@ -215,6 +215,14 @@ class TestKeywordFallback:
             ("CREDIT NOTE\nAgainst invoice INV-1", "credit_note"),
             ("DELIVERY CHALLAN\nGoods dispatched", "delivery_challan"),
             ("PURCHASE ORDER\nPlease supply", "purchase_order"),
+            # A receipt note quotes its PO, so it must win over "purchase order".
+            (
+                "GOODS RECEIPT NOTE\nGRN No.: GRN-1\nPurchase Order: PO-4471",
+                "goods_receipt",
+            ),
+            ("GRN No.: GRN-88\nReceived in good condition", "goods_receipt"),
+            ("GOODS RECEIVED NOTE\nStores", "goods_receipt"),
+            ("MATERIAL RECEIPT NOTE\nMRN-12", "goods_receipt"),
             ("RECEIPT\nPayment received with thanks", "receipt"),
             ("BILL OF SUPPLY\nComposition scheme", NON_TAX_INVOICE),
             ("TAX INVOICE\nGSTIN: 29ZOICE4828P1ZD", TAX_INVOICE),
@@ -235,3 +243,28 @@ class TestKeywordFallback:
         result = ClassifierAgent()._classify_by_keyword("   ")
         assert result.document_type == "unreadable"
         assert result.has_invoice is False
+
+
+class TestGoodsReceipt:
+    """A GRN is its own kind: receipt evidence for the three-way match, not a
+    payable and not a delivery challan."""
+
+    def test_it_is_a_known_non_payable_type(self):
+        assert "goods_receipt" in general_invoice_agent.DOCUMENT_TYPES
+        assert "goods_receipt" in general_invoice_agent.NON_PAYABLE_TYPES
+
+    def test_the_prompt_names_it(self, monkeypatch):
+        seen = {}
+
+        def capture(prompt, model, schema):
+            seen["prompt"] = prompt
+            return schema(document_type="goods_receipt"), None
+
+        monkeypatch.setattr(general_invoice_agent, "call_gemini", capture)
+        ClassifierAgent()._analyze_document("GRN", "grn.pdf")
+        assert '"goods_receipt"' in seen["prompt"]
+
+    def test_a_receipt_note_is_not_counted_as_an_invoice(self):
+        result = ClassifierAgent()._classify_by_keyword("GOODS RECEIPT NOTE")
+        assert result.has_invoice is False
+        assert result.invoice_count == 0
