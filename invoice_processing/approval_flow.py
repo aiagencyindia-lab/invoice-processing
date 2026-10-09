@@ -19,6 +19,7 @@ from .ports import RunContext
 logger = logging.getLogger(__name__)
 
 NEEDS_DB = "Approval routing needs a database. Configure DATABASE_URL."
+BOOK_DOWN = "Purchase-order lines could not be re-checked. Try again."
 
 
 def _sla_days(tenant_id: str) -> int:
@@ -177,6 +178,89 @@ class AlreadyDecided(Refused):
     """Lost a race: another person decided the step first (HTTP 409)."""
 
 
+class OverBilled(Refused):
+    """Another invoice consumed the received units since the match (409)."""
+
+
+class BookUnavailable(Refused):
+    """The PO book could not be read to re-check the match (503)."""
+
+
+def over_billed(ctx, artifacts: dict) -> str | None:
+    """Why approving now would bill more than was received or ordered.
+
+    Step 2.3 counts only invoices already approved, so two invoices matched
+    side by side can each pass against the same units; the final approval is
+    the last place to catch it. A hold the stored entry already carried was
+    accepted by whoever approved it and is not raised again. Raises
+    BookUnavailable when the book cannot be read: this check fails closed.
+    """
+    from . import (  # noqa: PLC0415
+        paths,
+        po_book,
+        rematch,
+        three_way,
+        vendor_master,
+    )
+    from .api import service  # noqa: PLC0415
+    from .shared_libraries.acting import (  # noqa: PLC0415
+        general_invoice_agent as agent,
+    )
+
+    stored = rematch._three_way(artifacts.get("phase2"))
+    if not stored or not stored.get("lines"):
+        return None
+    t = ctx.tenant_id
+    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+    try:
+        orders = service.get_purchase_orders()
+        if orders is None:
+            # ponytail: a file book has no record of approved invoices, so
+            # there is nothing cumulative to re-check against.
+            return None
+        vendors = service.get_vendors()
+        records = vendors.load_records(t) if vendors else None
+        # Built here, not via apply_to_pipeline: that rewrites the agent's
+        # process-wide config, which an approval must not do.
+        live = agent.three_way_entry(
+            invoice,
+            po_book.DbBook(orders, t),
+            {**agent.DEFAULT_CONFIG, **tenant_settings.effective(t)},
+            vendor_master.VendorMaster(records=records)
+            if records
+            else vendor_master.VendorMaster(paths.vendor_master_file(t)),
+        )
+    except Exception:
+        logger.exception("Approval re-check of %s failed", ctx.case_id)
+        raise BookUnavailable(BOOK_DOWN) from None
+    holds = {
+        three_way.OVER_ORDERED,
+        three_way.SHORT_RECEIVED,
+        three_way.NOT_RECEIVED,
+    }
+    accepted = {
+        ln.get("line_number"): set(ln.get("signals") or [])
+        for ln in stored["lines"]
+    }
+    for ln in live.get("lines") or []:
+        new = (set(ln["signals"]) & holds) - accepted.get(
+            ln["line_number"], set()
+        )
+        if not new:
+            continue
+        total = (ln["billed"] or 0) + (ln["quantity"] or 0)
+        of = (
+            ", more than was ordered"
+            if three_way.OVER_ORDERED in new
+            else f" of {ln['received'] or 0:g} received"
+        )
+        return (
+            f"Line {ln['line_number']} would bill {total:g}{of}; another "
+            "invoice was approved for this PO line since this was checked."
+        )
+    return None
+
+
 @dataclass
 class Decision:
     step: dict
@@ -238,6 +322,14 @@ def decide(
     overridden = bool(refusal and override_reason)
     if refusal and not (principal.can("admin") and override_reason):
         raise Refused(refusal)
+    pending = [s for s in repo.chain(t, case) if s["status"] == "pending"]
+    if approve and pending and pending[-1]["id"] == current["id"]:
+        # Only the decision that would complete the chain is re-checked:
+        # that is when the invoice starts counting as billed.
+        over = over_billed(ctx, artifacts)
+        if over and not (principal.can("admin") and override_reason):
+            raise OverBilled(over)
+        overridden = overridden or bool(over and override_reason)
 
     acting_for = None
     if why and why.startswith("delegate for"):

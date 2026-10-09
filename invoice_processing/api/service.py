@@ -1267,8 +1267,10 @@ def act(
                 override_reason=request.override_reason,
                 now=datetime.now(timezone.utc),
             )
-        except approval_flow.AlreadyDecided as exc:
+        except (approval_flow.AlreadyDecided, approval_flow.OverBilled) as exc:
             raise HTTPException(status_code=409, detail=exc.detail) from None
+        except approval_flow.BookUnavailable as exc:
+            raise HTTPException(status_code=503, detail=exc.detail) from None
         except approval_flow.Refused as exc:
             raise HTTPException(status_code=403, detail=exc.detail) from None
         step = outcome.step

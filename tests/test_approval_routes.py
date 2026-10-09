@@ -20,7 +20,10 @@ from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
 from invoice_processing.db import models
 from invoice_processing.db import session as db_session
-from invoice_processing.db.repositories import PgApprovalRepository
+from invoice_processing.db.repositories import (
+    PgApprovalRepository,
+    PgPurchaseOrderRepository,
+)
 from invoice_processing.db.session import (
     create_all,
     get_engine,
@@ -1129,3 +1132,151 @@ def test_gl_rule_needs_a_short_prefix(env, prefix):
 def test_unknown_kind_lists_gl(env):
     r = make_rule(env, kind="bogus")
     assert "gl" in r.json()["detail"].split("Use ")[1]
+
+
+# Approval-time re-check: two invoices cannot both consume the same received
+# units. The match is re-run at the final step against the live book.
+PO_ORDER = {
+    "po_number": "PO-9001",
+    "vendor_name": "QuickFix HVAC Repairs",
+    "total_amount": 2000,
+    "currency": "AUD",
+    "lines": [
+        {
+            "line_number": 1,
+            "item_code": "B-6205",
+            "description": "Ball bearing 6205",
+            "qty_ordered": 20,
+            "unit_price": 100,
+        }
+    ],
+}
+LINE_23 = {"line_number": 1, "po_line_number": 1, "quantity": 6, "signals": []}
+
+
+@pytest.fixture
+def po_env(env, monkeypatch):
+    orders = PgPurchaseOrderRepository(env["url"])
+    monkeypatch.setattr(service, "_purchase_orders", orders)
+    orders.upsert_orders(
+        TENANT,
+        [PO_ORDER],
+        uploaded_by="a@x.test",
+        now=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    orders.record_receipts(
+        TENANT,
+        [
+            {
+                "grn_number": "GRN-1",
+                "po_number": "PO-9001",
+                "received_on": "2026-10-01",
+                "lines": [{"line_number": 1, "qty_received": 10}],
+            }
+        ],
+        recorded_by="a@x.test",
+    )
+    case = env["root"] / CASE
+    ext_path = case / "02_extraction.json"
+    ext = json.loads(ext_path.read_text())
+    ext["invoice"]["po_number"] = "PO-9001"
+    ext["invoice"]["line_items"] = [
+        {
+            "item_code": "B-6205",
+            "description": "Ball bearing 6205",
+            "quantity": 6,
+            "unit_price": 100,
+        }
+    ]
+    ext_path.write_text(json.dumps(ext))
+    p2_path = case / "04_phase2_validation.json"
+    p2 = json.loads(p2_path.read_text())
+    p2["validations"].append(
+        {"step": "2.3", "passed": True, "signals": [], "lines": [LINE_23]}
+    )
+    p2_path.write_text(json.dumps(p2))
+    return env
+
+
+def consume_six(env):
+    """Another invoice on the same PO line, approved since this was matched."""
+    with tenant_session(TENANT, env["url"]) as s:
+        s.add(
+            models.Invoice(
+                tenant_id=TENANT,
+                case_id="case_other",
+                vendor_name="QuickFix HVAC Repairs",
+                invoice_number="INV-77",
+                invoice_date="2026-10-01",
+                currency="AUD",
+                total_ex_tax=600,
+                tax_amount=0,
+                total_inc_tax=600,
+                po_number="PO-9001",
+                vendor_tax_id="x",
+                due_date="2026-11-01",
+                min_confidence=1,
+                human_decision="approve",
+                fields={
+                    "workflow": {
+                        "decision": "approve",
+                        "decided_at": "2026-10-02T00:00:00+00:00",
+                    },
+                    "phase2": {
+                        "validations": [{"step": "2.3", "lines": [LINE_23]}]
+                    },
+                },
+            )
+        )
+
+
+def test_approve_within_received_succeeds(po_env):
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 200 and r.json()["completed"] is True
+
+
+def test_approve_after_the_units_are_consumed_is_409(po_env):
+    consume_six(po_env)
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 409
+    assert "Line 1 would bill 12 of 10 received" in r.json()["detail"]
+    assert not (po_env["root"] / CASE / "workflow.json").exists()
+    assert po_env["repo"].current(TENANT, CASE)["status"] == "pending"
+
+
+def test_reject_is_not_rechecked(po_env):
+    consume_six(po_env)
+    r = act(po_env, "approver:anyone", action="reject", reason="Wrong qty")
+    assert r.status_code == 200
+    assert workflow(po_env)["decision"] == "reject"
+
+
+def test_admin_override_approves_over_billed_and_is_audited(po_env):
+    consume_six(po_env)
+    r = act(po_env, "admin:boss", override_reason="Second delivery is here")
+    assert r.status_code == 200 and r.json()["completed"] is True
+    (event,) = [
+        e
+        for e in po_env["events"]()
+        if e["event_type"] == "approval_overridden"
+    ]
+    assert event["payload"]["override_reason"] == "Second delivery is here"
+
+
+def test_unreadable_book_at_approval_is_503(po_env, monkeypatch):
+    def broken(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(service._purchase_orders, "book", broken)
+    r = act(po_env, "approver:anyone")
+    assert r.status_code == 503
+    assert r.json()["detail"] == approval_flow.BOOK_DOWN
+    assert not (po_env["root"] / CASE / "workflow.json").exists()
+
+
+def test_only_the_final_step_is_rechecked(po_env):
+    two_tier(po_env)
+    consume_six(po_env)
+    first = act(po_env, "approver:a")
+    assert first.status_code == 200 and first.json()["completed"] is False
+    assert act(po_env, "approver:b").status_code == 409
