@@ -52,6 +52,7 @@ ESCALATION_SCAN_SECONDS = 60
 DOCUMENT_INGESTED = "document.ingested"
 # A goods receipt arrived for a PO a held case quotes; see rematch.py.
 REMATCH = "case.rematch"
+REMATCH_ATTEMPTS = "rematch_attempts"
 
 
 class ProcessingFailed(RuntimeError):
@@ -588,8 +589,11 @@ class AttemptLog:
 
     KEY = "attempts"
 
-    def __init__(self, cases):
+    def __init__(self, cases, key: str = KEY):
         self.cases = cases
+        # Re-match jobs count under their own key: the document's record is
+        # what the API reads to say whether an upload failed.
+        self.KEY = key
 
     def _ctx(self, tenant_id: str, document_id: str) -> RunContext:
         return RunContext(tenant_id=tenant_id, case_id=document_id)
@@ -730,9 +734,16 @@ class Worker:
         case_id = str(message.payload.get("case_id") or "")
         if not tenant_id or not case_id:
             self._dead_letter(
-                message, "Re-match message is missing tenant_id or case_id"
+                message,
+                "Re-match message is missing tenant_id or case_id",
+                event="rematch_dead_lettered",
             )
             return "dead-lettered:malformed"
+        log = (
+            AttemptLog(self.attempts.cases, key=REMATCH_ATTEMPTS)
+            if self.attempts is not None
+            else None
+        )
         try:
             from .. import rematch, tenant_settings  # noqa: PLC0415
             from ..api import service  # noqa: PLC0415
@@ -757,13 +768,19 @@ class Worker:
                 audit=self.audit or service.get_audit(),
             )
         except Exception as exc:
-            attempt = self._count_failure(tenant_id, case_id, message, exc)
+            attempt = self._count_failure(
+                tenant_id, case_id, message, exc, log=log
+            )
             if attempt >= self.max_attempts:
-                self._dead_letter(message, f"Failed {attempt} times: {exc}")
+                self._dead_letter(
+                    message,
+                    f"Failed {attempt} times: {exc}",
+                    event="rematch_dead_lettered",
+                )
                 return "dead-lettered:exhausted"
             self.queue.nack(message)
             return "retry"
-        self._clear_failures(tenant_id, case_id)
+        self._clear_failures(tenant_id, case_id, log=log)
         self.queue.ack(message)
         return "rematched"
 
@@ -838,7 +855,12 @@ class Worker:
         )
 
     def _count_failure(
-        self, tenant_id: str, document_id: str, message: Message, exc: Exception
+        self,
+        tenant_id: str,
+        document_id: str,
+        message: Message,
+        exc: Exception,
+        log: AttemptLog | None = None,
     ) -> int:
         """This attempt's number, from the most trustworthy source available.
 
@@ -847,16 +869,18 @@ class Worker:
         undercount a document into retrying forever.
         """
         reported = message.delivery_attempt or 1
-        if self.attempts is None:
+        if log is None:
+            log = self.attempts
+        if log is None:
             return reported
         try:
-            counted = self.attempts.record_failure(
+            counted = log.record_failure(
                 tenant_id,
                 document_id,
                 str(exc),
                 exhausted=max(
                     reported,
-                    self.attempts.count(tenant_id, document_id) + 1,
+                    log.count(tenant_id, document_id) + 1,
                 )
                 >= self.max_attempts,
             )
@@ -871,11 +895,15 @@ class Worker:
             return reported
         return max(reported, counted)
 
-    def _clear_failures(self, tenant_id: str, document_id: str) -> None:
-        if self.attempts is None:
+    def _clear_failures(
+        self, tenant_id: str, document_id: str, log: AttemptLog | None = None
+    ) -> None:
+        if log is None:
+            log = self.attempts
+        if log is None:
             return
         try:
-            self.attempts.clear(tenant_id, document_id)
+            log.clear(tenant_id, document_id)
         except Exception as store_error:
             logger.warning(
                 "Could not clear the failure record for %s: %s",
@@ -883,7 +911,12 @@ class Worker:
                 store_error,
             )
 
-    def _dead_letter(self, message: Message, reason: str) -> None:
+    def _dead_letter(
+        self,
+        message: Message,
+        reason: str,
+        event: str = "document_dead_lettered",
+    ) -> None:
         dead_letter = getattr(self.queue, "dead_letter", None)
         if dead_letter is not None:
             dead_letter(message, reason)
@@ -896,7 +929,7 @@ class Worker:
                 or message.payload.get("case_id")
                 or ""
             ),
-            "document_dead_lettered",
+            event,
             {"reason": reason, "message_id": message.id},
         )
 

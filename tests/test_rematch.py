@@ -53,7 +53,9 @@ def cases(scratch_db):
 def held(cases, tmp_path, monkeypatch):
     """Run step 2.3 against a short receipt and store the held case."""
 
-    def make(received=None, extra_review=(), ctx=CTX, repo=cases):
+    def make(
+        received=None, extra_review=(), ctx=CTX, repo=cases, routing="AUTO"
+    ):
         config = _config(FakeBook(list(LINES), received or {1: 2}))
         monkeypatch.setitem(
             general_invoice_agent._config_store, "CONFIG", config
@@ -72,7 +74,7 @@ def held(cases, tmp_path, monkeypatch):
                         "amount_ex_tax": 500,
                     }
                 ],
-                "_routing": "AUTO",
+                "_routing": routing,
                 "_evidence": {
                     "_summary": {"fields_needing_review": list(extra_review)}
                 },
@@ -204,3 +206,41 @@ def test_filesystem_store_finds_held_cases_too(held, tmp_path):
     assert fs.held_by_receipt("tenant-other", "PO-1") == []
     _run(fs, {1: 10}, FakeAudit())
     assert fs.held_by_receipt(TENANT, "PO-1") == []
+
+
+def test_a_repeat_never_lifts_an_invoice_routed_to_review(cases, held):
+    # Routed REVIEW at extraction with nothing listed (no field scores).
+    held(routing="REVIEW")
+    for _ in range(2):  # two GRN imports, or a redelivery
+        _run(cases, {1: 10}, FakeAudit())
+        assert _invoice(cases)["_routing"] == "REVIEW"
+    assert _step(cases)["routing_before"] == "REVIEW"
+
+
+def test_a_cleared_invoice_stays_auto_on_a_repeat(cases, held):
+    held()
+    first = _run(cases, {1: 10}, FakeAudit())
+    second = _run(cases, {1: 10}, FakeAudit())
+    assert first["cleared"] is True and second["cleared"] is False
+    assert _invoice(cases)["_routing"] == "AUTO"
+
+
+def test_a_decision_landing_mid_rematch_leaves_the_case_untouched(
+    cases, held, monkeypatch
+):
+    held()
+    before = cases.get_artifacts(CTX)
+    real = general_invoice_agent.three_way_entry
+
+    def decide_first(*args, **kwargs):
+        # The approver decides after the job read the case, before it writes.
+        cases.put_artifact(CTX, "workflow", {"decision": "approved"})
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(general_invoice_agent, "three_way_entry", decide_first)
+    audit = FakeAudit()
+    assert _run(cases, {1: 10}, audit) == {"skipped": "decided"}
+    after = cases.get_artifacts(CTX)
+    assert after.pop("workflow") == {"decision": "approved"}
+    assert after == before
+    assert audit.events == []

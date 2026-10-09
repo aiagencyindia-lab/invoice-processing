@@ -616,13 +616,14 @@ class ExportRequest(BaseModel):
 # vendor, no fields, and "no validation records".
 PROGRESS_KEY = "progress"
 ATTEMPTS_KEY = "attempts"
+REMATCH_ATTEMPTS_KEY = "rematch_attempts"
 
 # The worker's own bookkeeping, stored beside the artifacts because that store
 # is the only thing every container reaches. None of it is pipeline output, and
 # a reader that counts it as such reports a document nobody has processed yet
 # as a finished invoice -- which is exactly how an in-flight upload came to sit
 # in the workbench with no vendor and no validation records.
-INTERNAL_KEYS = (PROGRESS_KEY, ATTEMPTS_KEY)
+INTERNAL_KEYS = (PROGRESS_KEY, ATTEMPTS_KEY, REMATCH_ATTEMPTS_KEY)
 
 
 def read_case(cases, ctx) -> tuple[dict, dict]:

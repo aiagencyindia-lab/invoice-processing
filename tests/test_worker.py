@@ -20,6 +20,7 @@ from typing import ClassVar
 import pytest
 
 from invoice_processing import approval_flow, rematch, tenant_settings
+from invoice_processing.adapters import FsCaseRepository
 from invoice_processing.api import service
 from invoice_processing.core.config import ARTIFACT_MAP
 from invoice_processing.db import models
@@ -1168,6 +1169,32 @@ class TestRematchJobs:
         assert worker.run_once() == ["dead-lettered:exhausted"]
         [record] = queue.dead_letters()
         assert "db down" in record["dead_letter_reason"]
+
+    def test_rematch_failures_have_their_own_count_and_audit(
+        self, tmp_path, queue, claims, audit, rematched
+    ):
+        rematched.fail = True
+        cases = FsCaseRepository(
+            root=tmp_path / "cases", tenant_id="tenant-acme"
+        )
+        runner.enqueue_rematch(queue, "tenant-acme", "case-7", "PO-1")
+        worker = Worker(
+            queue=queue,
+            claims=claims,
+            handler=Handler(),
+            audit=audit,
+            max_attempts=1,
+            attempts=AttemptLog(cases),
+        )
+        assert worker.run_once() == ["dead-lettered:exhausted"]
+        stored = cases.get_artifacts(
+            RunContext(tenant_id="tenant-acme", case_id="case-7")
+        )
+        # Not the document's record: that one says whether the upload failed.
+        assert "attempts" not in stored
+        assert stored["rematch_attempts"]["count"] == 1
+        assert [e[1] for e in audit.events] == ["rematch_dead_lettered"]
+        assert "db down" in audit.events[0][2]["reason"]
 
     def test_a_document_message_still_goes_through_claims(
         self, queue, claims, rematched

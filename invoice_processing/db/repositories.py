@@ -143,6 +143,32 @@ class PgCaseRepository:
             invoice.fields = {**(invoice.fields or {}), key: value}
             return value
 
+    def update_artifacts(self, ctx: RunContext, mutate) -> dict | None:
+        """`update_artifact` for several keys at once, deciding on the whole
+        case: `mutate(artifacts)` returns the keys to write, or None to write
+        nothing. One locked transaction, so a check inside it holds."""
+        import copy  # noqa: PLC0415
+
+        with tenant_session(ctx.tenant_id, self.url) as session:
+            if session.get_bind().dialect.name == "sqlite":
+                session.execute(text("BEGIN IMMEDIATE"))
+            invoice = session.scalar(
+                select(Invoice)
+                .where(
+                    Invoice.tenant_id == ctx.tenant_id,
+                    Invoice.case_id == ctx.case_id,
+                )
+                .with_for_update()
+            )
+            if invoice is None:
+                return None  # no case, nothing to decide on or write
+            # A copy: nested edits in place would be invisible to the JSON
+            # column's change detection, and the write would not land.
+            updates = mutate(copy.deepcopy(dict(invoice.fields or {})))
+            if updates:
+                invoice.fields = {**(invoice.fields or {}), **updates}
+            return updates
+
     def project_case(self, ctx: RunContext, artifacts: dict) -> None:
         """Mirror a finished case into the columns and tables that answer
         questions.

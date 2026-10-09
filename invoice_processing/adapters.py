@@ -185,6 +185,22 @@ class FsCaseRepository:
             self.put_artifact(ctx, key, value)
             return value
 
+    def update_artifacts(
+        self, ctx: RunContext, mutate: Callable[[dict], dict | None]
+    ) -> dict | None:
+        """Several keys under the same lock: `mutate(artifacts)` returns the
+        keys to write, or None to write nothing."""
+        import fcntl  # noqa: PLC0415
+
+        case_dir = self._case_dir(ctx)
+        case_dir.parent.mkdir(parents=True, exist_ok=True)
+        with open(case_dir.with_name(f".{case_dir.name}.lock"), "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            updates = mutate(self.get_artifacts(ctx))
+            for key, value in (updates or {}).items():
+                self.put_artifact(ctx, key, value)
+            return updates
+
     def iter_case_ids(self, tenant_id: str = "default") -> Iterator[str]:
         """Sorted, so impact assessment walks cases in a stable order."""
         if not self.serves(tenant_id) or not self.root.exists():

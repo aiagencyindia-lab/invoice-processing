@@ -9,8 +9,6 @@ bank flag -- still needs review. A decided case is never touched.
 
 from __future__ import annotations
 
-import copy
-
 from . import po_matching
 
 RECEIPT = "receipt: "
@@ -52,64 +50,76 @@ def rematch_case(ctx, cases, book, *, vendors, config: dict, audit) -> dict:
     po_number = None
     try:
         artifacts = cases.get_artifacts(ctx)
-        # ponytail: checked once, not under the row lock; a decision landing
-        # mid-rematch is caught by the approval-time re-match.
         if (artifacts.get("workflow") or {}).get("decision"):
             return {"skipped": "decided"}
         invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
         po_number = invoice.get("po_number")
+        # Matched outside the lock: the book is another table, and holding
+        # the case row while reading it would serialise every receipt.
         entry = agent.three_way_entry(invoice, book, config, vendors)
-        old: dict = {}
+        out: dict = {}
 
-        # Deep copies: a nested edit in place is invisible to the JSON
-        # column's change detection, and the write would silently not land.
-        def rewrite_phase2(current):
-            current = copy.deepcopy(current or {})
-            validations = list(current.get("validations") or [])
-            for i, v in enumerate(validations):
-                if v.get("step") == "2.3":
-                    old.update(v)
-                    validations[i] = entry
-                    break
+        def rewrite(current: dict) -> dict | None:
+            # Checked again under the lock: a decided case is never touched.
+            if (current.get("workflow") or {}).get("decision"):
+                return None
+            phase2 = current.get("phase2") or {}
+            validations = list(phase2.get("validations") or [])
+            old = _three_way(phase2) or {}
+            new = dict(entry)
+            # Carried forward even on a pass, so the routing the invoice had
+            # before 2.3 first held it is never lost to a later re-match.
+            if "routing_before" in old:
+                new["routing_before"] = old["routing_before"]
+            elif not new["passed"]:
+                new["routing_before"] = "AUTO"
+            i = next(
+                (
+                    i
+                    for i, v in enumerate(validations)
+                    if v.get("step") == "2.3"
+                ),
+                None,
+            )
+            if i is None:
+                validations.append(new)
             else:
-                validations.append(entry)
-            if not entry["passed"]:
-                entry["routing_before"] = old.get("routing_before", "AUTO")
-            current["validations"] = validations
-            return current
+                validations[i] = new
 
-        cases.update_artifact(ctx, "phase2", rewrite_phase2)
-        cleared = False
-
-        def rewrite_extraction(current):
-            nonlocal cleared
-            current = copy.deepcopy(current or {})
-            inv = current.setdefault("invoice", {})
+            extraction = current.get("extraction") or {}
+            inv = extraction.setdefault("invoice", {})
             summary = inv.setdefault("_evidence", {}).setdefault("_summary", {})
             needing = [
                 f
                 for f in summary.get("fields_needing_review") or []
                 if not str(f).startswith(RECEIPT)
             ]
-            if entry["passed"]:
-                if not needing:
-                    inv["_routing"] = old.get("routing_before") or "AUTO"
-                    cleared = True
-            else:
-                needing += [f"{RECEIPT}{s}" for s in entry["signals"]]
+            # Only this run lifting a 2.3 hold restores routing: a repeat on
+            # an already-passing entry leaves it as it is.
+            cleared = (
+                old.get("passed") is False and new["passed"] and not needing
+            )
+            if cleared:
+                inv["_routing"] = old.get("routing_before") or "AUTO"
+            elif not new["passed"]:
+                needing += [f"{RECEIPT}{s}" for s in new["signals"]]
                 inv["_routing"] = "REVIEW"
             summary["fields_needing_review"] = needing
-            return current
+            out.update(
+                before=list(old.get("signals") or []),
+                after=list(new["signals"]),
+                cleared=cleared,
+            )
+            return {
+                "phase2": {**phase2, "validations": validations},
+                "extraction": extraction,
+            }
 
-        cases.update_artifact(ctx, "extraction", rewrite_extraction)
+        if cases.update_artifacts(ctx, rewrite) is None:
+            return {"skipped": "decided"}
         fresh = cases.get_artifacts(ctx)
         cases.project_case(ctx, fresh)
         service.reroute(ctx, fresh, ["receipt"])
-        out = {
-            "before": list(old.get("signals") or []),
-            "after": list(entry["signals"]),
-            "cleared": cleared,
-        }
         audit.emit(ctx, "three_way_rematched", {"po_number": po_number, **out})
         return out
     except Exception as exc:
