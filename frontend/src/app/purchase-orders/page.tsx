@@ -9,8 +9,10 @@ import {
   type Me,
   type PurchaseOrderDetail,
   type PurchaseOrderList,
+  type SupportingDocument,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
+import SupportingReview from "@/components/SupportingReview";
 
 function amount(value: number | null, currency: string | null): string {
   if (value === null || value === undefined) return "—";
@@ -96,6 +98,18 @@ function PoDetailRows({ poNumber }: { poNumber: string }) {
           {detail.receipts.map((g) => (
             <li key={g.grn_number}>
               {g.grn_number} · {g.received_on}
+              {g.source === "document" ? (
+                <>
+                  {" · "}
+                  {g.document_id ? (
+                    <a href={`/api/invoices/${g.document_id}/document`} target="_blank" rel="noreferrer">
+                      from scan
+                    </a>
+                  ) : (
+                    "from scan"
+                  )}
+                </>
+              ) : null}
               {g.reason ? ` · ${g.reason}` : ""} ·{" "}
               {g.lines.map((l) => `line ${l.line_number}: ${l.qty_received}`).join(", ")}
             </li>
@@ -103,6 +117,64 @@ function PoDetailRows({ poNumber }: { poNumber: string }) {
         </ul>
       )}
     </div>
+  );
+}
+
+const kindName = (kind: string) =>
+  kind === "goods_receipt" ? "Goods receipt" : "Purchase order";
+
+/** Scans waiting for a clerk. Absent entirely without a database. */
+function AwaitingConfirmation({
+  onNotice,
+  onAccepted,
+}: {
+  onNotice: (notice: string) => void;
+  onAccepted: () => void;
+}) {
+  const { data, error, reload } = usePoll<{ documents: SupportingDocument[] }>(
+    "/api/supporting-documents?status=pending,blocked",
+  );
+  const [open, setOpen] = useState<string | null>(null);
+  if (error?.includes("needs a database")) return null;
+  const docs = data?.documents ?? [];
+  if (docs.length === 0 && !error) return null;
+  return (
+    <section className="stack" style={{ gap: 8 }} aria-labelledby="awaiting-h">
+      <h2 id="awaiting-h">Documents awaiting confirmation</h2>
+      {error ? <div className="empty-state">{error}</div> : null}
+      <div className="card-list">
+        {docs.map((d) => (
+          <div key={d.id} className="panel row-between" style={{ padding: "10px 14px" }}>
+            <div className="stack" style={{ gap: 2 }}>
+              <strong>
+                {kindName(d.kind)}
+                {d.po_number ? ` · PO ${d.po_number}` : ""}
+              </strong>
+              <span className="muted" style={{ fontSize: 12.5 }}>
+                {d.status === "blocked"
+                  ? (d.blocked_reason ?? "Its purchase order is not on file.")
+                  : "Read from a scan; check it before it counts."}
+              </span>
+            </div>
+            <button type="button" className="btn-chip" onClick={() => setOpen(d.id)}>
+              Review
+            </button>
+          </div>
+        ))}
+      </div>
+      {open ? (
+        <SupportingReview
+          id={open}
+          onClose={() => setOpen(null)}
+          onDone={(notice) => {
+            setOpen(null);
+            onNotice(notice);
+            reload();
+            onAccepted();
+          }}
+        />
+      ) : null}
+    </section>
   );
 }
 
@@ -263,6 +335,16 @@ export default function PurchaseOrdersPage() {
             </div>
           ))}
         </div>
+      ) : null}
+
+      {canImport ? (
+        <AwaitingConfirmation
+          onNotice={(n) => {
+            setProblem(null);
+            setNotice(n);
+          }}
+          onAccepted={reload}
+        />
       ) : null}
 
       {problem ? (
