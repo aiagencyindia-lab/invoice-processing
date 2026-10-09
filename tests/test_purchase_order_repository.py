@@ -276,6 +276,18 @@ def test_replace_deletes_absent_orders_but_never_received_ones(repo):
     assert [o["po_number"] for o in r.list_orders("t1")] == ["PO9001"]
 
 
+def test_replace_keeps_scan_confirmed_orders_it_does_not_name(repo):
+    r, _ = repo
+    scanned = {**ORDER, "po_number": "PO-SCAN"}
+    r.upsert_orders("t1", [scanned], uploaded_by="c@x", source="document")
+    out = r.upsert_orders("t1", [ORDER], uploaded_by="a@x", replace=True)
+    assert out["deleted"] == 0
+    assert sorted(o["po_number"] for o in r.list_orders("t1")) == [
+        "PO9001",
+        "POSCAN",
+    ]
+
+
 def approved(url, case, when, *, po="PO-9001", quantity=3):
     """An invoice approved on the record only: no projected columns."""
     with tenant_session("t1", url) as s:

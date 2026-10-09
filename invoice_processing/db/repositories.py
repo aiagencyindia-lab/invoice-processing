@@ -1965,9 +1965,10 @@ class PgPurchaseOrderRepository:
         source: str = "upload", now: datetime | None = None,
         replace: bool = False, document_id: str | None = None,
     ) -> dict:  # fmt: skip
-        """Upsert by PO number. `replace` also deletes the tenant's POs absent
-        from `orders`, in the same transaction -- refused for a PO with goods
-        received, since receipts are evidence and are never deleted."""
+        """Upsert by PO number. `replace` also deletes the tenant's uploaded
+        POs absent from `orders`, in the same transaction -- refused for a PO
+        with goods received, since receipts are evidence and are never
+        deleted. A scan-confirmed PO is not the ERP's to drop."""
         now = now or datetime.now(timezone.utc)
         created = updated = lines = 0
         seen: set[str] = set()
@@ -2047,6 +2048,7 @@ class PgPurchaseOrderRepository:
             for gone in session.scalars(
                 select(PurchaseOrder).where(
                     PurchaseOrder.tenant_id == tenant_id,
+                    PurchaseOrder.source == "upload",
                     PurchaseOrder.po_number.not_in(seen),
                 )
             ).all():
