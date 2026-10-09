@@ -695,6 +695,127 @@ class GlRule(Base, TenantMixin, TimestampMixin):
     created_by: Mapped[str] = mapped_column(String(320), nullable=False)
 
 
+class PurchaseOrder(Base, TenantMixin, TimestampMixin):
+    """A purchase order as uploaded from the ERP; lines in PoLine.
+
+    po_number is stored normalised (po_matching.normalize_po_number) so the
+    match and the upsert agree on identity; po_number_display is what the
+    ERP printed, for people.
+    """
+
+    __tablename__ = "purchase_orders"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "po_number", name="uq_purchase_orders_number"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    po_number: Mapped[str] = mapped_column(String(128), nullable=False)
+    po_number_display: Mapped[str] = mapped_column(String(128), nullable=False)
+    vendor_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    total_amount: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, default="AUD"
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="open"
+    )
+    amount_invoiced: Mapped[float] = mapped_column(
+        Numeric(18, 4), nullable=False, default=0
+    )
+    customer_name: Mapped[str | None] = mapped_column(String(512))
+    valid_from: Mapped[str | None] = mapped_column(String(10))
+    valid_to: Mapped[str | None] = mapped_column(String(10))
+    amount_basis: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="inc_tax"
+    )
+    approved_quantity: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    approved_unit_price: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    hsn_sac: Mapped[str | None] = mapped_column(String(16))
+    source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="upload"
+    )
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+    uploaded_by: Mapped[str] = mapped_column(String(320), nullable=False)
+
+    lines: Mapped[list[PoLine]] = relationship(
+        back_populates="order",
+        cascade="all, delete-orphan",
+        order_by="PoLine.line_number",
+    )
+
+
+class PoLine(Base, TenantMixin):
+    __tablename__ = "po_lines"
+    __table_args__ = (
+        UniqueConstraint(
+            "purchase_order_id", "line_number", name="uq_po_lines_number"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    purchase_order_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("purchase_orders.id"), nullable=False, index=True
+    )
+    line_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_code: Mapped[str | None] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    qty_ordered: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    unit_price: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    uom: Mapped[str | None] = mapped_column(String(16))
+    receipt_required: Mapped[bool | None] = mapped_column(Boolean)
+    qty_invoiced_opening: Mapped[float] = mapped_column(
+        Numeric(18, 4), nullable=False, default=0
+    )
+
+    order: Mapped[PurchaseOrder] = relationship(back_populates="lines")
+
+
+class GoodsReceipt(Base, TenantMixin):
+    """Evidence that goods arrived. Immutable: a correction is a new receipt
+    with negative quantities and a reason."""
+
+    __tablename__ = "goods_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "grn_number", name="uq_goods_receipts_number"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    grn_number: Mapped[str] = mapped_column(String(128), nullable=False)
+    purchase_order_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("purchase_orders.id"), nullable=False, index=True
+    )
+    received_on: Mapped[str] = mapped_column(String(10), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(500))
+    source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="upload"
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+    recorded_by: Mapped[str] = mapped_column(String(320), nullable=False)
+
+    lines: Mapped[list[GrnLine]] = relationship(cascade="all, delete-orphan")
+
+
+class GrnLine(Base, TenantMixin):
+    __tablename__ = "grn_lines"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    goods_receipt_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("goods_receipts.id"), nullable=False, index=True
+    )
+    po_line_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("po_lines.id"), nullable=False, index=True
+    )
+    qty_received: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+
+
 TENANT_TABLES = (
     "users",
     "record_locks",
@@ -716,4 +837,8 @@ TENANT_TABLES = (
     "delegations",
     "approval_steps",
     "gl_rules",
+    "purchase_orders",
+    "po_lines",
+    "goods_receipts",
+    "grn_lines",
 )

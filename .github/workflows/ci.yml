@@ -160,6 +160,7 @@ jobs:
                         tests/test_vendor_repository.py \
                         tests/test_approval_repository.py \
                         tests/test_gl_rule_repository.py \
+                        tests/test_purchase_order_repository.py \
                         tests/test_worker.py \
                         tests/test_vendor_routes.py \
                         tests/test_approval_routes.py \
