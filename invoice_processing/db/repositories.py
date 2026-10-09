@@ -54,6 +54,7 @@ from .models import (
     RecordLock,
     Rule,
     SheetView,
+    SupportingDocument,
     Tenant,
     User,
     Vendor,
@@ -663,10 +664,23 @@ class PgDocumentRepository:
                     "byte_size": d.byte_size,
                     "source": d.source,
                     "source_ref": d.source_ref,
+                    "kind": d.kind,
                     "created_at": _iso(d.created_at),
                 }
                 for d in rows
             ]
+
+    def set_kind(self, tenant_id: str, document_id: str, kind) -> None:
+        """Mark a file as a purchase_order / goods_receipt (None = invoice)."""
+        with tenant_session(tenant_id, self.url) as session:
+            d = session.scalar(
+                select(Document).where(
+                    Document.tenant_id == tenant_id,
+                    Document.id == document_id,
+                )
+            )
+            if d is not None:
+                d.kind = kind
 
     def tenant_id_for_slug(self, slug: str) -> str | None:
         """Resolve an inbound-email local part to a tenant.
@@ -700,6 +714,7 @@ _ENTITY_TYPES = {
     "delegation": "delegation",
     "gl_rule": "gl_rule",
     "goods_receipt": "goods_receipt",
+    "supporting_document": "supporting_document",
 }
 
 
@@ -1814,6 +1829,7 @@ class PgPurchaseOrderRepository:
             "approved_unit_price": cls._f(o.approved_unit_price),
             "hsn_sac": o.hsn_sac,
             "source": o.source,
+            "document_id": o.document_id,
             "uploaded_at": _iso(o.uploaded_at),
             "uploaded_by": o.uploaded_by,
         }
@@ -1918,7 +1934,7 @@ class PgPurchaseOrderRepository:
     def upsert_orders(
         self, tenant_id: str, orders: list[dict], *, uploaded_by: str,
         source: str = "upload", now: datetime | None = None,
-        replace: bool = False,
+        replace: bool = False, document_id: str | None = None,
     ) -> dict:  # fmt: skip
         """Upsert by PO number. `replace` also deletes the tenant's POs absent
         from `orders`, in the same transaction -- refused for a PO with goods
@@ -1951,6 +1967,7 @@ class PgPurchaseOrderRepository:
                 # opening that already includes them over-counts -- a hold,
                 # never a silent pass.
                 order.source, order.uploaded_by = source, uploaded_by
+                order.document_id = document_id
                 order.uploaded_at = order.uploaded_at or now
                 session.flush()
                 # Lines update in place by number: the receipts reference them.
@@ -2017,6 +2034,7 @@ class PgPurchaseOrderRepository:
     def record_receipts(
         self, tenant_id: str, receipts: list[dict], *, recorded_by: str,
         source: str = "upload", now: datetime | None = None,
+        document_id: str | None = None,
     ) -> dict:  # fmt: skip
         now = now or datetime.now(timezone.utc)
         recorded: list[str] = []
@@ -2054,6 +2072,7 @@ class PgPurchaseOrderRepository:
                     received_on=rc["received_on"],
                     reason=rc.get("reason"),
                     source=source,
+                    document_id=document_id,
                     recorded_at=now,
                     recorded_by=recorded_by,
                 )
@@ -2156,6 +2175,7 @@ class PgPurchaseOrderRepository:
                 "received_on": g.received_on,
                 "reason": g.reason,
                 "source": g.source,
+                "document_id": g.document_id,
                 "recorded_at": _iso(g.recorded_at),
                 "recorded_by": g.recorded_by,
                 "lines": [
@@ -2201,6 +2221,12 @@ class PgPurchaseOrderRepository:
                 "receipts": self._receipts(session, tenant_id, o),
             }
 
+    def po_owned_by_upload(self, tenant_id: str, po_number) -> bool:
+        """True when an uploaded sheet owns this PO, so a scan must not touch it."""
+        with tenant_session(tenant_id, self.url) as session:
+            o = self._order(session, tenant_id, po_number)
+            return o is not None and o.source == "upload"
+
     def book(self, tenant_id: str, po_number) -> dict | None:
         with tenant_session(tenant_id, self.url) as session:
             o = self._order(session, tenant_id, po_number)
@@ -2213,6 +2239,119 @@ class PgPurchaseOrderRepository:
                 "billed": self._billed(session, tenant_id, o),
                 "uploaded_at": _iso(o.uploaded_at),
             }
+
+
+class PgSupportingDocumentRepository:
+    """Scanned POs and receipts waiting for a person; see SupportingDocument."""
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    @staticmethod
+    def _dict(row: SupportingDocument, filename: str | None) -> dict:
+        return {
+            "id": row.id,
+            "document_id": row.document_id,
+            "kind": row.kind,
+            "status": row.status,
+            "extracted": row.extracted or {},
+            "po_number": row.po_number,
+            "blocked_reason": row.blocked_reason,
+            "extraction_error": row.extraction_error,
+            "reviewed_by": row.reviewed_by,
+            "reviewed_at": _iso(row.reviewed_at),
+            "note": row.note,
+            "created_at": _iso(row.created_at),
+            "filename": filename,
+        }
+
+    def _one(self, session, tenant_id: str, id: str):
+        return session.execute(
+            select(SupportingDocument, Document.filename)
+            .join(Document, Document.id == SupportingDocument.document_id)
+            .where(
+                SupportingDocument.tenant_id == tenant_id,
+                SupportingDocument.id == id,
+            )
+        ).first()
+
+    def upsert_from_extraction(
+        self, tenant_id: str, *, document_id: str, kind: str, extracted: dict,
+        po_number: str | None, blocked_reason: str | None,
+        extraction_error: str | None,
+    ) -> dict | None:  # fmt: skip
+        """Create the row, or overwrite it while pending/blocked. A decided
+        row is left alone and None is returned."""
+        po = po_matching.normalize_po_number(po_number) if po_number else None
+        with tenant_session(tenant_id, self.url) as session:
+            row = session.scalar(
+                select(SupportingDocument).where(
+                    SupportingDocument.tenant_id == tenant_id,
+                    SupportingDocument.document_id == document_id,
+                )
+            )
+            if row is None:
+                row = SupportingDocument(
+                    tenant_id=tenant_id, document_id=document_id
+                )
+                session.add(row)
+            elif row.status not in ("pending", "blocked"):
+                return None
+            row.kind, row.extracted, row.po_number = kind, extracted, po
+            row.blocked_reason = blocked_reason
+            row.extraction_error = extraction_error
+            row.status = "blocked" if blocked_reason else "pending"
+            session.flush()
+            return self._dict(*self._one(session, tenant_id, row.id))
+
+    def list(self, tenant_id: str, statuses: tuple[str, ...]) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.execute(
+                select(SupportingDocument, Document.filename)
+                .join(Document, Document.id == SupportingDocument.document_id)
+                .where(
+                    SupportingDocument.tenant_id == tenant_id,
+                    SupportingDocument.status.in_(statuses),
+                )
+                .order_by(SupportingDocument.created_at, SupportingDocument.id)
+            ).all()
+            return [self._dict(r, f) for r, f in rows]
+
+    def get(self, tenant_id: str, id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            found = self._one(session, tenant_id, id)
+            return self._dict(*found) if found else None
+
+    def mark(
+        self, tenant_id: str, id: str, *, status: str, reviewed_by: str,
+        note: str | None = None, extracted: dict | None = None,
+    ) -> dict:  # fmt: skip
+        with tenant_session(tenant_id, self.url) as session:
+            found = self._one(session, tenant_id, id)
+            if found is None:
+                raise KeyError(id)
+            row = found[0]
+            row.status, row.reviewed_by, row.note = status, reviewed_by, note
+            row.reviewed_at = datetime.now(timezone.utc)
+            if extracted is not None:
+                row.extracted = extracted  # the clerk's corrected version
+            session.flush()
+            return self._dict(*found)
+
+    def unblock(self, tenant_id: str, po_number) -> list[str]:
+        """Blocked rows waiting on this PO become pending; returns their ids."""
+        po = po_matching.normalize_po_number(po_number)
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(SupportingDocument).where(
+                    SupportingDocument.tenant_id == tenant_id,
+                    SupportingDocument.status == "blocked",
+                    SupportingDocument.po_number == po,
+                )
+            ).all()
+            for r in rows:
+                r.status, r.blocked_reason = "pending", None
+            return [r.id for r in rows]
 
 
 class PgClaimStore:
