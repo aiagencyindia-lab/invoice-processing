@@ -71,8 +71,10 @@ try:
         confidence,
         duplicates,
         extraction_cleanup,
+        po_book,
         po_matching,
         tax_ids,
+        three_way,
         vendor_master,
         wa_matching,
     )
@@ -103,8 +105,10 @@ except ImportError:  # executed as a script: no parent package context
         confidence,
         duplicates,
         extraction_cleanup,
+        po_book,
         po_matching,
         tax_ids,
+        three_way,
         vendor_master,
         wa_matching,
     )
@@ -503,6 +507,7 @@ _FALLBACK_CONFIG = {
     # noise on large ones.
     "po_tolerance_pct": 0.02,
     "po_tolerance_abs": 50.0,
+    "three_way_qty_tolerance": 0,
     # Duplicate detection
     # On by default. It was shipped off, which meant a pilot ran without any
     # duplicate check at all -- and a duplicate invoice is a duplicate payment,
@@ -1947,6 +1952,30 @@ class Phase2ValidatorAgent(BaseAgent):
                 print(f"   PO match: {entry['evidence']}")
             validations.append(entry)
 
+            # Step 2.3: line-level three-way match, only once 2.2 has found
+            # the PO and passed it. Holds, never rejects -- see three_way.
+            if entry["passed"] and invoice.get("po_number"):
+                step = _three_way_step(invoice, config)
+                if not step["passed"]:
+                    # Same reopening of the extraction-time routing as step
+                    # 3.4, re-saved for every reader that takes routing from
+                    # the artifact.
+                    step["routing_before"] = invoice.get("_routing")
+                    invoice["_routing"] = "REVIEW"
+                    summary = invoice.setdefault("_evidence", {}).setdefault(
+                        "_summary", {}
+                    )
+                    needing = summary.setdefault("fields_needing_review", [])
+                    needing.extend(
+                        f"receipt: {s}"
+                        for s in step["signals"]
+                        if f"receipt: {s}" not in needing
+                    )
+                    self.save_artifact(
+                        output_folder, "02_extraction.json", extraction
+                    )
+                validations.append(step)
+
         # Determine decision
         failed = _settle(validations)
         decision = "REJECT" if failed else "CONTINUE"
@@ -1973,61 +2002,79 @@ class Phase2ValidatorAgent(BaseAgent):
 # ============================================================================
 
 
-class _PurchaseOrderFile:
-    """Purchase orders read from a JSON file next to the case data.
-
-    The local stand-in for an ERP query, exactly as `_load_seen_invoices` is
-    the local stand-in for an indexed duplicate lookup. Purchase orders
-    originate in the customer's ERP; a pilot loads an export of the open ones
-    here, and the connector replaces this without the matching logic changing.
-
-    Missing file means no purchase orders are known, which surfaces as
-    "purchase order not found" rather than as a silent pass -- a PO check that
-    cannot see any POs must not report success.
-    """
-
-    def __init__(self, path=None):
-        # The tenant's file, injected through config by the worker. Falls back
-        # to the shared legacy path only when no tenant is in play (a direct
-        # CLI run), never when one is.
-        if path is None:
-            path = (
-                _get_config().get("purchase_order_file") or PURCHASE_ORDER_FILE
-            )
-        self.path = Path(path)
-        self._index: dict[str, dict] | None = None
-
-    def _load(self) -> dict[str, dict]:
-        if self._index is not None:
-            return self._index
-        self._index = {}
-        if self.path.exists():
-            try:
-                raw = json.loads(self.path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                print(
-                    f"   WARNING: {self.path.name} is not valid JSON; no POs loaded."
-                )
-                return self._index
-            records = (
-                raw.get("purchase_orders", raw)
-                if isinstance(raw, dict)
-                else raw
-            )
-            if isinstance(records, dict):
-                records = list(records.values())
-            for record in records or []:
-                key = po_matching.normalize_po_number(record.get("po_number"))
-                if key:
-                    self._index[key] = record
-        return self._index
-
-    def find(self, po_number: str) -> dict | None:
-        return self._load().get(po_matching.normalize_po_number(po_number))
+# The file book lives in po_book with the database one; the old name stays for
+# the callers and tests that construct it directly.
+_PurchaseOrderFile = po_book.FileBook
 
 
-def _load_purchase_orders() -> "_PurchaseOrderFile":
-    return _PurchaseOrderFile()
+def _load_purchase_orders() -> "po_book.PurchaseOrderBook":
+    """This tenant's purchase orders: the database book the worker injected,
+    else the tenant's file (`purchase_order_file`, which the benchmark replay
+    sets directly), else the shared legacy file for a direct CLI run."""
+    config = _get_config()
+    return config.get("purchase_order_book") or po_book.FileBook(
+        config.get("purchase_order_file") or PURCHASE_ORDER_FILE
+    )
+
+
+def _three_way_step(invoice: dict, config: dict) -> dict:
+    """The step 2.3 entry for an invoice whose PO step 2.2 has passed."""
+    from ...checks import disabled_from  # noqa: PLC0415
+
+    step = {
+        "step": "2.3",
+        "rule": "Invoice lines match PO lines and goods received",
+        "passed": True,
+        "informational": True,
+        "evidence": "",
+        "signals": [],
+        "lines": [],
+        "rejection_template": None,
+    }
+    if "2.3" in disabled_from(config):
+        # Recorded so _settle can mark it skipped; nothing is read or held.
+        return step
+    try:
+        book = _load_purchase_orders().book(invoice["po_number"])
+        if book is None or not book.get("lines"):
+            # The matcher would call every line unpaired against no lines.
+            return {
+                **step,
+                "evidence": "No PO lines on file; header match only.",
+            }
+        vendor = _load_vendors().find(invoice.get("vendor_name"))
+        result = three_way.match(
+            invoice.get("line_items") or [],
+            book["lines"],
+            book["received"],
+            book["billed"],
+            # Unknown kind is treated as receipt-required by the matcher.
+            vendor_kind=(vendor.kind or None) if vendor else None,
+            qty_tol=float(config.get("three_way_qty_tolerance") or 0),
+            price_tol_pct=config.get(
+                "po_tolerance_pct", po_matching.DEFAULT_TOLERANCE_PCT
+            ),
+            price_tol_abs=config.get(
+                "po_tolerance_abs", po_matching.DEFAULT_TOLERANCE_ABS
+            ),
+            grn_numbers=book.get("grn_numbers"),
+        )
+    except Exception as exc:
+        # A book that cannot be read holds; it never passes silently.
+        return {
+            **step,
+            "passed": False,
+            "evidence": f"Purchase-order lines could not be checked: {exc}",
+            "signals": ["unchecked"],
+        }
+    return {
+        **step,
+        "passed": result.passed,
+        "evidence": "; ".join(result.evidence)
+        or "Every line is paired, received and priced within the order.",
+        "signals": list(result.signals),
+        "lines": [line.to_dict() for line in result.lines],
+    }
 
 
 def _load_vendors() -> "vendor_master.VendorMaster":

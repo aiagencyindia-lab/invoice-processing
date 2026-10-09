@@ -129,6 +129,7 @@ _locks = None
 _vendors = None
 _approvals = None
 _gl_rules = None
+_purchase_orders = None
 _rules = None
 _tenant_settings = None
 _claims_writer = None
@@ -377,6 +378,29 @@ def get_gl_rules():
 
         _gl_rules = PgGlRuleRepository()
     return _gl_rules
+
+
+def get_purchase_orders():
+    """Purchase orders, their lines and goods receipts. `None` without the table.
+
+    Raises when a configured database cannot be asked, like `get_gl_rules`:
+    None means "no orders here", and the pipeline would then match against
+    the file instead of the orders the tenant actually uploaded.
+    """
+    global _purchase_orders
+    if (
+        _purchase_orders is None
+        and _database_configured()
+        and _table_exists(
+            "purchase_orders", "Purchase orders", raise_on_error=True
+        )
+    ):
+        from ..db.repositories import (  # noqa: PLC0415
+            PgPurchaseOrderRepository,
+        )
+
+        _purchase_orders = PgPurchaseOrderRepository()
+    return _purchase_orders
 
 
 def get_queue():

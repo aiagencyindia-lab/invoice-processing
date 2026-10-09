@@ -80,6 +80,7 @@ def resolve_adapters_afresh(monkeypatch):
         "_vendors",
         "_approvals",
         "_gl_rules",
+        "_purchase_orders",
         "_rules",
         "_tenant_settings",
         "_claims_writer",

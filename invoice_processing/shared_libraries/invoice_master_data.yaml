@@ -248,6 +248,12 @@ validation_pipeline:
           enabled_when_config: "require_purchase_order"
           rejection_template: "Invalid purchase order"
 
+        - id: "2.3"
+          name: "Three-way match"
+          type: "informational"
+          informational_only: true
+          rejection_template: null
+
     - id: "phase3"
       name: "External Validation"
       artifact: "05_phase3_validation.json"
@@ -472,6 +478,7 @@ config_defaults:
   # Two-way match tolerance: the larger of the two applies.
   po_tolerance_pct: 0.02
   po_tolerance_abs: 50.0
+  three_way_qty_tolerance: 0   # units an invoice line may exceed the quantity received before step 2.3 holds it
   duplicate_check_enabled: true
   duplicate_check_type: "none"
   tax_rates_by_hsn: {}
