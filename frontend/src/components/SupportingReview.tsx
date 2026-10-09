@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   api,
   ApiError,
@@ -37,14 +37,22 @@ const label = (key: string) =>
     ? "GRN number"
     : key.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 
-/** Typed text back to what the API takes: numbers where the column is numeric,
- *  and text left as typed when it is not one, so the server names the problem. */
-function typed(key: string, text: string): Cell {
-  if (text.trim() === "") return null;
-  if (!NUMERIC.has(key)) return text;
-  const n = Number(text);
-  return Number.isNaN(n) ? text : n;
+const text = (v: Cell | undefined) => (v === null || v === undefined ? "" : String(v));
+const rawLine = (ln: Record<string, Cell>): Record<string, string> =>
+  Object.fromEntries(Object.entries(ln).map(([k, v]) => [k, text(v)]));
+
+/** Raw typed text to what the API takes, only when sending: blank is null,
+ *  a numeric column becomes a number, and anything that is not a finite
+ *  number goes as typed so the server names the problem. */
+function typed(key: string, raw: string): Cell {
+  if (raw.trim() === "") return null;
+  if (!NUMERIC.has(key)) return raw;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : raw;
 }
+
+const convert = (rec: Record<string, string>): Record<string, Cell> =>
+  Object.fromEntries(Object.entries(rec).map(([k, v]) => [k, typed(k, v)]));
 
 export default function SupportingReview({
   id,
@@ -57,32 +65,41 @@ export default function SupportingReview({
   onDone: (notice: string) => void;
 }) {
   const [detail, setDetail] = useState<SupportingDetail | null>(null);
-  const [fields, setFields] = useState<Record<string, Cell>>({});
-  const [lines, setLines] = useState<Record<string, Cell>[]>([]);
+  const [fields, setFields] = useState<Record<string, string>>({});
+  const [lines, setLines] = useState<Record<string, string>[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
-  const [poLines, setPoLines] = useState<number[]>([]);
+  const [poLines, setPoLines] = useState<number[] | null>(null);
+  const [poLinesFailed, setPoLinesFailed] = useState(false);
+  const drawer = useRef<HTMLElement>(null);
+
+  useEffect(() => drawer.current?.focus(), []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   useEffect(() => {
     api<SupportingDetail>(`/api/supporting-documents/${id}`)
       .then((d) => {
         setDetail(d);
-        setFields({ ...(d.extracted?.fields ?? {}) });
+        setFields(rawLine(d.extracted?.fields ?? {}));
         if (d.kind === "goods_receipt" && d.po_on_file && d.po_number) {
           api<PurchaseOrderDetail>(
             `/api/purchase-orders/${encodeURIComponent(d.po_number)}`,
           )
             .then((po) => setPoLines(po.lines.map((l) => l.line_number)))
-            .catch(() => {}); // the pre-filled pairing still works without the list
+            .catch(() => setPoLinesFailed(true));
         }
         // A receipt line starts on the PO line it paired to; null shows "no match".
         setLines(
           (d.extracted?.lines ?? []).map((ln, i) =>
             d.kind === "goods_receipt"
-              ? { ...ln, po_line_number: d.paired?.[i] ?? null }
-              : { ...ln },
+              ? { ...rawLine(ln), po_line_number: text(d.paired?.[i]) }
+              : rawLine(ln),
           ),
         );
       })
@@ -106,7 +123,10 @@ export default function SupportingReview({
       }
       const result = await api<ImportResult & { po_number?: string }>(
         `/api/supporting-documents/${id}/accept`,
-        { method: "POST", body: JSON.stringify({ fields, lines }) },
+        {
+          method: "POST",
+          body: JSON.stringify({ fields: convert(fields), lines: lines.map(convert) }),
+        },
       );
       onDone(
         detail.kind === "goods_receipt"
@@ -134,7 +154,7 @@ export default function SupportingReview({
   const isGrn = detail?.kind === "goods_receipt";
   const blocked = detail?.status === "blocked";
   const columns = detail ? LINE_COLUMNS[detail.kind] : [];
-  const setLine = (i: number, key: string, value: Cell) =>
+  const setLine = (i: number, key: string, value: string) =>
     setLines((all) => all.map((ln, j) => (j === i ? { ...ln, [key]: value } : ln)));
 
   return (
@@ -142,6 +162,8 @@ export default function SupportingReview({
       className="drawer"
       role="dialog"
       aria-label="Review scanned document"
+      ref={drawer}
+      tabIndex={-1}
       style={{ width: "min(1100px, 100vw)" }}
     >
       <div className="drawer-head">
@@ -181,7 +203,7 @@ export default function SupportingReview({
                       id={`f-${key}`}
                       value={fields[key] ?? ""}
                       onChange={(e) =>
-                        setFields({ ...fields, [key]: typed(key, e.target.value) })
+                        setFields({ ...fields, [key]: e.target.value })
                       }
                     />
                     {check ? (
@@ -196,6 +218,12 @@ export default function SupportingReview({
                 );
               })}
             </div>
+            {poLinesFailed ? (
+              <div className="muted" role="status" style={{ fontSize: 12.5 }}>
+                The purchase order&apos;s lines could not be loaded, so only the
+                paired PO line can be chosen.
+              </div>
+            ) : null}
             <div className="table-scroll">
               <table className="data-table">
                 <thead>
@@ -214,7 +242,7 @@ export default function SupportingReview({
                           <input
                             aria-label={`${name}, line ${i + 1}`}
                             value={ln[key] ?? ""}
-                            onChange={(e) => setLine(i, key, typed(key, e.target.value))}
+                            onChange={(e) => setLine(i, key, e.target.value)}
                             style={{ width: "100%", minWidth: 60 }}
                           />
                         </td>
@@ -225,13 +253,19 @@ export default function SupportingReview({
                             aria-label={`PO line for line ${i + 1}`}
                             value={ln.po_line_number ?? ""}
                             onChange={(e) =>
-                              setLine(i, "po_line_number", typed("line_number", e.target.value))
+                              setLine(i, "po_line_number", e.target.value)
                             }
                           >
                             <option value="">no match</option>
-                            {poLines.map((n) => (
+                            {[
+                              ...(poLines ?? []),
+                              ...(ln.po_line_number &&
+                              !(poLines ?? []).includes(Number(ln.po_line_number))
+                                ? [Number(ln.po_line_number)]
+                                : []),
+                            ].map((n) => (
                               <option key={n} value={n}>
-                                {n}
+                                {poLines ? n : `PO line ${n}`}
                               </option>
                             ))}
                           </select>
