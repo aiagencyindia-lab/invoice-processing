@@ -597,6 +597,20 @@ class JsonSupportingDocumentRepository:
         self._write(data)
         return row
 
+    def revert_to_pending(self, tenant_id, id, *, extracted) -> dict:
+        data = self._read()
+        row = data.get(tenant_id, {}).get(id)
+        if row is None:
+            raise KeyError(id)
+        if row["status"] != "accepted":
+            raise StatusChanged(row["status"])
+        row.update(
+            status="pending", extracted=extracted, reviewed_by=None,
+            reviewed_at=None, note=None,
+        )  # fmt: skip
+        self._write(data)
+        return row
+
     def unblock(self, tenant_id, po_number) -> list[str]:
         data = self._read()
         po = self._norm(po_number)

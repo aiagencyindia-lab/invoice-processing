@@ -84,6 +84,16 @@ class UploadOwned(ValueError):
         self.po_number = po_number
 
 
+class ConcurrentWrite(ValueError):
+    """Another writer inserted the same PO or receipt at the same moment."""
+
+    def __init__(self, what: str):
+        super().__init__(
+            f"Another import stored this {what} at the same moment; "
+            "reload and try again."
+        )
+
+
 class LockHeld(RuntimeError):
     """Someone else is editing this record. Carries the lock, so the refusal
     can say who and until when -- "locked" without a name is unactionable."""

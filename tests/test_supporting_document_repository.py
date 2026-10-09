@@ -38,6 +38,7 @@ from invoice_processing.db.repositories import (  # noqa: E402
     UploadOwned,
 )
 from invoice_processing.db.session import tenant_session  # noqa: E402
+from invoice_processing.ports import ConcurrentWrite  # noqa: E402
 
 PO = {
     "po_number": "PO-1",
@@ -215,6 +216,33 @@ def test_mark_is_compare_and_set(env):
         repo.mark("t1", "nope", status="x", reviewed_by="y", expect=("a",))
 
 
+def test_revert_to_pending_restores_the_reading(env):
+    _, _, ids, repo = env
+    a = _up(repo, "t1", ids["t1"][0])
+    repo.mark(
+        "t1", a["id"], status="accepted", reviewed_by="c", note="n",
+        extracted={"fixed": 1}, expect=("pending",),
+    )  # fmt: skip
+    back = repo.revert_to_pending("t1", a["id"], extracted={"a": 1})
+    assert back["status"] == "pending" and back["extracted"] == {"a": 1}
+    assert back["reviewed_by"] is None and back["reviewed_at"] is None
+    assert back["note"] is None
+    with pytest.raises(StatusChanged):
+        repo.revert_to_pending("t1", a["id"], extracted={})
+
+
+def test_a_concurrent_po_insert_is_a_conflict(env, monkeypatch):
+    url, _, _, _ = env
+    po = PgPurchaseOrderRepository(url)
+    po.upsert_orders("t1", [PO], uploaded_by="a")
+    # As if another import inserted it after this one looked.
+    monkeypatch.setattr(
+        PgPurchaseOrderRepository, "_order", staticmethod(lambda *a, **k: None)
+    )
+    with pytest.raises(ConcurrentWrite):
+        po.upsert_orders("t1", [PO], uploaded_by="a")
+
+
 def test_for_documents_reads_only_those_documents(env):
     _, _, ids, repo = env
     a = _up(repo, "t1", ids["t1"][0])
@@ -242,6 +270,8 @@ def test_json_fallback_matches_the_contract(tmp_path):
             "t1", a["id"], status="x", reviewed_by="c", expect=("pending",)
         )
     assert repo.get("t1", a["id"])["status"] == "rejected"
+    with pytest.raises(StatusChanged):
+        repo.revert_to_pending("t1", a["id"], extracted={})
     assert [r["id"] for r in repo.for_documents("t1", ["d1", "d2"])] == [
         a["id"]
     ]

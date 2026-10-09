@@ -471,14 +471,13 @@ def test_review_events_name_the_supporting_document():
         assert entity_type_for(name) == "supporting_document", name
 
 
-def test_a_scan_cannot_take_a_po_an_upload_just_stored(env, monkeypatch):
+def test_a_scan_cannot_take_a_po_an_upload_just_stored(env):
     """The ERP upload lands after any pre-check would have passed: the
     refusal has to come from the write itself."""
     _client().post(
         "/api/purchase-orders/import",
         json={"purchase_orders": [{**ORDER, "po_number": "PO-4471"}]},
     )
-    monkeypatch.setattr(env["orders"], "po_owned_by_upload", lambda *a: False)
     row = env["scan"](PO_READ)
     r = _accept(row, {"fields": PO_READ["fields"], "lines": PO_READ["lines"]})
     assert r.status_code == 409
@@ -535,3 +534,90 @@ def test_a_changed_po_line_counts_as_a_changed_line(env):
     assert _accept(row, body).status_code == 200
     [event] = env["events"]("supporting_document_accepted")
     assert event["payload"]["lines_changed"] == 1
+
+
+def test_a_reject_racing_an_accept_loses(env, monkeypatch):
+    """The accept claims the row before it stores, so a reject arriving
+    while the receipt is being written is refused, never left contradicted
+    by a stored receipt."""
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    row = env["scan"](GRN_READ)
+    real = env["orders"].record_receipts
+    raced = []
+
+    def record_while_rejected(*a, **kw):
+        raced.append(
+            _client("approver").post(
+                f"/api/supporting-documents/{row['id']}/reject",
+                json={"reason": "late"},
+            )
+        )
+        return real(*a, **kw)
+
+    monkeypatch.setattr(env["orders"], "record_receipts", record_while_rejected)
+    assert _accept(row, _grn_body()).status_code == 200
+    assert raced[0].status_code == 409
+    assert raced[0].json()["detail"] == "This document was already accepted."
+    assert len(env["orders"].list_receipts(TENANT)) == 1
+    assert env["supporting"].get(TENANT, row["id"])["status"] == "accepted"
+
+
+def test_a_failed_store_puts_the_row_back_as_it_was(env):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    assert _accept(env["scan"](GRN_READ), _grn_body()).status_code == 200
+    second = env["scan"](GRN_READ)
+    r = _accept(second, _grn_body(received_on="2026-10-05"))
+    assert r.status_code == 400
+    back = env["supporting"].get(TENANT, second["id"])
+    assert back["status"] == "pending"
+    assert back["extracted"] == GRN_READ
+    assert back["reviewed_by"] is None and back["reviewed_at"] is None
+    assert env["events"]("supporting_document_accepted")[1:] == []
+
+
+def test_an_unexpected_store_failure_also_puts_the_row_back(env, monkeypatch):
+    row = env["scan"](PO_READ)
+
+    def broken(*a, **kw):
+        raise RuntimeError("db went away")
+
+    monkeypatch.setattr(env["orders"], "upsert_orders", broken)
+    with pytest.raises(RuntimeError):
+        _accept(row, {"fields": PO_READ["fields"], "lines": PO_READ["lines"]})
+    assert env["supporting"].get(TENANT, row["id"])["status"] == "pending"
+
+
+def test_a_concurrent_insert_is_a_409_not_a_500(env, monkeypatch):
+    from invoice_processing.ports import ConcurrentWrite  # noqa: PLC0415
+
+    row = env["scan"](PO_READ)
+
+    def collided(*a, **kw):
+        raise ConcurrentWrite("purchase order")
+
+    monkeypatch.setattr(env["orders"], "upsert_orders", collided)
+    r = _accept(row, {"fields": PO_READ["fields"], "lines": PO_READ["lines"]})
+    assert r.status_code == 409
+    assert r.json()["detail"] == (
+        "Another import stored this purchase order at the same moment; "
+        "reload and try again."
+    )
+    assert env["supporting"].get(TENANT, row["id"])["status"] == "pending"
+
+
+def test_a_failed_pairing_read_does_not_fail_an_accept(env, monkeypatch):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    row = env["scan"](GRN_READ)
+    calls = []
+    real = env["orders"].get_order
+
+    def flaky(*a, **kw):
+        calls.append(1)
+        raise RuntimeError("read failed")
+
+    monkeypatch.setattr(env["orders"], "get_order", flaky)
+    r = _accept(row, _grn_body())
+    monkeypatch.setattr(env["orders"], "get_order", real)
+    assert r.status_code == 200 and calls
+    [event] = env["events"]("supporting_document_accepted")
+    assert event["payload"]["lines_changed"] is None

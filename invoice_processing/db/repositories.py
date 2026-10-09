@@ -25,6 +25,7 @@ from sqlalchemy.orm import aliased
 
 from .. import approvals, gl_coding, po_matching
 from ..ports import (
+    ConcurrentWrite,
     LockHeld,
     RuleBaseConflict,
     RunContext,
@@ -1952,7 +1953,14 @@ class PgPurchaseOrderRepository:
             for ln in order.lines
         }
 
-    def upsert_orders(
+    def upsert_orders(self, tenant_id: str, orders: list[dict], **kw) -> dict:
+        try:
+            return self._upsert_orders(tenant_id, orders, **kw)
+        except IntegrityError:
+            # Both read "not on file" and both inserted; the loser stored nothing.
+            raise ConcurrentWrite("purchase order") from None
+
+    def _upsert_orders(
         self, tenant_id: str, orders: list[dict], *, uploaded_by: str,
         source: str = "upload", now: datetime | None = None,
         replace: bool = False, document_id: str | None = None,
@@ -2063,7 +2071,13 @@ class PgPurchaseOrderRepository:
     def _item_key(code) -> str:
         return "".join(ch for ch in str(code).casefold() if ch.isalnum())
 
-    def record_receipts(
+    def record_receipts(self, tenant_id: str, receipts: list[dict], **kw):
+        try:
+            return self._record_receipts(tenant_id, receipts, **kw)
+        except IntegrityError:
+            raise ConcurrentWrite("goods receipt") from None
+
+    def _record_receipts(
         self, tenant_id: str, receipts: list[dict], *, recorded_by: str,
         source: str = "upload", now: datetime | None = None,
         document_id: str | None = None,
@@ -2399,6 +2413,35 @@ class PgSupportingDocumentRepository:
                 stmt.values(**values).execution_options(
                     synchronize_session=False
                 )
+            ).rowcount
+            found = self._one(session, tenant_id, id)
+            if found is None:
+                raise KeyError(id)
+            if not changed:
+                raise StatusChanged(found[0].status)
+            return self._dict(*found)
+
+    def revert_to_pending(
+        self, tenant_id: str, id: str, *, extracted: dict
+    ) -> dict:
+        """Undo an acceptance whose storage failed: pending again, with the
+        original reading and no reviewer. Only from accepted (StatusChanged)."""
+        with tenant_session(tenant_id, self.url) as session:
+            changed = session.execute(
+                update(SupportingDocument)
+                .where(
+                    SupportingDocument.tenant_id == tenant_id,
+                    SupportingDocument.id == id,
+                    SupportingDocument.status == "accepted",
+                )
+                .values(
+                    status="pending",
+                    extracted=extracted,
+                    reviewed_by=None,
+                    reviewed_at=None,
+                    note=None,
+                )
+                .execution_options(synchronize_session=False)
             ).rowcount
             found = self._one(session, tenant_id, id)
             if found is None:

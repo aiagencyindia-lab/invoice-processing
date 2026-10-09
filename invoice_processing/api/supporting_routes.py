@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import supporting_docs
-from ..ports import StatusChanged, UploadOwned
+from ..ports import ConcurrentWrite, StatusChanged, UploadOwned
 from ..supporting_docs import GOODS_RECEIPT, PURCHASE_ORDER
 from . import po_routes
 from .auth import Principal, require_role
@@ -173,6 +173,23 @@ def _changed(before: dict, after: dict) -> dict:
     }
 
 
+def _read_lines_changed(orders, principal, row, lines, keys) -> int | None:
+    """Lines the clerk changed, the PO line they chose included; None when
+    the pairing cannot be read (the audit then lacks only this count)."""
+    read = (row["extracted"] or {}).get("lines") or []
+    if row["kind"] == GOODS_RECEIPT:
+        try:
+            _, paired = _pairing(orders, principal, row)
+        except Exception:
+            logger.exception("Pairing of %s not read for its audit", row["id"])
+            return None
+        read = [
+            {**ln, "po_line_number": p}
+            for ln, p in zip(read, paired or [None] * len(read), strict=True)
+        ]
+    return _lines_changed(read, lines, keys)
+
+
 def _lines_changed(before: list, after: list, keys) -> int:
     def view(ln):
         return None if ln is None else {k: ln.get(k) for k in keys}
@@ -220,7 +237,7 @@ def _store_order(orders, principal: Principal, row: dict, clean: list) -> dict:
             document_id=row["document_id"],
             replace=False,
         )
-    except UploadOwned as exc:
+    except (UploadOwned, ConcurrentWrite) as exc:
         raise HTTPException(409, str(exc)) from None
     except ValueError as exc:
         raise _refused([str(exc)]) from None
@@ -235,6 +252,8 @@ def _store_receipt(orders, principal: Principal, row: dict, clean) -> dict:
             source="document",
             document_id=row["document_id"],
         )
+    except ConcurrentWrite as exc:
+        raise HTTPException(409, str(exc)) from None
     except ValueError as exc:
         raise _refused([str(exc)]) from None
     if out["skipped_duplicates"]:
@@ -272,49 +291,54 @@ def accept_supporting_document(
     record = _without_none(
         supporting_docs.to_import_payload(kind, fields, lines)
     )
-    if kind == PURCHASE_ORDER:
-        problems = po_routes.validate_orders([record])
-        if problems:
-            raise _refused(problems)
-        clean = po_routes._clean_orders([record])
-        out = _store_order(orders, principal, row, clean)
-        number = clean[0]["po_number"]
-        response.status_code = 201
-    else:
-        problems = po_routes.validate_receipts([record])
-        if problems:
-            raise _refused(problems)
-        clean = po_routes._clean_receipts([record])
-        stored = _store_receipt(orders, principal, row, clean)
-        number = clean[0]["grn_number"]
+    validate, clean_up, number_key = (
+        (po_routes.validate_orders, po_routes._clean_orders, "po_number")
+        if kind == PURCHASE_ORDER
+        else (
+            po_routes.validate_receipts,
+            po_routes._clean_receipts,
+            "grn_number",
+        )
+    )
+    problems = validate([record])
+    if problems:
+        raise _refused(problems)
+    clean = clean_up([record])
+    number = clean[0][number_key]
+    accepted = {
+        "id": row["id"],
+        "document_id": row["document_id"],
+        "kind": kind,
+        "number": number,
+        "changed": _changed(before.get("fields") or {}, fields),
+        "lines_changed": _read_lines_changed(
+            orders, principal, row, lines, kept
+        ),
+    }
 
-    # ponytail: stored before marked; a reject racing between the two leaves
-    # the PO/receipt stored and answers 409. One transaction across both
-    # repositories would close it.
+    # Claim the row first: a reject arriving while the PO or receipt is being
+    # written is then refused, rather than contradicted by what was stored.
     _mark(
         supporting, principal, row, ACCEPTABLE,
         status="accepted",
         extracted={**before, "fields": fields, "lines": lines},
     )  # fmt: skip
-    # What the clerk changed in the lines, the PO line they chose included.
-    read = before.get("lines") or []
-    if kind == GOODS_RECEIPT:
-        _, paired = _pairing(orders, principal, row)
-        read = [
-            {**ln, "po_line_number": p}
-            for ln, p in zip(read, paired or [None] * len(read), strict=True)
-        ]
+    try:
+        if kind == PURCHASE_ORDER:
+            out = _store_order(orders, principal, row, clean)
+            response.status_code = 201
+        else:
+            stored = _store_receipt(orders, principal, row, clean)
+    except Exception:
+        try:
+            supporting.revert_to_pending(
+                principal.tenant_id, row["id"], extracted=before
+            )
+        except Exception:
+            logger.exception("Scanned document %s left accepted", row["id"])
+        raise
     po_routes._audit().emit(
-        principal.context(),
-        "supporting_document_accepted",
-        {
-            "id": row["id"],
-            "document_id": row["document_id"],
-            "kind": kind,
-            "number": number,
-            "changed": _changed(before.get("fields") or {}, fields),
-            "lines_changed": _lines_changed(read, lines, kept),
-        },
+        principal.context(), "supporting_document_accepted", accepted
     )
     if kind == PURCHASE_ORDER:
         po_routes.unblock_receipts(principal, [number])
