@@ -110,6 +110,23 @@ def test_a_supporting_document_stops_after_the_classifier(
     assert [record["step"] for record in seen] == [1]
 
 
+def test_force_invoice_runs_a_supporting_document_as_an_invoice(
+    stub_agents, monkeypatch, tmp_path: Path
+):
+    """A clerk sent it to the invoice queue: the classifier is not obeyed."""
+    monkeypatch.setattr(
+        general_invoice_agent,
+        "ClassifierAgent",
+        _classifier_saying("goods_receipt", 0),
+    )
+    seen = []
+    result = general_invoice_agent._run_pipeline(
+        tmp_path, tmp_path, 0.0, on_step=seen.append, force_invoice=True
+    )
+    assert result["decision"] == "ACCEPT"
+    assert len(seen) == 9
+
+
 def test_a_bundle_with_an_invoice_stays_on_the_invoice_path(
     stub_agents, monkeypatch, tmp_path: Path
 ):

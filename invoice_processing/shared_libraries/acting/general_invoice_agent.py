@@ -3226,8 +3226,11 @@ def _run_pipeline(
     start_time: float,
     on_step=None,
     seen_invoices=None,
+    force_invoice: bool = False,
 ) -> dict:
-    """Run the main processing pipeline (agents 1-9). Returns result dict."""
+    """Run the main processing pipeline (agents 1-9). Returns result dict.
+    `force_invoice`: a person sent this document to the invoice queue, so a
+    PO/GRN classification does not divert it."""
     report = _step_reporter(on_step)
 
     # Agent 1: Classification
@@ -3240,7 +3243,8 @@ def _run_pipeline(
     summary = classification.get("summary") or {}
     document_type = summary.get("document_type")
     if (
-        document_type in SUPPORTING_TYPES
+        not force_invoice
+        and document_type in SUPPORTING_TYPES
         and not summary.get("invoice_count")
         and summary.get("classified_by") == "model"
     ):
@@ -3350,7 +3354,7 @@ def _run_pipeline(
 
 
 def process_invoice(
-    source_folder: Path, on_step=None, seen_invoices=None
+    source_folder: Path, on_step=None, seen_invoices=None, force_invoice=False
 ) -> dict:
     """Main pipeline orchestrator.
 
@@ -3377,7 +3381,12 @@ def process_invoice(
 
     try:
         return _run_pipeline(
-            source_folder, output_folder, start_time, on_step, seen_invoices
+            source_folder,
+            output_folder,
+            start_time,
+            on_step,
+            seen_invoices,
+            force_invoice,
         )
 
     except Exception as e:

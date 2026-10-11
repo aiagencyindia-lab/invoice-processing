@@ -131,7 +131,7 @@ class ClaimStore:
 # ---------------------------------------------------------------------------
 
 
-def seen_invoices_for(ctx: RunContext, cases, documents=None):
+def seen_invoices_for(ctx: RunContext, cases):
     """The corpus duplicate detection compares against, for one tenant.
 
     The pipeline's own default scans a local output directory. On a deployed
@@ -141,19 +141,15 @@ def seen_invoices_for(ctx: RunContext, cases, documents=None):
     validation record. Reading through the repository fixes both: the corpus
     is durable, and `tenant_id` scopes it.
 
-    A scanned PO or receipt is not an invoice, so its case is left out.
+    A scanned PO or receipt is not an invoice, and needs no lookup of
+    document kinds to be left out: its case holds a `supporting_extraction`
+    and no `extraction`, so the loop below already skips it.
     """
 
     def load(exclude_case_id: str = ""):
         from ..duplicates import InvoiceKey  # noqa: PLC0415
 
         skip = {exclude_case_id}
-        if documents is not None:
-            try:
-                skip |= documents.non_invoice_ids(ctx.tenant_id)
-            except Exception as exc:
-                # Comparing against too much only finds more duplicates.
-                logger.warning("Document kinds not read: %s", exc)
         case_ids = [
             case_id
             for case_id in cases.iter_case_ids(ctx.tenant_id)
@@ -279,17 +275,14 @@ def process_supporting(
     po_number = po_matching.normalize_po_number(shown) or None
     blocked_reason = None
     # Only a PO number that was read can be missing from the book; a receipt
-    # with none waits as pending for the clerk to key it in. No book at all
-    # is not a book that has the PO.
-    if (
-        document_type == "goods_receipt"
-        and po_number
-        and (
-            purchase_orders is None
-            or purchase_orders.book(ctx.tenant_id, shown) is None
-        )
-    ):
-        blocked_reason = f"Purchase order {shown} is not on file"
+    # with none waits as pending for the clerk to key it in. With no book at
+    # all (no database) nothing was checked: it waits as pending, marked so,
+    # and accepting -- which needs the database -- checks it then.
+    if document_type == "goods_receipt" and po_number:
+        if purchase_orders is None:
+            extracted["_checks"] = {"po_on_file": None}
+        elif purchase_orders.book(ctx.tenant_id, shown) is None:
+            blocked_reason = f"Purchase order {shown} is not on file"
 
     row = supporting.upsert_from_extraction(
         ctx.tenant_id,
@@ -325,7 +318,40 @@ def process_supporting(
     return {"case_id": ctx.case_id, "decision": "SUPPORTING", "artifacts": 1}
 
 
-def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
+def _close_review(ctx: RunContext, document_id: str) -> None:
+    """A document now processed as an invoice closes its waiting PO/receipt
+    review, so nobody confirms an invoice into the purchase-order book.
+    Never fails the invoice."""
+    from ..api import service  # noqa: PLC0415
+    from ..ports import StatusChanged  # noqa: PLC0415
+
+    try:
+        supporting = service.get_supporting_documents()
+        if supporting is None:
+            return
+        for row in supporting.for_documents(ctx.tenant_id, [document_id]):
+            if row["status"] not in ("pending", "blocked"):
+                continue
+            try:
+                supporting.mark(
+                    ctx.tenant_id, row["id"], status="rejected",
+                    reviewed_by="system", note="Reclassified as an invoice",
+                    expect=("pending", "blocked"),
+                )  # fmt: skip
+            except StatusChanged:
+                continue
+            service.get_audit().emit(
+                ctx,
+                "supporting_document_reclassified",
+                {"id": row["id"], "document_id": document_id},
+            )
+    except Exception as exc:
+        logger.warning("Review of %s not closed: %s", document_id, exc)
+
+
+def process_document(
+    ctx: RunContext, document: dict, blobs, cases, force_invoice: bool = False
+) -> dict:
     """Run the acting pipeline over one stored document.
 
     The pipeline is folder-oriented and writes to a package-relative output
@@ -376,7 +402,9 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
         result = process_invoice(
             source,
             on_step=publish_step,
-            seen_invoices=seen_invoices_for(ctx, cases, documents),
+            seen_invoices=seen_invoices_for(ctx, cases),
+            # A clerk sent a scanned PO/receipt here: run it as an invoice.
+            **({"force_invoice": True} if force_invoice else {}),
         )
 
         # `process_invoice` catches its own exceptions and returns
@@ -416,6 +444,7 @@ def process_document(ctx: RunContext, document: dict, blobs, cases) -> dict:
             )
         except Exception as exc:
             logger.warning("Kind of %s not recorded: %s", case_id, exc)
+        _close_review(ctx, document.get("id") or case_id)
 
         # Copy the artifacts through the port so they land under this tenant,
         # keyed the way every reader expects.
@@ -972,7 +1001,11 @@ class Worker:
             actor="worker",
         )
         return process_document(
-            ctx, document, service.get_blobs(tenant_id), service.get_cases()
+            ctx,
+            document,
+            service.get_blobs(tenant_id),
+            service.get_cases(),
+            force_invoice=bool(payload.get("force_invoice")),
         )
 
     def _count_failure(
@@ -1079,18 +1112,21 @@ def _artifact_map() -> dict[str, str]:
     return dict(ARTIFACT_MAP)
 
 
-def enqueue_document(queue: Queue, ctx: RunContext, result: Any) -> str:
-    """Publish the work item for one ingested document."""
-    return queue.publish(
-        {
-            "type": DOCUMENT_INGESTED,
-            "tenant_id": ctx.tenant_id,
-            "document_id": result.document_id,
-            "sha256": result.sha256,
-            "storage_key": result.storage_key,
-        },
-        tenant_id=ctx.tenant_id,
-    )
+def enqueue_document(
+    queue: Queue, ctx: RunContext, result: Any, force_invoice: bool = False
+) -> str:
+    """Publish the work item for one ingested document. `force_invoice`
+    runs it as an invoice whatever the classifier says."""
+    payload = {
+        "type": DOCUMENT_INGESTED,
+        "tenant_id": ctx.tenant_id,
+        "document_id": result.document_id,
+        "sha256": result.sha256,
+        "storage_key": result.storage_key,
+    }
+    if force_invoice:
+        payload["force_invoice"] = True
+    return queue.publish(payload, tenant_id=ctx.tenant_id)
 
 
 def enqueue_rematch(
