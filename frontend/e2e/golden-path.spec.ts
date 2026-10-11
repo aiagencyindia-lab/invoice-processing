@@ -27,6 +27,45 @@ test("the dashboard reports the numbers a pilot is judged on", async ({
   }
 });
 
+test("the KPI page reports the window and drills down to the invoices behind a reason", async ({
+  page,
+}) => {
+  await goto(page, "/kpis");
+  await expect(page.getByRole("heading", { name: "KPIs" })).toBeVisible();
+  for (const tile of [
+    "Received",
+    "Touchless rate",
+    "Exception rate",
+    "Median cycle time",
+    "Open",
+    "Three-way hold rate",
+    "AI cost per invoice",
+  ]) {
+    await expect(page.getByText(tile, { exact: true })).toBeVisible();
+  }
+  // The seeded cases were projected at startup, so every window holds them.
+  await expect
+    .poll(async () =>
+      Number(await page.locator("[data-tile='received'] .tile-value").textContent()),
+    )
+    .toBeGreaterThanOrEqual(3);
+
+  await page.getByRole("button", { name: "All time" }).click();
+  await expect(page).toHaveURL(/days=0/);
+
+  // Every seeded case needed a person, so the reasons table is never empty.
+  const row = page.locator("tr[data-reason]").first();
+  await expect(row).toBeVisible();
+  const reason = await row.getAttribute("data-reason");
+  await row.getByRole("link").click();
+
+  await expect(page).toHaveURL(new RegExp(`/invoices\\?reason=${reason}`));
+  await expect(page.locator(`[data-drill='${reason}']`)).toContainText("Showing");
+  await expect(page.locator(".queue-item").first()).toBeVisible();
+  await page.getByRole("link", { name: "Show all" }).click();
+  await expect(page).toHaveURL(/\/invoices$/);
+});
+
 test("a reviewer can read an invoice and why it was decided", async ({
   page,
 }) => {
@@ -177,6 +216,7 @@ test("every sidebar view opens", async ({ page }) => {
   await goto(page, "/dashboard");
   for (const label of [
     "Invoices",
+    "KPIs",
     "Approvals",
     "Approved invoices",
     "Documents",
