@@ -356,7 +356,7 @@ test("accepting a replacement cannot discard goods received", async ({
 });
 
 const PO_CSV_HEADER =
-  "po_number,vendor_name,total_amount,currency,status,amount_invoiced,customer_name,valid_from,valid_to,amount_basis,line_number,item_code,description,qty_ordered,unit_price,uom,receipt_required,qty_invoiced\n";
+  "po_number,vendor_name,total_amount,currency,status,amount_invoiced,customer_name,valid_from,valid_to,amount_basis,line_number,item_code,description,qty_ordered,unit_price,uom,receipt_required,qty_invoiced,gl_account\n";
 const GRN_CSV_HEADER =
   "grn_number,po_number,received_on,reason,line_number,item_code,qty_received\n";
 
@@ -374,8 +374,8 @@ test("PO import shows lines and receipts", async ({ page }) => {
       csv(
         "orders.csv",
         PO_CSV_HEADER +
-          "PO-E2E-9,Import Test Supplies,60,AUD,,,,,,,1,,E2E widget,10,5,,true,\n" +
-          "PO-E2E-9,Import Test Supplies,60,AUD,,,,,,,2,,E2E fitting service,1,10,,false,\n",
+          "PO-E2E-9,Import Test Supplies,60,AUD,,,,,,,1,,E2E widget,10,5,,true,,6100\n" +
+          "PO-E2E-9,Import Test Supplies,60,AUD,,,,,,,2,,E2E fitting service,1,10,,false,,\n",
       ),
     );
   await expect(
@@ -390,6 +390,7 @@ test("PO import shows lines and receipts", async ({ page }) => {
   const widget = page.getByRole("row").filter({ hasText: "E2E widget" }).last();
   await expect(widget.getByRole("cell").nth(3)).toHaveText("10"); // Ordered
   await expect(widget.getByRole("cell").nth(4)).toHaveText("0"); // Received
+  await expect(widget.getByRole("cell").nth(8)).toHaveText("6100"); // GL
 
   await page
     .locator("#grn-import")
@@ -408,6 +409,14 @@ test("PO import shows lines and receipts", async ({ page }) => {
   await row.getByRole("button", { name: "Lines & receipts" }).click();
   await expect(widget.getByRole("cell").nth(4)).toHaveText("4"); // Received
   await expect(page.getByText(/GRN-E2E-9 · 2026-10-09/)).toBeVisible();
+});
+
+test("a held PO invoice is coded from its PO lines", async ({ page }) => {
+  await as(page, "alice@e2e.test:clerk");
+  await goto(page, "/invoices?case=case_004_po2");
+  // Both lines paired by description at seed time; the PO carries 6100/6200.
+  await expect(page.getByText("PO line 1", { exact: true })).toBeVisible();
+  await expect(page.getByText("PO line 2", { exact: true })).toBeVisible();
 });
 
 test("Held invoice shows the three-way panel and a GRN clears it", async ({
