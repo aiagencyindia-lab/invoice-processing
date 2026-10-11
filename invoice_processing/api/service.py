@@ -1179,6 +1179,7 @@ def lock_record(
     Renewal is this same call, so an open editor keeps its lock by saying "I am
     still here" on a timer rather than through an endpoint of its own.
     """
+    require_invoice_case(principal.tenant_id, case_id)
     artifacts = get_cases().get_artifacts(principal.context(case_id))
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
@@ -1484,6 +1485,7 @@ def propose_bank_change_from_invoice(
     """
     from . import vendor_routes  # noqa: PLC0415
 
+    require_invoice_case(principal.tenant_id, case_id)
     repo = get_vendors()
     if repo is None:
         raise HTTPException(status_code=503, detail=vendor_routes.NEEDS_DB)
@@ -1729,6 +1731,7 @@ def export_invoice(
       attempt succeeded with its response lost in transit. Duplicate payments
       are the expensive mistake in accounts payable.
     """
+    require_invoice_case(principal.tenant_id, case_id)
     ctx = principal.context(case_id)
     artifacts = get_cases().get_artifacts(ctx)
     if not artifacts:

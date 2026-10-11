@@ -194,6 +194,16 @@ class TestScannedDocumentsAreNotInvoices:
         assert response.status_code == 404
         assert response.json()["detail"] == self.SAYS
 
+    def test_it_cannot_be_locked_for_editing(self, client, grn):
+        response = client.post(f"/api/invoices/{grn}/lock")
+        assert response.status_code == 404
+        assert response.json()["detail"] == self.SAYS
+
+    def test_it_cannot_be_exported(self, client, grn):
+        response = client.post(f"/api/invoices/{grn}/export", json={})
+        assert response.status_code == 404
+        assert response.json()["detail"] == self.SAYS
+
     def test_an_invoice_is_still_found(self, client, grn):
         assert client.get("/api/invoices/case_001").status_code == 200
 
