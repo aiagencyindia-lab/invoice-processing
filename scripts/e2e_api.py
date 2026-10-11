@@ -111,6 +111,7 @@ def seed_database() -> None:
             ("bob@e2e.test", "approver"),
             # A delegate decides in the seat, so must be able to approve.
             ("pat@e2e.test", "approver"),
+            ("casey@e2e.test", "viewer"),
         ):
             session.add(User(tenant_id=TENANT, email=email, role=role))
 

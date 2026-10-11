@@ -105,6 +105,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
           : response.statusText;
     throw new ApiError(response.status, message, detail);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -554,9 +555,21 @@ export type User = {
   email: string;
   role: string;
   uid?: string | null;
+  is_active?: boolean;
+  last_login_at?: string | null;
   display_name?: string | null;
   claims_written?: boolean;
 };
+
+export type SsoDomain = {
+  id: string;
+  domain: string;
+  provider: "google" | "microsoft";
+  default_role: "viewer" | "clerk";
+  created_by: string;
+  created_at: string | null;
+};
+export type SsoDomainList = { domains: SsoDomain[] };
 
 export type UserList = { users: User[]; count: number; roles: string[] };
 

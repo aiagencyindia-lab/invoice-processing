@@ -793,6 +793,43 @@ test("an admin can add a GL rule, see it listed, and delete it", async ({
   await expect(row).toHaveCount(0);
 });
 
+test("an admin connects a sign-in domain, promotes a colleague, and deactivates another", async ({
+  page,
+}) => {
+  await as(page, "dev@localhost:admin");
+  await goto(page, "/admin");
+
+  await page.getByLabel("Domain", { exact: true }).fill("e2e-sso.test");
+  await page.getByRole("button", { name: "Connect domain" }).click();
+  await expect(page.locator(".panel[role=status]")).toContainText("e2e-sso.test");
+  await expect(page.getByRole("cell", { name: "e2e-sso.test", exact: true })).toBeVisible();
+
+  await page.getByLabel("Role of casey@e2e.test").selectOption("clerk");
+  await expect(page.locator(".panel[role=status]")).toContainText("casey@e2e.test is now clerk");
+
+  page.once("dialog", (d) => d.accept());
+  const row = page.getByRole("row").filter({ hasText: "casey@e2e.test" });
+  await row.getByRole("button", { name: "Deactivate" }).click();
+  await expect(row.getByText("deactivated")).toBeVisible();
+
+  // The deactivated person is refused on their very next request.
+  await as(page, "casey@e2e.test:clerk");
+  await page.goto("/dashboard");
+  await expect(page.getByText(/This account has been deactivated/)).toBeVisible();
+
+  await as(page, "dev@localhost:admin");
+  await goto(page, "/admin");
+  await page.getByRole("row").filter({ hasText: "casey@e2e.test" })
+    .getByRole("button", { name: "Reactivate" }).click();
+  await expect(page.locator(".panel[role=status]")).toContainText("casey@e2e.test can sign in again");
+  await page.getByLabel("Role of casey@e2e.test").selectOption("viewer");
+  await expect(page.locator(".panel[role=status]")).toContainText("casey@e2e.test is now viewer");
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("row").filter({ hasText: "e2e-sso.test" })
+    .getByRole("button", { name: "Disconnect" }).click();
+  await expect(page.getByRole("cell", { name: "e2e-sso.test", exact: true })).toHaveCount(0);
+});
+
 // This test owns case_004_gl (cloned in scripts/e2e_api.py); nothing else
 // decides it. The seed codes lines, but with no rules and no PO for this case
 // nothing is coded: manual coding only.

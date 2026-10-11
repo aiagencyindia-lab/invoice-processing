@@ -244,3 +244,13 @@ export async function refreshToken(): Promise<void> {
   const { auth } = await client();
   if (auth.currentUser) await auth.currentUser.getIdToken(true);
 }
+
+/** Whether the signed-in token already carries a tenant claim. True when
+ *  Firebase is not configured, so the dev bypass never triggers a refresh. */
+export async function tokenHasTenant(): Promise<boolean> {
+  if (!firebaseConfigured()) return true;
+  const { auth } = await client();
+  if (!auth.currentUser) return true;
+  const result = await auth.currentUser.getIdTokenResult();
+  return !!result.claims.tenant_id;
+}
