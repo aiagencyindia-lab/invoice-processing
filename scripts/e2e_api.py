@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -236,26 +237,116 @@ def _scan(
     }
 
 
+# A scanned PO whose number was read with low confidence. Never accepted by
+# the e2e (its accept request is intercepted), so it stays pending.
+SCAN_ORDER = "PO-E2E-SCAN"
+
+
+def _po_scan() -> dict:
+    """What `supporting_docs.extract` stores for a one-line PO whose number
+    was read with low confidence."""
+    return {
+        "kind": "purchase_order",
+        "fields": {
+            "po_number": SCAN_ORDER,
+            "po_date": "2026-10-01",
+            "valid_from": None,
+            "valid_to": None,
+            "vendor_name": "Scan Test Supplies",
+            "vendor_tax_id": None,
+            "customer_name": None,
+            "currency": "INR",
+            "total_amount": 1250.5,
+            "amount_basis": None,
+        },
+        "lines": [
+            {
+                "line_number": 1,
+                "item_code": None,
+                "description": "Widgets",
+                "quantity": 5,
+                "unit": None,
+                "unit_price": 250.1,
+                "hsn_sac": None,
+            }
+        ],
+        "_evidence": {
+            "po_number": {
+                "value": SCAN_ORDER,
+                "grounded": False,
+                "page": None,
+                "confidence": 0.5,
+            },
+            "_summary": {
+                "min_confidence": 0.5,
+                "fields_needing_review": ["po_number"],
+                "has_text_layer": True,
+            },
+        },
+        "_repairs": [],
+    }
+
+
 def seed_scans() -> None:
-    """Scanned receipts waiting on a clerk, as the worker leaves them: one
-    pending against SCAN_PO, one blocked on a PO that is not on file, one
-    with no PO number read, and one that is really an invoice. Each test
-    decides its own.
+    """Scanned documents as the worker leaves them, each decided by its own
+    test: receipts pending against SCAN_PO, blocked on a PO not on file,
+    with no PO number read, and really an invoice; a PO with a flagged
+    number; and an acceptance that stored nothing (a crash between the
+    claim and the store), old enough for an admin to reopen.
 
     Each has a stored PDF and its `supporting_extraction` artifact, so the
     review drawer's document pane serves bytes rather than a 404.
     """
+    from sqlalchemy import update  # noqa: PLC0415
+
     from invoice_processing.api import service  # noqa: PLC0415
+    from invoice_processing.db.models import SupportingDocument  # noqa: PLC0415
     from invoice_processing.db.repositories import (  # noqa: PLC0415
         PgCaseRepository,
         PgDocumentRepository,
         PgSupportingDocumentRepository,
     )
+    from invoice_processing.db.session import tenant_session  # noqa: PLC0415
     from invoice_processing.ports import RunContext  # noqa: PLC0415
 
     description = _golden_invoice()["line_items"][0]["description"]
     documents = PgDocumentRepository()
+    supporting = PgSupportingDocumentRepository()
     blobs = service.get_blobs(TENANT)
+
+    def store(name: str, pdf: str, extracted: dict, blocked=None) -> dict:
+        # Marked with its name so every scan is its own document.
+        data = (
+            REPO / "invoice_processing" / "exemplary_data" / pdf / "invoice.pdf"
+        ).read_bytes() + f"%{name}\n".encode()
+        sha = hashlib.sha256(data).hexdigest()
+        key = f"documents/{sha}.pdf"
+        blobs.put(key, data, "application/pdf")
+        document_id = documents.create(
+            TENANT,
+            storage_key=key,
+            sha256=sha,
+            filename=f"{name.lower()}-scan.pdf",
+            mime_type="application/pdf",
+            byte_size=len(data),
+        )
+        documents.set_kind(TENANT, document_id, extracted["kind"])
+        row = supporting.upsert_from_extraction(
+            TENANT,
+            document_id=document_id,
+            kind=extracted["kind"],
+            extracted=extracted,
+            po_number=extracted["fields"]["po_number"],
+            blocked_reason=blocked,
+            extraction_error=None,
+        )
+        PgCaseRepository().put_artifact(
+            RunContext(tenant_id=TENANT, case_id=document_id),
+            "supporting_extraction",
+            extracted,
+        )
+        return row
+
     for grn, po_number, pdf, blocked in (
         ("GRN-E2E-21", SCAN_PO, "case_005", None),
         (
@@ -267,36 +358,25 @@ def seed_scans() -> None:
         ("GRN-E2E-23", None, "case_002", None),
         ("GRN-E2E-24", None, "case_002", None),
     ):
-        # Marked with its number so every scan is its own document.
-        data = (
-            REPO / "invoice_processing" / "exemplary_data" / pdf / "invoice.pdf"
-        ).read_bytes() + f"%{grn}\n".encode()
-        sha = hashlib.sha256(data).hexdigest()
-        key = f"documents/{sha}.pdf"
-        blobs.put(key, data, "application/pdf")
-        document_id = documents.create(
-            TENANT,
-            storage_key=key,
-            sha256=sha,
-            filename=f"{grn.lower()}-scan.pdf",
-            mime_type="application/pdf",
-            byte_size=len(data),
-        )
-        documents.set_kind(TENANT, document_id, "goods_receipt")
-        extracted = _scan(grn, po_number, 10, description)
-        PgSupportingDocumentRepository().upsert_from_extraction(
-            TENANT,
-            document_id=document_id,
-            kind="goods_receipt",
-            extracted=extracted,
-            po_number=po_number,
-            blocked_reason=blocked,
-            extraction_error=None,
-        )
-        PgCaseRepository().put_artifact(
-            RunContext(tenant_id=TENANT, case_id=document_id),
-            "supporting_extraction",
-            extracted,
+        store(grn, pdf, _scan(grn, po_number, 10, description), blocked)
+    store(SCAN_ORDER, "case_002", _po_scan())
+
+    orphan = store(
+        "GRN-E2E-25", "case_002", _scan("GRN-E2E-25", None, 1, description)
+    )
+    supporting.mark(
+        TENANT,
+        orphan["id"],
+        status="accepted",
+        reviewed_by="seed",
+        expect=("pending",),
+    )
+    # Past the window in which an acceptance may still be storing.
+    with tenant_session(TENANT) as session:
+        session.execute(
+            update(SupportingDocument)
+            .where(SupportingDocument.id == orphan["id"])
+            .values(reviewed_at=datetime.now(timezone.utc) - timedelta(hours=1))
         )
 
 

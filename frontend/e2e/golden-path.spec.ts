@@ -420,8 +420,9 @@ function scanCard(page: Page, po: string) {
 }
 
 /** The awaiting-confirmation card showing `text`. Further scans seeded by
- *  scripts/e2e_api.py: GRN-E2E-23 (no PO number read) and GRN-E2E-24 (really
- *  an invoice), one per test. */
+ *  scripts/e2e_api.py, one per test: GRN-E2E-23 (no PO number read),
+ *  GRN-E2E-24 (really an invoice), GRN-E2E-25 (accepted, nothing stored)
+ *  and the purchase order PO-E2E-SCAN (its number flagged). */
 function scanCardFor(page: Page, text: string) {
   return page
     .locator(".panel")
@@ -533,6 +534,10 @@ test("a receipt with no PO number read offers the PO's lines once one is typed",
   await expect(poLine.locator("option[value='1']")).toHaveCount(1);
   await poLine.selectOption("1");
   await expect(poLine).toHaveValue("1");
+  // A correction reason is asked for only once a quantity is negative.
+  await expect(drawer.getByLabel("Correction reason")).toHaveCount(0);
+  await drawer.getByLabel("Quantity received, line 1").fill("-1");
+  await expect(drawer.getByLabel("Correction reason")).toBeVisible();
   // Left undecided: accepting would record a receipt against PO-E2E-2.
   await drawer.getByRole("button", { name: "Close" }).click();
 });
@@ -546,6 +551,8 @@ test("a scan that is really an invoice is sent to the invoice queue", async ({
   await card.getByRole("button", { name: "Review" }).click();
   const drawer = page.getByRole("dialog", { name: "Review scanned document" });
   await drawer.getByRole("button", { name: "Process as invoice" }).click();
+  await expect(drawer.getByText(/runs the document through the invoice pipeline/)).toBeVisible();
+  await drawer.getByRole("button", { name: "Confirm process as invoice" }).click();
 
   await expect(
     page
@@ -768,4 +775,47 @@ test("a clerk codes a line to a GL account, and a decision closes it", async ({
   await goto(page, "/invoices?case=case_004_gl");
   await expect(gl).toBeDisabled();
   await expect(gl).toHaveValue("6200");
+});
+
+test("an admin reopens an acceptance that stored nothing", async ({ page }) => {
+  await goto(page, "/purchase-orders"); // as the default dev admin
+  const orphan = scanCardFor(page, "GRN-E2E-25").filter({
+    hasText: "Accepted, but nothing was stored",
+  });
+  await orphan.getByRole("button", { name: "Review" }).click();
+  const drawer = page.getByRole("dialog", { name: "Review scanned document" });
+  await expect(drawer.getByRole("button", { name: "Accept" })).toHaveCount(0);
+  await drawer.getByRole("button", { name: "Reopen" }).click();
+  await drawer.getByRole("button", { name: "Confirm reopen" }).click();
+
+  await expect(
+    page.getByRole("status").filter({ hasText: "Reopened the scanned document" }),
+  ).toBeVisible();
+  await expect(orphan).toHaveCount(0);
+  // Back in the queue, waiting for confirmation again.
+  await expect(scanCardFor(page, "GRN-E2E-25")).toContainText("check it before it counts");
+});
+
+test("a scanned PO's flagged number is described and its total sent as a number", async ({
+  page,
+}) => {
+  await as(page, "alice@e2e.test:clerk");
+  await goto(page, "/purchase-orders");
+  await scanCardFor(page, "Purchase order · PO")
+    .getByRole("button", { name: "Review" })
+    .click();
+  const drawer = page.getByRole("dialog", { name: "Review scanned document" });
+  const number = drawer.getByLabel("Po number");
+  await expect(number).toHaveAttribute("aria-describedby", "why-f-po_number");
+  await expect(number).toHaveAccessibleDescription(/check this/);
+
+  // Answered here, not by the API: the scan stays pending for a rerun.
+  let sent: { fields: Record<string, unknown> } | null = null;
+  await page.route("**/api/supporting-documents/*/accept", (route) => {
+    sent = route.request().postDataJSON();
+    return route.fulfill({ status: 201, contentType: "application/json", body: "{}" });
+  });
+  await drawer.getByRole("button", { name: "Accept" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Saved purchase order" })).toBeVisible();
+  expect(sent!.fields.total_amount).toBe(1250.5);
 });
