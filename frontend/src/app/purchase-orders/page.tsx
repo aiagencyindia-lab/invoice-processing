@@ -23,7 +23,7 @@ function amount(value: number | null, currency: string | null): string {
 }
 
 const PO_TEMPLATE =
-  "po_number,vendor_name,total_amount,currency,status,amount_invoiced,customer_name,valid_from,valid_to,amount_basis,line_number,item_code,description,qty_ordered,unit_price,uom,receipt_required,qty_invoiced\n";
+  "po_number,vendor_name,total_amount,currency,status,amount_invoiced,customer_name,valid_from,valid_to,amount_basis,line_number,item_code,description,qty_ordered,unit_price,uom,receipt_required,qty_invoiced,gl_account\n";
 const GRN_TEMPLATE =
   "grn_number,po_number,received_on,reason,line_number,item_code,qty_received\n";
 
@@ -73,6 +73,7 @@ function PoDetailRows({ poNumber }: { poNumber: string }) {
               <th>Billed</th>
               <th>Remaining</th>
               <th>Receipt?</th>
+              <th>GL</th>
             </tr>
           </thead>
           <tbody>
@@ -86,6 +87,7 @@ function PoDetailRows({ poNumber }: { poNumber: string }) {
                 <td>{ln.billed}</td>
                 <td>{ln.remaining}</td>
                 <td>{ln.receipt_required ? "Yes" : "No"}</td>
+                <td>{ln.gl_account ?? "—"}</td>
               </tr>
             ))}
           </tbody>

@@ -387,8 +387,10 @@ export type GlRule = {
 export type GlCodingLine = {
   line_number: number;
   gl_account: string | null;
-  source: "rule" | "manual" | "none";
+  source: "rule" | "manual" | "po" | "none";
   rule_id: string | null;
+  /** Set when source is "po": the PO line the account came from. */
+  po_line_number?: number | null;
   coded_by: string | null;
   coded_at: string | null;
 };
@@ -417,6 +419,7 @@ export type PoLine = {
   unit_price: number | null;
   uom: string | null;
   receipt_required: boolean;
+  gl_account: string | null;
   received: number;
   billed: number;
   remaining: number;

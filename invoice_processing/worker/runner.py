@@ -199,13 +199,54 @@ def _apply_rules(ctx: RunContext, cases, artifacts: dict, *, binding: bool):
     return written
 
 
-def _code_gl(ctx: RunContext, cases, artifacts: dict) -> dict:
+def _po_accounts(
+    invoice: dict, lines: list[dict], artifacts: dict, book
+) -> dict:
+    """The paired PO lines' accounts, or nothing when they cannot be read.
+
+    Its own try: a PO book that is down must cost only the inheritance, not
+    the rule coding that `_code_gl` would otherwise store.
+    """
+    from .. import gl_coding  # noqa: PLC0415
+
+    if book is None or not invoice.get("po_number"):
+        return {}
+    try:
+        entry = next(
+            (
+                v
+                for v in (artifacts.get("phase2") or {}).get("validations")
+                or []
+                if isinstance(v, dict) and v.get("step") == "2.3"
+            ),
+            None,
+        )
+        if entry is None:
+            return {}
+        found = book.book(invoice["po_number"])
+        if not found:
+            return {}
+        return gl_coding.po_accounts_from_match(
+            entry.get("lines") or [],
+            found.get("lines") or [],
+            [ln.get("line_number") for ln in lines],
+        )
+    except Exception as exc:
+        logger.warning(
+            "PO accounts of %s not read: %s", invoice.get("po_number"), exc
+        )
+        return {}
+
+
+def _code_gl(ctx: RunContext, cases, artifacts: dict, book=None) -> dict:
     """Code each line from this tenant's GL rules and store the coding.
 
     Informational, so a failure logs and keeps whatever coding was stored
     rather than failing the invoice. A line a person coded is kept: the coding
     stored at write time is passed as `previous`. A decided invoice keeps its
     coding as signed off: the account an approver approved is the one exported.
+    A line paired to a PO line takes that line's account first, when the PO book
+    can be read.
     """
     from .. import case_projection, gl_coding  # noqa: PLC0415
     from ..api import service  # noqa: PLC0415
@@ -223,13 +264,14 @@ def _code_gl(ctx: RunContext, cases, artifacts: dict) -> dict:
         invoice = case_projection.extraction(artifacts)
         lines = case_projection.lines(artifacts)
         rules = repo.list_rules(ctx.tenant_id)
+        po_accounts = _po_accounts(invoice, lines, artifacts, book)
         # Recoded from the coding stored at write time, not the one read
         # above: a line a person coded meanwhile is kept.
         coding = cases.update_artifact(
             ctx,
             "gl_coding",
             lambda current: gl_coding.code_lines(
-                invoice, lines, rules, previous=current
+                invoice, lines, rules, previous=current, po_accounts=po_accounts
             ),
         )
     except Exception as exc:
@@ -491,7 +533,11 @@ def process_document(
         )
 
         # Then the GL account of each line, so the projected lines carry it.
-        artifacts.update(_code_gl(ctx, cases, artifacts))
+        artifacts.update(
+            _code_gl(
+                ctx, cases, artifacts, book=settings.get("purchase_order_book")
+            )
+        )
 
         # Then the queryable view of them. Deliberately after: the artifacts
         # are the record, and a projection that failed must not cost a run

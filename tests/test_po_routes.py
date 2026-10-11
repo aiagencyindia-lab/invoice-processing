@@ -136,6 +136,14 @@ def test_clerk_imports_json_and_lists_and_reads_detail(env):
     assert imported[0]["actor"] == "clerk@x.test"
 
 
+def test_an_explicit_null_gl_account_is_none(env):
+    line = {**ORDER["lines"][0], "gl_account": None}
+    r = po_import(env, {"purchase_orders": [{**ORDER, "lines": [line]}]})
+    assert r.status_code == 201
+    detail = env["client"]("clerk").get("/api/purchase-orders/PO-9001").json()
+    assert detail["lines"][0]["gl_account"] is None
+
+
 def test_unknown_po_is_404(env):
     assert (
         env["client"]("clerk").get("/api/purchase-orders/PO-NOPE").status_code
@@ -512,3 +520,55 @@ def test_grn_import_queues_a_rematch_per_held_case(env, tmp_path, monkeypatch):
         "case_id": "held",
         "po_number": "PO9001",  # as the receipt store reports it, normalised
     }
+
+
+def test_a_po_line_carries_its_gl_account(env):
+    order = {
+        **ORDER,
+        "lines": [
+            {**ORDER["lines"][0], "gl_account": " 6100 "},
+            {**ORDER["lines"][1], "gl_account": "   "},
+        ],
+    }
+    assert po_import(env, {"purchase_orders": [order]}).status_code == 201
+    lines = env["repo"].get_order(TENANT, "PO-9001")["lines"]
+    assert [ln["gl_account"] for ln in lines] == ["6100", None]
+    body = env["client"]("clerk").get("/api/purchase-orders/PO-9001").json()
+    assert [ln["gl_account"] for ln in body["lines"]] == ["6100", None]
+    assert (
+        env["repo"].book(TENANT, "PO-9001")["lines"][0]["gl_account"] == "6100"
+    )
+
+
+def test_a_gl_account_over_64_characters_is_a_named_row_error(env):
+    order = {**ORDER, "lines": [{**ORDER["lines"][0], "gl_account": "x" * 65}]}
+    r = po_import(env, {"purchase_orders": [order]})
+    assert r.status_code == 400
+    assert "row 1" in r.json()["detail"] and "gl_account" in r.json()["detail"]
+    assert env["repo"].get_order(TENANT, "PO-9001") is None
+
+
+def test_csv_import_reads_the_gl_account_column(env):
+    csv_text = (
+        "po_number,vendor_name,total_amount,currency,line_number,description,"
+        "qty_ordered,unit_price,gl_account\n"
+        "PO-1,Acme,100,INR,1,Bolt,10,5,6100\n"
+        "PO-1,Acme,100,INR,2,Freight,1,50,\n"
+    )
+    r = env["client"]("clerk").post(
+        "/api/purchase-orders/import",
+        files={"file": ("po.csv", csv_text, "text/csv")},
+    )
+    assert r.status_code == 201
+    lines = env["repo"].get_order(TENANT, "PO-1")["lines"]
+    assert [ln["gl_account"] for ln in lines] == ["6100", None]
+
+
+def test_reimport_without_the_column_clears_the_account(env):
+    """A line is replaced whole; an upload that stops sending the account
+    means the ERP no longer has one."""
+    coded = {**ORDER, "lines": [{**ORDER["lines"][0], "gl_account": "6100"}]}
+    assert po_import(env, {"purchase_orders": [coded]}).status_code == 201
+    assert po_import(env, {"purchase_orders": [ORDER]}).status_code == 201
+    lines = env["repo"].get_order(TENANT, "PO-9001")["lines"]
+    assert lines[0]["gl_account"] is None

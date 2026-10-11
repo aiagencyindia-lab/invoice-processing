@@ -3,7 +3,7 @@
 from typing import ClassVar
 
 from invoice_processing import approval_flow, case_projection
-from invoice_processing.gl_coding import code_lines
+from invoice_processing.gl_coding import code_lines, po_accounts_from_match
 
 INVOICE = {"vendor_name": "Acme Supplies Pty Ltd"}
 LINES = [
@@ -183,3 +183,105 @@ def test_routing_ignores_a_malformed_coding():
     ):
         invoice = approval_flow.routing_invoice({"gl_coding": bad})
         assert invoice["_gl_accounts"] == []
+
+
+def test_a_po_line_account_beats_a_matching_rule():
+    rules = [rule("k", "200", keyword="paper")]
+    artifact = code_lines(INVOICE, LINES, rules, po_accounts={1: (7, "6100")})
+    assert artifact["lines"][0] == {
+        "line_number": 1,
+        "gl_account": "6100",
+        "source": "po",
+        "rule_id": None,
+        "po_line_number": 7,
+        "coded_by": None,
+        "coded_at": None,
+    }
+    # Line 2 has no PO account and no matching rule: uncoded as before.
+    assert artifact["lines"][1]["source"] == "none"
+
+
+def test_a_rule_still_codes_a_line_the_po_leaves_blank():
+    rules = [rule("v", "100", vendor="Acme Supplies Pty Ltd")]
+    artifact = code_lines(INVOICE, LINES, rules, po_accounts={1: (1, "6100")})
+    assert coded(artifact) == {1: ("6100", None), 2: ("100", "v")}
+
+
+def test_a_person_s_coding_beats_the_po():
+    manual = {
+        "line_number": 1,
+        "gl_account": "5000",
+        "source": "manual",
+        "rule_id": None,
+        "coded_by": "c@x.test",
+        "coded_at": "2026-01-02T00:00:00",
+    }
+    artifact = code_lines(
+        INVOICE,
+        LINES,
+        [],
+        previous={"lines": [manual]},
+        po_accounts={1: (1, "6100")},
+    )
+    assert artifact["lines"][0] == manual
+
+
+THREE_WAY = [
+    {"line_number": 1, "po_line_number": 1, "paired_by": "description"},
+    {"line_number": 2, "po_line_number": 2, "paired_by": "item_code"},
+]
+BOOK = [
+    {"line_number": 1, "gl_account": "6100"},
+    {"line_number": 2, "gl_account": "  "},
+]
+
+
+def test_po_accounts_follow_the_pairing_and_skip_blank_accounts():
+    assert po_accounts_from_match(THREE_WAY, BOOK, [1, 2]) == {1: (1, "6100")}
+
+
+def test_a_book_row_with_a_bad_line_number_is_ignored():
+    rows = [{"line_number": [1], "gl_account": "6100"}, BOOK[0]]
+    assert po_accounts_from_match(THREE_WAY, rows, [1, 2]) == {1: (1, "6100")}
+
+
+def test_bool_and_float_po_line_numbers_are_skipped():
+    odd = [
+        {"line_number": 1, "po_line_number": True},
+        {"line_number": 2, "po_line_number": 1.0},
+    ]
+    assert po_accounts_from_match(odd, BOOK, [1, 2]) == {}
+
+
+def test_two_invoice_lines_may_share_a_po_line():
+    shared = [
+        {"line_number": 1, "po_line_number": 1},
+        {"line_number": 2, "po_line_number": 1},
+    ]
+    assert po_accounts_from_match(shared, BOOK, [1, 2]) == {
+        1: (1, "6100"),
+        2: (1, "6100"),
+    }
+
+
+def test_an_unpaired_line_falls_to_rules():
+    unpaired = [{**THREE_WAY[0], "po_line_number": None, "paired_by": None}]
+    assert po_accounts_from_match(unpaired, BOOK, [1]) == {}
+
+
+def test_pairs_by_position_not_by_number():
+    """The transformer may number lines 10, 20; step 2.3 numbers them 1, 2."""
+    assert po_accounts_from_match(THREE_WAY, BOOK, [10, 20]) == {
+        10: (1, "6100")
+    }
+
+
+def test_a_count_mismatch_yields_nothing():
+    """Positions only line up when the counts do; otherwise do not guess."""
+    assert po_accounts_from_match(THREE_WAY, BOOK, [1]) == {}
+    assert po_accounts_from_match([], BOOK, [1, 2]) == {}
+
+
+def test_malformed_pairing_rows_are_skipped():
+    weird = [{"line_number": 1, "po_line_number": "1"}, "not a dict"]
+    assert po_accounts_from_match(weird, BOOK, [1, 2]) == {}

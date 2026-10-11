@@ -835,7 +835,9 @@ function LineItems({
                       ) : null}
                       {entry ? (
                         <span className="muted" style={{ fontSize: 11 }}>
-                          {entry.source}
+                          {entry.source === "po"
+                            ? `PO line ${entry.po_line_number ?? "?"}`
+                            : entry.source}
                         </span>
                       ) : null}
                     </div>

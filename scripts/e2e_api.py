@@ -87,14 +87,17 @@ def seed_database() -> None:
     # Imported here, after main() has set the environment: the product reads
     # its configuration at import, and must see the scratch database.
     sys.path.insert(0, str(REPO))
+    from invoice_processing import po_book  # noqa: PLC0415
     from invoice_processing.adapters import FsCaseRepository  # noqa: PLC0415
     from invoice_processing.db.migrate import upgrade_to_head  # noqa: PLC0415
     from invoice_processing.db.models import Tenant, User  # noqa: PLC0415
     from invoice_processing.db.repositories import (  # noqa: PLC0415
         PgCaseRepository,
+        PgPurchaseOrderRepository,
     )
     from invoice_processing.db.session import tenant_session  # noqa: PLC0415
     from invoice_processing.ports import RunContext  # noqa: PLC0415
+    from invoice_processing.worker import runner  # noqa: PLC0415
 
     upgrade_to_head()
     with tenant_session(TENANT) as session:
@@ -123,6 +126,18 @@ def seed_database() -> None:
         for key, payload in artifacts.items():
             target.put_artifact(ctx, key, payload)
         target.project_case(ctx, artifacts)
+        # The worker never runs in this stack, so code the lines here the
+        # way it would: PO-line accounts first, then the tenant's rules.
+        # The private worker function is used on purpose: the seed must code
+        # lines exactly as the worker would (PO lines first, then rules), and a
+        # hand-written artifact would drift from it.
+        coded = runner._code_gl(
+            ctx,
+            target,
+            artifacts,
+            book=po_book.DbBook(PgPurchaseOrderRepository(), TENANT),
+        )
+        target.project_case(ctx, {**artifacts, **(coded or {})})
 
 
 def _golden_invoice() -> dict:
@@ -154,6 +169,7 @@ def seed_purchase_order(po_number: str, vendor: str, grn: str) -> None:
                         "qty_ordered": first["quantity"],
                         "unit_price": first["unit_price"],
                         "receipt_required": True,
+                        "gl_account": "6100",
                     },
                     {
                         "line_number": 2,
@@ -161,6 +177,7 @@ def seed_purchase_order(po_number: str, vendor: str, grn: str) -> None:
                         "qty_ordered": second["quantity"],
                         "unit_price": second["unit_price"],
                         "receipt_required": False,
+                        "gl_account": "6200",
                     },
                 ],
             }

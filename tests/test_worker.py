@@ -615,6 +615,8 @@ class TestLinesAreGlCoded:
         previous=None,
         workflow=None,
         stored=None,
+        phase2=None,
+        book=None,
     ):
         output = tmp_path / "case-1"
         output.mkdir(parents=True)
@@ -623,6 +625,7 @@ class TestLinesAreGlCoded:
                 {
                     "invoice": {
                         "vendor_name": "Acme",
+                        "po_number": "PO-1",
                         "line_items": [
                             {"description": "Bolts"},
                             {"description": "Freight"},
@@ -631,6 +634,10 @@ class TestLinesAreGlCoded:
                 }
             )
         )
+        if phase2 is not None:
+            (output / "04_phase2_validation.json").write_text(
+                json.dumps(phase2)
+            )
         stored = {} if stored is None else stored
         if previous is not None:
             stored["gl_coding"] = previous
@@ -658,7 +665,11 @@ class TestLinesAreGlCoded:
 
         monkeypatch.setattr(gia, "get_output_folder", _folder(output))
         monkeypatch.setattr(gia, "process_invoice", _rejects)
-        monkeypatch.setattr(tenant_settings, "apply_to_pipeline", _no_settings)
+        monkeypatch.setattr(
+            tenant_settings,
+            "apply_to_pipeline",
+            lambda *a, **k: {"purchase_order_book": book} if book else {},
+        )
         monkeypatch.setattr(service, "get_gl_rules", rules)
         process_document(
             RunContext(tenant_id="t", case_id="case-1"),
@@ -675,6 +686,123 @@ class TestLinesAreGlCoded:
                 return [GL_RULE]
 
         return Repo
+
+    PAIRED: ClassVar[dict] = {
+        "validations": [
+            {
+                "step": "2.3",
+                "passed": True,
+                "lines": [
+                    {
+                        "line_number": 1,
+                        "po_line_number": 1,
+                        "paired_by": "description",
+                    },
+                    {
+                        "line_number": 2,
+                        "po_line_number": 2,
+                        "paired_by": "description",
+                    },
+                ],
+            }
+        ]
+    }
+
+    class Book:
+        def __init__(self, lines, *, missing=False, broken=False):
+            self.lines, self.missing, self.broken = lines, missing, broken
+
+        def find(self, po_number):
+            return None
+
+        def book(self, po_number):
+            if self.broken:
+                raise RuntimeError("book unavailable")
+            if self.missing:
+                return None
+            assert po_number == "PO-1"
+            return {"po": {}, "lines": self.lines, "received": {}, "billed": {}}
+
+    def test_a_paired_line_takes_the_po_line_account(
+        self, tmp_path, monkeypatch
+    ):
+        book = self.Book(
+            [{"line_number": 1, "gl_account": "7100"}, {"line_number": 2}]
+        )
+        stored, projected = self.run(
+            tmp_path, monkeypatch, self.repo(), phase2=self.PAIRED, book=book
+        )
+        lines = stored["gl_coding"]["lines"]
+        assert lines[0]["gl_account"] == "7100" and lines[0]["source"] == "po"
+        assert lines[0]["po_line_number"] == 1
+        # No PO account on line 2: the vendor rule codes it as before.
+        assert lines[1]["gl_account"] == "6100" and lines[1]["source"] == "rule"
+        assert projected[0]["gl_coding"] == stored["gl_coding"]
+
+    def test_without_a_pairing_rules_code_every_line(
+        self, tmp_path, monkeypatch
+    ):
+        book = self.Book([{"line_number": 1, "gl_account": "7100"}])
+        stored, _ = self.run(tmp_path, monkeypatch, self.repo(), book=book)
+        assert [x["source"] for x in stored["gl_coding"]["lines"]] == [
+            "rule",
+            "rule",
+        ]
+
+    def test_a_missing_po_falls_back_to_rules(self, tmp_path, monkeypatch):
+        stored, _ = self.run(
+            tmp_path,
+            monkeypatch,
+            self.repo(),
+            phase2=self.PAIRED,
+            book=self.Book([], missing=True),
+        )
+        assert [x["source"] for x in stored["gl_coding"]["lines"]] == [
+            "rule",
+            "rule",
+        ]
+
+    def test_an_unreadable_book_falls_back_to_rules(
+        self, tmp_path, monkeypatch
+    ):
+        """Inheritance is a convenience; it must never cost the coding."""
+        stored, _ = self.run(
+            tmp_path,
+            monkeypatch,
+            self.repo(),
+            phase2=self.PAIRED,
+            book=self.Book([], broken=True),
+        )
+        assert [x["gl_account"] for x in stored["gl_coding"]["lines"]] == [
+            "6100",
+            "6100",
+        ]
+
+    def test_a_decided_invoice_is_not_recoded_from_the_po(
+        self, tmp_path, monkeypatch
+    ):
+        book = self.Book([{"line_number": 1, "gl_account": "7100"}])
+        stored, _ = self.run(
+            tmp_path,
+            monkeypatch,
+            self.repo(),
+            previous={
+                "lines": [
+                    {
+                        "line_number": 1,
+                        "gl_account": "6100",
+                        "source": "rule",
+                        "rule_id": "r1",
+                        "coded_by": None,
+                        "coded_at": None,
+                    }
+                ]
+            },
+            workflow={"decision": "approve"},
+            phase2=self.PAIRED,
+            book=book,
+        )
+        assert stored["gl_coding"]["lines"][0]["gl_account"] == "6100"
 
     def test_lines_are_coded_before_projection(self, tmp_path, monkeypatch):
         stored, projected = self.run(tmp_path, monkeypatch, self.repo())
