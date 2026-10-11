@@ -792,7 +792,8 @@ test("an admin can add a GL rule, see it listed, and delete it", async ({
 });
 
 // This test owns case_004_gl (cloned in scripts/e2e_api.py); nothing else
-// decides it. No worker runs here, so rules never code it: manual coding only.
+// decides it. The seed codes lines, but with no rules and no PO for this case
+// nothing is coded: manual coding only.
 test("a clerk codes a line to a GL account, and a decision closes it", async ({
   page,
 }) => {

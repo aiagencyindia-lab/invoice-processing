@@ -87,6 +87,7 @@ def seed_database() -> None:
     # Imported here, after main() has set the environment: the product reads
     # its configuration at import, and must see the scratch database.
     sys.path.insert(0, str(REPO))
+    from invoice_processing import po_book  # noqa: PLC0415
     from invoice_processing.adapters import FsCaseRepository  # noqa: PLC0415
     from invoice_processing.db.migrate import upgrade_to_head  # noqa: PLC0415
     from invoice_processing.db.models import Tenant, User  # noqa: PLC0415
@@ -96,7 +97,6 @@ def seed_database() -> None:
     )
     from invoice_processing.db.session import tenant_session  # noqa: PLC0415
     from invoice_processing.ports import RunContext  # noqa: PLC0415
-    from invoice_processing import po_book  # noqa: PLC0415
     from invoice_processing.worker import runner  # noqa: PLC0415
 
     upgrade_to_head()
