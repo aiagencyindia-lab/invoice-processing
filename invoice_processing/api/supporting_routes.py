@@ -338,8 +338,9 @@ def list_supporting_documents(
     stored: bool | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> dict:
-    """`stored=false`: only acceptances that stored nothing (orphans an admin
-    can reopen), newest first; a store that cannot be read hides them all."""
+    """`stored=false`: only acceptances that stored nothing and are past the
+    still-storing window (orphans an admin can reopen), newest first; a store
+    that cannot be read hides them all."""
     supporting, orders = _repos()
     wanted = tuple(s.strip() for s in status.split(",") if s.strip())
     if not wanted or set(wanted) - set(STATUSES):
@@ -358,7 +359,10 @@ def list_supporting_documents(
         listed = [
             r
             for r in listed
-            if r["status"] == "accepted" and r["stored"] is stored
+            if r["status"] == "accepted"
+            and r["stored"] is stored
+            # Not yet an orphan: it may still be storing.
+            and (stored or not _still_storing(r))
         ]
     return {"documents": listed}
 
@@ -608,6 +612,14 @@ def process_supporting_document_as_invoice(
 STILL_STORING = timedelta(minutes=5)
 
 
+def _still_storing(row: dict) -> bool:
+    reviewed = row["reviewed_at"]
+    return bool(reviewed) and (
+        datetime.now(timezone.utc) - _aware(datetime.fromisoformat(reviewed))
+        < STILL_STORING
+    )
+
+
 @router.post("/api/supporting-documents/{row_id}/reopen")
 def reopen_supporting_document(
     row_id: str,
@@ -623,13 +635,7 @@ def reopen_supporting_document(
             "Only an accepted document can be reopened; this one is "
             f"{row['status']}.",
         )
-    reviewed = row["reviewed_at"]
-    if (
-        reviewed
-        and datetime.now(timezone.utc)
-        - _aware(datetime.fromisoformat(reviewed))
-        < STILL_STORING
-    ):
+    if _still_storing(row):
         raise HTTPException(
             409,
             "This document was accepted moments ago and may still be "

@@ -1148,7 +1148,7 @@ def test_a_lost_compare_and_set_on_a_decidable_row_is_neutral(env, monkeypatch):
     assert r.json()["detail"] == RACED
 
 
-def test_stored_false_lists_only_orphaned_acceptances(env):
+def test_stored_false_lists_only_orphaned_acceptances(env, settled):
     env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
     done = env["scan"](GRN_READ)
     assert _accept(done, _grn_body()).status_code == 200
@@ -1185,3 +1185,10 @@ def test_the_list_is_capped(env):
     assert len(c.get("/api/supporting-documents").json()["documents"]) == 3
     assert c.get("/api/supporting-documents?limit=501").status_code == 422
     assert c.get("/api/supporting-documents?limit=0").status_code == 422
+
+
+def test_a_fresh_acceptance_is_not_listed_as_an_orphan(env):
+    """It may still be storing, and its reopen would be refused."""
+    _orphan(env)
+    r = _client().get("/api/supporting-documents?status=accepted&stored=false")
+    assert r.status_code == 200 and r.json()["documents"] == []
