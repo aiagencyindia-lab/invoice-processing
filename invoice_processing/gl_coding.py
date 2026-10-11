@@ -71,16 +71,55 @@ def _uncoded(line_number) -> dict:
     }
 
 
+def po_accounts_from_match(
+    three_way_lines: list[dict],
+    book_lines: list[dict],
+    projected_line_numbers: list[int],
+) -> dict[int, tuple[int, str]]:
+    """Projected line number -> (PO line number, its GL account).
+
+    Step 2.3 numbers invoice lines by their position in the extraction; the
+    projection numbers them by the transformer's line_number. The two agree
+    by position, and only when the counts do -- the same guard the export
+    uses -- so a mismatch yields nothing rather than a wrong account.
+    """
+    if not three_way_lines or len(three_way_lines) != len(
+        projected_line_numbers
+    ):
+        return {}
+    accounts = {
+        ln.get("line_number"): _str(ln.get("gl_account"))
+        for ln in book_lines or []
+        if isinstance(ln, dict)
+    }
+    out: dict[int, tuple[int, str]] = {}
+    for paired, number in zip(
+        three_way_lines, projected_line_numbers, strict=True
+    ):
+        po_line = (
+            paired.get("po_line_number") if isinstance(paired, dict) else None
+        )
+        if not isinstance(po_line, int) or isinstance(po_line, bool):
+            continue
+        account = accounts.get(po_line, "")
+        if 0 < len(account) <= 64:
+            out[number] = (po_line, account)
+    return out
+
+
 def code_lines(
     invoice: dict,
     lines: list[dict],
     rules: list[dict],
     previous: dict | None = None,
+    po_accounts: dict[int, tuple[int, str]] | None = None,
 ) -> dict:
     """The `gl_coding` artifact for these lines.
 
     A line a person coded (source "manual" in `previous`) is kept as it is:
-    a re-run never overwrites a person.
+    a re-run never overwrites a person. Next comes the account on the PO line
+    the invoice line was paired to -- the buyer's own coding -- and only then
+    the tenant's rules.
     """
     manual = {
         entry["line_number"]: entry
@@ -101,6 +140,17 @@ def code_lines(
         number = line.get("line_number")
         if number in manual:
             out.append(manual[number])
+            continue
+        if po_accounts and number in po_accounts:
+            po_line, account = po_accounts[number]
+            out.append(
+                {
+                    **_uncoded(number),
+                    "gl_account": account,
+                    "source": "po",
+                    "po_line_number": po_line,
+                }
+            )
             continue
         description = str(line.get("description") or "").casefold()
         best, best_rank = None, 0
