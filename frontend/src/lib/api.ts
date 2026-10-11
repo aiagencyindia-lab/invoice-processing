@@ -159,7 +159,8 @@ export type DocumentRow = {
     | "failed"
     | "unknown"
     | "awaiting_confirmation"
-    | "blocked";
+    | "blocked"
+    | "accepted_unstored";
   /** invoice | purchase_order | goods_receipt; null until classified. */
   kind: string | null;
   explanation: string;
@@ -415,6 +416,9 @@ export type SupportingDocument = {
   blocked_reason: string | null;
   extraction_error: string | null;
   document_url: string;
+  /** Something (a PO or receipts) was stored from it; false on an accepted
+   *  row means the acceptance stored nothing and an admin can reopen it. */
+  stored: boolean;
   extracted: {
     kind?: string;
     fields: Record<string, string | number | null>;

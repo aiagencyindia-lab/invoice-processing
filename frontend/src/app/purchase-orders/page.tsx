@@ -123,20 +123,45 @@ function PoDetailRows({ poNumber }: { poNumber: string }) {
 const kindName = (kind: string) =>
   kind === "goods_receipt" ? "Goods receipt" : "Purchase order";
 
-/** Scans waiting for a clerk. Absent entirely without a database. */
+/** What a card says about a scan: its own number, vendor, date, and the
+ *  lowest confidence of anything read from it. */
+function cardFacts(d: SupportingDocument): string {
+  const f = d.extracted?.fields ?? {};
+  const summary = d.extracted?._evidence?._summary as
+    | { min_confidence?: number }
+    | undefined;
+  const lowest = summary?.min_confidence;
+  return [
+    d.kind === "goods_receipt" ? f.grn_number : null,
+    f.vendor_name,
+    d.kind === "goods_receipt" ? f.received_on : f.po_date,
+    typeof lowest === "number" ? `lowest confidence ${Math.round(lowest * 100)}%` : null,
+  ]
+    .filter((v) => v !== null && v !== undefined && v !== "")
+    .join(" · ");
+}
+
+/** Scans waiting for a clerk, and for an admin any acceptance that stored
+ *  nothing. Absent entirely without a database. */
 function AwaitingConfirmation({
+  admin,
   onNotice,
   onAccepted,
 }: {
+  admin: boolean;
   onNotice: (notice: string) => void;
   onAccepted: () => void;
 }) {
+  // ponytail: an admin's poll lists every accepted scan to find the few that
+  // stored nothing; add a server-side filter if that list grows large.
   const { data, error, reload } = usePoll<{ documents: SupportingDocument[] }>(
-    "/api/supporting-documents?status=pending,blocked",
+    `/api/supporting-documents?status=pending,blocked${admin ? ",accepted" : ""}`,
   );
   const [open, setOpen] = useState<string | null>(null);
   if (error?.includes("needs a database")) return null;
-  const docs = data?.documents ?? [];
+  const docs = (data?.documents ?? []).filter(
+    (d) => d.status !== "accepted" || !d.stored,
+  );
   if (docs.length === 0 && !error) return null;
   return (
     <section className="stack" style={{ gap: 8 }} aria-labelledby="awaiting-h">
@@ -150,10 +175,17 @@ function AwaitingConfirmation({
                 {kindName(d.kind)}
                 {d.po_number ? ` · PO ${d.po_number}` : ""}
               </strong>
+              {cardFacts(d) ? (
+                <span className="muted" style={{ fontSize: 12.5 }}>
+                  {cardFacts(d)}
+                </span>
+              ) : null}
               <span className="muted" style={{ fontSize: 12.5 }}>
                 {d.status === "blocked"
                   ? (d.blocked_reason ?? "Its purchase order is not on file.")
-                  : "Read from a scan; check it before it counts."}
+                  : d.status === "accepted"
+                    ? "Accepted, but nothing was stored; reopen it to confirm again."
+                    : "Read from a scan; check it before it counts."}
               </span>
             </div>
             <button type="button" className="btn-chip" onClick={() => setOpen(d.id)}>
@@ -165,6 +197,7 @@ function AwaitingConfirmation({
       {open ? (
         <SupportingReview
           id={open}
+          admin={admin}
           onClose={() => setOpen(null)}
           onDone={(notice) => {
             setOpen(null);
@@ -339,6 +372,7 @@ export default function PurchaseOrdersPage() {
 
       {canImport ? (
         <AwaitingConfirmation
+          admin={canReplace}
           onNotice={(n) => {
             setProblem(null);
             setNotice(n);

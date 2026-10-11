@@ -30,19 +30,28 @@ const LINE_COLUMNS: Record<string, [string, string][]> = {
     ["unit_price", "Unit price"],
   ],
 };
-const NUMERIC = new Set(["line_number", "quantity_received", "quantity", "unit_price"]);
+const NUMERIC = new Set([
+  "line_number",
+  "quantity_received",
+  "quantity",
+  "unit_price",
+  "total_amount",
+]);
 
+const LABELS: Record<string, string> = {
+  grn_number: "GRN number",
+  // Required by the import only when a quantity is negative.
+  reason: "Correction reason",
+};
 const label = (key: string) =>
-  key === "grn_number"
-    ? "GRN number"
-    : key.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+  LABELS[key] ?? key.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 
 const text = (v: Cell | undefined) => (v === null || v === undefined ? "" : String(v));
 const rawLine = (ln: Record<string, Cell>): Record<string, string> =>
   Object.fromEntries(Object.entries(ln).map(([k, v]) => [k, text(v)]));
 
 /** Raw typed text to what the API takes, only when sending: blank is null,
- *  a numeric column becomes a number, and anything that is not a finite
+ *  a numeric field or column becomes a number, and anything that is not a finite
  *  number goes as typed so the server names the problem. */
 function typed(key: string, raw: string): Cell {
   if (raw.trim() === "") return null;
@@ -61,12 +70,15 @@ const convert = (rec: Record<string, string>): Record<string, Cell> =>
 
 export default function SupportingReview({
   id,
+  admin,
   onClose,
   onDone,
 }: {
   id: string;
+  /** May reopen an acceptance that stored nothing. */
+  admin: boolean;
   onClose: () => void;
-  /** Called after a successful accept or reject, with the notice to show. */
+  /** Called after a successful decision, with the notice to show. */
   onDone: (notice: string) => void;
 }) {
   const [detail, setDetail] = useState<SupportingDetail | null>(null);
@@ -93,7 +105,8 @@ export default function SupportingReview({
     api<SupportingDetail>(`/api/supporting-documents/${id}`)
       .then((d) => {
         setDetail(d);
-        setFields(rawLine(d.extracted?.fields ?? {}));
+        const read = rawLine(d.extracted?.fields ?? {});
+        setFields(d.kind === "goods_receipt" ? { ...read, reason: read.reason ?? "" } : read);
         if (d.kind === "goods_receipt" && d.po_on_file && d.po_number) {
           api<PurchaseOrderDetail>(
             `/api/purchase-orders/${encodeURIComponent(d.po_number)}`,
@@ -130,17 +143,23 @@ export default function SupportingReview({
     };
   }, [rechosen, poNumber]);
 
-  async function decide(path: "accept" | "reject") {
+  async function decide(path: "accept" | "reject" | "reopen" | "process-as-invoice") {
     if (!detail) return;
     setBusy(true);
     setError(null);
     try {
-      if (path === "reject") {
-        await api(`/api/supporting-documents/${id}/reject`, {
+      if (path !== "accept") {
+        await api(`/api/supporting-documents/${id}/${path}`, {
           method: "POST",
-          body: JSON.stringify({ reason: reason.trim() }),
+          body: path === "reject" ? JSON.stringify({ reason: reason.trim() }) : undefined,
         });
-        onDone("Rejected the scanned document");
+        onDone(
+          {
+            reject: "Rejected the scanned document",
+            reopen: "Reopened the scanned document; it awaits confirmation again",
+            "process-as-invoice": "Sent the document to be processed as an invoice",
+          }[path],
+        );
         return;
       }
       const result = await api<ImportResult & { po_number?: string }>(
@@ -179,6 +198,8 @@ export default function SupportingReview({
   );
   const isGrn = detail?.kind === "goods_receipt";
   const blocked = detail?.status === "blocked";
+  const undecided = detail?.status === "pending" || blocked;
+  const reopenable = admin && detail?.status === "accepted" && detail.stored === false;
   const columns = detail ? LINE_COLUMNS[detail.kind] : [];
   const setLine = (i: number, key: string, value: string) =>
     setLines((all) => all.map((ln, j) => (j === i ? { ...ln, [key]: value } : ln)));
@@ -228,6 +249,7 @@ export default function SupportingReview({
                     <label htmlFor={`f-${key}`}>{label(key)}</label>
                     <input
                       id={`f-${key}`}
+                      aria-describedby={check ? `why-f-${key}` : undefined}
                       value={fields[key] ?? ""}
                       onChange={(e) => {
                         setFields({ ...fields, [key]: e.target.value });
@@ -241,7 +263,7 @@ export default function SupportingReview({
                       }}
                     />
                     {check ? (
-                      <div className="why">
+                      <div className="why" id={`why-f-${key}`}>
                         check this
                         {confidenceOf(ev)}
                       </div>
@@ -330,7 +352,23 @@ export default function SupportingReview({
                 </tbody>
               </table>
             </div>
-            {rejecting ? (
+            {reopenable ? (
+              <div className="stack" style={{ gap: 6 }}>
+                <div role="status" className="muted">
+                  Accepted, but nothing was stored from it.
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={busy}
+                    onClick={() => decide("reopen")}
+                  >
+                    Reopen
+                  </button>
+                </div>
+              </div>
+            ) : !undecided ? null : rejecting ? (
               <div className="stack" style={{ gap: 6 }}>
                 <label htmlFor="reject-reason">Reason for rejecting</label>
                 <input
@@ -370,6 +408,15 @@ export default function SupportingReview({
                   onClick={() => setRejecting(true)}
                 >
                   Reject
+                </button>
+                {/* The classifier was wrong: this is an invoice. */}
+                <button
+                  type="button"
+                  className="btn-chip"
+                  disabled={busy}
+                  onClick={() => decide("process-as-invoice")}
+                >
+                  Process as invoice
                 </button>
               </div>
             )}

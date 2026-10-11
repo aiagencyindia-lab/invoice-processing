@@ -18,6 +18,7 @@ const STAGE_CLASS: Record<string, string> = {
   unknown: "badge-warn",
   awaiting_confirmation: "badge-warn",
   blocked: "badge-warn",
+  accepted_unstored: "badge-warn",
 };
 
 const KIND_LABEL: Record<string, string> = {
