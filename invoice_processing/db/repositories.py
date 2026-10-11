@@ -2493,18 +2493,33 @@ class PgSupportingDocumentRepository:
     def revert_to_pending(
         self, tenant_id: str, id: str, *, extracted: dict,
         status: str = "pending", blocked_reason: str | None = None,
+        reviewed_at: str | None = None,
     ) -> dict:  # fmt: skip
         """Undo an acceptance: back to `status` and `blocked_reason` (what the
         acceptance replaced), with `extracted` and no reviewer. Only from
-        accepted (StatusChanged)."""
+        accepted, and with `reviewed_at` only from the acceptance made then,
+        never a later one (StatusChanged)."""
         with tenant_session(tenant_id, self.url) as session:
+            match = [
+                SupportingDocument.tenant_id == tenant_id,
+                SupportingDocument.id == id,
+                SupportingDocument.status == "accepted",
+            ]
+            if reviewed_at is not None:
+                found = self._one(session, tenant_id, id)
+                if found is None:
+                    raise KeyError(id)
+                if _iso(found[0].reviewed_at) != reviewed_at:
+                    raise StatusChanged(found[0].status)
+                # The UPDATE re-checks it, so a re-acceptance landing after
+                # this read still makes it miss.
+                match.append(
+                    SupportingDocument.reviewed_at == found[0].reviewed_at
+                )
+                session.expire(found[0])
             changed = session.execute(
                 update(SupportingDocument)
-                .where(
-                    SupportingDocument.tenant_id == tenant_id,
-                    SupportingDocument.id == id,
-                    SupportingDocument.status == "accepted",
-                )
+                .where(*match)
                 .values(
                     status=status,
                     blocked_reason=blocked_reason,

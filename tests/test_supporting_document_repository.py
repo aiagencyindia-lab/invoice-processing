@@ -474,3 +474,33 @@ def test_stored_documents_names_what_a_po_or_receipt_came_from(env):
     assert po.stored_documents("t1", [d0]) == set()
     assert po.stored_documents("t1", [d0], {d0: "po 1"}) == {d0}
     assert po.stored_documents("t1", [], {}) == set()
+
+
+@pytest.mark.parametrize("kind", ["pg", "json"])
+def test_revert_can_require_the_acceptance_it_read(env, tmp_path, kind):
+    _, _, ids, pg = env
+    repo = (
+        pg
+        if kind == "pg"
+        else JsonSupportingDocumentRepository(tmp_path / "sd.json")
+    )
+    doc = ids["t1"][0] if kind == "pg" else "d1"
+    a = _up(repo, "t1", doc)
+    first = repo.mark(
+        "t1", a["id"], status="accepted", reviewed_by="c", expect=("pending",)
+    )
+    repo.revert_to_pending("t1", a["id"], extracted={})
+    again = repo.mark(
+        "t1", a["id"], status="accepted", reviewed_by="d", expect=("pending",)
+    )
+    assert again["reviewed_at"] != first["reviewed_at"]
+    with pytest.raises(StatusChanged) as late:
+        repo.revert_to_pending(
+            "t1", a["id"], extracted={}, reviewed_at=first["reviewed_at"]
+        )
+    assert late.value.status == "accepted"
+    assert repo.get("t1", a["id"])["reviewed_by"] == "d"
+    back = repo.revert_to_pending(
+        "t1", a["id"], extracted={}, reviewed_at=again["reviewed_at"]
+    )
+    assert back["status"] == "pending"

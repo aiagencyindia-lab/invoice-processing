@@ -1007,3 +1007,118 @@ def test_a_misclassified_scan_is_sent_to_the_invoice_queue(
     again = _client().post(go)
     assert again.status_code == 409
     assert again.json()["detail"] == "This document was already rejected."
+
+
+# --- review fixes -----------------------------------------------------------
+def test_a_reopen_never_reverts_a_fresh_reacceptance(env, settled, monkeypatch):
+    orphan = _orphan(env)
+    stale = env["supporting"].get(TENANT, orphan["id"])
+    # Meanwhile: reopened by someone else and accepted again.
+    env["supporting"].revert_to_pending(TENANT, orphan["id"], extracted={})
+    env["supporting"].mark(
+        TENANT, orphan["id"], status="accepted", reviewed_by="other",
+        expect=("pending",),
+    )  # fmt: skip
+    monkeypatch.setattr(env["supporting"], "get", lambda *a: dict(stale))
+    r = _client("admin").post(
+        f"/api/supporting-documents/{orphan['id']}/reopen"
+    )
+    monkeypatch.undo()
+    assert r.status_code == 409
+    assert r.json()["detail"] == RACED
+    now = env["supporting"].get(TENANT, orphan["id"])
+    assert now["status"] == "accepted" and now["reviewed_by"] == "other"
+
+
+def _sent(env, tmp_path, monkeypatch):
+    from invoice_processing.db.repositories import PgClaimStore  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        service, "_claim_store", PgClaimStore(env["orders"].url)
+    )
+    row = env["scan"](GRN_READ)
+    return row, f"/api/supporting-documents/{row['id']}/process-as-invoice"
+
+
+def test_a_failed_kind_change_still_retries_as_an_invoice(
+    env, tmp_path, monkeypatch
+):
+    row, go = _sent(env, tmp_path, monkeypatch)
+    documents = service.get_documents()
+
+    def broken(*a, **k):
+        raise RuntimeError("down")
+
+    real = documents.set_kind
+    monkeypatch.setattr(documents, "set_kind", broken)
+    r = _client().post(go)
+    assert r.status_code == 503
+    monkeypatch.setattr(documents, "set_kind", real)
+    assert documents.get(TENANT, row["document_id"])["kind"] == "goods_receipt"
+    retried = _client("approver").post(
+        f"/api/documents/{row['document_id']}/retry"
+    )
+    assert retried.status_code == 200, retried.text
+    [message] = LocalQueue(tmp_path / "queue").pull()
+    assert message.payload["force_invoice"] is True
+
+
+def test_a_stored_acceptance_is_not_sent_to_invoices(
+    env, tmp_path, monkeypatch
+):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    row, go = _sent(env, tmp_path, monkeypatch)
+    assert _accept(row, _grn_body()).status_code == 200
+    r = _client().post(go)
+    assert r.status_code == 409
+    assert r.json()["detail"] == "This document was already accepted."
+    kind = service.get_documents().get(TENANT, row["document_id"])["kind"]
+    assert kind == "goods_receipt"
+    assert LocalQueue(tmp_path / "queue").pull() == []
+
+
+def test_a_missing_file_record_is_never_queued(env, tmp_path, monkeypatch):
+    row, go = _sent(env, tmp_path, monkeypatch)
+    monkeypatch.setattr(service.get_documents(), "get", lambda *a: None)
+    r = _client().post(go)
+    assert r.status_code == 404
+    assert r.json()["detail"] == (
+        "This document's file record is missing; it cannot be sent to the "
+        "invoice queue."
+    )
+    monkeypatch.undo()
+    assert env["supporting"].get(TENANT, row["id"])["status"] == "pending"
+    assert LocalQueue(tmp_path / "queue").pull() == []
+
+
+def test_an_unreadable_store_reads_as_stored_on_list_and_detail(
+    env, monkeypatch
+):
+    row = _orphan(env)
+
+    def down(*a, **k):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(env["orders"], "stored_documents", down)
+    c = _client()
+    listed = c.get("/api/supporting-documents?status=accepted")
+    assert listed.status_code == 200
+    assert listed.json()["documents"][0]["stored"] is True
+    detail = c.get(f"/api/supporting-documents/{row['id']}")
+    assert detail.status_code == 200 and detail.json()["stored"] is True
+
+
+def test_a_lost_compare_and_set_on_a_decidable_row_is_neutral(env, monkeypatch):
+    from invoice_processing.ports import StatusChanged  # noqa: PLC0415
+
+    row = env["scan"](PO_READ)
+
+    def lost(*a, **k):
+        raise StatusChanged("pending")
+
+    monkeypatch.setattr(env["supporting"], "mark", lost)
+    r = _client().post(
+        f"/api/supporting-documents/{row['id']}/reject", json={"reason": "x"}
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == RACED

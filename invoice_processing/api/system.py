@@ -31,6 +31,7 @@ import json
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -423,6 +424,19 @@ def list_documents(
     return {"documents": out, "counts": counts, "total": len(out)}
 
 
+def _sent_to_invoices(tenant_id: str, document_id: str) -> bool:
+    from . import service  # noqa: PLC0415
+    from .supporting_routes import SENT_TO_INVOICES  # noqa: PLC0415
+
+    rows = _safe(
+        lambda: service.get_supporting_documents().for_documents(
+            tenant_id, [document_id]
+        ),
+        default=[],
+    )
+    return any(r.get("note") == SENT_TO_INVOICES for r in rows or [])
+
+
 @router.post("/api/documents/{document_id}/retry")
 def retry_document(
     document_id: str,
@@ -448,21 +462,18 @@ def retry_document(
 
     service.get_claim_store().release(principal.tenant_id, document_id)
 
-    class _Result:
-        pass
-
-    result = _Result()
-    result.document_id = document_id
-    result.sha256 = document.get("sha256", "")
-    result.storage_key = document.get("storage_key", "")
-
     message_id = enqueue_document(
         service.get_queue(),
         principal.context(document_id),
-        result,
-        # Classified an invoice (or sent to the invoice queue by a clerk):
-        # a retry must not divert it to PO review again.
-        force_invoice=document.get("kind") == "invoice",
+        SimpleNamespace(
+            document_id=document_id,
+            sha256=document.get("sha256", ""),
+            storage_key=document.get("storage_key", ""),
+        ),
+        # Classified an invoice, or sent to the invoice queue by a clerk
+        # (even if marking its kind failed): never diverted to review again.
+        force_invoice=document.get("kind") == "invoice"
+        or _sent_to_invoices(principal.tenant_id, document_id),
     )
     service.get_audit().emit(
         principal.context(document_id),

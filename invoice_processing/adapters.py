@@ -623,13 +623,16 @@ class JsonSupportingDocumentRepository:
         return {**self._shown(tenant_id, [row])[0], "previous": was}
 
     def revert_to_pending(
-        self, tenant_id, id, *, extracted, status="pending", blocked_reason=None
-    ) -> dict:
+        self, tenant_id, id, *, extracted, status="pending",
+        blocked_reason=None, reviewed_at=None,
+    ) -> dict:  # fmt: skip
         data = self._read()
         row = data.get(tenant_id, {}).get(id)
         if row is None:
             raise KeyError(id)
-        if row["status"] != "accepted":
+        if row["status"] != "accepted" or (
+            reviewed_at is not None and row["reviewed_at"] != reviewed_at
+        ):
             raise StatusChanged(row["status"])
         row.update(
             status=status, blocked_reason=blocked_reason, extracted=extracted,

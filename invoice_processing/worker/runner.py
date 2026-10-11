@@ -404,7 +404,7 @@ def process_document(
             on_step=publish_step,
             seen_invoices=seen_invoices_for(ctx, cases),
             # A clerk sent a scanned PO/receipt here: run it as an invoice.
-            **({"force_invoice": True} if force_invoice else {}),
+            force_invoice=force_invoice,
         )
 
         # `process_invoice` catches its own exceptions and returns

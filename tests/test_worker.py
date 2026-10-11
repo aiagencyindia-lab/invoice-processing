@@ -1529,7 +1529,7 @@ class TestInvoicesAreMarkedAsInvoices:
         *_, go = self._invoice_run(tmp_path, monkeypatch, process)
         go(force_invoice=True)
         go()
-        assert seen == [True, None]
+        assert seen == [True, False]
 
 
 class TestTheHandlerPassesForceInvoice:

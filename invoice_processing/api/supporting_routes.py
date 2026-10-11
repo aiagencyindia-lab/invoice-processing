@@ -12,6 +12,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
+from types import SimpleNamespace
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -149,6 +150,16 @@ def _stored(orders, tenant_id: str, rows: list[dict]) -> set[str]:
     )
 
 
+def _stored_or_all(orders, tenant_id: str, rows: list[dict]) -> set[str]:
+    """`_stored` for display: unknown reads as stored, never as a 500 and
+    never as an orphan to reopen (the reopen route checks for itself)."""
+    try:
+        return _stored(orders, tenant_id, rows)
+    except Exception:
+        logger.exception("Stores of scanned documents not read")
+        return {r["document_id"] for r in rows}
+
+
 def _refusal(orders, principal: Principal, row: dict, status: str):
     """Why `row`, now `status`, cannot be decided. Accepted with nothing
     stored may be an accept still storing, so nobody is told it succeeded."""
@@ -188,6 +199,10 @@ def _mark(
             **decision,
         )
     except StatusChanged as exc:
+        if exc.status in allowed:
+            # Still decidable, yet the compare-and-set kept missing: the
+            # row is changing under us, so nothing is claimed about it.
+            raise HTTPException(409, RACED) from None
         raise _refusal(orders, principal, row, exc.status) from None
 
 
@@ -328,7 +343,7 @@ def list_supporting_documents(
             400, f"status must be some of {', '.join(STATUSES)}."
         )
     rows = supporting.list(principal.tenant_id, wanted)
-    stored = _stored(orders, principal.tenant_id, rows)
+    stored = _stored_or_all(orders, principal.tenant_id, rows)
     return {
         "documents": [
             {**_public(r), "stored": r["document_id"] in stored} for r in rows
@@ -349,7 +364,7 @@ def read_supporting_document(
         "po_on_file": order is not None,
         "paired": paired,
         "stored": row["document_id"]
-        in _stored(orders, principal.tenant_id, [row]),
+        in _stored_or_all(orders, principal.tenant_id, [row]),
     }
 
 
@@ -526,29 +541,39 @@ def process_supporting_document_as_invoice(
 
     supporting, orders = _repos()
     row = _decidable(supporting, orders, principal, row_id, REJECTABLE)
+    document_id = row["document_id"]
+    try:
+        documents = service.get_documents()
+        document = documents.get(principal.tenant_id, document_id)
+    except Exception:
+        logger.exception("Document %s not read", document_id)
+        raise HTTPException(
+            503, "The document could not be read; try again."
+        ) from None
+    if not document:
+        raise HTTPException(
+            404,
+            "This document's file record is missing; it cannot be sent to "
+            "the invoice queue.",
+        )
     _mark(
         supporting, orders, principal, row, REJECTABLE,
         status="rejected", note=SENT_TO_INVOICES,
     )  # fmt: skip
-    document_id = row["document_id"]
+    # From here a failure is recovered by Retry on Documents, which forces a
+    # document with this note through the invoice path (system.py).
     try:
-        documents = service.get_documents()
-        document = documents.get(principal.tenant_id, document_id) or {}
         documents.set_kind(principal.tenant_id, document_id, "invoice")
         # As a retry does: a kept claim would make the worker skip it.
         service.get_claim_store().release(principal.tenant_id, document_id)
-
-        class _Result:
-            pass
-
-        result = _Result()
-        result.document_id = document_id
-        result.sha256 = document.get("sha256", "")
-        result.storage_key = document.get("storage_key", "")
         message_id = enqueue_document(
             service.get_queue(),
             principal.context(document_id),
-            result,
+            SimpleNamespace(
+                document_id=document_id,
+                sha256=document.get("sha256", ""),
+                storage_key=document.get("storage_key", ""),
+            ),
             force_invoice=True,
         )
     except Exception:
@@ -613,10 +638,14 @@ def reopen_supporting_document(
             "Something was stored from this document; it cannot be reopened.",
         )
     try:
+        # Only the acceptance read above: one made since is left alone.
         supporting.revert_to_pending(
-            principal.tenant_id, row["id"], extracted=row["extracted"]
-        )
+            principal.tenant_id, row["id"], extracted=row["extracted"],
+            reviewed_at=row["reviewed_at"],
+        )  # fmt: skip
     except StatusChanged as exc:
+        if exc.status == "accepted":
+            raise HTTPException(409, RACED) from None
         raise _not_decidable(exc.status, row["blocked_reason"]) from None
     _emit(
         principal,
