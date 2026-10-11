@@ -145,6 +145,39 @@ export type Stats = {
   corrected_fields: string[];
 };
 
+export type KpiReason =
+  | "rejected_by_rules"
+  | "three_way_hold"
+  | "low_confidence"
+  | "approval_required"
+  | "manual_decision"
+  | "other";
+
+export const REASON_LABELS: Record<KpiReason, string> = {
+  rejected_by_rules: "Rejected by rules",
+  three_way_hold: "Held for goods receipt",
+  low_confidence: "Low-confidence extraction",
+  approval_required: "Approval chain",
+  manual_decision: "Decided by hand",
+  other: "Other",
+};
+
+export type Kpis = {
+  window: { days: number; since: string | null };
+  received: number;
+  decided: number;
+  touchless: number;
+  touchless_rate: number | null;
+  exception_rate: number | null;
+  exceptions: Record<KpiReason, number>;
+  cycle_hours: { median: number | null; p90: number | null; skipped: number };
+  open: { count: number; oldest_hours: number | null };
+  three_way: { po_invoices: number; held: number; hold_rate: number | null };
+  ai_cost: { per_invoice_usd: number | null; total_usd: number };
+};
+
+export type KpiCases = { case_ids: string[]; truncated: boolean };
+
 export type DocumentRow = {
   document_id: string;
   filename: string | null;
