@@ -15,6 +15,7 @@ a convenience over the artifacts, and the artifacts remain the record.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -70,6 +71,17 @@ _ACCEPTED = {"ACCEPT", "ACCEPTED", "PENDING PAYMENT", "APPROVED"}
 _REJECTED = {"REJECT", "REJECTED"}
 
 
+def classify_verdict(text) -> str:
+    """accept | reject | undecided, from whatever the pipeline wrote."""
+    verdict = str(text or "").strip().upper()
+    if verdict in _ACCEPTED:
+        return "accept"
+    if verdict in _REJECTED:
+        return "reject"
+    # SET_ASIDE, "To Verify", an unfinished pipeline: nothing to disagree with.
+    return "undecided"
+
+
 def machine_verdict(artifacts: dict) -> str:
     """What the pipeline decided: accept | reject | undecided.
 
@@ -81,26 +93,14 @@ def machine_verdict(artifacts: dict) -> str:
     postprocessing = (artifacts.get("postprocessing") or {}).get(
         "Invoice Processing"
     ) or {}
-    verdict = (
-        str(
-            decision.get("final_decision")
-            # The flattened rule-evaluation context spells it this way. Both
-            # are read here so one answer to "what did the machine decide"
-            # serves the sheet, the disagreement column and the impact report.
-            or decision.get("decision")
-            or postprocessing.get("Invoice Status")
-            or ""
-        )
-        .strip()
-        .upper()
+    return classify_verdict(
+        decision.get("final_decision")
+        # The flattened rule-evaluation context spells it this way. Both
+        # are read here so one answer to "what did the machine decide"
+        # serves the sheet, the disagreement column and the impact report.
+        or decision.get("decision")
+        or postprocessing.get("Invoice Status")
     )
-
-    if verdict in _ACCEPTED:
-        return "accept"
-    if verdict in _REJECTED:
-        return "reject"
-    # SET_ASIDE, "To Verify", an unfinished pipeline: nothing to disagree with.
-    return "undecided"
 
 
 def agreement(artifacts: dict) -> str | None:
@@ -122,6 +122,42 @@ def agreement(artifacts: dict) -> str | None:
     # Routed to a human because the pipeline would not decide. Them deciding
     # it is the system working, not a disagreement with it.
     return "agree"
+
+
+def parse_timestamp(value) -> datetime | None:
+    """An ISO timestamp as an aware datetime, or None.
+
+    Tolerant on purpose: the workflow artifact was written by several
+    versions of this code, some with a `Z`, some naive. Garbage is None, not
+    an exception -- a KPI must never stop a projection.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def decided_at(artifacts: dict) -> datetime | None:
+    """When a person decided this invoice; None if nobody has."""
+    workflow = artifacts.get("workflow") or {}
+    if workflow.get("decision") not in ("approve", "reject"):
+        return None
+    return parse_timestamp(workflow.get("decided_at"))
+
+
+def is_touchless(artifacts: dict) -> bool:
+    """Nothing asked for a person: confident extraction, the rulebook
+    accepted, and receiving did not hold it."""
+    if extraction(artifacts).get("_routing") != "AUTO":
+        return False
+    if machine_verdict(artifacts) != "accept":
+        return False
+    return not any(
+        f["step"] == "2.3" and f["passed"] is False for f in findings(artifacts)
+    )
 
 
 def invoice_columns(artifacts: dict) -> dict:

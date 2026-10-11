@@ -31,6 +31,7 @@ setTokenProvider(currentIdToken);
  *  endpoint is the enforcement, and it does not consult this list. */
 const NAV = [
   { href: "/dashboard", label: "Dashboard", glyph: "▦" },
+  { href: "/kpis", label: "KPIs", glyph: "◫" },
   { href: "/invoices", label: "Invoices", glyph: "▤" },
   { href: "/approvals", label: "Approvals", glyph: "✓", min: "viewer" },
   { href: "/sheet", label: "Approved invoices", glyph: "▥" },

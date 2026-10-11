@@ -2,42 +2,10 @@
 
 import Link from "next/link";
 import type { AuditEvent, Stats, SystemStatus } from "@/lib/api";
+import { Tile } from "@/components/Tile";
 import { usePoll } from "@/lib/hooks";
 
 const POLL_MS = 5000;
-
-function Tile({
-  label,
-  value,
-  hint,
-  href,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  href?: string;
-}) {
-  const body = (
-    <div className="panel" style={{ padding: 18, height: "100%" }}>
-      <div className="eyebrow">{label}</div>
-      <div style={{ font: "600 26px var(--font-ui)", margin: "6px 0 2px" }}>
-        {value}
-      </div>
-      {hint ? (
-        <div className="muted" style={{ fontSize: 12 }}>
-          {hint}
-        </div>
-      ) : null}
-    </div>
-  );
-  return href ? (
-    <Link href={href} style={{ textDecoration: "none", color: "inherit" }}>
-      {body}
-    </Link>
-  ) : (
-    body
-  );
-}
 
 function percent(rate: number | null | undefined): string {
   // `null` means no invoices yet, which is not the same as 0% touchless --
@@ -89,7 +57,8 @@ export default function DashboardPage() {
         <Tile
           label="Touchless rate"
           value={percent(stats?.touchless_rate)}
-          hint={stats?.total ? `of ${stats.total} invoices` : "no invoices yet"}
+          href="/kpis"
+          hint={stats?.total ? `of ${stats.total} invoices · see KPIs` : "no invoices yet"}
         />
         <Tile
           label="Corrections"

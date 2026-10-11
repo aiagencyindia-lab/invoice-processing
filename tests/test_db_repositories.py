@@ -13,11 +13,13 @@ all, so they exercise the application-layer half; the policy half is covered by
 test_rls_policies.py.
 """
 
+from datetime import datetime
+
 import pytest
 from sqlalchemy.exc import DatabaseError
 
 from invoice_processing.adapters import JsonDocumentRepository
-from invoice_processing.case_projection import _decimal
+from invoice_processing.case_projection import _decimal, parse_timestamp
 from invoice_processing.db import session as session_module
 from invoice_processing.db.models import (
     TENANT_TABLES,
@@ -577,6 +579,120 @@ class TestProjection:
                 session.query(InvoiceLine).filter_by(tenant_id=GLOBEX).count()
                 == 0
             )
+
+    def test_a_human_decision_time_lands_in_its_own_column(self, db):
+        decided = {
+            **ARTIFACTS,
+            "workflow": {
+                "decision": "approve",
+                "decided_by": "a@acme.test",
+                "decided_at": "2026-10-01T10:00:00+00:00",
+            },
+        }
+        self._project(db, artifacts=decided)
+        with tenant_session(ACME, db) as session:
+            invoice = session.query(Invoice).filter_by(case_id="case-1").one()
+            assert invoice.decided_at is not None
+            assert invoice.decided_at.replace(tzinfo=None) == datetime(
+                2026, 10, 1, 10, 0, 0
+            )
+
+    def test_a_touchless_case_is_decided_when_it_is_projected(self, db):
+        touchless = {
+            "extraction": {
+                "invoice": {
+                    **ARTIFACTS["extraction"]["invoice"],
+                    "_routing": "AUTO",
+                }
+            },
+            "decision": {"final_decision": "ACCEPT"},
+        }
+        self._project(db, case_id="auto-1", artifacts=touchless)
+        with tenant_session(ACME, db) as session:
+            invoice = session.query(Invoice).filter_by(case_id="auto-1").one()
+            assert invoice.decided_at is not None
+            assert invoice.human_decision is None
+
+    def test_a_held_auto_case_is_not_touchless(self, db):
+        held = {
+            "extraction": {
+                "invoice": {
+                    **ARTIFACTS["extraction"]["invoice"],
+                    "_routing": "AUTO",
+                }
+            },
+            "decision": {"final_decision": "ACCEPT"},
+            "phase2": {
+                "validations": [
+                    {
+                        "step": "2.3",
+                        "rule": "Three-way",
+                        "passed": False,
+                        "informational": True,
+                    }
+                ]
+            },
+        }
+        self._project(db, case_id="held-1", artifacts=held)
+        with tenant_session(ACME, db) as session:
+            invoice = session.query(Invoice).filter_by(case_id="held-1").one()
+            assert invoice.decided_at is None
+
+    def test_a_review_case_stays_undecided(self, db):
+        self._project(db)
+        with tenant_session(ACME, db) as session:
+            invoice = session.query(Invoice).filter_by(case_id="case-1").one()
+            assert invoice.decided_at is None
+
+    def test_reprojecting_from_pipeline_output_keeps_the_human_decision_time(
+        self, db
+    ):
+        """A retry re-projects from the worker's files, which never hold the
+        workflow artifact. That must not erase when a person decided."""
+        decided = {
+            **ARTIFACTS,
+            "workflow": {
+                "decision": "reject",
+                "decided_by": "a@acme.test",
+                "decided_at": "2026-10-01T10:00:00+00:00",
+            },
+        }
+        self._project(db, artifacts=decided)
+        self._project(db, artifacts=ARTIFACTS)
+        with tenant_session(ACME, db) as session:
+            invoice = session.query(Invoice).filter_by(case_id="case-1").one()
+            assert invoice.decided_at is not None
+            assert invoice.human_decision == "reject"
+
+    def test_decided_at_parses_z_and_naive_and_ignores_garbage(self):
+        z = parse_timestamp("2026-10-01T10:00:00Z")
+        naive = parse_timestamp("2026-10-01T10:00:00")
+        assert z is not None and z.utcoffset().total_seconds() == 0
+        assert naive is not None and naive.utcoffset().total_seconds() == 0
+        assert parse_timestamp("yesterday") is None
+        assert parse_timestamp(None) is None
+        assert parse_timestamp(1700000000) is None
+
+    def test_reprojecting_leaves_exactly_one_run_row(self, db):
+        """Every approval, correction, GL coding and rematch re-projects the
+        case; each used to add another pipeline_runs row, so summing cost
+        counted the same run five times."""
+        self._project(db)
+        self._project(db)
+        self._project(db)
+        with tenant_session(ACME, db) as session:
+            assert session.query(PipelineRun).count() == 1
+
+    def test_a_projection_without_an_audit_log_keeps_the_run(self, db):
+        """No audit_log means no run to write, not a reason to erase the
+        cost already recorded."""
+        self._project(db)
+        self._project(
+            db,
+            artifacts={k: v for k, v in ARTIFACTS.items() if k != "audit_log"},
+        )
+        with tenant_session(ACME, db) as session:
+            assert session.query(PipelineRun).count() == 1
 
 
 class TestCorrections:

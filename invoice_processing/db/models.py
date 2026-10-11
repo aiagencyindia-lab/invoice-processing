@@ -220,6 +220,10 @@ class Invoice(Base, TenantMixin, TimestampMixin):
     fields: Mapped[dict] = mapped_column(JSONType, default=dict)
 
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When the invoice stopped needing anyone: a person's decision time from
+    # the workflow artifact, or the projection time for a touchless invoice.
+    # Null while someone still has to act.
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     external_id: Mapped[str | None] = mapped_column(String(128))  # ERP bill id
 
     document: Mapped[Document | None] = relationship(back_populates="invoices")
