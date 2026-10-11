@@ -12,7 +12,7 @@ Purchase orders::
 
     po_number,vendor_name,total_amount,currency,status,amount_invoiced,
     customer_name,valid_from,valid_to,amount_basis,line_number,item_code,
-    description,qty_ordered,unit_price,uom,receipt_required,qty_invoiced
+    description,qty_ordered,unit_price,uom,receipt_required,qty_invoiced,gl_account
 
 Goods receipts::
 
@@ -39,6 +39,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    field_validator,
 )
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
@@ -60,7 +61,7 @@ PO_HEADER = (
 )  # fmt: skip
 PO_LINE = (
     "line_number", "item_code", "description", "qty_ordered", "unit_price",
-    "uom", "receipt_required", "qty_invoiced",
+    "uom", "receipt_required", "qty_invoiced", "gl_account",
 )  # fmt: skip
 GRN_HEADER = ("grn_number", "po_number", "received_on", "reason")
 GRN_LINE = ("line_number", "item_code", "qty_received")
@@ -130,6 +131,15 @@ class PoLineIn(_Row):
     uom: Text(16) | None = None
     receipt_required: bool | None = None
     qty_invoiced: Amount = 0
+    # Blank cells never reach here: the CSV grouper drops empty cells and
+    # str_strip_whitespace trims JSON, so "   " arrives as "" -- mapped to
+    # None by the validator below rather than stored as an empty account.
+    gl_account: Text(64) | None = None
+
+    @field_validator("gl_account")
+    @classmethod
+    def _blank_is_none(cls, value):
+        return value or None
 
 
 class GrnHeaderIn(_Row):

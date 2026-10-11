@@ -777,6 +777,10 @@ class PoLine(Base, TenantMixin):
     unit_price: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
     uom: Mapped[str | None] = mapped_column(String(16))
     receipt_required: Mapped[bool | None] = mapped_column(Boolean)
+    # The buyer's coding at ordering time. An invoice line paired to this PO
+    # line inherits it ahead of the tenant's vendor/keyword rules. Only the
+    # ERP upload sets it; a scanned PO leaves it null.
+    gl_account: Mapped[str | None] = mapped_column(String(64))
     qty_invoiced_opening: Mapped[float] = mapped_column(
         Numeric(18, 4), nullable=False, default=0
     )

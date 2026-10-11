@@ -1888,6 +1888,7 @@ class PgPurchaseOrderRepository:
             "unit_price": cls._f(line.unit_price),
             "uom": line.uom,
             "receipt_required": line.receipt_required,
+            "gl_account": line.gl_account,
         }
 
     @staticmethod
@@ -2063,6 +2064,7 @@ class PgPurchaseOrderRepository:
                     row.uom = ln.get("uom")
                     row.receipt_required = ln.get("receipt_required")
                     row.qty_invoiced_opening = ln.get("qty_invoiced") or 0
+                    row.gl_account = ln.get("gl_account")
                 lines += len(incoming)
                 session.flush()
             if not replace:
