@@ -1293,6 +1293,24 @@ Return ONLY this JSON:
 
     _WHOLE_WORDS: ClassVar[frozenset[str]] = frozenset({"grn", "mrn"})
 
+    # Supporting documents are named in their title; an invoice names them in
+    # its body ("PO No", "GRN No", "Challan No"). So their markers count only
+    # in the title region, and only up to the first line naming an invoice.
+    _SUPPORTING_KINDS: ClassVar[frozenset[str]] = frozenset(
+        {"purchase_order", GOODS_RECEIPT, "delivery_challan"}
+    )
+    _INVOICE_MARKERS: ClassVar[tuple[str, ...]] = (
+        "tax invoice",
+        "invoice",
+        "bill of supply",
+    )
+    _TITLE_LINES: ClassVar[int] = 5
+
+    def _has_marker(self, marker: str, text: str) -> bool:
+        if marker in self._WHOLE_WORDS:
+            return marker in re.findall(r"[a-z]+", text)
+        return marker in text
+
     def _classify_by_keyword(self, content: str) -> DocumentContent:
         """What can be told from the text when the model call fails.
 
@@ -1301,15 +1319,25 @@ Return ONLY this JSON:
         code and is right about the documents that matter.
         """
         lowered = content.lower()
-        words = set(re.findall(r"[a-z]+", lowered))
+        lines = [line for line in lowered.splitlines() if line.strip()]
+        first_invoice_line = next(
+            (
+                i
+                for i, line in enumerate(lines)
+                if any(m in line for m in self._INVOICE_MARKERS)
+            ),
+            len(lines),
+        )
+        title = "\n".join(
+            lines[: min(self._TITLE_LINES, first_invoice_line + 1)]
+        )
         document_type = next(
             (
                 kind
                 for marker, kind in self._TITLE_MARKERS
-                if (
-                    marker in words
-                    if marker in self._WHOLE_WORDS
-                    else marker in lowered
+                if self._has_marker(
+                    marker,
+                    title if kind in self._SUPPORTING_KINDS else lowered,
                 )
             ),
             "unreadable" if not lowered.strip() else "other",

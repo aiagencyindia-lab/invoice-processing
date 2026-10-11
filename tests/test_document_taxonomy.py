@@ -230,6 +230,26 @@ class TestKeywordFallback:
             ("TAX INVOICE\nGSTIN: 29ZOICE4828P1ZD", TAX_INVOICE),
             # An invoice quoting the receipt it bills is still an invoice.
             ("TAX INVOICE\nGRN No: 123", TAX_INVOICE),
+            # A supporting marker counts only in the title region, and only
+            # when no invoice marker comes before it.
+            ("TAX INVOICE\nPurchase Order No: PO-1", TAX_INVOICE),
+            ("TAX INVOICE\nInvoice No: 9\nGRN No: 5", TAX_INVOICE),
+            (
+                "ACME TRADERS\nTAX INVOICE\nGSTIN: 29AAA\nInvoice No: 9\n"
+                "Date: 01-04-2026\nDelivery Challan No: DC-4\nPO No: 7",
+                TAX_INVOICE,
+            ),
+            (
+                "ACME TRADERS\nPlot 4\nPeenya\nBengaluru\nPh 080\n"
+                "Bill of supply 22\nPurchase Order: PO-1",
+                NON_TAX_INVOICE,
+            ),
+            # Untitled: the markers are only in the body, so nothing is told.
+            (
+                "ACME TRADERS\nPlot 4\nPeenya\nBengaluru\nPh 080\n"
+                "GRN No: 5\nPurchase Order: PO-1",
+                "other",
+            ),
         ],
     )
     def test_it_reads_the_title(self, text, expected):

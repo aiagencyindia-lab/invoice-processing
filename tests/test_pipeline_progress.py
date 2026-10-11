@@ -148,8 +148,8 @@ def test_a_bundle_with_an_invoice_stays_on_the_invoice_path(
 def test_a_keyword_guess_never_diverts_a_document(
     stub_agents, monkeypatch, tmp_path: Path
 ):
-    """The fallback reads the whole page, so an invoice quoting its GRN or PO
-    reads as one. It stays in the queue a person watches."""
+    """A keyword guess can still be wrong about a page, so a document it
+    calls a GRN stays in the queue a person watches."""
     monkeypatch.setattr(
         general_invoice_agent,
         "ClassifierAgent",
@@ -201,6 +201,10 @@ def test_an_invoice_read_by_the_fallback_stays_an_invoice(
         (tmp_path / "out" / "01_classification.json").read_text()
     )
     assert classification["summary"]["classified_by"] == "keyword"
+    assert classification["summary"]["document_type"] in (
+        "tax_invoice",
+        "invoice",
+    )
 
 
 def test_a_model_classified_receipt_is_diverted(
