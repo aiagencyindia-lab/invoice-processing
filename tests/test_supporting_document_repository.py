@@ -1,5 +1,7 @@
 """Scanned POs and receipts wait in supporting_documents for a human."""
 
+from inspect import signature as inspect_signature
+
 from sqlalchemy import inspect
 
 from invoice_processing.db import models
@@ -504,3 +506,23 @@ def test_revert_can_require_the_acceptance_it_read(env, tmp_path, kind):
         "t1", a["id"], extracted={}, reviewed_at=again["reviewed_at"]
     )
     assert back["status"] == "pending"
+
+
+@pytest.mark.parametrize("kind", ["pg", "json"])
+def test_list_is_capped_oldest_first_unless_newest_asked(env, tmp_path, kind):
+    _, _, ids, pg = env
+    repo = (
+        pg
+        if kind == "pg"
+        else JsonSupportingDocumentRepository(tmp_path / "sd.json")
+    )
+    docs = ids["t1"] if kind == "pg" else ["d1", "d2"]
+    a, b = (_up(repo, "t1", doc) for doc in docs)
+    assert inspect_signature(repo.list).parameters["limit"].default == 200
+    assert [r["id"] for r in repo.list("t1", ("pending",), limit=1)] == [
+        a["id"]
+    ]
+    newest = repo.list("t1", ("pending",), limit=1, newest_first=True)
+    assert [r["id"] for r in newest] == [b["id"]]
+    assert len(repo.list("t1", ("pending",))) == 2
+    assert len(repo.list("t1", ("pending",), limit=None)) == 2

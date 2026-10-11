@@ -575,14 +575,18 @@ class JsonSupportingDocumentRepository:
         self._write(data)
         return self._shown(tenant_id, [row])[0]
 
-    def list(self, tenant_id, statuses) -> list[dict]:
+    def list(
+        self, tenant_id, statuses, limit=200, newest_first=False
+    ) -> list[dict]:
         rows = [
             r
             for r in self._read().get(tenant_id, {}).values()
             if r["status"] in statuses
         ]
-        rows.sort(key=lambda r: (r["created_at"], r["id"]))
-        return self._shown(tenant_id, rows)
+        rows.sort(
+            key=lambda r: (r["created_at"], r["id"]), reverse=newest_first
+        )
+        return self._shown(tenant_id, rows[:limit])
 
     def get(self, tenant_id, id) -> dict | None:
         row = self._read().get(tenant_id, {}).get(id)

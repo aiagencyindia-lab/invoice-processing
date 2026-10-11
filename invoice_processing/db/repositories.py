@@ -2411,13 +2411,26 @@ class PgSupportingDocumentRepository:
             session.flush()
             return self._dict(*self._one(session, tenant_id, row.id))
 
-    def list(self, tenant_id: str, statuses: tuple[str, ...]) -> list[dict]:
+    def list(
+        self,
+        tenant_id: str,
+        statuses: tuple[str, ...],
+        limit: int | None = 200,
+        newest_first: bool = False,
+    ) -> list[dict]:
+        """Oldest first, so the longest-waiting scan is never cut off; the
+        newest first for a search of recent acceptances. `limit=None` reads
+        every row (an internal sweep, never a page)."""
+        query = self._select(tenant_id).where(
+            SupportingDocument.status.in_(statuses)
+        )
+        if newest_first:
+            query = query.order_by(None).order_by(
+                SupportingDocument.created_at.desc(),
+                SupportingDocument.id.desc(),
+            )
         with tenant_session(tenant_id, self.url) as session:
-            rows = session.execute(
-                self._select(tenant_id).where(
-                    SupportingDocument.status.in_(statuses)
-                )
-            ).all()
+            rows = session.execute(query.limit(limit)).all()
             return [self._dict(r, f) for r, f in rows]
 
     def for_documents(self, tenant_id: str, document_ids) -> list[dict]:

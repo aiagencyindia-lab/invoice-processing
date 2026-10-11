@@ -335,20 +335,32 @@ def _lines_changed(before: list, after: list, keys) -> int:
 def list_supporting_documents(
     principal: Annotated[Principal, Depends(require_role("clerk"))],
     status: Annotated[str, Query(max_length=64)] = "pending,blocked",
+    stored: bool | None = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> dict:
+    """`stored=false`: only acceptances that stored nothing (orphans an admin
+    can reopen), newest first; a store that cannot be read hides them all."""
     supporting, orders = _repos()
     wanted = tuple(s.strip() for s in status.split(",") if s.strip())
     if not wanted or set(wanted) - set(STATUSES):
         raise HTTPException(
             400, f"status must be some of {', '.join(STATUSES)}."
         )
-    rows = supporting.list(principal.tenant_id, wanted)
-    stored = _stored_or_all(orders, principal.tenant_id, rows)
-    return {
-        "documents": [
-            {**_public(r), "stored": r["document_id"] in stored} for r in rows
+    rows = supporting.list(
+        principal.tenant_id,
+        wanted,
+        limit=limit,
+        newest_first=stored is not None,
+    )
+    done = _stored_or_all(orders, principal.tenant_id, rows)
+    listed = [{**_public(r), "stored": r["document_id"] in done} for r in rows]
+    if stored is not None:
+        listed = [
+            r
+            for r in listed
+            if r["status"] == "accepted" and r["stored"] is stored
         ]
-    }
+    return {"documents": listed}
 
 
 @router.get("/api/supporting-documents/{row_id}")

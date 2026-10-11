@@ -317,7 +317,7 @@ def test_replacing_the_po_set_also_unblocks(env):
 
 def test_a_failed_unblock_never_fails_the_import(env, monkeypatch):
     class Broken:
-        def list(self, *a):
+        def list(self, *a, **k):
             raise RuntimeError("down")
 
     monkeypatch.setattr(service, "_supporting_documents", Broken())
@@ -1146,3 +1146,42 @@ def test_a_lost_compare_and_set_on_a_decidable_row_is_neutral(env, monkeypatch):
     )
     assert r.status_code == 409
     assert r.json()["detail"] == RACED
+
+
+def test_stored_false_lists_only_orphaned_acceptances(env):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    done = env["scan"](GRN_READ)
+    assert _accept(done, _grn_body()).status_code == 200
+    orphan = _orphan(
+        env,
+        {**GRN_READ, "fields": {**GRN_READ["fields"], "grn_number": "G-2"}},
+    )
+    env["scan"](GRN_READ)  # pending: nothing stored, but not an acceptance
+    r = _client().get(
+        "/api/supporting-documents?status=pending,accepted&stored=false"
+    )
+    assert r.status_code == 200, r.text
+    assert [d["id"] for d in r.json()["documents"]] == [orphan["id"]]
+
+
+def test_an_unreadable_store_lists_no_orphans(env, monkeypatch):
+    _orphan(env)
+
+    def down(*a, **k):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(env["orders"], "stored_documents", down)
+    r = _client().get("/api/supporting-documents?status=accepted&stored=false")
+    assert r.status_code == 200 and r.json()["documents"] == []
+
+
+def test_the_list_is_capped(env):
+    for _ in range(3):
+        env["scan"](GRN_READ)
+    c = _client()
+    assert (
+        len(c.get("/api/supporting-documents?limit=2").json()["documents"]) == 2
+    )
+    assert len(c.get("/api/supporting-documents").json()["documents"]) == 3
+    assert c.get("/api/supporting-documents?limit=501").status_code == 422
+    assert c.get("/api/supporting-documents?limit=0").status_code == 422

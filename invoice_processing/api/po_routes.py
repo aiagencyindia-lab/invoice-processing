@@ -494,7 +494,10 @@ def unblock_receipts(principal: Principal, po_numbers) -> list[str]:
         # One read of what is blocked, so a 1,000-PO import is not 1,000 queries.
         waiting = {
             r["po_number"]
-            for r in supporting.list(principal.tenant_id, ("blocked",))
+            # Uncapped: a blocked receipt past any page size must still go.
+            for r in supporting.list(
+                principal.tenant_id, ("blocked",), limit=None
+            )
         }
         for po in sorted(wanted & waiting):
             for row_id in supporting.unblock(principal.tenant_id, po):
