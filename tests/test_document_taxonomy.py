@@ -260,7 +260,14 @@ class TestKeywordFallback:
             ("TAX INVOICE\nInvoice No: 7", TAX_INVOICE),
             ("CREDIT NOTE AGAINST INVOICE\nCN-4", "credit_note"),
             # No title line: only a body invoice marker that is not a label.
-            ("ACME\nPlot 4\nInvoice No: 5\nTotal 100", "other"),
+            # A label alone names an invoice only when nothing on the page
+            # names a supporting document (ruling: a PO or GRN prints its
+            # own number label; GSTIN makes it a tax invoice).
+            ("ACME\nPlot 4\nInvoice No: 5\nTotal 100", NON_TAX_INVOICE),
+            ("Invoice No: 5\nGSTIN 29AAA\nTotal 100", TAX_INVOICE),
+            ("Invoice No: 5\nGRN No: 7", "other"),
+            ("Invoice No: 5\nPO No: PO-1", "other"),
+            ("Invoice No: 5\nDelivery Challan No: 3", "other"),
             ("ACME\nPlot 4\nThis is a tax invoice under GST", TAX_INVOICE),
             # Untitled: the markers are only in the body, so nothing is told.
             (

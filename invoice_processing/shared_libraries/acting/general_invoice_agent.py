@@ -1309,6 +1309,16 @@ Return ONLY this JSON:
         r"|ref|amount)\b|\s*[#:.\-\d])"
     )
 
+    # A label ("Invoice No: 5") names an invoice only on a page that names no
+    # supporting document anywhere: a PO or GRN prints its own number label.
+    _ANY_INVOICE: ClassVar[re.Pattern] = re.compile(
+        r"(?<!proforma )(?<!pro forma )\b(tax invoice|invoice)\b"
+    )
+    _ANY_SUPPORTING: ClassVar[re.Pattern] = re.compile(
+        r"purchase order|goods receipt|goods received|material receipt"
+        r"|delivery challan|delivery note|\b(?:po|grn|mrn|challan)\b"
+    )
+
     def _title_kind(self, line: str) -> str | None:
         """The kind a title line names, or None for a field line."""
         line = re.sub(r"\s+", " ", line).strip(" \t.,;*()[]|_=~'\"")
@@ -1339,7 +1349,12 @@ Return ONLY this JSON:
             None,
         )
         if document_type is None:
-            body = self._BODY_INVOICE.search(re.sub(r"\s+", " ", lowered))
+            flat = re.sub(r"\s+", " ", lowered)
+            body = self._BODY_INVOICE.search(flat) or (
+                None
+                if self._ANY_SUPPORTING.search(flat)
+                else self._ANY_INVOICE.search(flat)
+            )
             if body:
                 document_type = (
                     TAX_INVOICE
