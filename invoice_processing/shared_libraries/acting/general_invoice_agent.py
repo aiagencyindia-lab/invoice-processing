@@ -1265,9 +1265,7 @@ Return ONLY this JSON:
             self.fell_back = True
             return self._classify_by_keyword(content)
 
-    # Document-title phrases. A TITLE line is made of these alone, joined by
-    # / - & "cum" "and" "against"; any other word, a colon or a digit makes
-    # it a field line ("Invoice To:", "Supplier Invoice", "GRN No: 5").
+    # Document-title phrases and the type each names.
     _TITLE_PHRASES: ClassVar[dict[str, str]] = {
         "proforma invoice": "proforma_invoice",
         "pro forma invoice": "proforma_invoice",
@@ -1275,20 +1273,29 @@ Return ONLY this JSON:
         "invoice": NON_TAX_INVOICE,
         "bill of supply": NON_TAX_INVOICE,
         "credit note": "credit_note",
+        "debit note": "other",  # no debit-note type; never a payable
         "purchase order": "purchase_order",
+        "work order": "other",
         "goods receipt note": GOODS_RECEIPT,
         "goods received note": GOODS_RECEIPT,
         "goods receipt": GOODS_RECEIPT,
         "material receipt note": GOODS_RECEIPT,
+        "material receipt": GOODS_RECEIPT,
         "grn": GOODS_RECEIPT,
         "mrn": GOODS_RECEIPT,
         "delivery challan": "delivery_challan",
         "delivery note": "delivery_challan",
+        "challan": "delivery_challan",
         "quotation": "quotation",
         "receipt": "receipt",
         "statement of account": "statement",
         "statement": "statement",
     }
+    _INVOICE_KINDS: ClassVar[frozenset[str]] = frozenset(
+        {TAX_INVOICE, NON_TAX_INVOICE}
+    )
+    # The documents an invoice is billed "against": on a heading that also
+    # names an invoice, the invoice wins over these (and only these).
     _SUPPORTING_KINDS: ClassVar[frozenset[str]] = frozenset(
         {"purchase_order", GOODS_RECEIPT, "delivery_challan"}
     )
@@ -1296,49 +1303,87 @@ Return ONLY this JSON:
     _PHRASE: ClassVar[str] = "|".join(
         sorted(map(re.escape, _TITLE_PHRASES), key=len, reverse=True)
     )
-    _TITLE_LINE: ClassVar[re.Pattern] = re.compile(
+    _NON_INVOICE_PHRASE: ClassVar[str] = "|".join(
+        sorted(
+            (
+                re.escape(p)
+                for p, kind in _TITLE_PHRASES.items()
+                if kind not in (TAX_INVOICE, NON_TAX_INVOICE)
+            ),
+            key=len,
+            reverse=True,
+        )
+    )
+    # (a) A clean heading: title phrases alone, joined by / - & "cum" "and"
+    # "against". Checked only on a line with no colon and no digit.
+    _HEADING: ClassVar[re.Pattern] = re.compile(
         rf"(?:{_PHRASE})(?:(?:\s*[/&-]\s*|\s+(?:cum|and|against)\s+)"
         rf"(?:{_PHRASE}))*"
     )
     _PHRASES_IN: ClassVar[re.Pattern] = re.compile(rf"\b(?:{_PHRASE})\b")
+    # (b) A non-payable title: the phrase first, then only a number, a
+    # "No."/"#" label, a parenthetical or copy words ("PURCHASE ORDER No.
+    # 4471", "GOODS RECEIPT NOTE (GRN)", "CREDIT NOTE No: CN-4").
+    _NON_PAYABLE_TITLE: ClassVar[re.Pattern] = re.compile(
+        rf"(?P<phrase>{_NON_INVOICE_PHRASE})\b(?:\s*(?:[-/,]|\([a-z ]+\)"
+        r"|(?:original|duplicate|triplicate|copy|amendment|amended|revised)\b"
+        r"|(?:no\b\.?|number\b|#)\s*[:.]?"
+        r"|[a-z]{0,4}[-/]?\d[\w/-]*))*"
+    )
     _TITLE_SCAN_LINES: ClassVar[int] = 8
-    # With no title line: an invoice named in the body, but not as a label.
-    _BODY_INVOICE: ClassVar[re.Pattern] = re.compile(
-        r"(?<!proforma )(?<!pro forma )\b(tax invoice|bill of supply|invoice)\b"
-        r"(?!\s*(?:to|no|number|date|dated|addr|address|party|details|value"
-        r"|ref|amount)\b|\s*[#:.\-\d])"
-    )
-
-    # A label ("Invoice No: 5") names an invoice only on a page that names no
-    # supporting document anywhere: a PO or GRN prints its own number label.
-    _ANY_INVOICE: ClassVar[re.Pattern] = re.compile(
-        r"(?<!proforma )(?<!pro forma )\b(tax invoice|invoice)\b"
-    )
-    _ANY_SUPPORTING: ClassVar[re.Pattern] = re.compile(
+    # (d) With no title line, any of these anywhere keeps the page off the
+    # invoice types: a PO or GRN quotes "Invoice No" and "Invoice Qty".
+    _ANY_NON_PAYABLE: ClassVar[re.Pattern] = re.compile(
         r"purchase order|goods receipt|goods received|material receipt"
-        r"|delivery challan|delivery note|\b(?:po|grn|mrn|challan)\b"
+        r"|delivery note|credit note|debit note|work order"
+        r"|\b(?:po|grn|mrn|challan)\b"
+    )
+    _ANY_INVOICE: ClassVar[re.Pattern] = re.compile(
+        r"(?<!proforma )(?<!pro forma )\b(tax invoice|bill of supply|invoice)\b"
     )
 
     def _title_kind(self, line: str) -> str | None:
-        """The kind a title line names, or None for a field line."""
-        line = re.sub(r"\s+", " ", line).strip(" \t.,;*()[]|_=~'\"")
-        if not line or re.search(r"[:\d]", line):
+        """The type a title line names, or None for any other line."""
+        line = re.sub(r"\s+", " ", line).strip(" \t.,;*[]|_=~'\"")
+        if line.startswith("(") and line.endswith(")"):
+            line = line[1:-1].strip()
+        if not line:
             return None
-        if not self._TITLE_LINE.fullmatch(line):
+        if not re.search(r"[:\d]", line) and self._HEADING.fullmatch(line):
+            kinds = [
+                self._TITLE_PHRASES[m] for m in self._PHRASES_IN.findall(line)
+            ]
+            # A non-payable (credit note, proforma...) beats an invoice,
+            # which beats the PO/GRN/challan it is billed against.
+            return min(
+                kinds,
+                key=lambda k: (
+                    2
+                    if k in self._SUPPORTING_KINDS
+                    else 1
+                    if k in self._INVOICE_KINDS
+                    else 0
+                ),
+            )
+        title = self._NON_PAYABLE_TITLE.fullmatch(line)
+        if title is None:
             return None
-        kinds = [self._TITLE_PHRASES[m] for m in self._PHRASES_IN.findall(line)]
-        # An invoice phrase beats a supporting one on the same line.
-        return next(
-            (k for k in kinds if k not in self._SUPPORTING_KINDS), kinds[0]
-        )
+        # A bare "GRN No: 7" is a field label; the abbreviation titles a page
+        # only on its own ("GRN", "GRN (ORIGINAL)").
+        if title["phrase"] in ("grn", "mrn") and re.search(
+            r"[\d#]|\bno\b|\bnumber\b", line
+        ):
+            return None
+        return self._TITLE_PHRASES[title["phrase"]]
 
     def _classify_by_keyword(self, content: str) -> DocumentContent:
         """What can be told from the text when the model call fails.
 
         It used to answer "invoice" for anything containing the word, which
-        made a quotation a payable. It reads the first title line instead; a
-        supporting type is never taken from body text, because an invoice
-        quotes its PO and GRN there.
+        made a quotation a payable. It fails closed: the first title line
+        decides, and an untitled page is an invoice only when it names no PO,
+        GRN, challan or note anywhere. An invoice typed "other" is a visible
+        rejection; a PO typed as an invoice would be paid.
         """
         lowered = content.lower()
         lines = [line for line in lowered.splitlines() if line.strip()]
@@ -1350,9 +1395,9 @@ Return ONLY this JSON:
         )
         if document_type is None:
             flat = re.sub(r"\s+", " ", lowered)
-            body = self._BODY_INVOICE.search(flat) or (
+            body = (
                 None
-                if self._ANY_SUPPORTING.search(flat)
+                if self._ANY_NON_PAYABLE.search(flat)
                 else self._ANY_INVOICE.search(flat)
             )
             if body:

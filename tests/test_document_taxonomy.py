@@ -241,10 +241,12 @@ class TestKeywordFallback:
                 "Date: 01-04-2026\nDelivery Challan No: DC-4\nPO No: 7",
                 TAX_INVOICE,
             ),
+            # Untitled with a PO marker anywhere: fail closed (was
+            # bill-of-supply invoice; ruling (d) puts supporting markers first).
             (
                 "ACME TRADERS\nPlot 4\nPeenya\nBengaluru\nPh 080\n"
                 "Issued as a bill of supply\nPurchase Order: PO-1",
-                NON_TAX_INVOICE,
+                "other",
             ),
             # "Invoice To" is an address, not a title: still a PO.
             (
@@ -267,7 +269,9 @@ class TestKeywordFallback:
             ("Invoice No: 5\nGSTIN 29AAA\nTotal 100", TAX_INVOICE),
             ("Invoice No: 5\nGRN No: 7", "other"),
             ("Invoice No: 5\nPO No: PO-1", "other"),
-            ("Invoice No: 5\nDelivery Challan No: 3", "other"),
+            # Ruling (b): "Delivery Challan No: 3" is now a challan title
+            # (was "other"); still never an invoice.
+            ("Invoice No: 5\nDelivery Challan No: 3", "delivery_challan"),
             ("ACME\nPlot 4\nThis is a tax invoice under GST", TAX_INVOICE),
             # Untitled: the markers are only in the body, so nothing is told.
             (
@@ -282,6 +286,71 @@ class TestKeywordFallback:
             ClassifierAgent()._classify_by_keyword(text).document_type
             == expected
         )
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            (
+                "ACME LTD\nPURCHASE ORDER No. 4471\n"
+                "Note: Invoice should quote PO number",
+                "purchase_order",
+            ),
+            (
+                "PURCHASE ORDER (ORIGINAL)\nPO No: 4471\nGSTIN 29AAA\n"
+                "Please raise invoice in duplicate",
+                "purchase_order",
+            ),
+            (
+                "PURCHASE ORDER - ORIGINAL\nInvoice will be paid in 30 days",
+                "purchase_order",
+            ),
+            (
+                "PURCHASE ORDER AMENDMENT\nPO No 4471\n"
+                "Invoice as per revised rates",
+                "purchase_order",
+            ),
+            (
+                "GOODS RECEIPT NOTE (GRN)\nGRN No: 88\nSupplier Invoice\n"
+                "Invoice Qty Received Qty",
+                "goods_receipt",
+            ),
+            ("MATERIAL RECEIPT\nMRN 5\nInvoice Qty 4", "goods_receipt"),
+            (
+                "CREDIT NOTE No: CN-4\nAgainst Invoice No: 77\nGSTIN 29AAA",
+                "credit_note",
+            ),
+            ("CHALLAN\nInvoice will follow", "delivery_challan"),
+            ("WORK ORDER\nInvoice shall be raised monthly", "other"),
+            ("TAX INVOICE\nInvoice No: 7\nPO No: 4471", TAX_INVOICE),
+            ("INVOICE\nGSTIN 29AAA", TAX_INVOICE),
+            ("Invoice No: 5\nGSTIN 29AAA\nTotal 100", TAX_INVOICE),
+            ("Invoice No: 5\nGRN No: 7", "other"),
+            ("Invoice No: 5\nPO No: PO-1", "other"),
+            (
+                "ACME LTD\nInvoice To: Foo Pvt Ltd\nPURCHASE ORDER\nPO No 5",
+                "purchase_order",
+            ),
+        ],
+    )
+    def test_a_non_payable_title_is_never_an_invoice(self, text, expected):
+        assert (
+            ClassifierAgent()._classify_by_keyword(text).document_type
+            == expected
+        )
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Receipt No 88\nSupplier Invoice\nInvoice Qty 10",
+            "DEBIT NOTE\nAgainst Invoice No: 77",
+            "DEBIT NOTE AGAINST INVOICE\nGSTIN 29AAA",
+            "INVOICE / CREDIT NOTE\nGSTIN 29AAA",
+        ],
+    )
+    def test_these_are_not_typed_as_an_invoice(self, text):
+        result = ClassifierAgent()._classify_by_keyword(text)
+        assert result.document_type not in (TAX_INVOICE, NON_TAX_INVOICE)
+        assert result.has_invoice is False
 
     @pytest.mark.parametrize(
         "label",
