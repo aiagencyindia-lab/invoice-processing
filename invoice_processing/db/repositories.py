@@ -212,6 +212,19 @@ class PgCaseRepository:
             for column, value in columns.items():
                 setattr(invoice, column, value)
 
+            # The human decision time wins. A touchless invoice is decided
+            # the moment it is projected, and keeps that time on retries so a
+            # re-run does not move it. Nothing here ever writes None: the
+            # worker re-projects from files that never hold the workflow
+            # artifact, and clearing the column would erase a real decision.
+            decided = case_projection.decided_at(artifacts)
+            if decided is not None:
+                invoice.decided_at = decided
+            elif invoice.decided_at is None and case_projection.is_touchless(
+                artifacts
+            ):
+                invoice.decided_at = datetime.now(timezone.utc)
+
             # The case id *is* the document id everywhere in this system, so
             # the link needs no extra bookkeeping -- but it is only set when
             # that document really exists, because a dangling foreign key
@@ -255,6 +268,13 @@ class PgCaseRepository:
                     )
                 )
 
+            # One run row per invoice. Every approval, correction, GL coding
+            # and rematch re-projects; appending on each made the same cost
+            # count several times over.
+            session.query(PipelineRun).filter(
+                PipelineRun.tenant_id == ctx.tenant_id,
+                PipelineRun.invoice_id == invoice.id,
+            ).delete(synchronize_session=False)
             run = case_projection.run(artifacts)
             if run is not None:
                 session.add(

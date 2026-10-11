@@ -15,6 +15,7 @@ No test touches GCS; a fake client records calls.
 """
 
 import glob
+import json
 import os
 import sqlite3
 import subprocess
@@ -265,6 +266,66 @@ class TestMigration:
         }
         assert remaining == {"alembic_version"}, f"left behind: {remaining}"
 
+    def test_decided_at_is_backfilled_from_the_workflow_artifact(
+        self, tmp_path
+    ):
+        """History must not start blank: a decision made last month has a
+        time, and the new column should know it."""
+        db = tmp_path / "b.db"
+        assert _alembic("upgrade d8e1f2a3b4c5", db).returncode == 0
+
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "insert into tenants (id, slug, name, region, status, settings, "
+            "created_at, updated_at) values ('t1', 't1', 'T1', 'au', 'active', "
+            "'{}', '2026-01-01', '2026-01-01')"
+        )
+        rows = [
+            (
+                "decided",
+                {
+                    "workflow": {
+                        "decision": "approve",
+                        "decided_at": "2026-09-30T08:00:00Z",
+                    }
+                },
+            ),
+            ("pending", {"workflow": {}}),
+            (
+                "garbage",
+                {
+                    "workflow": {
+                        "decision": "reject",
+                        "decided_at": "last tuesday",
+                    }
+                },
+            ),
+        ]
+        for case_id, fields in rows:
+            conn.execute(
+                "insert into invoices (id, tenant_id, case_id, status, fields, "
+                "created_at, updated_at) values (?, 't1', ?, 'processed', ?, "
+                "'2026-09-01', '2026-09-01')",
+                (case_id, case_id, json.dumps(fields)),
+            )
+        conn.commit()
+        conn.close()
+
+        up = _alembic("upgrade head", db)
+        assert up.returncode == 0, up.stderr
+        got = dict(
+            sqlite3.connect(db)
+            .execute("select case_id, decided_at from invoices")
+            .fetchall()
+        )
+        assert got["decided"] is not None and got["decided"].startswith(
+            "2026-09-30"
+        )
+        assert got["pending"] is None
+        assert got["garbage"] is None
+
+        assert _alembic("downgrade d8e1f2a3b4c5", db).returncode == 0
+
     def test_migration_carries_rls(self):
         """A schema deployed without RLS has no database-level isolation."""
         path = glob.glob(
@@ -333,6 +394,7 @@ class TestMigration:
             ("b21ac023e07e", 1),
             ("c4d7e8f91a02", 4),
             ("d8e1f2a3b4c5", 1),
+            ("a7b3c9d2e4f6", 0),
         ],
     )
     def test_migration_protects_exactly_the_tables_it_creates(

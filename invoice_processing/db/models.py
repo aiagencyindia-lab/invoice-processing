@@ -169,6 +169,9 @@ class Invoice(Base, TenantMixin, TimestampMixin):
         Index("ix_invoices_status", "tenant_id", "status"),
         # "Everything a reviewer overruled" is the learning loop's one query.
         Index("ix_invoices_agreement", "tenant_id", "decision_agreement"),
+        # The KPI window: "decided in the last 30 days" must not scan every
+        # row's JSON to find out.
+        Index("ix_invoices_tenant_decided", "tenant_id", "decided_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -220,6 +223,10 @@ class Invoice(Base, TenantMixin, TimestampMixin):
     fields: Mapped[dict] = mapped_column(JSONType, default=dict)
 
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When the invoice stopped needing anyone: a person's decision time from
+    # the workflow artifact, or the projection time for a touchless invoice.
+    # Null while someone still has to act.
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     external_id: Mapped[str | None] = mapped_column(String(128))  # ERP bill id
 
     document: Mapped[Document | None] = relationship(back_populates="invoices")
