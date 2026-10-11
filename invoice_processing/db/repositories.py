@@ -271,13 +271,15 @@ class PgCaseRepository:
 
             # One run row per invoice. Every approval, correction, GL coding
             # and rematch re-projects; appending on each made the same cost
-            # count several times over.
-            session.query(PipelineRun).filter(
-                PipelineRun.tenant_id == ctx.tenant_id,
-                PipelineRun.invoice_id == invoice.id,
-            ).delete(synchronize_session=False)
+            # count several times over. Replace only when there is a run to
+            # replace it with: a projection without an audit_log must not
+            # erase the cost already recorded.
             run = case_projection.run(artifacts)
             if run is not None:
+                session.query(PipelineRun).filter(
+                    PipelineRun.tenant_id == ctx.tenant_id,
+                    PipelineRun.invoice_id == invoice.id,
+                ).delete(synchronize_session=False)
                 session.add(
                     PipelineRun(
                         tenant_id=ctx.tenant_id,
@@ -2863,7 +2865,7 @@ class KpiRepository:
                 PipelineRun.tenant_id == tenant_id,
                 PipelineRun.invoice_id == Invoice.id,
             )
-            .order_by(PipelineRun.created_at.desc())
+            .order_by(PipelineRun.created_at.desc(), PipelineRun.id.desc())
             .limit(1)
             .scalar_subquery()
         )
@@ -2949,7 +2951,9 @@ class KpiRepository:
         )
 
         po_rows = [r for r in rows if r.po_number]
-        held = [r for r in rows if r.held]
+        # A hold is a three-way-match outcome: only PO-backed rows can have
+        # one, so the rate can never exceed 1.
+        held = [r for r in po_rows if r.held]
 
         costs = [float(r.cost_usd) for r in rows if r.cost_usd is not None]
 
@@ -2989,7 +2993,6 @@ class KpiRepository:
         tenant_id: str,
         since: datetime | None,
         reason: str,
-        now: datetime | None = None,
     ) -> dict:
         """The invoices behind one bucket, newest received first."""
         with tenant_session(tenant_id, self.url) as session:

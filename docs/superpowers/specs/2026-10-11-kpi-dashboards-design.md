@@ -81,9 +81,10 @@ Per invoice:
 ## 2. Storage
 
 - **Migration** (new head after `d8e1f2a3b4c5`): add
-  `invoices.decided_at TIMESTAMPTZ NULL` and index
-  `ix_invoices_tenant_decided (tenant_id, decided_at)`. Backfill in the same
-  migration: parse `fields->'workflow'->>'decided_at'` for every row; set the
+  `invoices.decided_at TIMESTAMPTZ NULL` (no index: the window filters on
+  received, not decided). Backfill in the same migration, one tenant at a
+  time with `app.tenant_id` set so forced RLS lets a non-BYPASSRLS role see
+  the rows: parse `fields->'workflow'->>'decided_at'` for every row; set the
   column when it parses, otherwise leave it null. The backfill reads JSON only
   and never writes `fields`. Touchless history stays null-decided; only rows
   projected after this change get a touchless `decided_at` (documented limit).

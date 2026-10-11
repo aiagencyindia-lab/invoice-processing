@@ -169,9 +169,6 @@ class Invoice(Base, TenantMixin, TimestampMixin):
         Index("ix_invoices_status", "tenant_id", "status"),
         # "Everything a reviewer overruled" is the learning loop's one query.
         Index("ix_invoices_agreement", "tenant_id", "decision_agreement"),
-        # The KPI window: "decided in the last 30 days" must not scan every
-        # row's JSON to find out.
-        Index("ix_invoices_tenant_decided", "tenant_id", "decided_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)

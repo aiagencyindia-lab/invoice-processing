@@ -683,6 +683,17 @@ class TestProjection:
         with tenant_session(ACME, db) as session:
             assert session.query(PipelineRun).count() == 1
 
+    def test_a_projection_without_an_audit_log_keeps_the_run(self, db):
+        """No audit_log means no run to write, not a reason to erase the
+        cost already recorded."""
+        self._project(db)
+        self._project(
+            db,
+            artifacts={k: v for k, v in ARTIFACTS.items() if k != "audit_log"},
+        )
+        with tenant_session(ACME, db) as session:
+            assert session.query(PipelineRun).count() == 1
+
 
 class TestCorrections:
     """The asset that compounds -- kept where a deploy cannot erase it.

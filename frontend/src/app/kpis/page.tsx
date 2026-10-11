@@ -126,7 +126,6 @@ function KpisView() {
                   ? "nothing waiting"
                   : `oldest waiting ${hours(data.open.oldest_hours)}`
               }
-              href="/invoices"
               testId="open"
             />
             <Tile

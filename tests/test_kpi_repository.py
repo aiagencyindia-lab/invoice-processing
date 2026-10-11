@@ -302,6 +302,38 @@ class TestSummary:
             "hold_rate": 0.5,
         }
 
+    def test_a_held_invoice_without_a_po_is_not_counted_as_held(self, db):
+        """hold_rate is held/PO-backed; counting a PO-less hold in the
+        numerator alone could push it past 1."""
+        with tenant_session(ACME, db) as session:
+            seed(session, "no-po-held", routing="REVIEW", held=True)
+            seed(session, "po-ok", po="PO-2", decided=days_ago(0.5))
+        body = KpiRepository(db).summary(ACME, None, now=NOW)
+        assert body["three_way"] == {
+            "po_invoices": 1,
+            "held": 0,
+            "hold_rate": 0.0,
+        }
+
+    def test_runs_written_in_the_same_instant_resolve_deterministically(
+        self, db
+    ):
+        with tenant_session(ACME, db) as session:
+            invoice = seed(session, "tie", decided=days_ago(0.5))
+            at = days_ago(1)
+            for run_id, value in (("a" * 36, 0.01), ("z" * 36, 0.05)):
+                session.add(
+                    PipelineRun(
+                        id=run_id,
+                        tenant_id=ACME,
+                        invoice_id=invoice.id,
+                        cost_usd=value,
+                        created_at=at,
+                    )
+                )
+        body = KpiRepository(db).summary(ACME, None, now=NOW)
+        assert body["ai_cost"]["total_usd"] == 0.05
+
     def test_cost_uses_the_latest_run_when_duplicates_exist(self, db):
         with tenant_session(ACME, db) as session:
             seed(session, "dup", cost=[0.01, 0.01, 0.02], decided=days_ago(0.5))
@@ -349,7 +381,7 @@ class TestCases:
             seed(session, "older", received=days_ago(3), routing="REVIEW")
             seed(session, "newer", received=days_ago(2), routing="REVIEW")
             seed(session, "auto", decided=days_ago(0.5))
-        body = KpiRepository(db).cases(ACME, None, "low_confidence", now=NOW)
+        body = KpiRepository(db).cases(ACME, None, "low_confidence")
         assert body == {"case_ids": ["newer", "older"], "truncated": False}
 
     def test_is_capped(self, db, monkeypatch):
@@ -359,6 +391,6 @@ class TestCases:
                 seed(
                     session, f"c{i}", received=days_ago(i + 1), routing="REVIEW"
                 )
-        body = KpiRepository(db).cases(ACME, None, "low_confidence", now=NOW)
+        body = KpiRepository(db).cases(ACME, None, "low_confidence")
         assert len(body["case_ids"]) == 2
         assert body["truncated"] is True

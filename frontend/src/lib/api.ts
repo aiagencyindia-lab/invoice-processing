@@ -156,7 +156,7 @@ export type KpiReason =
 export const REASON_LABELS: Record<KpiReason, string> = {
   rejected_by_rules: "Rejected by rules",
   three_way_hold: "Held for goods receipt",
-  low_confidence: "Low-confidence extraction",
+  low_confidence: "Sent for review",
   approval_required: "Approval chain",
   manual_decision: "Decided by hand",
   other: "Other",
