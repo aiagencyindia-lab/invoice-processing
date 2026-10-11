@@ -1265,82 +1265,89 @@ Return ONLY this JSON:
             self.fell_back = True
             return self._classify_by_keyword(content)
 
-    # Titles, most specific first: "proforma invoice" and "tax invoice" both
-    # contain "invoice", so the order is the logic.
-    _TITLE_MARKERS: ClassVar[tuple[tuple[str, str], ...]] = (
-        ("proforma invoice", "proforma_invoice"),
-        ("pro forma invoice", "proforma_invoice"),
-        ("credit note", "credit_note"),
-        ("delivery challan", "delivery_challan"),
-        ("delivery note", "delivery_challan"),
-        # Before "purchase order": a receipt note quotes the PO it receives.
-        ("goods receipt", GOODS_RECEIPT),
-        ("goods received note", GOODS_RECEIPT),
-        ("material receipt", GOODS_RECEIPT),
-        ("purchase order", "purchase_order"),
-        ("quotation", "quotation"),
-        ("quote no", "quotation"),
-        ("statement of account", "statement"),
-        ("bill of supply", NON_TAX_INVOICE),
-        ("tax invoice", TAX_INVOICE),
-        # After "tax invoice": an invoice quotes the GRN it bills. Whole
-        # words only (see _WHOLE_WORDS): "IMRN-2" is a reference.
-        ("grn", GOODS_RECEIPT),
-        ("mrn", GOODS_RECEIPT),
-        ("receipt", "receipt"),
-        ("invoice", NON_TAX_INVOICE),
-    )
-
-    _WHOLE_WORDS: ClassVar[frozenset[str]] = frozenset({"grn", "mrn"})
-
-    # Supporting documents are named in their title; an invoice names them in
-    # its body ("PO No", "GRN No", "Challan No"). So their markers count only
-    # in the title region, and only on lines before one titling an invoice --
-    # which "Invoice To:" or "Invoice No" does not: a PO prints those too.
+    # Document-title phrases. A TITLE line is made of these alone, joined by
+    # / - & "cum" "and" "against"; any other word, a colon or a digit makes
+    # it a field line ("Invoice To:", "Supplier Invoice", "GRN No: 5").
+    _TITLE_PHRASES: ClassVar[dict[str, str]] = {
+        "proforma invoice": "proforma_invoice",
+        "pro forma invoice": "proforma_invoice",
+        "tax invoice": TAX_INVOICE,
+        "invoice": NON_TAX_INVOICE,
+        "bill of supply": NON_TAX_INVOICE,
+        "credit note": "credit_note",
+        "purchase order": "purchase_order",
+        "goods receipt note": GOODS_RECEIPT,
+        "goods received note": GOODS_RECEIPT,
+        "goods receipt": GOODS_RECEIPT,
+        "material receipt note": GOODS_RECEIPT,
+        "grn": GOODS_RECEIPT,
+        "mrn": GOODS_RECEIPT,
+        "delivery challan": "delivery_challan",
+        "delivery note": "delivery_challan",
+        "quotation": "quotation",
+        "receipt": "receipt",
+        "statement of account": "statement",
+        "statement": "statement",
+    }
     _SUPPORTING_KINDS: ClassVar[frozenset[str]] = frozenset(
         {"purchase_order", GOODS_RECEIPT, "delivery_challan"}
     )
-    _INVOICE_TITLE: ClassVar[re.Pattern] = re.compile(
-        r"tax invoice|bill of supply"
-        r"|^\W*invoice\b(?!\s*(?:(?:to|no|number|date|address|ref)\b|[#:.]))"
-        r"|^\W*(?:\w+\s+){0,2}invoice\W*$"
+    # Longest first, so "goods receipt note" is not read as "goods receipt".
+    _PHRASE: ClassVar[str] = "|".join(
+        sorted(map(re.escape, _TITLE_PHRASES), key=len, reverse=True)
     )
-    _TITLE_LINES: ClassVar[int] = 5
+    _TITLE_LINE: ClassVar[re.Pattern] = re.compile(
+        rf"(?:{_PHRASE})(?:(?:\s*[/&-]\s*|\s+(?:cum|and|against)\s+)"
+        rf"(?:{_PHRASE}))*"
+    )
+    _PHRASES_IN: ClassVar[re.Pattern] = re.compile(rf"\b(?:{_PHRASE})\b")
+    _TITLE_SCAN_LINES: ClassVar[int] = 8
+    # With no title line: an invoice named in the body, but not as a label.
+    _BODY_INVOICE: ClassVar[re.Pattern] = re.compile(
+        r"(?<!proforma )(?<!pro forma )\b(tax invoice|bill of supply|invoice)\b"
+        r"(?!\s*(?:to|no|number|date|dated|addr|address|party|details|value"
+        r"|ref|amount)\b|\s*[#:.\-\d])"
+    )
 
-    def _has_marker(self, marker: str, text: str) -> bool:
-        if marker in self._WHOLE_WORDS:
-            return marker in re.findall(r"[a-z]+", text)
-        return marker in text
+    def _title_kind(self, line: str) -> str | None:
+        """The kind a title line names, or None for a field line."""
+        line = re.sub(r"\s+", " ", line).strip(" \t.,;*()[]|_=~'\"")
+        if not line or re.search(r"[:\d]", line):
+            return None
+        if not self._TITLE_LINE.fullmatch(line):
+            return None
+        kinds = [self._TITLE_PHRASES[m] for m in self._PHRASES_IN.findall(line)]
+        # An invoice phrase beats a supporting one on the same line.
+        return next(
+            (k for k in kinds if k not in self._SUPPORTING_KINDS), kinds[0]
+        )
 
     def _classify_by_keyword(self, content: str) -> DocumentContent:
         """What can be told from the text when the model call fails.
 
         It used to answer "invoice" for anything containing the word, which
-        made a quotation a payable. Reading the title instead is barely more
-        code and is right about the documents that matter.
+        made a quotation a payable. It reads the first title line instead; a
+        supporting type is never taken from body text, because an invoice
+        quotes its PO and GRN there.
         """
         lowered = content.lower()
         lines = [line for line in lowered.splitlines() if line.strip()]
-        first_invoice_line = next(
-            (
-                i
-                for i, line in enumerate(lines)
-                if self._INVOICE_TITLE.search(line.strip())
-            ),
-            len(lines),
-        )
-        title = "\n".join(lines[: min(self._TITLE_LINES, first_invoice_line)])
         document_type = next(
-            (
-                kind
-                for marker, kind in self._TITLE_MARKERS
-                if self._has_marker(
-                    marker,
-                    title if kind in self._SUPPORTING_KINDS else lowered,
-                )
+            filter(
+                None, map(self._title_kind, lines[: self._TITLE_SCAN_LINES])
             ),
-            "unreadable" if not lowered.strip() else "other",
+            None,
         )
+        if document_type is None:
+            body = self._BODY_INVOICE.search(re.sub(r"\s+", " ", lowered))
+            if body:
+                document_type = (
+                    TAX_INVOICE
+                    if body.group(1) == "tax invoice"
+                    else NON_TAX_INVOICE
+                )
+            else:
+                document_type = "unreadable" if not lowered.strip() else "other"
         if document_type == NON_TAX_INVOICE and "gstin" in lowered:
             document_type = TAX_INVOICE
         return DocumentContent(

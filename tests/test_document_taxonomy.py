@@ -220,7 +220,9 @@ class TestKeywordFallback:
                 "GOODS RECEIPT NOTE\nGRN No.: GRN-1\nPurchase Order: PO-4471",
                 "goods_receipt",
             ),
-            ("GRN No.: GRN-88\nReceived in good condition", "goods_receipt"),
+            # A field label is not a title, and body text never makes a
+            # supporting type (was goods_receipt: "GRN" matched anywhere).
+            ("GRN No.: GRN-88\nReceived in good condition", "other"),
             ("GOODS RECEIVED NOTE\nStores", "goods_receipt"),
             ("MATERIAL RECEIPT NOTE\nMRN-12", "goods_receipt"),
             # A whole word only: "IMRN-2" is a reference, not a receipt note.
@@ -241,7 +243,7 @@ class TestKeywordFallback:
             ),
             (
                 "ACME TRADERS\nPlot 4\nPeenya\nBengaluru\nPh 080\n"
-                "Bill of supply 22\nPurchase Order: PO-1",
+                "Issued as a bill of supply\nPurchase Order: PO-1",
                 NON_TAX_INVOICE,
             ),
             # "Invoice To" is an address, not a title: still a PO.
@@ -255,6 +257,11 @@ class TestKeywordFallback:
             ("PURCHASE ORDER / TAX INVOICE\nGSTIN 29AAA", TAX_INVOICE),
             ("TAX INVOICE CUM DELIVERY CHALLAN\nGSTIN 29AAA", TAX_INVOICE),
             ("INVOICE AGAINST PURCHASE ORDER\nPO-1", NON_TAX_INVOICE),
+            ("TAX INVOICE\nInvoice No: 7", TAX_INVOICE),
+            ("CREDIT NOTE AGAINST INVOICE\nCN-4", "credit_note"),
+            # No title line: only a body invoice marker that is not a label.
+            ("ACME\nPlot 4\nInvoice No: 5\nTotal 100", "other"),
+            ("ACME\nPlot 4\nThis is a tax invoice under GST", TAX_INVOICE),
             # Untitled: the markers are only in the body, so nothing is told.
             (
                 "ACME TRADERS\nPlot 4\nPeenya\nBengaluru\nPh 080\n"
@@ -267,6 +274,35 @@ class TestKeywordFallback:
         assert (
             ClassifierAgent()._classify_by_keyword(text).document_type
             == expected
+        )
+
+    @pytest.mark.parametrize(
+        "label",
+        [
+            "GRN No: 5  Tax Invoice No: 77",
+            "Supplier Tax Invoice No: 77",
+            "Invoice Addr: Plot 4",
+            "Invoice Party: Foo",
+            "Invoice Details",
+            "Supplier Invoice",
+            "Invoice Value: 1000",
+            "Invoice - 123",
+            "Invoice 123 dated 01-04-2026",
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("title", "expected"),
+        [
+            ("PURCHASE ORDER", "purchase_order"),
+            ("GOODS RECEIPT NOTE", "goods_receipt"),
+        ],
+    )
+    def test_a_field_label_above_the_title_is_not_a_title(
+        self, label, title, expected
+    ):
+        text = f"ACME LTD\n{label}\n{title}\nGSTIN 29AAA\nTotal 100"
+        assert ClassifierAgent()._classify_by_keyword(text).document_type == (
+            expected
         )
 
     def test_only_a_payable_document_is_counted_as_an_invoice(self):
