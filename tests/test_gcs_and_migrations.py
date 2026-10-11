@@ -265,6 +265,81 @@ class TestMigration:
         }
         assert remaining == {"alembic_version"}, f"left behind: {remaining}"
 
+    @staticmethod
+    def _db_with_a_purchase_order(tmp_path, po_id="po-1"):
+        """A database at the revision before scanned documents, holding one
+        purchase order and a line that references `po_id`.
+
+        Written with plain sqlite3, which leaves foreign keys off, so a line
+        can be made to point at a PO that does not exist.
+        """
+        db = tmp_path / "po.db"
+        assert _alembic("upgrade c4d7e8f91a02", db).returncode == 0
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "insert into tenants (id, slug, name, region, status, settings, "
+            "created_at, updated_at) values ('t1', 't1', 'T1', 'au', 'active', "
+            "'{}', '2026-01-01', '2026-01-01')"
+        )
+        conn.execute(
+            "insert into purchase_orders (id, tenant_id, po_number, "
+            "po_number_display, vendor_name, total_amount, uploaded_by) "
+            "values ('po-1', 't1', 'PO1', 'PO-1', 'Acme', 100, 'a@t1.test')"
+        )
+        conn.execute(
+            "insert into po_lines (id, tenant_id, purchase_order_id, "
+            "line_number, qty_ordered, unit_price) "
+            "values ('l1', 't1', ?, 1, 2, 50)",
+            (po_id,),
+        )
+        conn.commit()
+        conn.close()
+        return db
+
+    def test_an_existing_po_line_does_not_stop_the_upgrade(self, tmp_path):
+        """SQLite rebuilds a table to alter it. With foreign keys enforced,
+        dropping the old purchase_orders while po_lines point at it fails,
+        so any local database holding a PO could not reach head."""
+        db = self._db_with_a_purchase_order(tmp_path)
+
+        up = _alembic("upgrade head", db)
+
+        assert up.returncode == 0, up.stderr[-2000:]
+        conn = sqlite3.connect(db)
+        assert conn.execute("select count(*) from po_lines").fetchone() == (1,)
+        assert conn.execute("pragma foreign_key_check").fetchall() == []
+
+    def test_a_dangling_reference_fails_the_upgrade_loudly(self, tmp_path):
+        """Turning enforcement off for the rebuild must not let broken data
+        through silently. It is refused before anything changes, because
+        SQLite cannot roll back a table rebuild once it has run."""
+        db = self._db_with_a_purchase_order(tmp_path, po_id="missing")
+
+        up = _alembic("upgrade head", db)
+
+        assert up.returncode != 0
+        assert "po_lines" in up.stderr
+        assert "Nothing was migrated" in up.stderr
+        version = sqlite3.connect(db).execute(
+            "select version_num from alembic_version"
+        )
+        assert [row[0] for row in version] == ["c4d7e8f91a02"]
+
+    def test_the_app_keeps_foreign_keys_on_after_migrating(
+        self, tmp_path, monkeypatch
+    ):
+        """The migration borrows the app's engine. A connection handed back
+        to the pool with enforcement off would quietly disable it for the
+        requests that reuse it."""
+        url = f"sqlite:///{tmp_path / 'fk.db'}"
+        monkeypatch.setenv("DATABASE_URL", url)
+        monkeypatch.setattr(session, "_engine", None)
+
+        migrate.upgrade_to_head()
+
+        with session.get_engine().connect() as conn:
+            assert conn.exec_driver_sql("pragma foreign_keys").scalar() == 1
+
     def test_migration_carries_rls(self):
         """A schema deployed without RLS has no database-level isolation."""
         path = glob.glob(
