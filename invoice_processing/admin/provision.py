@@ -369,6 +369,7 @@ class Provisioner:
                 tenant_id=tenant.id,
                 email=email,
                 role=role,
+                uid=uid or None,
                 display_name=display_name,
             )
             session.add(user)

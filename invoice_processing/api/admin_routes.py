@@ -23,9 +23,9 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from .auth import Principal, require_role
@@ -68,11 +68,43 @@ class UserCreate(BaseModel):
 
 class UserPatch(BaseModel):
     manager_email: str | None = Field(default=None, max_length=320)
+    role: str | None = None
+    is_active: bool | None = None
+
+
+class SsoDomainCreate(BaseModel):
+    domain: str = Field(max_length=253)
+    provider: Literal["google", "microsoft"]
+    default_role: Literal["viewer", "clerk"]
 
 
 class ClaimsUpdate(BaseModel):
     email: str
     uid: str
+
+
+def _sso_domains():
+    from . import service  # noqa: PLC0415
+
+    repo = service.get_sso_domains()
+    if repo is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Single sign-on needs a database. Set DATABASE_URL or "
+            "CLOUD_SQL_INSTANCE and run the Alembic migrations.",
+        )
+    return repo
+
+
+def _directory():
+    from . import service  # noqa: PLC0415
+
+    directory = service.get_user_directory()
+    if directory is None:
+        raise HTTPException(
+            status_code=503, detail="Managing users needs a database."
+        )
+    return directory
 
 
 def _provisioner():
@@ -254,29 +286,173 @@ def patch_user(
     request: UserPatch,
     principal: Annotated[Principal, Depends(require_role("admin"))],
 ) -> dict:
-    """Set who a user's overdue approvals escalate to (null clears it)."""
+    """Set a user's manager, role or active flag (never one's own role/flag)."""
     from . import service  # noqa: PLC0415
 
     # Omitted and null differ: null clears the manager, omitted is a mistake.
-    if "manager_email" not in request.model_fields_set:
+    fields = request.model_fields_set
+    if not fields:
         raise HTTPException(status_code=400, detail="Nothing to change.")
-    try:
-        with _database_required():
-            record = _provisioner().set_manager(
-                principal.tenant_id, user_id, request.manager_email
+    record: dict = {"id": user_id}
+    if "manager_email" in fields:
+        try:
+            with _database_required():
+                changed = _provisioner().set_manager(
+                    principal.tenant_id, user_id, request.manager_email
+                )
+        except LookupError:
+            raise HTTPException(
+                status_code=404, detail="Unknown user"
+            ) from None
+        except _provisioning_error() as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        previous = changed.pop("previous_manager_email")
+        service.get_audit().emit(
+            principal.context(),
+            "user_updated",
+            {"user_id": user_id, "manager_email": changed["manager_email"]},
+            before={"manager_email": previous},
+        )
+        record.update(changed)
+    if "role" in fields or "is_active" in fields:
+        from .auth import ROLE_RANK  # noqa: PLC0415
+
+        directory = _directory()
+        try:
+            current = next(
+                u
+                for u in _provisioner().list_users(principal.tenant_id)
+                if u["id"] == user_id
             )
-    except LookupError:
-        raise HTTPException(status_code=404, detail="Unknown user") from None
-    except _provisioning_error() as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    previous = record.pop("previous_manager_email")
+        except StopIteration:
+            raise HTTPException(
+                status_code=404, detail="Unknown user"
+            ) from None
+        if current["email"].lower() == principal.email.lower():
+            raise HTTPException(
+                status_code=409,
+                detail="You cannot change your own role or deactivate yourself; ask another admin.",
+            )
+        try:
+            if "role" in fields:
+                if request.role not in ROLE_RANK:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Unknown role {request.role!r}.",
+                    )
+                changed = directory.set_role(
+                    principal.tenant_id, user_id, request.role
+                )
+                service.get_audit().emit(
+                    principal.context(),
+                    "user_role_changed",
+                    {
+                        "user_id": user_id,
+                        "email": changed["email"],
+                        "role": request.role,
+                    },
+                    before={"role": changed["previous_role"]},
+                )
+                record.update(changed)
+            if "is_active" in fields:
+                changed = directory.set_active(
+                    principal.tenant_id, user_id, bool(request.is_active)
+                )
+                service.get_audit().emit(
+                    principal.context(),
+                    "user_reactivated"
+                    if request.is_active
+                    else "user_deactivated",
+                    {"user_id": user_id, "email": changed["email"]},
+                )
+                record.update(changed)
+        except LookupError:
+            raise HTTPException(
+                status_code=404, detail="Unknown user"
+            ) from None
+        if current.get("uid"):
+            # The claim is a cache of the row; keep it in step where it is live.
+            fresh = directory.find(principal.tenant_id, current["email"])
+            service.get_claims_writer().set_claims(
+                current["uid"],
+                {"tenant_id": principal.tenant_id, "role": fresh["role"]},
+            )
+    record.pop("previous_role", None)
+    record.pop("previous_active", None)
+    record.pop("tenant_name", None)
+    return record
+
+
+@router.get("/api/admin/sso-domains")
+def list_sso_domains(
+    principal: Annotated[Principal, Depends(require_role("admin"))],
+) -> dict:
+    return {"domains": _sso_domains().list(principal.tenant_id)}
+
+
+@router.post("/api/admin/sso-domains", status_code=201)
+def add_sso_domain(
+    request: SsoDomainCreate,
+    principal: Annotated[Principal, Depends(require_role("admin"))],
+) -> dict:
+    """Let a company's verified accounts sign in here.
+
+    No proof of ownership: a bound domain admits only Google-verified
+    accounts of exactly that domain, and Google verifies only addresses it
+    hosts, so binding a domain you do not own admits nobody.
+    """
+    from .. import sso  # noqa: PLC0415
+    from ..db.repositories import DomainTaken  # noqa: PLC0415
+    from . import service  # noqa: PLC0415
+
+    try:
+        domain = sso.normalize_domain(request.domain)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        record = _sso_domains().add(
+            principal.tenant_id,
+            domain=domain,
+            provider=request.provider,
+            default_role=request.default_role,
+            created_by=principal.email,
+        )
+    except DomainTaken:
+        # Which organisation holds it is their business, not the caller's.
+        raise HTTPException(
+            status_code=409,
+            detail="That domain is already connected to another organisation.",
+        ) from None
     service.get_audit().emit(
         principal.context(),
-        "user_updated",
-        {"user_id": user_id, "manager_email": record["manager_email"]},
-        before={"manager_email": previous},
+        "sso_domain_added",
+        {
+            "domain": domain,
+            "provider": request.provider,
+            "default_role": request.default_role,
+        },
     )
     return record
+
+
+@router.delete("/api/admin/sso-domains/{domain_id}", status_code=204)
+def remove_sso_domain(
+    domain_id: str,
+    principal: Annotated[Principal, Depends(require_role("admin"))],
+) -> Response:
+    from . import service  # noqa: PLC0415
+
+    repo = _sso_domains()
+    before = next(
+        (d for d in repo.list(principal.tenant_id) if d["id"] == domain_id),
+        None,
+    )
+    if before is None or not repo.remove(principal.tenant_id, domain_id):
+        raise HTTPException(status_code=404, detail="Unknown domain")
+    service.get_audit().emit(
+        principal.context(), "sso_domain_removed", {"domain": before["domain"]}
+    )
+    return Response(status_code=204)
 
 
 @router.post("/api/admin/users/claims")

@@ -362,3 +362,226 @@ class TestNoDatabaseConfigured:
         assert "DATABASE_URL" in response.json()["detail"], (
             "the message must name the setting that fixes it"
         )
+
+
+def _events(tmp_path):
+    return [
+        json.loads(x)
+        for x in (tmp_path / "audit.jsonl").read_text().splitlines()
+    ]
+
+
+class TestSsoDomains:
+    def test_add_list_remove(self, env, tmp_path):
+        client = env["client"]("admin")
+        r = client.post(
+            "/api/admin/sso-domains",
+            json={
+                "domain": " Acme.COM ",
+                "provider": "google",
+                "default_role": "clerk",
+            },
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["domain"] == "acme.com"
+        listed = client.get("/api/admin/sso-domains").json()["domains"]
+        assert [d["domain"] for d in listed] == ["acme.com"]
+        assert (
+            client.delete(
+                f"/api/admin/sso-domains/{listed[0]['id']}"
+            ).status_code
+            == 204
+        )
+        assert client.get("/api/admin/sso-domains").json()["domains"] == []
+        names = [e["event_type"] for e in _events(tmp_path)]
+        assert "sso_domain_added" in names and "sso_domain_removed" in names
+
+    @pytest.mark.parametrize(
+        "domain", ["gmail.com", "outlook.com", "not a domain", ""]
+    )
+    def test_public_and_malformed_domains_are_refused(self, env, domain):
+        r = env["client"]("admin").post(
+            "/api/admin/sso-domains",
+            json={
+                "domain": domain,
+                "provider": "google",
+                "default_role": "viewer",
+            },
+        )
+        assert r.status_code == 422
+
+    def test_bad_provider_or_role_is_refused(self, env):
+        client = env["client"]("admin")
+        assert (
+            client.post(
+                "/api/admin/sso-domains",
+                json={
+                    "domain": "acme.com",
+                    "provider": "okta",
+                    "default_role": "viewer",
+                },
+            ).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                "/api/admin/sso-domains",
+                json={
+                    "domain": "acme.com",
+                    "provider": "google",
+                    "default_role": "admin",
+                },
+            ).status_code
+            == 422
+        )
+
+    def test_a_domain_held_by_another_tenant_is_refused_without_naming_it(
+        self, env
+    ):
+        acme = env["client"]("admin")
+        globex = env["client"]("admin", env["globex"]["id"])
+        assert (
+            acme.post(
+                "/api/admin/sso-domains",
+                json={
+                    "domain": "acme.com",
+                    "provider": "google",
+                    "default_role": "viewer",
+                },
+            ).status_code
+            == 201
+        )
+        r = globex.post(
+            "/api/admin/sso-domains",
+            json={
+                "domain": "acme.com",
+                "provider": "google",
+                "default_role": "viewer",
+            },
+        )
+        assert r.status_code == 409
+        assert "another organisation" in r.json()[
+            "detail"
+        ] and "acme" not in r.json()["detail"].lower().replace("acme.com", "")
+
+    def test_only_admins_manage_domains(self, env):
+        assert (
+            env["client"]("approver").get("/api/admin/sso-domains").status_code
+            == 403
+        )
+
+    def test_removing_a_domain_keeps_existing_users(self, env):
+        client = env["client"]("admin")
+        d = client.post(
+            "/api/admin/sso-domains",
+            json={
+                "domain": "acme.com",
+                "provider": "google",
+                "default_role": "viewer",
+            },
+        ).json()
+        client.post(
+            "/api/admin/users", json={"email": "pat@acme.com", "role": "clerk"}
+        )
+        assert (
+            client.delete(f"/api/admin/sso-domains/{d['id']}").status_code
+            == 204
+        )
+        emails = [
+            u["email"] for u in client.get("/api/admin/users").json()["users"]
+        ]
+        assert "pat@acme.com" in emails
+
+
+class TestRoleAndActive:
+    def _user(self, env, email="pat@acme.com", role="clerk"):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users",
+            json={"email": email, "role": role, "uid": "fb-pat"},
+        )
+        return next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == email
+        )
+
+    def test_change_role_rewrites_claims_and_audits(self, env, tmp_path):
+        pat = self._user(env)
+        client = env["client"]("admin")
+        r = client.patch(
+            f"/api/admin/users/{pat['id']}", json={"role": "approver"}
+        )
+        assert r.status_code == 200 and r.json()["role"] == "approver"
+        assert (
+            "fb-pat",
+            {"tenant_id": env["acme"]["id"], "role": "approver"},
+        ) in env["claims"].written
+        assert "user_role_changed" in [
+            e["event_type"] for e in _events(tmp_path)
+        ]
+
+    def test_deactivate_and_reactivate(self, env, tmp_path):
+        pat = self._user(env)
+        client = env["client"]("admin")
+        assert (
+            client.patch(
+                f"/api/admin/users/{pat['id']}", json={"is_active": False}
+            ).json()["is_active"]
+            is False
+        )
+        listed = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["id"] == pat["id"]
+        )
+        assert listed["is_active"] is False and listed["uid"] == "fb-pat"
+        assert (
+            client.patch(
+                f"/api/admin/users/{pat['id']}", json={"is_active": True}
+            ).json()["is_active"]
+            is True
+        )
+        names = [e["event_type"] for e in _events(tmp_path)]
+        assert "user_deactivated" in names and "user_reactivated" in names
+
+    def test_an_admin_cannot_demote_or_deactivate_themself(self, env):
+        client = env["client"]("admin")
+        # The admin token's email is admin@x.test; give it a row.
+        client.post(
+            "/api/admin/users", json={"email": "admin@x.test", "role": "admin"}
+        )
+        me = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == "admin@x.test"
+        )
+        assert (
+            client.patch(
+                f"/api/admin/users/{me['id']}", json={"role": "clerk"}
+            ).status_code
+            == 409
+        )
+        assert (
+            client.patch(
+                f"/api/admin/users/{me['id']}", json={"is_active": False}
+            ).status_code
+            == 409
+        )
+
+    def test_an_unknown_role_is_refused(self, env):
+        pat = self._user(env)
+        assert (
+            env["client"]("admin")
+            .patch(f"/api/admin/users/{pat['id']}", json={"role": "boss"})
+            .status_code
+            == 422
+        )
+
+    def test_users_list_carries_the_new_fields(self, env):
+        pat = self._user(env)
+        assert (
+            pat["uid"] == "fb-pat"
+            and pat["is_active"] is True
+            and "last_login_at" in pat
+        )
