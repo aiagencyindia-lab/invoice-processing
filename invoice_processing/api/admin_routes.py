@@ -296,6 +296,12 @@ def patch_user(
     fields = request.model_fields_set
     if not fields:
         raise HTTPException(status_code=400, detail="Nothing to change.")
+    if ("role" in fields and request.role is None) or (
+        "is_active" in fields and request.is_active is None
+    ):
+        raise HTTPException(
+            status_code=422, detail="role and is_active cannot be null."
+        )
     wants_state = "role" in fields or "is_active" in fields
     if wants_state:
         directory = _directory()

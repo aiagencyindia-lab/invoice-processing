@@ -694,3 +694,43 @@ def test_re_adding_your_own_domain_says_so(env):
     assert client.post("/api/admin/sso-domains", json=body).status_code == 201
     r = client.post("/api/admin/sso-domains", json=body)
     assert r.status_code == 409 and "your organisation" in r.json()["detail"]
+
+
+class TestNullStateIsRefused:
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"role": None},
+            {"is_active": None},
+            {"manager_email": "admin@x.test", "role": None},
+        ],
+    )
+    def test_null_role_or_active_changes_nothing(self, env, tmp_path, body):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users", json={"email": "pat@acme.com", "role": "clerk"}
+        )
+        pat = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == "pat@acme.com"
+        )
+        r = client.patch(f"/api/admin/users/{pat['id']}", json=body)
+        assert r.status_code == 422, r.text
+        assert "cannot be null" in r.json()["detail"]
+        after = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["id"] == pat["id"]
+        )
+        assert (after["role"], after["is_active"], after["manager_email"]) == (
+            "clerk",
+            True,
+            None,
+        )
+        names = [e["event_type"] for e in _events(tmp_path)]
+        assert not {
+            "user_updated",
+            "user_role_changed",
+            "user_deactivated",
+        } & set(names)
