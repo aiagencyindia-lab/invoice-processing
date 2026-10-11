@@ -1331,15 +1331,11 @@ Return ONLY this JSON:
         r"|[a-z]{0,4}[-/]?\d[\w/-]*))*"
     )
     _TITLE_SCAN_LINES: ClassVar[int] = 8
-    # (d) With no title line, any of these anywhere keeps the page off the
-    # invoice types: a PO or GRN quotes "Invoice No" and "Invoice Qty".
-    _ANY_NON_PAYABLE: ClassVar[re.Pattern] = re.compile(
-        r"purchase order|goods receipt|goods received|material receipt"
-        r"|delivery note|credit note|debit note|work order"
-        r"|\b(?:po|grn|mrn|challan)\b"
-    )
-    _ANY_INVOICE: ClassVar[re.Pattern] = re.compile(
-        r"(?<!proforma )(?<!pro forma )\b(tax invoice|bill of supply|invoice)\b"
+    # A copy marking printed after a heading: "TAX INVOICE (ORIGINAL FOR
+    # RECIPIENT)" is still a clean heading once it is dropped.
+    _COPY_MARK: ClassVar[re.Pattern] = re.compile(
+        r"\s*\((?:original|duplicate|triplicate|copy|for|recipient|supplier"
+        r"|transporter|buyer|seller|office|extra|\s)+\)$"
     )
 
     def _title_kind(self, line: str) -> str | None:
@@ -1349,9 +1345,13 @@ Return ONLY this JSON:
             line = line[1:-1].strip()
         if not line:
             return None
-        if not re.search(r"[:\d]", line) and self._HEADING.fullmatch(line):
+        heading = self._COPY_MARK.sub("", line)
+        if not re.search(r"[:\d]", heading) and self._HEADING.fullmatch(
+            heading
+        ):
             kinds = [
-                self._TITLE_PHRASES[m] for m in self._PHRASES_IN.findall(line)
+                self._TITLE_PHRASES[m]
+                for m in self._PHRASES_IN.findall(heading)
             ]
             # A non-payable (credit note, proforma...) beats an invoice,
             # which beats the PO/GRN/challan it is billed against.
@@ -1381,9 +1381,10 @@ Return ONLY this JSON:
 
         It used to answer "invoice" for anything containing the word, which
         made a quotation a payable. It fails closed: the first title line
-        decides, and an untitled page is an invoice only when it names no PO,
-        GRN, challan or note anywhere. An invoice typed "other" is a visible
-        rejection; a PO typed as an invoice would be paid.
+        decides, and an untitled page is "other" -- body text cannot tell an
+        invoice from an untitled PO, GRN or note quoting "Invoice No". An
+        invoice typed "other" is a visible rejection; a PO typed as an invoice
+        would be paid.
         """
         lowered = content.lower()
         lines = [line for line in lowered.splitlines() if line.strip()]
@@ -1394,20 +1395,7 @@ Return ONLY this JSON:
             None,
         )
         if document_type is None:
-            flat = re.sub(r"\s+", " ", lowered)
-            body = (
-                None
-                if self._ANY_NON_PAYABLE.search(flat)
-                else self._ANY_INVOICE.search(flat)
-            )
-            if body:
-                document_type = (
-                    TAX_INVOICE
-                    if body.group(1) == "tax invoice"
-                    else NON_TAX_INVOICE
-                )
-            else:
-                document_type = "unreadable" if not lowered.strip() else "other"
+            document_type = "unreadable" if not lowered.strip() else "other"
         if document_type == NON_TAX_INVOICE and "gstin" in lowered:
             document_type = TAX_INVOICE
         return DocumentContent(

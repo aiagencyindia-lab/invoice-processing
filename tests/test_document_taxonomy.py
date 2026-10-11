@@ -241,8 +241,7 @@ class TestKeywordFallback:
                 "Date: 01-04-2026\nDelivery Challan No: DC-4\nPO No: 7",
                 TAX_INVOICE,
             ),
-            # Untitled with a PO marker anywhere: fail closed (was
-            # bill-of-supply invoice; ruling (d) puts supporting markers first).
+            # Untitled: fail closed to "other" (was a bill-of-supply invoice).
             (
                 "ACME TRADERS\nPlot 4\nPeenya\nBengaluru\nPh 080\n"
                 "Issued as a bill of supply\nPurchase Order: PO-1",
@@ -261,18 +260,18 @@ class TestKeywordFallback:
             ("INVOICE AGAINST PURCHASE ORDER\nPO-1", NON_TAX_INVOICE),
             ("TAX INVOICE\nInvoice No: 7", TAX_INVOICE),
             ("CREDIT NOTE AGAINST INVOICE\nCN-4", "credit_note"),
-            # No title line: only a body invoice marker that is not a label.
-            # A label alone names an invoice only when nothing on the page
-            # names a supporting document (ruling: a PO or GRN prints its
-            # own number label; GSTIN makes it a tax invoice).
-            ("ACME\nPlot 4\nInvoice No: 5\nTotal 100", NON_TAX_INVOICE),
-            ("Invoice No: 5\nGSTIN 29AAA\nTotal 100", TAX_INVOICE),
+            # No title line: always "other" (final ruling; was an invoice
+            # type). Body text cannot tell an invoice from an untitled PO,
+            # GRN or note quoting "Invoice No", and no marker list is
+            # complete; an invoice typed "other" is a visible rejection.
+            ("ACME\nPlot 4\nInvoice No: 5\nTotal 100", "other"),
+            ("Invoice No: 5\nGSTIN 29AAA\nTotal 100", "other"),
             ("Invoice No: 5\nGRN No: 7", "other"),
             ("Invoice No: 5\nPO No: PO-1", "other"),
             # Ruling (b): "Delivery Challan No: 3" is now a challan title
             # (was "other"); still never an invoice.
             ("Invoice No: 5\nDelivery Challan No: 3", "delivery_challan"),
-            ("ACME\nPlot 4\nThis is a tax invoice under GST", TAX_INVOICE),
+            ("ACME\nPlot 4\nThis is a tax invoice under GST", "other"),
             # Untitled: the markers are only in the body, so nothing is told.
             (
                 "ACME TRADERS\nPlot 4\nPeenya\nBengaluru\nPh 080\n"
@@ -323,7 +322,9 @@ class TestKeywordFallback:
             ("WORK ORDER\nInvoice shall be raised monthly", "other"),
             ("TAX INVOICE\nInvoice No: 7\nPO No: 4471", TAX_INVOICE),
             ("INVOICE\nGSTIN 29AAA", TAX_INVOICE),
-            ("Invoice No: 5\nGSTIN 29AAA\nTotal 100", TAX_INVOICE),
+            # Untitled: "other" (final ruling; was tax_invoice).
+            ("Invoice No: 5\nGSTIN 29AAA\nTotal 100", "other"),
+            ("TAX INVOICE (ORIGINAL FOR RECIPIENT)\nGSTIN 29AAA", TAX_INVOICE),
             ("Invoice No: 5\nGRN No: 7", "other"),
             ("Invoice No: 5\nPO No: PO-1", "other"),
             (
@@ -345,6 +346,24 @@ class TestKeywordFallback:
             "DEBIT NOTE\nAgainst Invoice No: 77",
             "DEBIT NOTE AGAINST INVOICE\nGSTIN 29AAA",
             "INVOICE / CREDIT NOTE\nGSTIN 29AAA",
+            # Untitled non-payables: no marker list catches them all.
+            "ACME LTD\nP.O. No: 4471\nDate\nInvoice To: ACME LTD\nGSTIN 29AAA",
+            "ACME LTD\nSUPPLY ORDER\nOrder No: 4471\n"
+            "Invoice must quote this order no\nGSTIN 29AAA",
+            "ACME LTD\nGOODS INWARD NOTE\nGIN No: 5\nSupplier Invoice No: 77\n"
+            "GSTIN 29AAA",
+            "ACME LTD\nInward No: 5\nParty Invoice No: 77\nInvoice Date\n"
+            "Qty Recd\nGSTIN 29AAA",
+            "ACME LTD\nD.C. No: 33\nDate\nGSTIN 29AAA\ninvoice will follow",
+            "ACME LTD\nGSTIN 29AAA\nCN No: 4\nOriginal Invoice No: 77",
+            "ACME LTD\nPI No: 5\nThis is a proforma invoice, not a tax invoice\n"
+            "GSTIN 29AAA",
+            "ACME LTD\nW.O. No: 7\nContractor shall raise invoice monthly\n"
+            "GSTIN 29AAA",
+            "ACME LTD\nESTIMATE\nEstimate No 5\nThis is not a tax invoice\n"
+            "GSTIN 29AAA",
+            "ACME LTD\nQuote Ref: Q-5\n"
+            "This quotation is valid; invoice on delivery\nGSTIN 29AAA",
         ],
     )
     def test_these_are_not_typed_as_an_invoice(self, text):
