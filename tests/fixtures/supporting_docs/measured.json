@@ -1,5 +1,5 @@
 {
- "source": "One real run of invoice_processing.supporting_docs.extract (default call: general_invoice_agent.call_gemini_with_pdf, Pro model gemini-2.5-pro on Vertex, project rasayan) on 2026-10-09 over 26 PDFs; PDFs not committed. 20 GRNs from benchmark/dataset/generator/gen_render.render_grn over ACTIVE goods-vendor rows of benchmark/dataset/po_master.csv, built by a scratch script with random.Random(4208): difficulty cycles clean / degraded (degrade(path, 'MEDIUM')) / adversarial (degrade(path, 'MEDIUM', adversarial=True): RECEIVED stamp with a distractor date, watermark, handwritten note); every adversarial GRN is multi-line (up to 3 distinct items of one vendor, each from its own po_master row, under the first row's PO number; truth po_lines is that synthetic multi-line PO); 7 of 28 lines received short (x0.5/0.8/0.9 of ordered); GRN-06 receives PO lines 1 and 3 only, printed as GRN #1 and #2. GRN dates 2026-05..08, numbers GRN/26-27/NNNNN, receiver from gen_core.NAMES. Fonts: matplotlib's DejaVu TTFs via DEJAVU_FONTDIR (Condensed aliased to regular). Plus the dataset's 6 PURCHASE_ORDER non-documents copied as-is (TECH-INV-084/090 are image-only scans, the other 4 have a text layer); their truth is the po_master.csv row named by the submission's po_number, or for TECH-INV-091/SVC-INV-089 the PO number printed on the page.",
+ "source": "One real run of invoice_processing.supporting_docs.extract (default call: general_invoice_agent.call_gemini_with_pdf, Pro model gemini-2.5-pro on Vertex, project rasayan) on 2026-10-09 over 26 PDFs; PDFs not committed. 20 GRNs from benchmark/dataset/generator/gen_render.render_grn over ACTIVE goods-vendor rows of benchmark/dataset/po_master.csv, built by a scratch script with random.Random(4208): difficulty cycles clean / degraded (degrade(path, 'MEDIUM')) / adversarial (degrade(path, 'MEDIUM', adversarial=True): RECEIVED stamp with a distractor date, watermark, handwritten note); every adversarial GRN is multi-line (up to 3 distinct items of one vendor, each from its own po_master row, under the first row's PO number; truth po_lines is that synthetic multi-line PO); 7 of 28 lines received short (x0.5/0.8/0.9 of ordered); GRN-06 receives PO lines 1 and 3 only, printed as GRN #1 and #2. GRN dates 2026-05..08, numbers GRN/26-27/NNNNN, receiver from gen_core.NAMES. Fonts: matplotlib's DejaVu TTFs via DEJAVU_FONTDIR (Condensed aliased to regular). Plus the dataset's 6 PURCHASE_ORDER non-documents copied as-is (TECH-INV-084/090 are image-only scans, the other 4 have a text layer); their truth is the po_master.csv row named by the submission's po_number, or for TECH-INV-091/SVC-INV-089 the PO number printed on the page. page_dates added 2026-10-11 without a model call: the distinct dates supporting_docs._dates_on finds on the pages supporting_docs._read_pages grounds against (text layer, else tesseract OCR), read from the same 26 PDFs.",
  "records": [
   {
    "file": "GRN-01.pdf",
@@ -100,7 +100,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-08-13"
+   ]
   },
   {
    "file": "GRN-02.pdf",
@@ -203,7 +206,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-07-18"
+   ]
   },
   {
    "file": "GRN-03.pdf",
@@ -339,7 +345,11 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-07-28",
+    "2026-09-02"
+   ]
   },
   {
    "file": "GRN-04.pdf",
@@ -440,7 +450,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-08-19"
+   ]
   },
   {
    "file": "GRN-05.pdf",
@@ -541,7 +554,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-05-16"
+   ]
   },
   {
    "file": "GRN-06.pdf",
@@ -684,7 +700,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-07-28"
+   ]
   },
   {
    "file": "GRN-07.pdf",
@@ -785,7 +804,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-07-25"
+   ]
   },
   {
    "file": "GRN-08.pdf",
@@ -888,7 +910,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-07-17"
+   ]
   },
   {
    "file": "GRN-09.pdf",
@@ -1027,7 +1052,11 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-08-19",
+    "2026-09-04"
+   ]
   },
   {
    "file": "GRN-10.pdf",
@@ -1128,7 +1157,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-07-27"
+   ]
   },
   {
    "file": "GRN-11.pdf",
@@ -1229,7 +1261,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-05-22"
+   ]
   },
   {
    "file": "GRN-12.pdf",
@@ -1402,7 +1437,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-06-07"
+   ]
   },
   {
    "file": "GRN-13.pdf",
@@ -1503,7 +1541,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-08-26"
+   ]
   },
   {
    "file": "GRN-14.pdf",
@@ -1604,7 +1645,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-07-21"
+   ]
   },
   {
    "file": "GRN-15.pdf",
@@ -1742,7 +1786,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-07-24"
+   ]
   },
   {
    "file": "GRN-16.pdf",
@@ -1843,7 +1890,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-06-12"
+   ]
   },
   {
    "file": "GRN-17.pdf",
@@ -1944,7 +1994,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-06-08"
+   ]
   },
   {
    "file": "GRN-18.pdf",
@@ -2115,7 +2168,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-06-17"
+   ]
   },
   {
    "file": "GRN-19.pdf",
@@ -2216,7 +2272,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-05-20"
+   ]
   },
   {
    "file": "GRN-20.pdf",
@@ -2317,7 +2376,10 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-07-08"
+   ]
   },
   {
    "file": "TECH-INV-084.pdf",
@@ -2428,7 +2490,11 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-01-14",
+    "2027-03-31"
+   ]
   },
   {
    "file": "TECH-INV-090.pdf",
@@ -2537,7 +2603,11 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-01-11",
+    "2027-03-31"
+   ]
   },
   {
    "file": "TECH-INV-091.pdf",
@@ -2644,7 +2714,11 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-02-23",
+    "2026-05-24"
+   ]
   },
   {
    "file": "TECH-INV-099.pdf",
@@ -2753,7 +2827,11 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-04-10",
+    "2027-03-31"
+   ]
   },
   {
    "file": "SVC-INV-095.pdf",
@@ -2863,7 +2941,11 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-04-07",
+    "2027-03-31"
+   ]
   },
   {
    "file": "SVC-INV-089.pdf",
@@ -2966,7 +3048,11 @@
      }
     },
     "_repairs": []
-   }
+   },
+   "page_dates": [
+    "2026-02-25",
+    "2027-03-31"
+   ]
   }
  ]
 }

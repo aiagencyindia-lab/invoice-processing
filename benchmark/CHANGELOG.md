@@ -1460,11 +1460,11 @@ Every wrong value, with its reason:
   stamp's date (2026-09-02, 2026-09-04) over the printed GRN date. The stamp
   date is on the page, so OCR grounds it; as first measured it reached the
   clerk **unflagged**. Now flagged: `received_on` goes to review whenever the
-  page prints more than one distinct date (re-scored 2026-10-11 from the
-  committed fixture, no new model run; the page text was not recorded, so the
-  re-score applies the rule to the dates the fixture's `source` says each page
-  prints). The cost: the two adversarial GRNs read correctly (GRN-06, GRN-18)
-  now send their right `received_on` to review too.
+  page prints more than one distinct date (re-scored 2026-10-11 with no new
+  model run: each record's `page_dates` was read from the same PDFs by
+  `_read_pages` + `_dates_on` and added to the fixture). OCR found both dates
+  on GRN-03 and GRN-09 and one on every other GRN, so 0 of the 16 correct GRN
+  `received_on` values is newly flagged.
 - GRN-12, GRN-15 (adversarial) `received_on`: the same stamp misread; OCR did
   not find the stamp date, so both were flagged.
 - SVC-INV-089 (PO, text layer) `total`: the page prints only the line amount,

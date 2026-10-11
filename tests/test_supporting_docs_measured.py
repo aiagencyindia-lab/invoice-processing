@@ -38,21 +38,9 @@ def _same(truth, got) -> bool:
 
 
 def _second_date_on_page(rec, key) -> bool:
-    """Today's rule (`supporting_docs._dates_on`) over the recorded run.
-
-    The page text was not recorded, so this applies the rule to what the
-    fixture's `source` says each page prints: every GRN its own date, and an
-    adversarial one also a RECEIVED stamp dated September -- never a GRN date
-    (May-Aug) -- so two distinct dates. Only where the page was read at all:
-    `grounded` None means no readable text, and the field is in review anyway.
-    ponytail: assumes OCR read both dates; recapture with page text to drop it.
-    """
-    stamp = rec["extracted"]["_evidence"].get("received_on") or {}
-    return (
-        key == "received_on"
-        and rec["difficulty"] == "adversarial"
-        and stamp.get("grounded") is not None
-    )
+    """Today's rule (`supporting_docs._dates_on`) over the recorded run: the
+    run predates it, so `page_dates` was read later from the same PDFs."""
+    return key == "received_on" and len(rec["page_dates"]) > 1
 
 
 def _flagged(rec, key, got) -> bool:
@@ -111,9 +99,9 @@ def score(records):
 # ponytail: pinned to this one run of 26 documents, not a gate; turn these into
 # floors once the scan set grows enough for a rate to mean something.
 PINNED = ((56, 60), (17, 18), (34, 34), (28, 28), (5, 5))
-# GRN-03/09/12/15 read the RECEIVED stamp's date (OCR grounds 03 and 09, and
-# the stamp's second date flags them); SVC-INV-089 prints no total row and the
-# total is blank.
+# GRN-03/09/12/15 read the RECEIVED stamp's date (OCR grounds 03 and 09, but
+# the stamp's date is a second date on their pages, which flags them);
+# SVC-INV-089 prints no total row and the total is blank.
 PINNED_WRONG = [
     ("GRN-03.pdf", "received_on"),
     ("GRN-09.pdf", "received_on"),
@@ -128,6 +116,20 @@ def test_fixture_is_the_full_scan_set():
     assert kinds.count(GOODS_RECEIPT) == 20
     assert kinds.count("purchase_order") == 6
     assert all("error" not in r["extracted"] for r in RECORDS)
+
+
+def test_the_second_date_rule_flags_no_correct_receipt_date():
+    newly = [
+        r["file"]
+        for r in RECORDS
+        if r["kind"] == GOODS_RECEIPT
+        and _same(
+            r["truth"]["received_on"],
+            r["extracted"]["fields"].get("received_on"),
+        )
+        and _second_date_on_page(r, "received_on")
+    ]
+    assert newly == []
 
 
 def test_measured_figures_are_pinned():
