@@ -212,6 +212,10 @@ class TestKeywordFallback:
                 "quotation",
             ),
             ("PROFORMA INVOICE\nAdvance payment requested", "proforma_invoice"),
+            # Spelling variants of the proforma heading label it too.
+            ("PRO-FORMA INVOICE\nAdvance payment", "proforma_invoice"),
+            ("PROFORMA TAX INVOICE\nGSTIN: 29AAA", "proforma_invoice"),
+            ("PRO FORMA TAX INVOICE\nGSTIN: 29AAA", "proforma_invoice"),
             ("CREDIT NOTE\nAgainst invoice INV-1", "credit_note"),
             ("DELIVERY CHALLAN\nGoods dispatched", "delivery_challan"),
             ("PURCHASE ORDER\nPlease supply", "purchase_order"),

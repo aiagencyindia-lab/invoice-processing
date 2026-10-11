@@ -1269,6 +1269,9 @@ Return ONLY this JSON:
     _TITLE_PHRASES: ClassVar[dict[str, str]] = {
         "proforma invoice": "proforma_invoice",
         "pro forma invoice": "proforma_invoice",
+        "pro-forma invoice": "proforma_invoice",
+        "proforma tax invoice": "proforma_invoice",
+        "pro forma tax invoice": "proforma_invoice",
         "tax invoice": TAX_INVOICE,
         "invoice": NON_TAX_INVOICE,
         "bill of supply": NON_TAX_INVOICE,
