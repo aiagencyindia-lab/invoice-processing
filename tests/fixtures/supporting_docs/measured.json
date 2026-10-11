@@ -1,0 +1,3058 @@
+{
+ "source": "One real run of invoice_processing.supporting_docs.extract (default call: general_invoice_agent.call_gemini_with_pdf, Pro model gemini-2.5-pro on Vertex, project rasayan) on 2026-10-09 over 26 PDFs; PDFs not committed. 20 GRNs from benchmark/dataset/generator/gen_render.render_grn over ACTIVE goods-vendor rows of benchmark/dataset/po_master.csv, built by a scratch script with random.Random(4208): difficulty cycles clean / degraded (degrade(path, 'MEDIUM')) / adversarial (degrade(path, 'MEDIUM', adversarial=True): RECEIVED stamp with a distractor date, watermark, handwritten note); every adversarial GRN is multi-line (up to 3 distinct items of one vendor, each from its own po_master row, under the first row's PO number; truth po_lines is that synthetic multi-line PO); 7 of 28 lines received short (x0.5/0.8/0.9 of ordered); GRN-06 receives PO lines 1 and 3 only, printed as GRN #1 and #2. GRN dates 2026-05..08, numbers GRN/26-27/NNNNN, receiver from gen_core.NAMES. Fonts: matplotlib's DejaVu TTFs via DEJAVU_FONTDIR (Condensed aliased to regular). Plus the dataset's 6 PURCHASE_ORDER non-documents copied as-is (TECH-INV-084/090 are image-only scans, the other 4 have a text layer); their truth is the po_master.csv row named by the submission's po_number, or for TECH-INV-091/SVC-INV-089 the PO number printed on the page. page_dates added 2026-10-11 without a model call: the distinct dates supporting_docs._dates_on finds on the pages supporting_docs._read_pages grounds against (text layer, else tesseract OCR), read from the same 26 PDFs.",
+ "records": [
+  {
+   "file": "GRN-01.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "clean",
+   "truth": {
+    "grn_number": "GRN/26-27/01100",
+    "received_on": "2026-08-13",
+    "po_number": "PO-2026-4055",
+    "vendor_name": "Vortex Pneumatics Pvt Ltd",
+    "received_by": "K. Nair",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "5/2 solenoid valve 1/4 inch",
+      "quantity_received": 100.0,
+      "ordered": 100.0,
+      "unit": "nos",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "5/2 solenoid valve 1/4 inch",
+      "quantity": 100.0,
+      "unit": "nos",
+      "hsn_sac": "8481"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01100",
+     "received_on": "2026-08-13",
+     "po_number": "PO-2026-4055",
+     "vendor_name": "Vortex Pneumatics Pvt Ltd",
+     "received_by": "K. Nair, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "5/2 solenoid valve 1/4 inch",
+      "quantity_received": 100.0,
+      "unit": "nos",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01100",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-08-13",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "PO-2026-4055",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Vortex Pneumatics Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "K. Nair, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 100.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "5/2 solenoid valve 1/4 inch",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": true
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-08-13"
+   ]
+  },
+  {
+   "file": "GRN-02.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "degraded",
+   "truth": {
+    "grn_number": "GRN/26-27/01107",
+    "received_on": "2026-07-18",
+    "po_number": "PO-2026-4071",
+    "vendor_name": "Surya Electricals & Automation Pvt Ltd",
+    "received_by": "P. Mehta",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "PLC I/O module 16DI",
+      "quantity_received": 200.0,
+      "ordered": 200.0,
+      "unit": "nos",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "PLC I/O module 16DI",
+      "quantity": 200.0,
+      "unit": "nos",
+      "hsn_sac": "8537"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01107",
+     "received_on": "2026-07-18",
+     "po_number": "PO-2026-4071",
+     "vendor_name": "Surya Electricals & Automation Pvt Ltd",
+     "received_by": "P. Mehta, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": "8537",
+      "description": "PLC I/O module 16DI",
+      "quantity_received": 200.0,
+      "unit": "nos",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01107",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-07-18",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "PO-2026-4071",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Surya Electricals & Automation Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "P. Mehta, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 200.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "PLC I/O module 16DI",
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "_summary": {
+      "min_confidence": 0.3,
+      "fields_needing_review": [
+       "lines[0].description"
+      ],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-07-18"
+   ]
+  },
+  {
+   "file": "GRN-03.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "adversarial",
+   "truth": {
+    "grn_number": "GRN/26-27/01114",
+    "received_on": "2026-07-28",
+    "po_number": "ZC-PO-260004",
+    "vendor_name": "Nimbus Nine Software LLP",
+    "received_by": "P. Mehta",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Nimbus Analytics add-on – per seat",
+      "quantity_received": 200.0,
+      "ordered": 200.0,
+      "unit": "seat",
+      "po_line_number": 1
+     },
+     {
+      "line_number": 2,
+      "description": "Nimbus Suite Enterprise licence – annual, per seat",
+      "quantity_received": 1.0,
+      "ordered": 1.0,
+      "unit": "seat",
+      "po_line_number": 2
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "Nimbus Analytics add-on – per seat",
+      "quantity": 200.0,
+      "unit": "seat",
+      "hsn_sac": "997331"
+     },
+     {
+      "line_number": 2,
+      "description": "Nimbus Suite Enterprise licence – annual, per seat",
+      "quantity": 1.0,
+      "unit": "seat",
+      "hsn_sac": "997331"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01114",
+     "received_on": "2026-09-02",
+     "po_number": "ZC-PO-260004",
+     "vendor_name": "Nimbus Nine Software LLP",
+     "received_by": "P. Mehta"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": "997331",
+      "description": "Nimbus Analytics add-on - per seat",
+      "quantity_received": 200.0,
+      "unit": "seat",
+      "remarks": null
+     },
+     {
+      "line_number": 2,
+      "item_code": "997331",
+      "description": "Nimbus Suite Enterprise licence annual, per seat",
+      "quantity_received": 1.0,
+      "unit": "seat",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01114",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-09-02",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "ZC-PO-260004",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Nimbus Nine Software LLP",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "P. Mehta",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 200.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Nimbus Analytics add-on - per seat",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[1].quantity_received": {
+      "value": 1.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[1].description": {
+      "value": "Nimbus Suite Enterprise licence annual, per seat",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-07-28",
+    "2026-09-02"
+   ]
+  },
+  {
+   "file": "GRN-04.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "clean",
+   "truth": {
+    "grn_number": "GRN/26-27/01121",
+    "received_on": "2026-08-19",
+    "po_number": "PO-2026-4043",
+    "vendor_name": "Shakti Steel & Alloys Ltd",
+    "received_by": "V. Deshmukh",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "quantity_received": 1.0,
+      "ordered": 1.0,
+      "unit": "MT",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "quantity": 1.0,
+      "unit": "MT",
+      "hsn_sac": "7209"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01121",
+     "received_on": "2026-08-19",
+     "po_number": "PO-2026-4043",
+     "vendor_name": "Shakti Steel & Alloys Ltd",
+     "received_by": "V. Deshmukh, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "quantity_received": 1.0,
+      "unit": "MT",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01121",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-08-19",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "PO-2026-4043",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Shakti Steel & Alloys Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "V. Deshmukh, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 1.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "CR sheet 1.2mm, 1250 x 2500",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": true
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-08-19"
+   ]
+  },
+  {
+   "file": "GRN-05.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "degraded",
+   "truth": {
+    "grn_number": "GRN/26-27/01128",
+    "received_on": "2026-05-16",
+    "po_number": "PO-2026-4071",
+    "vendor_name": "Surya Electricals & Automation Pvt Ltd",
+    "received_by": "V. Deshmukh",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "PLC I/O module 16DI",
+      "quantity_received": 200.0,
+      "ordered": 200.0,
+      "unit": "nos",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "PLC I/O module 16DI",
+      "quantity": 200.0,
+      "unit": "nos",
+      "hsn_sac": "8537"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01128",
+     "received_on": "2026-05-16",
+     "po_number": "PO-2026-4071",
+     "vendor_name": "Surya Electricals & Automation Pvt Ltd",
+     "received_by": "V. Deshmukh, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "PLC I/O module 16DI",
+      "quantity_received": 200.0,
+      "unit": "nos",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01128",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-05-16",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "PO-2026-4071",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Surya Electricals & Automation Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "V. Deshmukh, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 200.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "PLC I/O module 16DI",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-05-16"
+   ]
+  },
+  {
+   "file": "GRN-06.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "adversarial",
+   "truth": {
+    "grn_number": "GRN/26-27/01135",
+    "received_on": "2026-07-28",
+    "po_number": "ZC-PO-260024",
+    "vendor_name": "Sapphire Systems Hardware Pvt Ltd",
+    "received_by": "S. Banerjee",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "27-inch IPS monitor",
+      "quantity_received": 20.0,
+      "ordered": 20.0,
+      "unit": "nos",
+      "po_line_number": 1
+     },
+     {
+      "line_number": 2,
+      "description": "USB-C docking station",
+      "quantity_received": 1.0,
+      "ordered": 2.0,
+      "unit": "nos",
+      "po_line_number": 3
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "27-inch IPS monitor",
+      "quantity": 20.0,
+      "unit": "nos",
+      "hsn_sac": "8528"
+     },
+     {
+      "line_number": 2,
+      "description": "Rack server, 2U, dual Xeon, 256GB RAM",
+      "quantity": 20.0,
+      "unit": "nos",
+      "hsn_sac": "8471"
+     },
+     {
+      "line_number": 3,
+      "description": "USB-C docking station",
+      "quantity": 2.0,
+      "unit": "nos",
+      "hsn_sac": "8471"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01135",
+     "received_on": "2026-07-28",
+     "po_number": "ZC-PO-260024",
+     "vendor_name": "Sapphire Systems Hardware Pvt Ltd",
+     "received_by": "S. Banerjee"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": "8528",
+      "description": "27-inch IPS monitor",
+      "quantity_received": 20.0,
+      "unit": "nos",
+      "remarks": null
+     },
+     {
+      "line_number": 2,
+      "item_code": "8471",
+      "description": "USB-C docking station",
+      "quantity_received": 1.0,
+      "unit": "nos",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01135",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-07-28",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "ZC-PO-260024",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Sapphire Systems Hardware Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "S. Banerjee",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 20.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "27-inch IPS monitor",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[1].quantity_received": {
+      "value": 1.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[1].description": {
+      "value": "USB-C docking station",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-07-28"
+   ]
+  },
+  {
+   "file": "GRN-07.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "clean",
+   "truth": {
+    "grn_number": "GRN/26-27/01142",
+    "received_on": "2026-07-25",
+    "po_number": "PO-2026-4058",
+    "vendor_name": "Marudhar Machine Tools Pvt Ltd",
+    "received_by": "V. Deshmukh",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity_received": 2.0,
+      "ordered": 2.0,
+      "unit": "nos",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity": 2.0,
+      "unit": "nos",
+      "hsn_sac": "8483"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01142",
+     "received_on": "2026-07-25",
+     "po_number": "PO-2026-4058",
+     "vendor_name": "Marudhar Machine Tools Pvt Ltd",
+     "received_by": "V. Deshmukh, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "Ball screw assembly 32mm x 1200",
+      "quantity_received": 2.0,
+      "unit": "nos",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01142",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-07-25",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "PO-2026-4058",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Marudhar Machine Tools Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "V. Deshmukh, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 2.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Ball screw assembly 32mm x 1200",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": true
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-07-25"
+   ]
+  },
+  {
+   "file": "GRN-08.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "degraded",
+   "truth": {
+    "grn_number": "GRN/26-27/01149",
+    "received_on": "2026-07-17",
+    "po_number": "PO-2026-4038",
+    "vendor_name": "Apex Industrial Components Pvt Ltd",
+    "received_by": "R. Iyer",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Lock nut KM 12",
+      "quantity_received": 20.0,
+      "ordered": 20.0,
+      "unit": "nos",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "Lock nut KM 12",
+      "quantity": 20.0,
+      "unit": "nos",
+      "hsn_sac": "7318"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01149",
+     "received_on": "2026-07-17",
+     "po_number": "PO-2026-4038",
+     "vendor_name": "Apex Industrial Components Pvt Ltd",
+     "received_by": "R. Iyer, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "Lock nut KM 12",
+      "quantity_received": 20.0,
+      "unit": "nos",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01149",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-07-17",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "PO-2026-4038",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Apex Industrial Components Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "R. Iyer, Stores",
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "lines[0].quantity_received": {
+      "value": 20.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Lock nut KM 12",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 0.3,
+      "fields_needing_review": [
+       "received_by"
+      ],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-07-17"
+   ]
+  },
+  {
+   "file": "GRN-09.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "adversarial",
+   "truth": {
+    "grn_number": "GRN/26-27/01156",
+    "received_on": "2026-08-19",
+    "po_number": "ZC-PO-260029",
+    "vendor_name": "Meridian SaaS Tools (India) Pvt Ltd",
+    "received_by": "A. Khan",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Meridian Workspace Pro – monthly subscription, per user",
+      "quantity_received": 16.0,
+      "ordered": 20.0,
+      "unit": "user",
+      "po_line_number": 1
+     },
+     {
+      "line_number": 2,
+      "description": "Meridian Storage 1TB block – monthly",
+      "quantity_received": 50.0,
+      "ordered": 50.0,
+      "unit": "block",
+      "po_line_number": 2
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "Meridian Workspace Pro – monthly subscription, per user",
+      "quantity": 20.0,
+      "unit": "user",
+      "hsn_sac": "998315"
+     },
+     {
+      "line_number": 2,
+      "description": "Meridian Storage 1TB block – monthly",
+      "quantity": 50.0,
+      "unit": "block",
+      "hsn_sac": "998315"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01156",
+     "received_on": "2026-09-04",
+     "po_number": "ZC-PO-260029",
+     "vendor_name": "Meridian SaaS Tools (India) Pvt Ltd",
+     "received_by": "A. Khan, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": "998315",
+      "description": "Meridian Workspace Pro - monthly subscription, per user",
+      "quantity_received": 16.0,
+      "unit": "user",
+      "remarks": null
+     },
+     {
+      "line_number": 2,
+      "item_code": "998315",
+      "description": "Meridian Storage 1TB block - monthly",
+      "quantity_received": 50.0,
+      "unit": "block",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01156",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-09-04",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "ZC-PO-260029",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Meridian SaaS Tools (India) Pvt Ltd",
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "received_by": {
+      "value": "A. Khan, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 16.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Meridian Workspace Pro - monthly subscription, per user",
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "lines[1].quantity_received": {
+      "value": 50.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[1].description": {
+      "value": "Meridian Storage 1TB block - monthly",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 0.3,
+      "fields_needing_review": [
+       "lines[0].description",
+       "vendor_name"
+      ],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-08-19",
+    "2026-09-04"
+   ]
+  },
+  {
+   "file": "GRN-10.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "clean",
+   "truth": {
+    "grn_number": "GRN/26-27/01163",
+    "received_on": "2026-07-27",
+    "po_number": "ZC-PO-260004",
+    "vendor_name": "Nimbus Nine Software LLP",
+    "received_by": "N. Kulkarni",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Nimbus Analytics add-on – per seat",
+      "quantity_received": 200.0,
+      "ordered": 200.0,
+      "unit": "seat",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "Nimbus Analytics add-on – per seat",
+      "quantity": 200.0,
+      "unit": "seat",
+      "hsn_sac": "997331"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01163",
+     "received_on": "2026-07-27",
+     "po_number": "ZC-PO-260004",
+     "vendor_name": "Nimbus Nine Software LLP",
+     "received_by": "N. Kulkarni, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": "997331",
+      "description": "Nimbus Analytics add-on - per seat",
+      "quantity_received": 200.0,
+      "unit": "seat",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01163",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-07-27",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "ZC-PO-260004",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Nimbus Nine Software LLP",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "N. Kulkarni, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 200.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Nimbus Analytics add-on - per seat",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": true
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-07-27"
+   ]
+  },
+  {
+   "file": "GRN-11.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "degraded",
+   "truth": {
+    "grn_number": "GRN/26-27/01170",
+    "received_on": "2026-05-22",
+    "po_number": "ZC-PO-260026",
+    "vendor_name": "Sapphire Systems Hardware Pvt Ltd",
+    "received_by": "A. Khan",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "USB-C docking station",
+      "quantity_received": 1.0,
+      "ordered": 2.0,
+      "unit": "nos",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "USB-C docking station",
+      "quantity": 2.0,
+      "unit": "nos",
+      "hsn_sac": "8471"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01170",
+     "received_on": "2026-05-22",
+     "po_number": "ZC-PO-260026",
+     "vendor_name": "Sapphire Systems Hardware Pvt Ltd",
+     "received_by": "A. Khan, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": "8471",
+      "description": "USB-C docking station",
+      "quantity_received": 1.0,
+      "unit": "nos",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01170",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-05-22",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "ZC-PO-260026",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Sapphire Systems Hardware Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "A. Khan, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 1.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "USB-C docking station",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-05-22"
+   ]
+  },
+  {
+   "file": "GRN-12.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "adversarial",
+   "truth": {
+    "grn_number": "GRN/26-27/01177",
+    "received_on": "2026-06-07",
+    "po_number": "PO-2026-4037",
+    "vendor_name": "Apex Industrial Components Pvt Ltd",
+    "received_by": "M. Reddy",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Deep groove ball bearing 6205-2RS",
+      "quantity_received": 2.0,
+      "ordered": 2.0,
+      "unit": "nos",
+      "po_line_number": 1
+     },
+     {
+      "line_number": 2,
+      "description": "Lock nut KM 12",
+      "quantity_received": 10.0,
+      "ordered": 20.0,
+      "unit": "nos",
+      "po_line_number": 2
+     },
+     {
+      "line_number": 3,
+      "description": "Taper roller bearing 30208",
+      "quantity_received": 50.0,
+      "ordered": 50.0,
+      "unit": "nos",
+      "po_line_number": 3
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "Deep groove ball bearing 6205-2RS",
+      "quantity": 2.0,
+      "unit": "nos",
+      "hsn_sac": "8482"
+     },
+     {
+      "line_number": 2,
+      "description": "Lock nut KM 12",
+      "quantity": 20.0,
+      "unit": "nos",
+      "hsn_sac": "7318"
+     },
+     {
+      "line_number": 3,
+      "description": "Taper roller bearing 30208",
+      "quantity": 50.0,
+      "unit": "nos",
+      "hsn_sac": "8482"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01177",
+     "received_on": "2026-09-02",
+     "po_number": "PO-2026-4037",
+     "vendor_name": "Apex Industrial Components Pvt Ltd",
+     "received_by": "M. Reddy. Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": "6205-2RS",
+      "description": "Deep groove ball bearing 6205-2RS",
+      "quantity_received": 2.0,
+      "unit": "nos",
+      "remarks": null
+     },
+     {
+      "line_number": 2,
+      "item_code": "KM 12",
+      "description": "Lock nut KM 12",
+      "quantity_received": 10.0,
+      "unit": "nos",
+      "remarks": null
+     },
+     {
+      "line_number": 3,
+      "item_code": "30208",
+      "description": "Taper roller bearing 30208",
+      "quantity_received": 50.0,
+      "unit": "nos",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01177",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-09-02",
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "po_number": {
+      "value": "PO-2026-4037",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Apex Industrial Components Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "M. Reddy. Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 2.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Deep groove ball bearing 6205-2RS",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[1].quantity_received": {
+      "value": 10.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[1].description": {
+      "value": "Lock nut KM 12",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[2].quantity_received": {
+      "value": 50.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[2].description": {
+      "value": "Taper roller bearing 30208",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 0.3,
+      "fields_needing_review": [
+       "received_on"
+      ],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-06-07"
+   ]
+  },
+  {
+   "file": "GRN-13.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "clean",
+   "truth": {
+    "grn_number": "GRN/26-27/01184",
+    "received_on": "2026-08-26",
+    "po_number": "ZC-PO-260007",
+    "vendor_name": "Nimbus Nine Software LLP",
+    "received_by": "K. Nair",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Nimbus Analytics add-on – per seat",
+      "quantity_received": 50.0,
+      "ordered": 50.0,
+      "unit": "seat",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "Nimbus Analytics add-on – per seat",
+      "quantity": 50.0,
+      "unit": "seat",
+      "hsn_sac": "997331"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01184",
+     "received_on": "2026-08-26",
+     "po_number": "ZC-PO-260007",
+     "vendor_name": "Nimbus Nine Software LLP",
+     "received_by": "K. Nair, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": "997331",
+      "description": "Nimbus Analytics add-on - per seat",
+      "quantity_received": 50.0,
+      "unit": "seat",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01184",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-08-26",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "ZC-PO-260007",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Nimbus Nine Software LLP",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "K. Nair, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 50.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Nimbus Analytics add-on - per seat",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": true
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-08-26"
+   ]
+  },
+  {
+   "file": "GRN-14.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "degraded",
+   "truth": {
+    "grn_number": "GRN/26-27/01191",
+    "received_on": "2026-07-21",
+    "po_number": "ZC-PO-260025",
+    "vendor_name": "Sapphire Systems Hardware Pvt Ltd",
+    "received_by": "N. Kulkarni",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Rack server, 2U, dual Xeon, 256GB RAM",
+      "quantity_received": 20.0,
+      "ordered": 20.0,
+      "unit": "nos",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "Rack server, 2U, dual Xeon, 256GB RAM",
+      "quantity": 20.0,
+      "unit": "nos",
+      "hsn_sac": "8471"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01191",
+     "received_on": "2026-07-21",
+     "po_number": "ZC-PO-260025",
+     "vendor_name": "Sapphire Systems Hardware Pvt Ltd",
+     "received_by": "N. Kulkarni, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": "8471",
+      "description": "Rack server, 2U, dual Xeon, 256GB RAM",
+      "quantity_received": 20.0,
+      "unit": "nos",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01191",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-07-21",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "ZC-PO-260025",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Sapphire Systems Hardware Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "N. Kulkarni, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 20.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Rack server, 2U, dual Xeon, 256GB RAM",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-07-21"
+   ]
+  },
+  {
+   "file": "GRN-15.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "adversarial",
+   "truth": {
+    "grn_number": "GRN/26-27/01198",
+    "received_on": "2026-07-24",
+    "po_number": "PO-2026-4042",
+    "vendor_name": "Shakti Steel & Alloys Ltd",
+    "received_by": "S. Banerjee",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "HR coil IS 2062 E250, 3.0mm",
+      "quantity_received": 10.0,
+      "ordered": 10.0,
+      "unit": "MT",
+      "po_line_number": 1
+     },
+     {
+      "line_number": 2,
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "quantity_received": 1.0,
+      "ordered": 1.0,
+      "unit": "MT",
+      "po_line_number": 2
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "HR coil IS 2062 E250, 3.0mm",
+      "quantity": 10.0,
+      "unit": "MT",
+      "hsn_sac": "7208"
+     },
+     {
+      "line_number": 2,
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "quantity": 1.0,
+      "unit": "MT",
+      "hsn_sac": "7209"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01198",
+     "received_on": "2026-09-05",
+     "po_number": "PO-2026-4042",
+     "vendor_name": "Shakti Steel & Alloys Ltd",
+     "received_by": "S. Banerjee, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "HR coil IS 2062 E250, 3.0mm",
+      "quantity_received": 10.0,
+      "unit": "MT",
+      "remarks": null
+     },
+     {
+      "line_number": 2,
+      "item_code": null,
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "quantity_received": 1.0,
+      "unit": "MT",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01198",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-09-05",
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "po_number": {
+      "value": "PO-2026-4042",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Shakti Steel & Alloys Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "S. Banerjee, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 10.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "HR coil IS 2062 E250, 3.0mm",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[1].quantity_received": {
+      "value": 1.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[1].description": {
+      "value": "CR sheet 1.2mm, 1250 x 2500",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 0.3,
+      "fields_needing_review": [
+       "received_on"
+      ],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-07-24"
+   ]
+  },
+  {
+   "file": "GRN-16.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "clean",
+   "truth": {
+    "grn_number": "GRN/26-27/01205",
+    "received_on": "2026-06-12",
+    "po_number": "PO-2026-4043",
+    "vendor_name": "Shakti Steel & Alloys Ltd",
+    "received_by": "K. Nair",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "quantity_received": 1.0,
+      "ordered": 1.0,
+      "unit": "MT",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "quantity": 1.0,
+      "unit": "MT",
+      "hsn_sac": "7209"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01205",
+     "received_on": "2026-06-12",
+     "po_number": "PO-2026-4043",
+     "vendor_name": "Shakti Steel & Alloys Ltd",
+     "received_by": "K. Nair, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": "7209",
+      "description": "CR sheet 1.2mm, 1250 x 2500",
+      "quantity_received": 1.0,
+      "unit": "MT",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01205",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-06-12",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "PO-2026-4043",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Shakti Steel & Alloys Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "K. Nair, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 1.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "CR sheet 1.2mm, 1250 x 2500",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": true
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-06-12"
+   ]
+  },
+  {
+   "file": "GRN-17.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "degraded",
+   "truth": {
+    "grn_number": "GRN/26-27/01212",
+    "received_on": "2026-06-08",
+    "po_number": "PO-2026-4076",
+    "vendor_name": "Greenline Logistics Pvt Ltd",
+    "received_by": "P. Mehta",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Freight – Vadodara to Rajkot, 32ft MXL",
+      "quantity_received": 200.0,
+      "ordered": 200.0,
+      "unit": "trip",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "Freight – Vadodara to Rajkot, 32ft MXL",
+      "quantity": 200.0,
+      "unit": "trip",
+      "hsn_sac": "996511"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01212",
+     "received_on": "2026-06-08",
+     "po_number": "PO-2026-4076",
+     "vendor_name": "Greenline Logistics Pvt Ltd",
+     "received_by": "P. Mehta, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": "996511",
+      "description": "Freight - Vadodara to Rajkot, 32ft MXL",
+      "quantity_received": 200.0,
+      "unit": "trip",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01212",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-06-08",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "PO-2026-4076",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Greenline Logistics Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "P. Mehta, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 200.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Freight - Vadodara to Rajkot, 32ft MXL",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-06-08"
+   ]
+  },
+  {
+   "file": "GRN-18.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "adversarial",
+   "truth": {
+    "grn_number": "GRN/26-27/01219",
+    "received_on": "2026-06-17",
+    "po_number": "PO-2026-4047",
+    "vendor_name": "Bharat Fasteners Corporation",
+    "received_by": "V. Deshmukh",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "quantity_received": 5.0,
+      "ordered": 5.0,
+      "unit": "box",
+      "po_line_number": 1
+     },
+     {
+      "line_number": 2,
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "quantity_received": 200.0,
+      "ordered": 200.0,
+      "unit": "box",
+      "po_line_number": 2
+     },
+     {
+      "line_number": 3,
+      "description": "Spring washer M12 (box of 500)",
+      "quantity_received": 1.0,
+      "ordered": 2.0,
+      "unit": "box",
+      "po_line_number": 3
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "quantity": 5.0,
+      "unit": "box",
+      "hsn_sac": "7318"
+     },
+     {
+      "line_number": 2,
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "quantity": 200.0,
+      "unit": "box",
+      "hsn_sac": "7318"
+     },
+     {
+      "line_number": 3,
+      "description": "Spring washer M12 (box of 500)",
+      "quantity": 2.0,
+      "unit": "box",
+      "hsn_sac": "7318"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01219",
+     "received_on": "2026-06-17",
+     "po_number": "PO-2026-4047",
+     "vendor_name": "Bharat Fasteners Corporation",
+     "received_by": "V. Deshmukh"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "quantity_received": 5.0,
+      "unit": "box",
+      "remarks": null
+     },
+     {
+      "line_number": 2,
+      "item_code": null,
+      "description": "Hex nut M12, 8 grade (box of 200)",
+      "quantity_received": 200.0,
+      "unit": "box",
+      "remarks": null
+     },
+     {
+      "line_number": 3,
+      "item_code": null,
+      "description": "Spring washer M12 (box of 500)",
+      "quantity_received": 1.0,
+      "unit": "box",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01219",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-06-17",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "PO-2026-4047",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Bharat Fasteners Corporation",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "V. Deshmukh",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 5.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Hex bolt M12x50, 8.8, zinc (box of 100)",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[1].quantity_received": {
+      "value": 200.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[1].description": {
+      "value": "Hex nut M12, 8 grade (box of 200)",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[2].quantity_received": {
+      "value": 1.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[2].description": {
+      "value": "Spring washer M12 (box of 500)",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-06-17"
+   ]
+  },
+  {
+   "file": "GRN-19.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "clean",
+   "truth": {
+    "grn_number": "GRN/26-27/01226",
+    "received_on": "2026-05-20",
+    "po_number": "ZC-PO-260006",
+    "vendor_name": "Nimbus Nine Software LLP",
+    "received_by": "T. Sharma",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Nimbus Suite Enterprise licence – annual, per seat",
+      "quantity_received": 9.0,
+      "ordered": 10.0,
+      "unit": "seat",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "Nimbus Suite Enterprise licence – annual, per seat",
+      "quantity": 10.0,
+      "unit": "seat",
+      "hsn_sac": "997331"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01226",
+     "received_on": "2026-05-20",
+     "po_number": "ZC-PO-260006",
+     "vendor_name": "Nimbus Nine Software LLP",
+     "received_by": "T. Sharma, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": "997331",
+      "description": "Nimbus Suite Enterprise licence – annual, per seat",
+      "quantity_received": 9.0,
+      "unit": "seat",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01226",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-05-20",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "ZC-PO-260006",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Nimbus Nine Software LLP",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "T. Sharma, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 9.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Nimbus Suite Enterprise licence – annual, per seat",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": true
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-05-20"
+   ]
+  },
+  {
+   "file": "GRN-20.pdf",
+   "kind": "goods_receipt",
+   "difficulty": "degraded",
+   "truth": {
+    "grn_number": "GRN/26-27/01233",
+    "received_on": "2026-07-08",
+    "po_number": "PO-2026-4073",
+    "vendor_name": "Surya Electricals & Automation Pvt Ltd",
+    "received_by": "J. Fernandes",
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "VFD 15kW 415V",
+      "quantity_received": 5.0,
+      "ordered": 10.0,
+      "unit": "nos",
+      "po_line_number": 1
+     }
+    ],
+    "po_lines": [
+     {
+      "line_number": 1,
+      "description": "VFD 15kW 415V",
+      "quantity": 10.0,
+      "unit": "nos",
+      "hsn_sac": "8504"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "goods_receipt",
+    "fields": {
+     "grn_number": "GRN/26-27/01233",
+     "received_on": "2026-07-08",
+     "po_number": "PO-2026-4073",
+     "vendor_name": "Surya Electricals & Automation Pvt Ltd",
+     "received_by": "J. Fernandes, Stores"
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "VFD 15kW 415V",
+      "quantity_received": 5.0,
+      "unit": "nos",
+      "remarks": null
+     }
+    ],
+    "_evidence": {
+     "grn_number": {
+      "value": "GRN/26-27/01233",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_on": {
+      "value": "2026-07-08",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_number": {
+      "value": "PO-2026-4073",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Surya Electricals & Automation Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "received_by": {
+      "value": "J. Fernandes, Stores",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity_received": {
+      "value": 5.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "VFD 15kW 415V",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-07-08"
+   ]
+  },
+  {
+   "file": "TECH-INV-084.pdf",
+   "kind": "purchase_order",
+   "difficulty": "hard",
+   "truth": {
+    "po_number": "ZC-PO-260032",
+    "vendor_name": "Meridian SaaS Tools (India) Pvt Ltd",
+    "total": 1387.0,
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Meridian Workspace Pro – monthly subscription, per user",
+      "quantity": 1.0,
+      "unit": "user",
+      "hsn_sac": "998315"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "purchase_order",
+    "fields": {
+     "po_number": "ZC-PO-260032",
+     "po_date": "2026-01-14",
+     "valid_from": null,
+     "valid_to": "2027-03-31",
+     "vendor_name": "Meridian SaaS Tools (India) Pvt Ltd",
+     "vendor_tax_id": "09BBUCO9128L1ZD",
+     "customer_name": "Zentrix Cloudworks Private Limited",
+     "currency": "Rs.",
+     "total_amount": 1387.0,
+     "amount_basis": null
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "Meridian Workspace Pro - monthly subscription, per user",
+      "quantity": 1.0,
+      "unit": "user",
+      "unit_price": 1387.0,
+      "hsn_sac": "998315"
+     }
+    ],
+    "_evidence": {
+     "po_number": {
+      "value": "ZC-PO-260032",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_date": {
+      "value": "2026-01-14",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "valid_to": {
+      "value": "2027-03-31",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Meridian SaaS Tools (India) Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_tax_id": {
+      "value": "09BBUCO9128L1ZD",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "customer_name": {
+      "value": "Zentrix Cloudworks Private Limited",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "total_amount": {
+      "value": 1387.0,
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "lines[0].quantity": {
+      "value": 1.0,
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "lines[0].description": {
+      "value": "Meridian Workspace Pro - monthly subscription, per user",
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "_summary": {
+      "min_confidence": 0.3,
+      "fields_needing_review": [
+       "lines[0].description",
+       "lines[0].quantity",
+       "total_amount"
+      ],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-01-14",
+    "2027-03-31"
+   ]
+  },
+  {
+   "file": "TECH-INV-090.pdf",
+   "kind": "purchase_order",
+   "difficulty": "hard",
+   "truth": {
+    "po_number": "ZC-PO-260030",
+    "vendor_name": "Meridian SaaS Tools (India) Pvt Ltd",
+    "total": 6280.0,
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Meridian Workspace Pro – monthly subscription, per user",
+      "quantity": 5.0,
+      "unit": "user",
+      "hsn_sac": "998315"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "purchase_order",
+    "fields": {
+     "po_number": "ZC-PO-260030",
+     "po_date": "2026-01-11",
+     "valid_from": null,
+     "valid_to": "2027-03-31",
+     "vendor_name": "Meridian SaaS Tools (India) Pvt Ltd",
+     "vendor_tax_id": "09BBUCO9128L1ZD",
+     "customer_name": "Zentrix Cloudworks Private Limited",
+     "currency": "Rs.",
+     "total_amount": 6280.0,
+     "amount_basis": null
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "Meridian Workspace Pro - monthly\nsubscription, per user",
+      "quantity": 5.0,
+      "unit": "user",
+      "unit_price": 1256.0,
+      "hsn_sac": "998315"
+     }
+    ],
+    "_evidence": {
+     "po_number": {
+      "value": "ZC-PO-260030",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_date": {
+      "value": "2026-01-11",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "valid_to": {
+      "value": "2027-03-31",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Meridian SaaS Tools (India) Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_tax_id": {
+      "value": "09BBUCO9128L1ZD",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "customer_name": {
+      "value": "Zentrix Cloudworks Private Limited",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "total_amount": {
+      "value": 6280.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity": {
+      "value": 5.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Meridian Workspace Pro - monthly\nsubscription, per user",
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "_summary": {
+      "min_confidence": 0.3,
+      "fields_needing_review": [
+       "lines[0].description"
+      ],
+      "has_text_layer": false
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-01-11",
+    "2027-03-31"
+   ]
+  },
+  {
+   "file": "TECH-INV-091.pdf",
+   "kind": "purchase_order",
+   "difficulty": "medium",
+   "truth": {
+    "po_number": "ZC-PO-260014",
+    "vendor_name": "Britehall IT Staffing Solutions",
+    "total": 259200.0,
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Contract QA analyst – {name} – {mon} 2026",
+      "quantity": 160.0,
+      "unit": "hour",
+      "hsn_sac": "998513"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "purchase_order",
+    "fields": {
+     "po_number": "ZC-PO-260014",
+     "po_date": "2026-02-23",
+     "valid_from": null,
+     "valid_to": "2026-05-24",
+     "vendor_name": "Britehall IT Staffing Solutions",
+     "vendor_tax_id": "33HRAPY4075N1Z2",
+     "customer_name": "Zentrix Cloudworks Private Limited",
+     "currency": "Rs",
+     "total_amount": 259200.0,
+     "amount_basis": null
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "Contract QA analyst – {name} –\n{mon} 2026",
+      "quantity": 160.0,
+      "unit": "hour",
+      "unit_price": 1620.0,
+      "hsn_sac": "998513"
+     }
+    ],
+    "_evidence": {
+     "po_number": {
+      "value": "ZC-PO-260014",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_date": {
+      "value": "2026-02-23",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "valid_to": {
+      "value": "2026-05-24",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Britehall IT Staffing Solutions",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_tax_id": {
+      "value": "33HRAPY4075N1Z2",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "customer_name": {
+      "value": "Zentrix Cloudworks Private Limited",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "total_amount": {
+      "value": 259200.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity": {
+      "value": 160.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Contract QA analyst – {name} –\n{mon} 2026",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "_summary": {
+      "min_confidence": 1.0,
+      "fields_needing_review": [],
+      "has_text_layer": true
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-02-23",
+    "2026-05-24"
+   ]
+  },
+  {
+   "file": "TECH-INV-099.pdf",
+   "kind": "purchase_order",
+   "difficulty": "medium",
+   "truth": {
+    "po_number": "ZC-PO-260029",
+    "vendor_name": "Meridian SaaS Tools (India) Pvt Ltd",
+    "total": 26420.0,
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Meridian Workspace Pro – monthly subscription, per user",
+      "quantity": 20.0,
+      "unit": "user",
+      "hsn_sac": "998315"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "purchase_order",
+    "fields": {
+     "po_number": "ZC-PO-260029",
+     "po_date": "2026-04-10",
+     "valid_from": null,
+     "valid_to": "2027-03-31",
+     "vendor_name": "Meridian SaaS Tools (India) Pvt Ltd",
+     "vendor_tax_id": "09BBUCO9128L1ZD",
+     "customer_name": "Zentrix Cloudworks Private Limited",
+     "currency": "Rs.",
+     "total_amount": 26420.0,
+     "amount_basis": null
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "Meridian Workspace Pro - monthly\nsubscription, per user",
+      "quantity": 20.0,
+      "unit": "user",
+      "unit_price": 1321.0,
+      "hsn_sac": "998315"
+     }
+    ],
+    "_evidence": {
+     "po_number": {
+      "value": "ZC-PO-260029",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_date": {
+      "value": "2026-04-10",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "valid_to": {
+      "value": "2027-03-31",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Meridian SaaS Tools (India) Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_tax_id": {
+      "value": "09BBUCO9128L1ZD",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "customer_name": {
+      "value": "Zentrix Cloudworks Private Limited",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "total_amount": {
+      "value": 26420.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity": {
+      "value": 20.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Meridian Workspace Pro - monthly\nsubscription, per user",
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "_summary": {
+      "min_confidence": 0.3,
+      "fields_needing_review": [
+       "lines[0].description"
+      ],
+      "has_text_layer": true
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-04-10",
+    "2027-03-31"
+   ]
+  },
+  {
+   "file": "SVC-INV-095.pdf",
+   "kind": "purchase_order",
+   "difficulty": "easy",
+   "truth": {
+    "po_number": "LB/PO/0083",
+    "vendor_name": "Hue & Cry Creative Studio LLP",
+    "total": 68520.0,
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Brand identity design – {proj}",
+      "quantity": 40.0,
+      "unit": "hour",
+      "hsn_sac": "998391"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "purchase_order",
+    "fields": {
+     "po_number": "LB/PO/0083",
+     "po_date": "2026-04-07",
+     "valid_from": null,
+     "valid_to": "2027-03-31",
+     "vendor_name": "Hue & Cry Creative Studio LLP",
+     "vendor_tax_id": "27XEIFZ6541Q1ZD",
+     "customer_name": "Lumora Brandcraft LLP",
+     "currency": null,
+     "total_amount": 68520.0,
+     "amount_basis": null
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "Brand identity design - {proj}",
+      "quantity": 40.0,
+      "unit": "hour",
+      "unit_price": 1713.0,
+      "hsn_sac": "998391"
+     }
+    ],
+    "_evidence": {
+     "po_number": {
+      "value": "LB/PO/0083",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_date": {
+      "value": "2026-04-07",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "valid_to": {
+      "value": "2027-03-31",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Hue & Cry Creative Studio LLP",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_tax_id": {
+      "value": "27XEIFZ6541Q1ZD",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "customer_name": {
+      "value": "Lumora Brandcraft LLP",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "total_amount": {
+      "value": 68520.0,
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "lines[0].quantity": {
+      "value": 40.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Brand identity design - {proj}",
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "_summary": {
+      "min_confidence": 0.3,
+      "fields_needing_review": [
+       "lines[0].description",
+       "total_amount"
+      ],
+      "has_text_layer": true
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-04-07",
+    "2027-03-31"
+   ]
+  },
+  {
+   "file": "SVC-INV-089.pdf",
+   "kind": "purchase_order",
+   "difficulty": "medium",
+   "truth": {
+    "po_number": "LB/PO/0093",
+    "vendor_name": "Northstar Strategy Consultants Pvt Ltd",
+    "total": 487920.0,
+    "lines": [
+     {
+      "line_number": 1,
+      "description": "Brand strategy consulting – {proj}",
+      "quantity": 80.0,
+      "unit": "hour",
+      "hsn_sac": "998311"
+     }
+    ]
+   },
+   "extracted": {
+    "kind": "purchase_order",
+    "fields": {
+     "po_number": "LB/PO/0093",
+     "po_date": "2026-02-25",
+     "valid_from": null,
+     "valid_to": "2027-03-31",
+     "vendor_name": "Northstar Strategy Consultants Pvt Ltd",
+     "vendor_tax_id": "07JSMCJ8126A1ZE",
+     "customer_name": "Lumora Brandcraft LLP",
+     "currency": "Rs",
+     "total_amount": null,
+     "amount_basis": null
+    },
+    "lines": [
+     {
+      "line_number": 1,
+      "item_code": null,
+      "description": "Brand strategy consulting - \n{proj}",
+      "quantity": 80.0,
+      "unit": "hour",
+      "unit_price": 6099.0,
+      "hsn_sac": "998311"
+     }
+    ],
+    "_evidence": {
+     "po_number": {
+      "value": "LB/PO/0093",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "po_date": {
+      "value": "2026-02-25",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "valid_to": {
+      "value": "2027-03-31",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_name": {
+      "value": "Northstar Strategy Consultants Pvt Ltd",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "vendor_tax_id": {
+      "value": "07JSMCJ8126A1ZE",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "customer_name": {
+      "value": "Lumora Brandcraft LLP",
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].quantity": {
+      "value": 80.0,
+      "grounded": true,
+      "page": 1,
+      "confidence": 1.0
+     },
+     "lines[0].description": {
+      "value": "Brand strategy consulting - \n{proj}",
+      "grounded": false,
+      "page": null,
+      "confidence": 0.3
+     },
+     "_summary": {
+      "min_confidence": 0.3,
+      "fields_needing_review": [
+       "lines[0].description"
+      ],
+      "has_text_layer": true
+     }
+    },
+    "_repairs": []
+   },
+   "page_dates": [
+    "2026-02-25",
+    "2027-03-31"
+   ]
+  }
+ ]
+}

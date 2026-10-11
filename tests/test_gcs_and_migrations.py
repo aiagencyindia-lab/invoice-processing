@@ -328,7 +328,12 @@ class TestMigration:
 
     @pytest.mark.parametrize(
         ("revision", "count"),
-        [("f2c7a19d8e43", 4), ("b21ac023e07e", 1), ("c4d7e8f91a02", 4)],
+        [
+            ("f2c7a19d8e43", 4),
+            ("b21ac023e07e", 1),
+            ("c4d7e8f91a02", 4),
+            ("d8e1f2a3b4c5", 1),
+        ],
     )
     def test_migration_protects_exactly_the_tables_it_creates(
         self, revision, count
@@ -401,6 +406,7 @@ class TestMigration:
                 "po_lines",
                 "goods_receipts",
                 "grn_lines",
+                "supporting_documents",
             ]
             with engine.connect() as c:
                 policies = {

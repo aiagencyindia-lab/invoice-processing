@@ -299,6 +299,7 @@ def invoice_chain(
 ) -> dict:
     from . import service  # noqa: PLC0415
 
+    service.require_invoice_case(principal.tenant_id, case_id)
     repo, ctx = _repo(), principal.context(case_id)
     if not service.get_cases().get_artifacts(ctx):
         raise HTTPException(404, f"Unknown case {case_id}")

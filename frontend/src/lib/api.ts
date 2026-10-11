@@ -152,7 +152,17 @@ export type DocumentRow = {
   byte_size: number | null;
   sha256: string | null;
   received_at: string | null;
-  stage: "queued" | "processing" | "done" | "failed" | "unknown";
+  stage:
+    | "queued"
+    | "processing"
+    | "done"
+    | "failed"
+    | "unknown"
+    | "awaiting_confirmation"
+    | "blocked"
+    | "accepted_unstored";
+  /** invoice | purchase_order | goods_receipt; null until classified. */
+  kind: string | null;
   explanation: string;
   /** How far through the nine pipeline steps the worker is. Null until it
    *  reports one -- an older document processed before this existed has none. */
@@ -384,7 +394,49 @@ export type Grn = {
   received_on: string;
   reason: string | null;
   recorded_by: string | null;
+  /** "document" when a clerk confirmed it from a scan. */
+  source?: string | null;
+  document_id?: string | null;
   lines: { line_number: number; qty_received: number }[];
+};
+
+export type Evidence = {
+  value: unknown;
+  grounded: boolean;
+  page: number | null;
+  confidence: number | null;
+};
+
+export type SupportingDocument = {
+  id: string;
+  document_id: string;
+  kind: "purchase_order" | "goods_receipt";
+  status: "pending" | "blocked" | "accepted" | "rejected";
+  po_number: string | null;
+  blocked_reason: string | null;
+  extraction_error: string | null;
+  document_url: string;
+  /** Something (a PO or receipts) was stored from it; false on an accepted
+   *  row means the acceptance stored nothing and an admin can reopen it. */
+  stored: boolean;
+  extracted: {
+    kind?: string;
+    fields: Record<string, string | number | null>;
+    lines: Record<string, string | number | null>[];
+    _evidence?: Record<string, Evidence | Record<string, unknown>>;
+  } | null;
+};
+
+export type SupportingList = {
+  documents: SupportingDocument[];
+  /** The server's cap (200) cut the list. */
+  truncated: boolean;
+};
+
+export type SupportingDetail = SupportingDocument & {
+  /** Per extracted receipt line, the PO line number it pairs to (null: none). */
+  paired: (number | null)[] | null;
+  po_on_file: boolean;
 };
 
 // The order's receipts come back under `receipts` (po_routes.read_purchase_order).

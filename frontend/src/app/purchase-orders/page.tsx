@@ -9,8 +9,11 @@ import {
   type Me,
   type PurchaseOrderDetail,
   type PurchaseOrderList,
+  type SupportingDocument,
+  type SupportingList,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
+import SupportingReview from "@/components/SupportingReview";
 
 function amount(value: number | null, currency: string | null): string {
   if (value === null || value === undefined) return "—";
@@ -96,6 +99,18 @@ function PoDetailRows({ poNumber }: { poNumber: string }) {
           {detail.receipts.map((g) => (
             <li key={g.grn_number}>
               {g.grn_number} · {g.received_on}
+              {g.source === "document" ? (
+                <>
+                  {" · "}
+                  {g.document_id ? (
+                    <a href={`/api/invoices/${g.document_id}/document`} target="_blank" rel="noreferrer">
+                      from scan
+                    </a>
+                  ) : (
+                    "from scan"
+                  )}
+                </>
+              ) : null}
               {g.reason ? ` · ${g.reason}` : ""} ·{" "}
               {g.lines.map((l) => `line ${l.line_number}: ${l.qty_received}`).join(", ")}
             </li>
@@ -103,6 +118,112 @@ function PoDetailRows({ poNumber }: { poNumber: string }) {
         </ul>
       )}
     </div>
+  );
+}
+
+const kindName = (kind: string) =>
+  kind === "goods_receipt" ? "Goods receipt" : "Purchase order";
+
+/** What a card says about a scan: its own number, vendor, date, and the
+ *  lowest confidence of anything read from it. */
+function cardFacts(d: SupportingDocument): string {
+  const f = d.extracted?.fields ?? {};
+  const summary = d.extracted?._evidence?._summary as
+    | { min_confidence?: number }
+    | undefined;
+  const lowest = summary?.min_confidence;
+  return [
+    d.kind === "goods_receipt" ? f.grn_number : null,
+    f.vendor_name,
+    d.kind === "goods_receipt" ? f.received_on : f.po_date,
+    typeof lowest === "number" ? `lowest confidence ${Math.round(lowest * 100)}%` : null,
+  ]
+    .filter((v) => v !== null && v !== undefined && v !== "")
+    .join(" · ");
+}
+
+/** Scans waiting for a clerk, and for an admin any acceptance that stored
+ *  nothing. Absent entirely without a database. */
+function AwaitingConfirmation({
+  admin,
+  onNotice,
+  onAccepted,
+}: {
+  admin: boolean;
+  onNotice: (notice: string) => void;
+  onAccepted: () => void;
+}) {
+  const { data, error, reload } = usePoll<SupportingList>(
+    "/api/supporting-documents?status=pending,blocked",
+  );
+  const orphans = usePoll<SupportingList>(
+    admin ? "/api/supporting-documents?status=accepted&stored=false" : null,
+  );
+  const [open, setOpen] = useState<string | null>(null);
+  if (error?.includes("needs a database")) return null;
+  const docs = [
+    ...(data?.documents ?? []),
+    // The server leaves out one accepted moments ago (it may still be
+    // storing, and its reopen would be refused).
+    ...(orphans.data?.documents ?? []),
+  ];
+  if (docs.length === 0 && !error) return null;
+  return (
+    <section className="stack" style={{ gap: 8 }} aria-labelledby="awaiting-h">
+      <h2 id="awaiting-h">Documents awaiting confirmation</h2>
+      {error ? <div className="empty-state">{error}</div> : null}
+      {data?.truncated ? (
+        <div className="muted" role="status" style={{ fontSize: 12.5 }}>
+          Showing the oldest 200; decide some to see the rest.
+        </div>
+      ) : null}
+      {orphans.data?.truncated ? (
+        <div className="muted" role="status" style={{ fontSize: 12.5 }}>
+          Showing 200 orphaned acceptances; reopen some to see the rest.
+        </div>
+      ) : null}
+      <div className="card-list">
+        {docs.map((d) => (
+          <div key={d.id} className="panel row-between" style={{ padding: "10px 14px" }}>
+            <div className="stack" style={{ gap: 2 }}>
+              <strong>
+                {kindName(d.kind)}
+                {d.po_number ? ` · PO ${d.po_number}` : ""}
+              </strong>
+              {cardFacts(d) ? (
+                <span className="muted" style={{ fontSize: 12.5 }}>
+                  {cardFacts(d)}
+                </span>
+              ) : null}
+              <span className="muted" style={{ fontSize: 12.5 }}>
+                {d.status === "blocked"
+                  ? (d.blocked_reason ?? "Its purchase order is not on file.")
+                  : d.status === "accepted"
+                    ? "Accepted, but nothing was stored; reopen it to confirm again."
+                    : "Read from a scan; check it before it counts."}
+              </span>
+            </div>
+            <button type="button" className="btn-chip" onClick={() => setOpen(d.id)}>
+              Review
+            </button>
+          </div>
+        ))}
+      </div>
+      {open ? (
+        <SupportingReview
+          id={open}
+          admin={admin}
+          onClose={() => setOpen(null)}
+          onDone={(notice) => {
+            setOpen(null);
+            onNotice(notice);
+            reload();
+            orphans.reload();
+            onAccepted();
+          }}
+        />
+      ) : null}
+    </section>
   );
 }
 
@@ -263,6 +384,17 @@ export default function PurchaseOrdersPage() {
             </div>
           ))}
         </div>
+      ) : null}
+
+      {canImport ? (
+        <AwaitingConfirmation
+          admin={canReplace}
+          onNotice={(n) => {
+            setProblem(null);
+            setNotice(n);
+          }}
+          onAccepted={reload}
+        />
       ) : null}
 
       {problem ? (

@@ -21,12 +21,22 @@ from .ports import CaseRepository, RunContext
 class TenantCaseLoader:
     """`CaseLoaderAgent`'s surface, over the tenant case store."""
 
-    def __init__(self, cases: CaseRepository, tenant_id: str):
+    def __init__(self, cases: CaseRepository, tenant_id: str, documents=None):
         self.cases = cases
         self.tenant_id = tenant_id
+        self.documents = documents
 
     def list_cases(self) -> list[str]:
-        return sorted(self.cases.iter_case_ids(self.tenant_id))
+        """The tenant's invoice cases. A scanned PO or receipt's case holds
+        no invoice, so a rule measured over it counts what never runs."""
+        skip = (
+            self.documents.non_invoice_ids(self.tenant_id)
+            if self.documents is not None
+            else set()
+        )
+        return sorted(
+            c for c in self.cases.iter_case_ids(self.tenant_id) if c not in skip
+        )
 
     def load_many(self, case_ids: list[str]) -> dict[str, CaseData]:
         """Every case at once.

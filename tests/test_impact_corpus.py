@@ -63,6 +63,18 @@ def corpus():
 
 
 class TestTheCorpusIsTheTenants:
+    def test_a_scanned_po_or_receipt_is_not_a_case(self, corpus):
+        """Its case holds no invoice; a rule measured over it would count
+        documents the engine never evaluates."""
+
+        class Documents:
+            def non_invoice_ids(self, tenant_id):
+                assert tenant_id == "tenant-acme"
+                return {"case_1", "case_3"}
+
+        loader = TenantCaseLoader(corpus, "tenant-acme", Documents())
+        assert loader.list_cases() == ["case_0", "case_2", "case_target"]
+
     def test_cases_come_from_the_case_store(self, corpus):
         """Not from a folder on somebody's laptop, which in a deployed worker
         is empty -- and an impact report over no cases finds no collateral."""

@@ -274,6 +274,9 @@ def replace_purchase_orders(
             "purchase_orders_replaced",
             {"count": len(records)},
         )
+        po_routes.unblock_receipts(
+            principal, [r.get("po_number") for r in records]
+        )
         return {
             "count": len(records),
             "message": f"Loaded {len(records)} purchase orders.",

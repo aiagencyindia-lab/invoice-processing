@@ -16,6 +16,15 @@ const STAGE_CLASS: Record<string, string> = {
   done: "badge-ok",
   failed: "badge-error",
   unknown: "badge-warn",
+  awaiting_confirmation: "badge-warn",
+  blocked: "badge-warn",
+  accepted_unstored: "badge-warn",
+};
+
+const KIND_LABEL: Record<string, string> = {
+  invoice: "Invoice",
+  purchase_order: "Purchase order",
+  goods_receipt: "Goods receipt",
 };
 
 function bytes(size: number | null): string {
@@ -130,6 +139,7 @@ export default function DocumentsPage() {
               <tr>
                 <th>File</th>
                 <th>Received</th>
+                <th>Kind</th>
                 <th>Source</th>
                 <th>Size</th>
                 <th>Stage</th>
@@ -150,6 +160,9 @@ export default function DocumentsPage() {
                     )}
                   </td>
                   <td className="faint">{when(document.received_at)}</td>
+                  <td className="muted">
+                    {document.kind ? (KIND_LABEL[document.kind] ?? document.kind) : "—"}
+                  </td>
                   <td className="muted">{document.source ?? "—"}</td>
                   <td className="muted">{bytes(document.byte_size)}</td>
                   <td>

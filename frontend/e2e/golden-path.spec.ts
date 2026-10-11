@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 /** The flow the product is sold on: a document arrives, a reviewer reads the
  *  decision and the evidence behind it, corrects what is wrong, approves, and
@@ -129,8 +129,11 @@ test("an edit is recorded as a correction", async ({ page }) => {
 });
 
 test("an upload is received and queued, and says so", async ({ page }) => {
+  // Not empty: the seeded receipt scans are documents too.
   await goto(page, "/documents");
-  await expect(page.getByText(/No documents yet/)).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "grn-e2e-21-scan.pdf" }),
+  ).toBeVisible();
 
   await page.locator("#upload").setInputFiles({
     name: "smoke-invoice.pdf",
@@ -410,6 +413,159 @@ test("Held invoice shows the three-way panel and a GRN clears it", async ({
   ).toHaveCount(0);
 });
 
+// Seeded by scripts/e2e_api.py: a receipt scan for PO-E2E-2 whose line 1 was
+// read as 10 when 1 arrived, and one blocked on a PO not on file.
+function scanCard(page: Page, po: string) {
+  return scanCardFor(page, `Goods receipt · PO ${po}`);
+}
+
+/** The awaiting-confirmation card showing `text`. Further scans seeded by
+ *  scripts/e2e_api.py, one per test: GRN-E2E-23 (no PO number read),
+ *  GRN-E2E-24 (really an invoice), GRN-E2E-25 (accepted, nothing stored)
+ *  and the purchase order PO-E2E-SCAN (its number flagged). */
+function scanCardFor(page: Page, text: string) {
+  return page
+    .locator(".panel")
+    .filter({ hasText: text })
+    .filter({ has: page.getByRole("button", { name: "Review" }) });
+}
+
+test("a clerk corrects a scanned receipt and it clears the held invoice", async ({
+  page,
+}) => {
+  await as(page, "alice@e2e.test:clerk");
+  await goto(page, "/purchase-orders");
+  await expect(
+    page.getByRole("heading", { name: "Documents awaiting confirmation" }),
+  ).toBeVisible();
+  await scanCard(page, "POE2E2").getByRole("button", { name: "Review" }).click();
+
+  const drawer = page.getByRole("dialog", { name: "Review scanned document" });
+  await expect(drawer.getByLabel("GRN number")).toHaveValue("GRN-E2E-21");
+  // The scan itself is served beside what was read from it.
+  const scan = await drawer.locator("iframe").getAttribute("src");
+  expect((await page.request.get(scan!)).headers()["content-type"]).toBe(
+    "application/pdf",
+  );
+  const quantity = drawer.getByLabel("Quantity received, line 1");
+  await expect(quantity).toHaveValue("10"); // the misread
+  await expect(quantity).toHaveAccessibleDescription(/check this/);
+  await expect(drawer.getByLabel("PO line for line 1")).toHaveValue("1");
+  await quantity.fill("1");
+  await drawer.getByRole("button", { name: "Accept" }).click();
+
+  await expect(
+    page
+      .getByRole("status")
+      .filter({ hasText: "Recorded 1 receipt; 1 invoice queued for re-match" }),
+  ).toBeVisible();
+  await expect(scanCard(page, "POE2E2")).toHaveCount(0);
+
+  // The re-match runs in the e2e stack's worker, not in the request.
+  await expect
+    .poll(
+      async () =>
+        (await (await page.request.get("/api/invoices/case_004_po2")).json())
+          .routing,
+      { timeout: 10_000 },
+    )
+    .toBe("AUTO");
+});
+
+test("a receipt for a PO not on file is refused until its PO number is corrected", async ({
+  page,
+}) => {
+  await as(page, "alice@e2e.test:clerk");
+  await goto(page, "/purchase-orders");
+  const card = scanCard(page, "PONOTYET");
+  await expect(card).toContainText("not on file");
+  await card.getByRole("button", { name: "Review" }).click();
+
+  const drawer = page.getByRole("dialog", { name: "Review scanned document" });
+  await expect(drawer.getByText(/PO-NOT-YET is not on file/)).toBeVisible();
+  await expect(
+    drawer.getByText("Correct the PO number to one on file to accept."),
+  ).toBeVisible();
+  await drawer.getByRole("button", { name: "Accept" }).click();
+  await expect(drawer.getByRole("alert")).toBeVisible(); // refused, still blocked
+  // A changed PO number clears the scan's pairing: the lines are chosen again.
+  await drawer.getByLabel("Po number").fill("PO-E2E-2");
+  await expect(drawer.getByLabel("PO line for line 1")).toHaveValue("");
+  await drawer.getByRole("button", { name: "Reject" }).click();
+  await drawer.getByLabel("Reason for rejecting").fill("Not our purchase order");
+  await drawer.getByRole("button", { name: "Confirm reject" }).click();
+
+  await expect(
+    page.getByRole("status").filter({ hasText: "Rejected the scanned document" }),
+  ).toBeVisible();
+  await expect(card).toHaveCount(0);
+});
+
+/** The cell of `row` under the "Kind" column of the documents table. */
+async function kindCell(page: Page, row: Locator) {
+  const headers = await page.getByRole("columnheader").allTextContents();
+  const at = headers.indexOf("Kind");
+  expect(at, `no "Kind" column among ${JSON.stringify(headers)}`).toBeGreaterThanOrEqual(0);
+  return row.getByRole("cell").nth(at);
+}
+
+test("the documents page names a scanned receipt as one", async ({ page }) => {
+  await goto(page, "/documents");
+  const row = page.getByRole("row").filter({ hasText: "grn-e2e-21-scan.pdf" });
+  await expect(row).toBeVisible();
+  await expect(await kindCell(page, row)).toHaveText("Goods receipt");
+});
+
+test("a receipt with no PO number read offers the PO's lines once one is typed", async ({
+  page,
+}) => {
+  await as(page, "alice@e2e.test:clerk");
+  await goto(page, "/purchase-orders");
+  const card = scanCardFor(page, "GRN-E2E-23");
+  // The card names the scan's own number, date and weakest reading.
+  await expect(card).toContainText("2026-10-09");
+  await expect(card).toContainText("lowest confidence 40%");
+  await card.getByRole("button", { name: "Review" }).click();
+
+  const drawer = page.getByRole("dialog", { name: "Review scanned document" });
+  const poLine = drawer.getByLabel("PO line for line 1");
+  await expect(poLine.locator("option")).toHaveCount(1); // only "no match"
+  await drawer.getByLabel("Po number").fill("PO-E2E-2");
+  await expect(poLine.locator("option[value='1']")).toHaveCount(1);
+  await poLine.selectOption("1");
+  await expect(poLine).toHaveValue("1");
+  // A correction reason is asked for only once a quantity is negative.
+  await expect(drawer.getByLabel("Correction reason")).toHaveCount(0);
+  await drawer.getByLabel("Quantity received, line 1").fill("-1");
+  await expect(drawer.getByLabel("Correction reason")).toBeVisible();
+  // Left undecided: accepting would record a receipt against PO-E2E-2.
+  await drawer.getByRole("button", { name: "Close" }).click();
+});
+
+test("a scan that is really an invoice is sent to the invoice queue", async ({
+  page,
+}) => {
+  await as(page, "alice@e2e.test:clerk");
+  await goto(page, "/purchase-orders");
+  const card = scanCardFor(page, "GRN-E2E-24");
+  await card.getByRole("button", { name: "Review" }).click();
+  const drawer = page.getByRole("dialog", { name: "Review scanned document" });
+  await drawer.getByRole("button", { name: "Process as invoice" }).click();
+  await expect(drawer.getByText(/runs the document through the invoice pipeline/)).toBeVisible();
+  await drawer.getByRole("button", { name: "Confirm process as invoice" }).click();
+
+  await expect(
+    page
+      .getByRole("status")
+      .filter({ hasText: "Sent the document to be processed as an invoice" }),
+  ).toBeVisible();
+  await expect(card).toHaveCount(0);
+
+  await goto(page, "/documents");
+  const row = page.getByRole("row").filter({ hasText: "grn-e2e-24-scan.pdf" });
+  await expect(await kindCell(page, row)).toHaveText("Invoice");
+});
+
 test("the sign-in page is a real route", async ({ page }) => {
   await page.goto("/login");
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
@@ -619,4 +775,47 @@ test("a clerk codes a line to a GL account, and a decision closes it", async ({
   await goto(page, "/invoices?case=case_004_gl");
   await expect(gl).toBeDisabled();
   await expect(gl).toHaveValue("6200");
+});
+
+test("an admin reopens an acceptance that stored nothing", async ({ page }) => {
+  await goto(page, "/purchase-orders"); // as the default dev admin
+  const orphan = scanCardFor(page, "GRN-E2E-25").filter({
+    hasText: "Accepted, but nothing was stored",
+  });
+  await orphan.getByRole("button", { name: "Review" }).click();
+  const drawer = page.getByRole("dialog", { name: "Review scanned document" });
+  await expect(drawer.getByRole("button", { name: "Accept" })).toHaveCount(0);
+  await drawer.getByRole("button", { name: "Reopen" }).click();
+  await drawer.getByRole("button", { name: "Confirm reopen" }).click();
+
+  await expect(
+    page.getByRole("status").filter({ hasText: "Reopened the scanned document" }),
+  ).toBeVisible();
+  await expect(orphan).toHaveCount(0);
+  // Back in the queue, waiting for confirmation again.
+  await expect(scanCardFor(page, "GRN-E2E-25")).toContainText("check it before it counts");
+});
+
+test("a scanned PO's flagged number is described and its total sent as a number", async ({
+  page,
+}) => {
+  await as(page, "alice@e2e.test:clerk");
+  await goto(page, "/purchase-orders");
+  await scanCardFor(page, "Purchase order · PO")
+    .getByRole("button", { name: "Review" })
+    .click();
+  const drawer = page.getByRole("dialog", { name: "Review scanned document" });
+  const number = drawer.getByLabel("Po number");
+  await expect(number).toHaveAttribute("aria-describedby", "why-f-po_number");
+  await expect(number).toHaveAccessibleDescription(/check this/);
+
+  // Answered here, not by the API: the scan stays pending for a rerun.
+  let sent: { fields: Record<string, unknown> } | null = null;
+  await page.route("**/api/supporting-documents/*/accept", (route) => {
+    sent = route.request().postDataJSON();
+    return route.fulfill({ status: 201, contentType: "application/json", body: "{}" });
+  });
+  await drawer.getByRole("button", { name: "Accept" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Saved purchase order" })).toBeVisible();
+  expect(sent!.fields.total_amount).toBe(1250.5);
 });

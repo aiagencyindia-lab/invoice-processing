@@ -81,6 +81,7 @@ def resolve_adapters_afresh(monkeypatch):
         "_approvals",
         "_gl_rules",
         "_purchase_orders",
+        "_supporting_documents",
         "_rules",
         "_tenant_settings",
         "_claims_writer",

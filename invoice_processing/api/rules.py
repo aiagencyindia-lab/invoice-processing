@@ -111,7 +111,9 @@ def draft(tenant_id: str, rule_id: str) -> dict:
     proposal = rules.proposal(tenant_id, rule_id) or {}
     case_id = proposal.get("source_case_id")
     try:
-        loader = TenantCaseLoader(service.get_cases(), tenant_id)
+        loader = TenantCaseLoader(
+            service.get_cases(), tenant_id, service.get_documents()
+        )
         # What this tenant already has in force, so the model can see the
         # scopes that are taken and the rules it must not contradict. The
         # writer used to read these from a file; rules are per tenant now.

@@ -1203,3 +1203,381 @@ class TestRematchJobs:
         assert worker_for(queue, claims, Handler()).run_once() == ["done"]
         assert claims.state("tenant-acme", "doc-1") == "done"
         assert rematched.calls == []
+
+
+class TestSupportingDocuments:
+    """A scanned PO or GRN is read and parked for a person to confirm; it is
+    never validated, coded, projected or routed as an invoice."""
+
+    GRN: ClassVar[dict] = {
+        "kind": "goods_receipt",
+        "fields": {"grn_number": "GRN-1", "po_number": "po-4471"},
+        "lines": [{"line_number": 1, "quantity_received": 5}],
+        "_evidence": {},
+        "_repairs": [],
+    }
+
+    def _run(
+        self,
+        tmp_path,
+        monkeypatch,
+        *,
+        kind="goods_receipt",
+        extract=None,
+        orders=None,
+        book=None,
+    ):
+        from invoice_processing import supporting_docs  # noqa: PLC0415
+        from invoice_processing.adapters import (  # noqa: PLC0415
+            JsonDocumentRepository,
+            JsonSupportingDocumentRepository,
+        )
+
+        documents = JsonDocumentRepository(tmp_path / "documents.json")
+        document_id = documents.create("t", storage_key="k", sha256="s")
+        supporting = JsonSupportingDocumentRepository(tmp_path / "sd.json")
+        emitted = []
+
+        class Audit:
+            def emit(self, ctx, event, payload, before=None):
+                emitted.append((event, payload))
+
+        class Orders:
+            def book(self, tenant_id, po_number):
+                return (book or {}).get(po_number)
+
+        stored: dict = {}
+
+        class Sink:
+            def put_artifact(self, ctx, key, payload):
+                stored[key] = payload
+
+            def get_artifacts(self, ctx):
+                return stored
+
+            def project_case(self, ctx, artifacts):
+                raise AssertionError("a supporting document is not projected")
+
+        class Blobs:
+            def get(self, key):
+                return b"%PDF-1.4"
+
+        def process(source, **kwargs):
+            return {
+                "decision": "SUPPORTING",
+                "document_type": kind,
+                "pdf": str(source / "invoice.pdf"),
+            }
+
+        def refuse(*a, **k):
+            raise AssertionError("not for a supporting document")
+
+        monkeypatch.setattr(gia, "process_invoice", process)
+        monkeypatch.setattr(tenant_settings, "apply_to_pipeline", _no_settings)
+        monkeypatch.setattr(runner, "_apply_rules", refuse)
+        monkeypatch.setattr(runner, "_code_gl", refuse)
+        monkeypatch.setattr(approval_flow, "route", refuse)
+        monkeypatch.setattr(service, "get_documents", lambda: documents)
+        monkeypatch.setattr(
+            service, "get_supporting_documents", lambda: supporting
+        )
+        monkeypatch.setattr(
+            service,
+            "get_purchase_orders",
+            # orders=False: no purchase-order storage at all.
+            lambda: Orders() if orders is None else None,
+        )
+        monkeypatch.setattr(service, "get_audit", Audit)
+        monkeypatch.setattr(
+            supporting_docs,
+            "extract",
+            extract or (lambda path, k, **kw: {**self.GRN, "kind": k}),
+        )
+
+        def go():
+            return process_document(
+                RunContext(tenant_id="t", case_id=document_id),
+                {"id": document_id, "storage_key": "k", "sha256": "s"},
+                cases=Sink(),
+                blobs=Blobs(),
+            )
+
+        result = go()
+        [row] = supporting.list("t", ("pending", "blocked", "accepted"))
+        return {
+            "result": result,
+            "row": row,
+            "stored": stored,
+            "emitted": emitted,
+            "kind": documents.get("t", document_id).get("kind"),
+            "supporting": supporting,
+            "go": go,
+        }
+
+    def test_a_receipt_for_a_known_po_waits_for_confirmation(
+        self, tmp_path, monkeypatch
+    ):
+        out = self._run(tmp_path, monkeypatch, book={"po-4471": {"po": {}}})
+        row = out["row"]
+        assert (row["status"], row["kind"], row["po_number"]) == (
+            "pending",
+            "goods_receipt",
+            "PO4471",
+        )
+        assert row["extracted"]["fields"]["grn_number"] == "GRN-1"
+        assert out["kind"] == "goods_receipt"
+        assert out["stored"]["supporting_extraction"]["kind"] == (
+            "goods_receipt"
+        )
+        [(event, payload)] = out["emitted"]
+        assert event == "supporting_document_extracted"
+        assert payload == {
+            "kind": "goods_receipt",
+            "po_number": "PO4471",
+            "blocked_reason": None,
+            "extraction_error": None,
+        }
+        assert out["result"]["decision"] == "SUPPORTING"
+
+    def test_a_purchase_order_is_never_blocked(self, tmp_path, monkeypatch):
+        out = self._run(tmp_path, monkeypatch, kind="purchase_order")
+        assert out["row"]["status"] == "pending"
+        assert out["kind"] == "purchase_order"
+
+    def test_a_receipt_whose_po_is_not_on_file_is_blocked(
+        self, tmp_path, monkeypatch
+    ):
+        row = self._run(tmp_path, monkeypatch)["row"]
+        assert row["status"] == "blocked"
+        assert row["blocked_reason"] == "Purchase order po-4471 is not on file"
+
+    def test_without_purchase_order_storage_a_receipt_waits_unchecked(
+        self, tmp_path, monkeypatch
+    ):
+        """No book to check against: pending, marked not checked. Accepting
+        needs the database, and that still refuses a PO not on file."""
+        row = self._run(tmp_path, monkeypatch, orders=False)["row"]
+        assert row["status"] == "pending"
+        assert row["blocked_reason"] is None
+        assert row["extraction_error"] is None
+        assert row["extracted"]["_checks"] == {"po_on_file": None}
+
+    def test_an_unreadable_scan_waits_with_its_error(
+        self, tmp_path, monkeypatch
+    ):
+        def broken(*a, **k):
+            raise RuntimeError("model returned nothing")
+
+        out = self._run(tmp_path, monkeypatch, extract=broken)
+        row = out["row"]
+        assert row["status"] == "pending"
+        assert row["extraction_error"] == "model returned nothing"
+        assert row["extracted"]["fields"] == {}
+        assert row["extracted"]["lines"] == []
+
+    def test_a_retry_after_acceptance_overwrites_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        out = self._run(tmp_path, monkeypatch, book={"po-4471": {"po": {}}})
+        supporting = out["supporting"]
+        supporting.mark(
+            "t", out["row"]["id"], status="accepted", reviewed_by="a@b.c",
+            expect=("pending",),
+        )  # fmt: skip
+        out["stored"].clear()
+        out["emitted"].clear()
+
+        out["go"]()
+
+        [row] = supporting.list("t", ("accepted",))
+        assert row["extracted"] == out["row"]["extracted"]
+        assert "supporting_extraction" not in out["stored"]
+        assert out["emitted"] == []
+
+
+class TestInvoicesAreMarkedAsInvoices:
+    def test_the_invoice_path_sets_the_kind(self, tmp_path, monkeypatch):
+        from invoice_processing.adapters import (  # noqa: PLC0415
+            JsonDocumentRepository,
+        )
+
+        documents = JsonDocumentRepository(tmp_path / "documents.json")
+        document_id = documents.create("t", storage_key="k", sha256="s")
+        output = tmp_path / "out"
+        output.mkdir()
+
+        class Sink:
+            def put_artifact(self, ctx, key, payload): ...
+
+            def get_artifacts(self, ctx):
+                return {}
+
+            def project_case(self, ctx, artifacts): ...
+
+        class Blobs:
+            def get(self, key):
+                return b"%PDF-1.4"
+
+        monkeypatch.setattr(gia, "get_output_folder", _folder(output))
+        monkeypatch.setattr(gia, "process_invoice", _rejects)
+        monkeypatch.setattr(tenant_settings, "apply_to_pipeline", _no_settings)
+        monkeypatch.setattr(runner, "_apply_rules", lambda *a, **k: {})
+        monkeypatch.setattr(service, "get_documents", lambda: documents)
+        process_document(
+            RunContext(tenant_id="t", case_id=document_id),
+            {"id": document_id, "storage_key": "k", "sha256": "s"},
+            cases=Sink(),
+            blobs=Blobs(),
+        )
+        assert documents.get("t", document_id)["kind"] == "invoice"
+
+    def _invoice_run(self, tmp_path, monkeypatch, process=_rejects):
+        from invoice_processing.adapters import (  # noqa: PLC0415
+            JsonDocumentRepository,
+            JsonSupportingDocumentRepository,
+        )
+
+        documents = JsonDocumentRepository(tmp_path / "documents.json")
+        document_id = documents.create("t", storage_key="k", sha256="s")
+        supporting = JsonSupportingDocumentRepository(tmp_path / "sd.json")
+        output = tmp_path / "out"
+        output.mkdir()
+        emitted = []
+
+        class Audit:
+            def emit(self, ctx, event, payload, before=None):
+                emitted.append((ctx.case_id, event, payload))
+
+        class Sink:
+            def put_artifact(self, ctx, key, payload): ...
+
+            def get_artifacts(self, ctx):
+                return {}
+
+            def project_case(self, ctx, artifacts): ...
+
+        class Blobs:
+            def get(self, key):
+                return b"%PDF-1.4"
+
+        monkeypatch.setattr(gia, "get_output_folder", _folder(output))
+        monkeypatch.setattr(gia, "process_invoice", process)
+        monkeypatch.setattr(tenant_settings, "apply_to_pipeline", _no_settings)
+        monkeypatch.setattr(runner, "_apply_rules", lambda *a, **k: {})
+        monkeypatch.setattr(service, "get_documents", lambda: documents)
+        monkeypatch.setattr(
+            service, "get_supporting_documents", lambda: supporting
+        )
+        monkeypatch.setattr(service, "get_audit", Audit)
+
+        def go(**kw):
+            return process_document(
+                RunContext(tenant_id="t", case_id=document_id),
+                {"id": document_id, "storage_key": "k", "sha256": "s"},
+                cases=Sink(),
+                blobs=Blobs(),
+                **kw,
+            )
+
+        return document_id, supporting, emitted, go
+
+    def test_a_review_row_waiting_on_it_is_closed(self, tmp_path, monkeypatch):
+        document_id, supporting, emitted, go = self._invoice_run(
+            tmp_path, monkeypatch
+        )
+        row = supporting.upsert_from_extraction(
+            "t", document_id=document_id, kind="goods_receipt",
+            extracted={}, po_number="PO-1", blocked_reason="not on file",
+            extraction_error=None,
+        )  # fmt: skip
+        go()
+        closed = supporting.get("t", row["id"])
+        assert closed["status"] == "rejected"
+        assert closed["note"] == "Reclassified as an invoice"
+        assert closed["reviewed_by"] == "system"
+        [(_, _event, payload)] = [
+            e for e in emitted if e[1] == "supporting_document_reclassified"
+        ]
+        assert payload["id"] == row["id"]
+
+    def test_a_decided_review_row_is_left_alone(self, tmp_path, monkeypatch):
+        document_id, supporting, emitted, go = self._invoice_run(
+            tmp_path, monkeypatch
+        )
+        row = supporting.upsert_from_extraction(
+            "t", document_id=document_id, kind="goods_receipt",
+            extracted={}, po_number=None, blocked_reason=None,
+            extraction_error=None,
+        )  # fmt: skip
+        supporting.mark(
+            "t", row["id"], status="accepted", reviewed_by="c",
+            expect=("pending",),
+        )  # fmt: skip
+        go()
+        assert supporting.get("t", row["id"])["status"] == "accepted"
+        assert not [
+            e for e in emitted if e[1] == "supporting_document_reclassified"
+        ]
+
+    def test_force_invoice_reaches_the_pipeline(self, tmp_path, monkeypatch):
+        seen = []
+
+        def process(source, **kwargs):
+            seen.append(kwargs.get("force_invoice"))
+            return {"decision": "REJECT"}
+
+        *_, go = self._invoice_run(tmp_path, monkeypatch, process)
+        go(force_invoice=True)
+        go()
+        assert seen == [True, False]
+
+
+class TestTheHandlerPassesForceInvoice:
+    def test_the_payload_flag_reaches_process_document(
+        self, tmp_path, monkeypatch
+    ):
+        from invoice_processing.worker.queue import Message  # noqa: PLC0415
+
+        class Documents:
+            def find_by_sha(self, tenant_id, sha):
+                return {"id": "d1", "sha256": sha, "storage_key": "k"}
+
+        got = []
+        monkeypatch.setattr(service, "get_documents", Documents)
+        monkeypatch.setattr(service, "get_blobs", lambda t: None)
+        monkeypatch.setattr(service, "get_cases", lambda: None)
+        monkeypatch.setattr(
+            runner,
+            "process_document",
+            lambda ctx, doc, blobs, cases, **kw: got.append(kw) or {},
+        )
+        worker = Worker(LocalQueue(tmp_path / "q"), ClaimStore(tmp_path / "c"))
+        payload = {"tenant_id": "t", "sha256": "s", "document_id": "d1"}
+        worker._default_handler(
+            Message(id="m1", payload={**payload, "force_invoice": True})
+        )
+        worker._default_handler(Message(id="m2", payload=payload))
+        assert got == [{"force_invoice": True}, {"force_invoice": False}]
+
+
+class TestTheDuplicateCorpusIsInvoicesOnly:
+    def test_a_receipt_s_case_is_not_compared_against(self, tmp_path):
+        """A scanned PO or receipt's case holds a supporting_extraction and
+        no invoice extraction, so it never enters the corpus."""
+        cases = FsCaseRepository(tmp_path / "cases", tenant_id="t")
+        cases.put_artifact(
+            RunContext(tenant_id="t", case_id="grn"),
+            "supporting_extraction",
+            {"kind": "goods_receipt", "fields": {"grn_number": "G1"}},
+        )
+        cases.put_artifact(
+            RunContext(tenant_id="t", case_id="inv"),
+            "extraction",
+            {"invoice": {"invoice_number": "I1"}},
+        )
+
+        corpus = runner.seen_invoices_for(
+            RunContext(tenant_id="t", case_id="now"), cases
+        )()
+
+        assert [key.case_id for key in corpus] == ["inv"]

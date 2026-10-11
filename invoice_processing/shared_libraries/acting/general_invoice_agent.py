@@ -615,11 +615,17 @@ NON_PAYABLE_TYPES = frozenset(
         "proforma_invoice",
         "credit_note",
         "purchase_order",
+        "goods_receipt",
         "delivery_challan",
         "statement",
         "unreadable",
     }
 )
+GOODS_RECEIPT = "goods_receipt"
+# Not payables, but evidence for the three-way match: when a file holds one of
+# these and no invoice, it goes to a person to confirm rather than through
+# invoice validation.
+SUPPORTING_TYPES = frozenset({"purchase_order", GOODS_RECEIPT})
 DOCUMENT_TYPES = (
     TAX_INVOICE,
     NON_TAX_INVOICE,
@@ -1120,6 +1126,10 @@ class ClassifierAgent(BaseAgent):
 
         files_info = {}
         summary = {"invoice_count": 0, "waf_count": 0, "document_type": ""}
+        # Whether the model or the keyword fallback decided. Only the model
+        # may divert a document from the invoice path: the fallback reads the
+        # whole page, so an invoice quoting its GRN or PO reads as one.
+        self.fell_back = False
         invoice_sources = []
         waf_sources = []
 
@@ -1175,6 +1185,7 @@ class ClassifierAgent(BaseAgent):
         files_info["invoice_sources"] = invoice_sources
         files_info["waf_sources"] = waf_sources
 
+        summary["classified_by"] = "keyword" if self.fell_back else "model"
         output = self.create_output(
             {
                 "source_folder": source_folder.name,
@@ -1222,6 +1233,9 @@ invoice" settles it:
   tax invoice.
 - "credit_note": reverses an earlier invoice.
 - "purchase_order": the buyer's own order document.
+- "goods_receipt": a goods receipt note (GRN) or material receipt note (MRN)
+  recording what the buyer's stores received, usually quoting the purchase
+  order. Not a delivery challan, which is the supplier's dispatch note.
 - "delivery_challan": a delivery or dispatch note, usually without prices.
 - "statement": a statement of account listing several invoices.
 - "unreadable": nothing legible could be recovered from the page.
@@ -1248,38 +1262,143 @@ Return ONLY this JSON:
             raise  # the service, not the document: see llm_guard
         except Exception as e:
             print(f"    Warning: Document analysis failed: {e}")
+            self.fell_back = True
             return self._classify_by_keyword(content)
 
-    # Titles, most specific first: "proforma invoice" and "tax invoice" both
-    # contain "invoice", so the order is the logic.
-    _TITLE_MARKERS: ClassVar[tuple[tuple[str, str], ...]] = (
-        ("proforma invoice", "proforma_invoice"),
-        ("pro forma invoice", "proforma_invoice"),
-        ("credit note", "credit_note"),
-        ("delivery challan", "delivery_challan"),
-        ("delivery note", "delivery_challan"),
-        ("purchase order", "purchase_order"),
-        ("quotation", "quotation"),
-        ("quote no", "quotation"),
-        ("statement of account", "statement"),
-        ("bill of supply", NON_TAX_INVOICE),
-        ("tax invoice", TAX_INVOICE),
-        ("receipt", "receipt"),
-        ("invoice", NON_TAX_INVOICE),
+    # Document-title phrases and the type each names.
+    _TITLE_PHRASES: ClassVar[dict[str, str]] = {
+        "proforma invoice": "proforma_invoice",
+        "pro forma invoice": "proforma_invoice",
+        "pro-forma invoice": "proforma_invoice",
+        "proforma tax invoice": "proforma_invoice",
+        "pro forma tax invoice": "proforma_invoice",
+        "tax invoice": TAX_INVOICE,
+        "invoice": NON_TAX_INVOICE,
+        "bill of supply": NON_TAX_INVOICE,
+        "credit note": "credit_note",
+        "debit note": "other",  # no debit-note type; never a payable
+        "purchase order": "purchase_order",
+        "work order": "other",
+        "goods receipt note": GOODS_RECEIPT,
+        "goods received note": GOODS_RECEIPT,
+        "goods receipt": GOODS_RECEIPT,
+        "material receipt note": GOODS_RECEIPT,
+        "material receipt": GOODS_RECEIPT,
+        "grn": GOODS_RECEIPT,
+        "mrn": GOODS_RECEIPT,
+        "delivery challan": "delivery_challan",
+        "delivery note": "delivery_challan",
+        "challan": "delivery_challan",
+        "quotation": "quotation",
+        "receipt": "receipt",
+        "statement of account": "statement",
+        "statement": "statement",
+    }
+    _INVOICE_KINDS: ClassVar[frozenset[str]] = frozenset(
+        {TAX_INVOICE, NON_TAX_INVOICE}
     )
+    # The documents an invoice is billed "against": on a heading that also
+    # names an invoice, the invoice wins over these (and only these).
+    _SUPPORTING_KINDS: ClassVar[frozenset[str]] = frozenset(
+        {"purchase_order", GOODS_RECEIPT, "delivery_challan"}
+    )
+    # Longest first, so "goods receipt note" is not read as "goods receipt".
+    _PHRASE: ClassVar[str] = "|".join(
+        sorted(map(re.escape, _TITLE_PHRASES), key=len, reverse=True)
+    )
+    _NON_INVOICE_PHRASE: ClassVar[str] = "|".join(
+        sorted(
+            (
+                re.escape(p)
+                for p, kind in _TITLE_PHRASES.items()
+                if kind not in (TAX_INVOICE, NON_TAX_INVOICE)
+            ),
+            key=len,
+            reverse=True,
+        )
+    )
+    # (a) A clean heading: title phrases alone, joined by / - & "cum" "and"
+    # "against". Checked only on a line with no colon and no digit.
+    _HEADING: ClassVar[re.Pattern] = re.compile(
+        rf"(?:{_PHRASE})(?:(?:\s*[/&-]\s*|\s+(?:cum|and|against)\s+)"
+        rf"(?:{_PHRASE}))*"
+    )
+    _PHRASES_IN: ClassVar[re.Pattern] = re.compile(rf"\b(?:{_PHRASE})\b")
+    # (b) A non-payable title: the phrase first, then only a number, a
+    # "No."/"#" label, a parenthetical or copy words ("PURCHASE ORDER No.
+    # 4471", "GOODS RECEIPT NOTE (GRN)", "CREDIT NOTE No: CN-4").
+    _NON_PAYABLE_TITLE: ClassVar[re.Pattern] = re.compile(
+        rf"(?P<phrase>{_NON_INVOICE_PHRASE})\b(?:\s*(?:[-/,]|\([a-z ]+\)"
+        r"|(?:original|duplicate|triplicate|copy|amendment|amended|revised)\b"
+        r"|(?:no\b\.?|number\b|#)\s*[:.]?"
+        r"|[a-z]{0,4}[-/]?\d[\w/-]*))*"
+    )
+    _TITLE_SCAN_LINES: ClassVar[int] = 8
+    # A copy marking printed after a heading: "TAX INVOICE (ORIGINAL FOR
+    # RECIPIENT)" is still a clean heading once it is dropped.
+    _COPY_MARK: ClassVar[re.Pattern] = re.compile(
+        r"\s*\((?:original|duplicate|triplicate|copy|for|recipient|supplier"
+        r"|transporter|buyer|seller|office|extra|\s)+\)$"
+    )
+
+    def _title_kind(self, line: str) -> str | None:
+        """The type a title line names, or None for any other line."""
+        line = re.sub(r"\s+", " ", line).strip(" \t.,;*[]|_=~'\"")
+        if line.startswith("(") and line.endswith(")"):
+            line = line[1:-1].strip()
+        if not line:
+            return None
+        heading = self._COPY_MARK.sub("", line)
+        if not re.search(r"[:\d]", heading) and self._HEADING.fullmatch(
+            heading
+        ):
+            kinds = [
+                self._TITLE_PHRASES[m]
+                for m in self._PHRASES_IN.findall(heading)
+            ]
+            # A non-payable (credit note, proforma...) beats an invoice,
+            # which beats the PO/GRN/challan it is billed against.
+            return min(
+                kinds,
+                key=lambda k: (
+                    2
+                    if k in self._SUPPORTING_KINDS
+                    else 1
+                    if k in self._INVOICE_KINDS
+                    else 0
+                ),
+            )
+        title = self._NON_PAYABLE_TITLE.fullmatch(line)
+        if title is None:
+            return None
+        # A bare "GRN No: 7" is a field label; the abbreviation titles a page
+        # only on its own ("GRN", "GRN (ORIGINAL)").
+        if title["phrase"] in ("grn", "mrn") and re.search(
+            r"[\d#]|\bno\b|\bnumber\b", line
+        ):
+            return None
+        return self._TITLE_PHRASES[title["phrase"]]
 
     def _classify_by_keyword(self, content: str) -> DocumentContent:
         """What can be told from the text when the model call fails.
 
         It used to answer "invoice" for anything containing the word, which
-        made a quotation a payable. Reading the title instead is barely more
-        code and is right about the documents that matter.
+        made a quotation a payable. It fails closed: the first title line
+        decides, and an untitled page is "other" -- body text cannot tell an
+        invoice from an untitled PO, GRN or note quoting "Invoice No". An
+        invoice typed "other" is a visible rejection; a PO typed as an invoice
+        would be paid.
         """
         lowered = content.lower()
+        lines = [line for line in lowered.splitlines() if line.strip()]
         document_type = next(
-            (kind for marker, kind in self._TITLE_MARKERS if marker in lowered),
-            "unreadable" if not lowered.strip() else "other",
+            filter(
+                None, map(self._title_kind, lines[: self._TITLE_SCAN_LINES])
+            ),
+            None,
         )
+        if document_type is None:
+            document_type = "unreadable" if not lowered.strip() else "other"
         if document_type == NON_TAX_INVOICE and "gstin" in lowered:
             document_type = TAX_INVOICE
         return DocumentContent(
@@ -3192,14 +3311,42 @@ def _run_pipeline(
     start_time: float,
     on_step=None,
     seen_invoices=None,
+    force_invoice: bool = False,
 ) -> dict:
-    """Run the main processing pipeline (agents 1-9). Returns result dict."""
+    """Run the main processing pipeline (agents 1-9). Returns result dict.
+    `force_invoice`: a person sent this document to the invoice queue, so a
+    PO/GRN classification does not divert it."""
     report = _step_reporter(on_step)
 
     # Agent 1: Classification
     report(1)
     classifier = ClassifierAgent()
     classification = classifier.run(source_folder, output_folder)
+
+    # A PO or GRN on its own goes to a person to confirm; a bundle that also
+    # holds an invoice is still an invoice.
+    summary = classification.get("summary") or {}
+    document_type = summary.get("document_type")
+    if (
+        not force_invoice
+        and document_type in SUPPORTING_TYPES
+        and not summary.get("invoice_count")
+        and summary.get("classified_by") == "model"
+    ):
+        files = classification.get("files") or {}
+        pdf = next(
+            (
+                name
+                for name, info in files.items()
+                if isinstance(info, dict) and info.get("type") == "pdf"
+            ),
+            "",
+        )
+        return {
+            "decision": "SUPPORTING",
+            "document_type": document_type,
+            "pdf": str(source_folder / pdf) if pdf else "",
+        }
 
     # Agent 2: Extraction
     report(2)
@@ -3292,7 +3439,7 @@ def _run_pipeline(
 
 
 def process_invoice(
-    source_folder: Path, on_step=None, seen_invoices=None
+    source_folder: Path, on_step=None, seen_invoices=None, force_invoice=False
 ) -> dict:
     """Main pipeline orchestrator.
 
@@ -3319,7 +3466,12 @@ def process_invoice(
 
     try:
         return _run_pipeline(
-            source_folder, output_folder, start_time, on_step, seen_invoices
+            source_folder,
+            output_folder,
+            start_time,
+            on_step,
+            seen_invoices,
+            force_invoice,
         )
 
     except Exception as e:

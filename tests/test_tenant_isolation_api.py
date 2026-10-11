@@ -40,6 +40,7 @@ from invoice_processing.api import (
     gl_routes,
     po_routes,
     service,
+    supporting_routes,
     system,
     vendor_routes,
 )
@@ -47,9 +48,11 @@ from invoice_processing.api.service import app
 from invoice_processing.db.models import Base, Invoice, Tenant, User
 from invoice_processing.db.repositories import (
     PgApprovalRepository,
+    PgDocumentRepository,
     PgGlRuleRepository,
     PgPurchaseOrderRepository,
     PgRuleRepository,
+    PgSupportingDocumentRepository,
     PgVendorRepository,
 )
 from invoice_processing.db.session import (
@@ -516,6 +519,68 @@ class TestWritesDoNotCross:
         theirs = po_db.get_order(GLOBEX, "PO-9001")
         assert theirs["vendor_name"] == "Globex"
         assert [ln["received"] for ln in theirs["lines"]] == [4.0]
+
+    def test_scanned_documents_do_not_cross_tenants(
+        self, clients, po_db, monkeypatch
+    ):
+        """Another tenant's scanned receipt is unknown: not listed, not
+        readable, and neither acceptable nor rejectable by guessing its id."""
+        url = po_db.url
+        po_db.upsert_orders(
+            ACME,
+            [
+                {
+                    "po_number": "PO-9001",
+                    "vendor_name": "Acme Pty Ltd",
+                    "total_amount": 1000,
+                    "lines": [
+                        {"line_number": 1, "qty_ordered": 10, "unit_price": 100}
+                    ],
+                }
+            ],
+            uploaded_by="u",
+        )
+        doc = PgDocumentRepository(url).create(
+            ACME, storage_key="k", sha256="s", filename="grn.pdf", byte_size=1
+        )
+        supporting = PgSupportingDocumentRepository(url)
+        monkeypatch.setattr(service, "_supporting_documents", supporting)
+        fields = {
+            "grn_number": "GRN-1",
+            "po_number": "PO-9001",
+            "received_on": "2026-10-01",
+        }
+        lines = [{"line_number": 1, "quantity_received": 4}]
+        row = supporting.upsert_from_extraction(
+            ACME, document_id=doc, kind="goods_receipt",
+            extracted={"kind": "goods_receipt", "fields": fields,
+                       "lines": lines},
+            po_number="PO-9001", blocked_reason=None, extraction_error=None,
+        )  # fmt: skip
+        base = f"/api/supporting-documents/{row['id']}"
+        globex = clients("globex")
+        assert globex.get("/api/supporting-documents").json() == {
+            "documents": [],
+            "truncated": False,
+        }
+        assert globex.get(base).status_code == 404
+        body = {"fields": fields, "lines": [{**lines[0], "po_line_number": 1}]}
+        assert globex.post(f"{base}/accept", json=body).status_code == 404
+        assert (
+            globex.post(f"{base}/reject", json={"reason": "x"}).status_code
+            == 404
+        )
+        assert globex.post(f"{base}/reopen").status_code == 404
+        assert globex.post(f"{base}/process-as-invoice").status_code == 404
+        # Nothing of ACME's moved, and ACME itself still can.
+        assert supporting.get(ACME, row["id"])["status"] == "pending"
+        assert po_db.list_receipts(ACME) == []
+        assert po_db.list_receipts(GLOBEX) == []
+        acme = clients("acme")
+        assert (
+            len(acme.get("/api/supporting-documents").json()["documents"]) == 1
+        )
+        assert acme.post(f"{base}/accept", json=body).status_code == 200
 
     def test_manager_cannot_be_set_across_tenants(self, clients, approvals_db):
         acme_user = next(
@@ -1180,6 +1245,12 @@ class TestCoverage:
         "/api/purchase-orders/{po_number}",
         "/api/goods-receipts/import",
         "/api/goods-receipts",
+        "/api/supporting-documents",
+        "/api/supporting-documents/{row_id}",
+        "/api/supporting-documents/{row_id}/accept",
+        "/api/supporting-documents/{row_id}/reject",
+        "/api/supporting-documents/{row_id}/reopen",
+        "/api/supporting-documents/{row_id}/process-as-invoice",
         "/api/vendors",
         "/api/vendors/{vendor_id}",
         "/api/vendors/{vendor_id}/bank-changes",
@@ -1256,6 +1327,7 @@ class TestCoverage:
             config_routes,
             gl_routes,
             po_routes,
+            supporting_routes,
             system,
             vendor_routes,
         ):

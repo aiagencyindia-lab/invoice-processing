@@ -53,6 +53,7 @@ from ..adapters import (
     JsonDocumentRepository,
     JsonlAuditSink,
     JsonlCorrectionStore,
+    JsonSupportingDocumentRepository,
     LocalBlobStore,
 )
 from ..ports import LockHeld
@@ -137,6 +138,7 @@ _vendors = None
 _approvals = None
 _gl_rules = None
 _purchase_orders = None
+_supporting_documents = None
 _rules = None
 _tenant_settings = None
 _claims_writer = None
@@ -408,6 +410,69 @@ def get_purchase_orders():
 
         _purchase_orders = PgPurchaseOrderRepository()
     return _purchase_orders
+
+
+def get_supporting_documents():
+    """Scanned POs and receipts awaiting confirmation.
+
+    A file without a database, so single-process development still works;
+    `None` when a database is configured without the table, and raises when
+    it cannot be asked -- the worker then retries rather than dropping a scan.
+    """
+    global _supporting_documents
+    if _supporting_documents is None:
+        if not _database_configured():
+            _supporting_documents = JsonSupportingDocumentRepository()
+        elif _table_exists(
+            "supporting_documents", "Scanned documents", raise_on_error=True
+        ):
+            from ..db.repositories import (  # noqa: PLC0415
+                PgSupportingDocumentRepository,
+            )
+
+            _supporting_documents = PgSupportingDocumentRepository()
+    return _supporting_documents
+
+
+def non_invoice_ids(tenant_id: str) -> set[str]:
+    """Documents classified as something other than an invoice.
+
+    Cases are keyed by document id, so these are the cases to leave out of
+    invoice listings. A lookup that fails hides nothing: a stray row in a
+    list beats a list that will not load.
+    """
+    try:
+        return get_documents().non_invoice_ids(tenant_id)
+    except Exception as exc:
+        logger.warning("Document kinds not read for %s: %s", tenant_id, exc)
+        return set()
+
+
+_SCANNED = {
+    "purchase_order": "purchase order",
+    "goods_receipt": "goods receipt",
+}
+
+
+def require_invoice_case(tenant_id: str, case_id: str) -> None:
+    """404 a case whose document is a scanned PO or receipt.
+
+    Its case holds an extraction awaiting confirmation; reading, editing or
+    deciding it as an invoice would act on something that is not a payable.
+    """
+    try:
+        document = get_documents().get(tenant_id, case_id) or {}
+    except Exception as exc:
+        # ponytail: unreadable kind lets the route run; the case then has no
+        # invoice extraction to act on. Fail closed if that ever matters.
+        logger.warning("Document kind of %s not read: %s", case_id, exc)
+        return
+    if (label := _SCANNED.get(document.get("kind"))) is not None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"This document is a scanned {label}; review it on "
+            "Purchase orders.",
+        )
 
 
 def get_queue():
@@ -730,7 +795,12 @@ def list_invoices(
     need a human at the top; a chronological queue buries them.
     """
     cases = get_cases()
-    case_ids = list(cases.iter_case_ids(principal.tenant_id))
+    skip = non_invoice_ids(principal.tenant_id)
+    case_ids = [
+        case_id
+        for case_id in cases.iter_case_ids(principal.tenant_id)
+        if case_id not in skip
+    ]
     read = read_cases(cases, principal.tenant_id, case_ids)
     items = []
     for case_id in case_ids:
@@ -759,6 +829,7 @@ def list_invoices(
 def get_invoice(
     case_id: str, principal: Annotated[Principal, Depends(current_principal)]
 ) -> dict:
+    require_invoice_case(principal.tenant_id, case_id)
     artifacts, _ = read_case(get_cases(), principal.context(case_id))
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
@@ -887,6 +958,7 @@ def edit_fields(
                 detail=f"{edit.field} is not an editable field; edit the "
                 "invoice's header fields here.",
             )
+    require_invoice_case(principal.tenant_id, case_id)
     _require_unlocked(principal, case_id)
     ctx = principal.context(case_id)
     artifacts = get_cases().get_artifacts(ctx)
@@ -1107,6 +1179,7 @@ def lock_record(
     Renewal is this same call, so an open editor keeps its lock by saying "I am
     still here" on a timer rather than through an endpoint of its own.
     """
+    require_invoice_case(principal.tenant_id, case_id)
     artifacts = get_cases().get_artifacts(principal.context(case_id))
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
@@ -1262,6 +1335,7 @@ def act(
             detail="Only an admin can override an approval rule.",
         )
 
+    require_invoice_case(principal.tenant_id, case_id)
     _require_unlocked(principal, case_id)
     ctx = principal.context(case_id)
     artifacts = get_cases().get_artifacts(ctx)
@@ -1411,6 +1485,7 @@ def propose_bank_change_from_invoice(
     """
     from . import vendor_routes  # noqa: PLC0415
 
+    require_invoice_case(principal.tenant_id, case_id)
     repo = get_vendors()
     if repo is None:
         raise HTTPException(status_code=503, detail=vendor_routes.NEEDS_DB)
@@ -1656,6 +1731,7 @@ def export_invoice(
       attempt succeeded with its response lost in transit. Duplicate payments
       are the expensive mistake in accounts payable.
     """
+    require_invoice_case(principal.tenant_id, case_id)
     ctx = principal.context(case_id)
     artifacts = get_cases().get_artifacts(ctx)
     if not artifacts:
@@ -1749,6 +1825,7 @@ from .po_routes import router as po_router  # noqa: E402
 from .rules import router as rules_router  # noqa: E402
 from .sheet import router as sheet_router  # noqa: E402
 from .signup import router as signup_router  # noqa: E402
+from .supporting_routes import router as supporting_router  # noqa: E402
 from .system import router as system_router  # noqa: E402
 from .vendor_routes import router as vendor_router  # noqa: E402
 
@@ -1763,6 +1840,7 @@ app.include_router(vendor_router)
 app.include_router(approval_router)
 app.include_router(gl_router)
 app.include_router(po_router)
+app.include_router(supporting_router)
 
 
 @app.get("/", response_class=HTMLResponse)

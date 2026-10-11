@@ -15,7 +15,7 @@ import numpy as np
 import gen_core as g
 from gen_core import D, COMPANIES, VBY, STATES
 
-FONTDIR = "/usr/share/fonts/truetype/dejavu/"
+FONTDIR = os.environ.get("DEJAVU_FONTDIR", "/usr/share/fonts/truetype/dejavu/")
 pdfmetrics.registerFont(TTFont("DV", FONTDIR+"DejaVuSans.ttf")); pdfmetrics.registerFont(TTFont("DV-B", FONTDIR+"DejaVuSans-Bold.ttf"))
 pdfmetrics.registerFont(TTFont("DVC", FONTDIR+"DejaVuSansCondensed.ttf")); pdfmetrics.registerFont(TTFont("DVC-B", FONTDIR+"DejaVuSansCondensed-Bold.ttf"))
 pdfmetrics.registerFont(TTFont("DVS", FONTDIR+"DejaVuSerif.ttf")) if os.path.exists(FONTDIR+"DejaVuSerif.ttf") else None
@@ -288,6 +288,20 @@ def render_nondoc(rec, path):
             rows = [["#","Description","HSN","Qty","Unit","Packages"]] + [[str(i), Paragraph(l["description"], S["n"]), l["hsn_sac"], str(l["quantity"]), l["unit"], str(g.rng.randint(1,12))] for i, l in enumerate(sub["lines"],1)]
             tb = Table(rows, colWidths=[8*mm,80*mm,18*mm,16*mm,16*mm,22*mm]); tb.setStyle(TableStyle([("GRID",(0,0),(-1,-1),0.3,colors.grey),("BACKGROUND",(0,0),(-1,0),colors.HexColor("#DDDDDD"))])); story.append(tb)
             story.append(Spacer(1,4*mm)); story.append(Paragraph("Goods dispatched for delivery. Not for sale — value not indicated. Received in good condition: ______________", S["s"]))
+    doc.build(story); return path
+
+def render_grn(rec, path):
+    """The buyer's goods receipt note against a PO: rec = company_id, vendor_id, grn_number,
+    received_on (ISO), po_number, received_by, lines [{description, hsn_sac, ordered, received, unit}].
+    Scan it with degrade(); adversarial=True adds the RECEIVED stamp."""
+    v = VBY[rec["vendor_id"]]; comp = COMPANIES[rec["company_id"]]; L = LAYOUTS[v["layout"]]; S = styles(L)
+    doc = SimpleDocTemplate(path, pagesize=L["page"], leftMargin=15*mm, rightMargin=15*mm, topMargin=12*mm, bottomMargin=12*mm, title="GOODS RECEIPT NOTE")
+    story = [Paragraph(f"<b>{comp['legal_name']}</b><br/>{comp['address']}, {comp['city']} {comp['pin']}<br/>GSTIN: {comp['gstin']}", S["n"]), Spacer(1,3*mm),
+             Paragraph("GOODS RECEIPT NOTE", S["t"]), Spacer(1,3*mm),
+             Table([[Paragraph(f"<b>GRN No.</b> {rec['grn_number']}<br/><b>Date</b> {fmt_date(rec['received_on'], L)}<br/><b>PO No.</b> {rec['po_number']}", S["n"]), Paragraph(f"<b>Supplier</b><br/>{v['name']}<br/>{v['address']}, {v['city']}<br/>GSTIN: {v['gstin']}", S["n"])]], colWidths=[80*mm,80*mm])]
+    rows = [["#","Item","HSN/SAC","Ordered","Received","Unit"]] + [[str(i), Paragraph(l["description"], S["n"]), l["hsn_sac"], str(l["ordered"]), str(l["received"]), l["unit"]] for i, l in enumerate(rec["lines"], 1)]
+    tb = Table(rows, colWidths=[8*mm,80*mm,20*mm,18*mm,18*mm,16*mm]); tb.setStyle(TableStyle([("GRID",(0,0),(-1,-1),0.3,colors.grey),("BACKGROUND",(0,0),(-1,0),colors.HexColor("#DDDDDD"))]))
+    story += [Spacer(1,3*mm), tb, Spacer(1,3*mm), Paragraph("Goods received subject to inspection. Shortages noted against the PO line.", S["s"]), Spacer(1,8*mm), Paragraph(f"Received by: {rec['received_by']}, Stores", S["n"])]
     doc.build(story); return path
 
 # ---------------------------------------------------------------- degradation

@@ -31,6 +31,7 @@ import json
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -45,6 +46,11 @@ PROCESSING = "processing"
 DONE = "done"
 FAILED = "failed"
 UNKNOWN = "unknown"
+# A scanned PO or receipt waits for a person rather than a worker.
+AWAITING_CONFIRMATION = "awaiting_confirmation"
+BLOCKED = "blocked"
+# Accepted, but the PO or receipt was never written (a crash in between).
+ACCEPTED_UNSTORED = "accepted_unstored"
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +295,43 @@ def _progress_sentence(progress: dict | None) -> str:
     )
 
 
+def _review_stage(row: dict, stored: bool = True) -> tuple[str, str]:
+    """Stage and explanation of a scanned PO or receipt, from its review."""
+    status = row.get("status")
+    if status == "blocked":
+        return BLOCKED, f"Blocked: {row.get('blocked_reason')}"
+    if status == "accepted" and not stored:
+        return (
+            ACCEPTED_UNSTORED,
+            "Accepted but nothing was stored; an admin can reopen it.",
+        )
+    if status == "accepted":
+        return DONE, "Confirmed."
+    if status == "rejected":
+        return DONE, "Rejected."
+    return AWAITING_CONFIRMATION, "Awaiting confirmation on Purchase orders."
+
+
+def _reviews(tenant_id: str, listing: list[dict]) -> dict[str, dict]:
+    """Review rows of the scanned documents in `listing`, by document id."""
+    scanned = [
+        str(d.get("id"))
+        for d in listing
+        if d.get("kind") not in (None, "invoice")
+    ]
+    if not scanned:
+        return {}
+    from . import service  # noqa: PLC0415
+
+    rows = _safe(
+        lambda: service.get_supporting_documents().for_documents(
+            tenant_id, scanned
+        ),
+        default=[],
+    )
+    return {r["document_id"]: r for r in rows or []}
+
+
 def _ctx_for(tenant_id: str, case_id: str):
     from ..ports import RunContext  # noqa: PLC0415
 
@@ -326,22 +369,48 @@ def list_documents(
         default={},
     )
 
+    reviews = _reviews(principal.tenant_id, listing)
+    from .supporting_routes import _stored  # noqa: PLC0415
+
+    accepted = [r for r in reviews.values() if r.get("status") == "accepted"]
+    # Unknown reads as stored: the reopen route checks again for itself.
+    stored = _safe(
+        lambda: (
+            _stored(
+                service.get_purchase_orders(), principal.tenant_id, accepted
+            )
+            if accepted
+            else set()
+        ),
+        default=None,
+    )
+
     out: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
     for document in listing:
-        stage, explanation, progress = document_stage(
-            document,
-            principal.tenant_id,
-            queued,
-            dead,
-            cases,
-            read.get(str(document.get("id") or "")),
-        )
+        review = reviews.get(str(document.get("id") or ""))
+        if review is not None:
+            (stage, explanation), progress = (
+                _review_stage(
+                    review, stored is None or review["document_id"] in stored
+                ),
+                None,
+            )
+        else:
+            stage, explanation, progress = document_stage(
+                document,
+                principal.tenant_id,
+                queued,
+                dead,
+                cases,
+                read.get(str(document.get("id") or "")),
+            )
         counts[stage] = counts.get(stage, 0) + 1
         out.append(
             {
                 "document_id": document.get("id"),
                 "filename": document.get("filename"),
+                "kind": document.get("kind"),
                 "source": document.get("source"),
                 "byte_size": document.get("byte_size"),
                 "sha256": document.get("sha256"),
@@ -353,6 +422,28 @@ def list_documents(
             }
         )
     return {"documents": out, "counts": counts, "total": len(out)}
+
+
+def _sent_to_invoices(tenant_id: str, document_id: str) -> bool:
+    """Whether a clerk sent this scan to the invoice queue.
+
+    Not `_safe`: an unreadable store is not "no", and an unforced retry of a
+    document a clerk sent over would divert it back to review.
+    """
+    from . import service  # noqa: PLC0415
+    from .supporting_routes import SENT_TO_INVOICES  # noqa: PLC0415
+
+    try:
+        store = service.get_supporting_documents()
+        # None: a database without the table has never held a scan.
+        rows = store.for_documents(tenant_id, [document_id]) if store else []
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not check whether this document was sent to the "
+            "invoice queue; try again.",
+        ) from exc
+    return any(r.get("note") == SENT_TO_INVOICES for r in rows)
 
 
 @router.post("/api/documents/{document_id}/retry")
@@ -378,18 +469,23 @@ def retry_document(
     if document is None:
         raise HTTPException(status_code=404, detail="Unknown document")
 
+    # Classified an invoice, or sent to the invoice queue by a clerk (even if
+    # marking its kind failed): never diverted to review again. Asked before
+    # the claim is released, so a failed check leaves the document as it was.
+    force_invoice = document.get("kind") == "invoice" or _sent_to_invoices(
+        principal.tenant_id, document_id
+    )
     service.get_claim_store().release(principal.tenant_id, document_id)
 
-    class _Result:
-        pass
-
-    result = _Result()
-    result.document_id = document_id
-    result.sha256 = document.get("sha256", "")
-    result.storage_key = document.get("storage_key", "")
-
     message_id = enqueue_document(
-        service.get_queue(), principal.context(document_id), result
+        service.get_queue(),
+        principal.context(document_id),
+        SimpleNamespace(
+            document_id=document_id,
+            sha256=document.get("sha256", ""),
+            storage_key=document.get("storage_key", ""),
+        ),
+        force_invoice=force_invoice,
     )
     service.get_audit().emit(
         principal.context(document_id),

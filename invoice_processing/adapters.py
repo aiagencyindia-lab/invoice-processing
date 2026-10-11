@@ -23,7 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import paths
-from .ports import RuleBaseConflict, RunContext
+from .po_matching import normalize_po_number
+from .ports import RuleBaseConflict, RunContext, StatusChanged
 
 # ---------------------------------------------------------------------------
 # Blob storage
@@ -460,6 +461,21 @@ class JsonDocumentRepository:
         docs.sort(key=lambda d: str(d.get("created_at") or ""), reverse=True)
         return docs[:limit]
 
+    def set_kind(self, tenant_id: str, document_id: str, kind) -> None:
+        data = self._read()
+        for document in data.get(tenant_id, {}).values():
+            if document.get("id") == document_id:
+                document["kind"] = kind
+                self._write(data)
+                return
+
+    def non_invoice_ids(self, tenant_id: str) -> set[str]:
+        return {
+            d["id"]
+            for d in self._read().get(tenant_id, {}).values()
+            if d.get("kind") not in (None, "invoice")
+        }
+
     def tenant_id_for_slug(self, slug: str) -> str | None:
         """Resolve an inbound-email local part to a tenant, or refuse.
 
@@ -483,3 +499,160 @@ class JsonDocumentRepository:
         # A tenant already holding documents is also legitimate, so a local
         # corpus built up before AUTH_DEV_TENANT was set keeps working.
         return slug if slug in self._read() else None
+
+
+class JsonSupportingDocumentRepository:
+    """Single-process file fallback for `PgSupportingDocumentRepository`."""
+
+    def __init__(
+        self,
+        path: Path | None = None,
+        documents: JsonDocumentRepository | None = None,
+    ):
+        self.path = (
+            Path(path) if path else paths.DATA_DIR / "supporting_documents.json"
+        )
+        # The documents store beside this file, as the defaults place them.
+        self.documents = documents or JsonDocumentRepository(
+            self.path.parent / "documents.json"
+        )
+
+    def _read(self) -> dict:
+        try:
+            return json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _write(self, data: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(data, indent=2, default=str), encoding="utf-8"
+        )
+        os.replace(tmp, self.path)
+
+    def _shown(self, tenant_id, rows: list[dict]) -> list[dict]:
+        """Rows with their document's filename, as the database joins it."""
+        names = {
+            d.get("id"): d.get("filename")
+            for d in self.documents._read().get(tenant_id, {}).values()
+        }
+        return [{**r, "filename": names.get(r["document_id"])} for r in rows]
+
+    @staticmethod
+    def _norm(po_number) -> str | None:
+        return normalize_po_number(po_number) if po_number else None
+
+    def upsert_from_extraction(
+        self, tenant_id, *, document_id, kind, extracted, po_number,
+        blocked_reason, extraction_error,
+    ) -> dict | None:  # fmt: skip
+        data = self._read()
+        rows = data.setdefault(tenant_id, {})
+        row = next(
+            (r for r in rows.values() if r["document_id"] == document_id), None
+        )
+        if row is None:
+            row = {
+                "id": str(uuid.uuid4()),
+                "document_id": document_id,
+                "reviewed_by": None,
+                "reviewed_at": None,
+                "note": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            rows[row["id"]] = row
+        elif row["status"] not in ("pending", "blocked"):
+            return None
+        row.update(
+            kind=kind,
+            extracted=extracted,
+            po_number=self._norm(po_number),
+            blocked_reason=blocked_reason,
+            extraction_error=extraction_error,
+            status="blocked" if blocked_reason else "pending",
+        )
+        self._write(data)
+        return self._shown(tenant_id, [row])[0]
+
+    def list(
+        self, tenant_id, statuses, limit=200, newest_first=False
+    ) -> list[dict]:
+        rows = [
+            r
+            for r in self._read().get(tenant_id, {}).values()
+            if r["status"] in statuses
+        ]
+        rows.sort(
+            key=lambda r: (r["created_at"], r["id"]), reverse=newest_first
+        )
+        return self._shown(tenant_id, rows[:limit])
+
+    def get(self, tenant_id, id) -> dict | None:
+        row = self._read().get(tenant_id, {}).get(id)
+        return self._shown(tenant_id, [row])[0] if row else None
+
+    def for_documents(self, tenant_id, document_ids) -> list[dict]:
+        wanted = set(document_ids)
+        rows = self._read().get(tenant_id, {}).values()
+        return self._shown(
+            tenant_id, [r for r in rows if r["document_id"] in wanted]
+        )
+
+    def mark(
+        self, tenant_id, id, *, status, reviewed_by, expect, note=None,
+        extracted=None,
+    ) -> dict:  # fmt: skip
+        data = self._read()
+        row = data.get(tenant_id, {}).get(id)
+        if row is None:
+            raise KeyError(id)
+        if row["status"] not in expect:
+            raise StatusChanged(row["status"])
+        was = {
+            "status": row["status"],
+            "blocked_reason": row.get("blocked_reason"),
+        }
+        row.update(
+            status=status,
+            reviewed_by=reviewed_by,
+            note=note,
+            reviewed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        if extracted is not None:
+            row["extracted"] = extracted
+        if status == "accepted":
+            row["blocked_reason"] = None
+        self._write(data)
+        return {**self._shown(tenant_id, [row])[0], "previous": was}
+
+    def revert_to_pending(
+        self, tenant_id, id, *, extracted, status="pending",
+        blocked_reason=None, reviewed_at=None,
+    ) -> dict:  # fmt: skip
+        data = self._read()
+        row = data.get(tenant_id, {}).get(id)
+        if row is None:
+            raise KeyError(id)
+        if row["status"] != "accepted" or (
+            reviewed_at is not None and row["reviewed_at"] != reviewed_at
+        ):
+            raise StatusChanged(row["status"])
+        row.update(
+            status=status, blocked_reason=blocked_reason, extracted=extracted,
+            reviewed_by=None, reviewed_at=None, note=None,
+        )  # fmt: skip
+        self._write(data)
+        return self._shown(tenant_id, [row])[0]
+
+    def unblock(self, tenant_id, po_number) -> list[str]:
+        data = self._read()
+        po = self._norm(po_number)
+        ids = []
+        for r in data.get(tenant_id, {}).values():
+            if r["status"] == "blocked" and r["po_number"] == po:
+                r["status"], r["blocked_reason"] = "pending", None
+                ids.append(r["id"])
+        if ids:
+            self._write(data)
+        return ids
