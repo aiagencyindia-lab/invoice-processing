@@ -21,14 +21,16 @@ window, with a drill-down to the invoices behind each number.
 4. **Three-way hold rate is over PO-backed invoices only.**
 5. **AI cost per invoice is included**, labelled as model cost, not fully
    loaded cost.
-6. **Approach: SQL aggregates over typed columns plus one new column**
-   (`invoices.decided_at`). No Python-over-all-cases, no rollup table.
+6. **Approach: one typed-column row per invoice in the window, aggregated in
+   Python, plus one new column** (`invoices.decided_at`). No artifact JSON is
+   loaded and there is no rollup table.
 
 ## 1. Definitions
 
 All numbers cover invoices whose **document was received in the window**.
 `days` ∈ {0, 7, 30, 90}; 0 = all time; default 30. Scanned POs/GRNs
-(`documents.kind` not null) are excluded, the same filter `SheetRepository._base`
+(`documents.kind` set to anything other than `invoice`) are excluded, the same
+filter `SheetRepository._base`
 uses.
 
 Per invoice:
@@ -46,7 +48,7 @@ Per invoice:
   touchless `decided_at` can exist before a chain does. The query therefore
   treats an invoice as decided only when `decided_at` is set and either a
   person decided it (`human_decision` not null) or it has no approval chain.
-- **Touchless**: decided and `human_decision` is null.
+- **Touchless**: decided (as defined above) and `human_decision` is null.
 - **Exception**: not touchless. One bucket per invoice, first match wins:
   1. `rejected_by_rules` — `case_projection.machine_verdict` is reject.
   2. `three_way_hold` — a `findings` row with `step='2.3'` and `passed=false`.
@@ -55,21 +57,25 @@ Per invoice:
   5. `manual_decision` — none of the above, but a person decided it (for
      example an AUTO invoice approved from the workbench).
   6. `other` — an exception matching none of the above (for example an invoice
-     projected before `decided_at` existed). Counted so the buckets always sum
+     projected before `decided_at` existed, see §2: touchless rows projected
+     before this change). Counted so the buckets always sum
      to the exceptions; a non-zero `other` is a data-quality signal, not a
      category to design around.
   The buckets are exhaustive over exceptions and say why a person was needed,
   not the current state: an invoice that was REVIEW and is now approved still
   counts under `low_confidence`.
 - **Cycle time**: `decided_at − received` in hours; median and p90 over
-  decided invoices (nearest-rank). Rows with `decided_at < received` or a null
+  decided invoices (as defined above) (nearest-rank). Rows with `decided_at < received` or a null
   received time are excluded and counted in `skipped`, so a bad clock can
   never make the median look better (fail closed).
-- **Open**: `decided_at` null → count and the age of the oldest, in hours.
+- **Open**: not decided under the rule above (`decided_at` null, or set with
+  no `human_decision` while an approval chain exists) → count and the age of
+  the oldest, in hours.
 - **Three-way hold rate**: invoices with a failed 2.3 finding ÷ invoices with
   a non-null `po_number`.
 - **AI cost per invoice**: mean of `pipeline_runs.cost_usd` over invoices that
   have a run (one row per invoice after the fix in §2), with the total.
+  `per_invoice_usd` is null when no invoice in the window has a run.
 - Every rate is `null` when its denominator is 0, as `touchless_rate` is today.
 
 ## 2. Storage
@@ -104,7 +110,8 @@ per invoice in the window** from typed columns only: `case_id`, received
 `findings` row with `step='2.3'` and `passed=false`), `chain` (EXISTS an
 `approval_steps` row for the case) and `cost_usd` (the latest `pipeline_runs`
 row for the invoice, as a scalar subquery). Scans are excluded with the same
-`~exists(documents.kind not null and != 'invoice')` the sheet uses. The window
+`~exists(documents.kind not null and != 'invoice')` the sheet uses (the same
+filter as §1). The window
 filter is on received. The numbers — counts, buckets, nearest-rank
 percentiles, open age, hold rate, cost — are then computed in Python over
 those rows. No artifact JSON is loaded.
@@ -116,6 +123,10 @@ The bucket rule is one pure function `exception_bucket(decision, held,
 routing, chain, human_decision) -> str` and the percentile is one pure
 function `percentile(values, p)`, both in the repository module and
 unit-tested directly.
+
+`decision` is the raw `invoices.decision` column (e.g. `REJECT`); it is
+classified with the same rule as `case_projection.machine_verdict`. `other` is
+the fallthrough when no earlier bucket matches.
 
 ## 4. API
 
@@ -139,6 +150,9 @@ GET /api/kpis/cases?reason=<bucket>&days=30   viewer+
 
 `reason` must be one of the six buckets, else 422.
 
+Both routes validate `days` the same way (default 30; anything outside {0, 7, 30,
+90} is 422).
+
 Response:
 
 ```json
@@ -146,12 +160,14 @@ Response:
  "received":120,"decided":104,"touchless":48,
  "touchless_rate":0.4,"exception_rate":0.6,
  "exceptions":{"rejected_by_rules":9,"three_way_hold":6,
-               "low_confidence":40,"approval_required":15,"manual_decision":1},
+               "low_confidence":40,"approval_required":15,"manual_decision":1,"other":0},
  "cycle_hours":{"median":5.2,"p90":41.0,"skipped":0},
  "open":{"count":16,"oldest_hours":96.5},
  "three_way":{"po_invoices":30,"held":6,"hold_rate":0.2},
  "ai_cost":{"per_invoice_usd":0.0131,"total_usd":1.57}}
 ```
+
+The six bucket keys are always present, with 0 when empty.
 
 `since` is null when `days=0`.
 
@@ -165,10 +181,13 @@ Response:
   (hint: held of PO-backed), AI cost per invoice (hint: total).
 - Exceptions by reason: a table of reason / count / share; each row links to
   `/invoices?reason=<bucket>`.
-- `/invoices` accepts `?reason=<bucket>&days=N`. When present it fetches
-  `/api/kpis/cases` once and shows only the queue items whose case id is in
-  the answer, with a banner "Showing N invoices needing a person: <reason>"
-  and a "Show all" link back to `/invoices`.
+- `/invoices` accepts `?reason=<bucket>&days=N` (the KPI page always passes
+  `days`). When present it fetches `/api/kpis/cases` once and filters the
+  invoice list — which holds every invoice, decided or not — to the returned
+  case ids. A banner reads "Showing N invoices that needed a person: <reason>"
+  where N is the rows shown, adds "(newest 500)" when `truncated`, and links
+  "Show all" back to `/invoices`. If the call fails (for example an unknown
+  reason) the banner shows the API's message and the full list is shown.
 - Empty window → "No invoices received in this window". 503 → the friendly
   "needs a database" message through `ApiError.friendly`.
 - Sidebar entry "KPIs"; the dashboard's touchless tile links to `/kpis`.
@@ -191,7 +210,8 @@ Response:
   over one run per invoice.
 - `tests/test_kpi_api.py`: viewer allowed, `days` validation, 503 without DB.
 - `tests/test_tenant_isolation_api.py`: cross-tenant probe and `PROBED` entry
-  for `/api/kpis`; module listed in the no-tenant-in-request test.
+  for `/api/kpis` and `/api/kpis/cases`; module listed in the
+  no-tenant-in-request test.
 - `tests/test_gcs_and_migrations.py`: migration round trip including backfill
   of a row that has a workflow `decided_at`.
 - e2e: open `/kpis`, assert the tiles for the seeded cases, click a reason row
@@ -199,6 +219,12 @@ Response:
   get a `decided_at`.
 - Measure before claiming: run `summary` against the manual stack's SQLite DB
   and reconcile each count by hand against the invoice list.
+- Repository: an invoice with no documents row is counted via
+  invoices.created_at; an invoice with decided_at set, an approval chain and
+  no human_decision is open; every exception lands in exactly one of the six
+  buckets; cases() returns newest-first, caps at 500 and sets truncated.
+- API: /api/kpis/cases rejects an unknown reason and a bad days with 422,
+  returns 503 without a database, and is open to viewers.
 
 ## Later (out of scope)
 
