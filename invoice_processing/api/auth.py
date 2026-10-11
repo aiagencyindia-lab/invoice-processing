@@ -271,7 +271,14 @@ def set_sso_services(provider) -> None:
 
 
 def _services():
-    return _sso_services() if _sso_services is not None else None
+    if _sso_services is None:
+        return None
+    try:
+        return _sso_services()
+    except Exception as exc:  # an unreachable database refuses, never guesses
+        from .. import sso  # noqa: PLC0415
+
+        raise sso._unavailable(exc) from exc
 
 
 def get_verifier() -> TokenVerifier:

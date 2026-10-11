@@ -6,13 +6,15 @@ from datetime import datetime, timezone
 
 import pytest
 
-from invoice_processing.db.models import Base, Tenant, User
+from invoice_processing.db import repositories
+from invoice_processing.db.models import AuditEvent, Base, Tenant, User
 from invoice_processing.db.repositories import (
     DomainTaken,
     PgSsoDomainRepository,
     PgUserDirectory,
 )
 from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.ports import RunContext
 
 ACME = "tenant-acme"
 GLOBEX = "tenant-globex"
@@ -70,6 +72,47 @@ class TestDirectory:
         assert created["display_name"] == "New Person"
         with tenant_session(ACME, db) as session:
             assert session.query(User).filter_by(email="new@acme.com").one()
+
+    def test_provision_writes_its_audit_event_in_the_same_transaction(self, db):
+        ctx = RunContext(tenant_id=ACME, case_id="", actor="new@acme.com")
+        payload = {
+            "email": "new@acme.com",
+            "role": "viewer",
+            "domain": "acme.com",
+        }
+        created = PgUserDirectory(db).provision(
+            ACME,
+            "new@acme.com",
+            "viewer",
+            "fb-7",
+            None,
+            audit=(ctx, "user_provisioned_by_sso", payload),
+            now=NOW,
+        )
+        assert created["last_login_at"] is not None
+        with tenant_session(ACME, db) as session:
+            events = session.query(AuditEvent).all()
+            assert [e.action for e in events] == ["user_provisioned_by_sso"]
+            assert events[0].after == {**payload, "user_id": created["id"]}
+
+    def test_an_audit_row_that_cannot_be_built_leaves_no_user(
+        self, db, monkeypatch
+    ):
+        def broken(*args, **kwargs):
+            raise RuntimeError("audit down")
+
+        monkeypatch.setattr(repositories, "audit_event_row", broken)
+        ctx = RunContext(tenant_id=ACME, case_id="", actor="new@acme.com")
+        with pytest.raises(RuntimeError):
+            PgUserDirectory(db).provision(
+                ACME,
+                "new@acme.com",
+                "viewer",
+                "fb-7",
+                None,
+                audit=(ctx, "user_provisioned_by_sso", {}),
+            )
+        assert PgUserDirectory(db).find(ACME, "new@acme.com") is None
 
     def test_link_uid_and_touch_login(self, db):
         with tenant_session(ACME, db) as session:

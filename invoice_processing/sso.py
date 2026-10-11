@@ -152,27 +152,45 @@ def resolve_principal(
         bound = services.directory.domain(domain_of(email))
     except Exception as exc:
         raise _unavailable(exc) from exc
-    if bound is None:
+    if bound is None or bound.get("provider") != "google":
+        # A binding for another provider never admits a Google account.
         return principal_from_claims(claims)  # raises the usual 403
+
+    from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
 
     tenant_id = bound["tenant_id"]
     uid = str(claims.get("user_id") or claims.get("sub") or "")
+    role = str(bound["default_role"])
+    created = False
     try:
         row = services.directory.find(tenant_id, email)
         if row is None:
-            row = services.directory.provision(
-                tenant_id,
-                email,
-                bound["default_role"],
-                uid or None,
-                (claims.get("name") or None),
-            )
-            created = True
-        else:
+            ctx = Principal(
+                user_id=uid, email=email, tenant_id=tenant_id, role=role
+            ).context()
+            payload = {"email": email, "role": role, "domain": bound["domain"]}
+            try:
+                # The event is written in the insert's own transaction, so a
+                # user can never exist without the record of how they arrived.
+                row = services.directory.provision(
+                    tenant_id,
+                    email,
+                    role,
+                    uid or None,
+                    (claims.get("name") or None),
+                    audit=(ctx, "user_provisioned_by_sso", payload),
+                    now=now,
+                )
+                created = True
+            except IntegrityError:
+                # A concurrent first login inserted the row first.
+                row = services.directory.find(tenant_id, email)
+                if row is None:
+                    raise
+        if not created:
             _refuse_inactive(row)
             if not row.get("uid") and uid:
                 services.directory.link_uid(tenant_id, row["id"], uid)
-            created = False
     except AuthError:
         raise
     except Exception as exc:
@@ -189,11 +207,6 @@ def resolve_principal(
         except Exception as exc:
             # The row is the authority now; the next request writes the claim.
             logger.warning("Claims not written for %s: %s", email, exc)
-    if created:
-        services.audit.emit(
-            principal.context(),
-            "user_provisioned_by_sso",
-            {"email": email, "role": row["role"], "domain": bound["domain"]},
-        )
-    _touch(services, {**row, "tenant_id": tenant_id}, now)
+    if not created:  # provision already stamped last_login_at
+        _touch(services, {**row, "tenant_id": tenant_id}, now)
     return principal

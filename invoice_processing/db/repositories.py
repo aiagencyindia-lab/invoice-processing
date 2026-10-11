@@ -776,6 +776,27 @@ def entity_type_for(event_type: str, case_id: str = "") -> str | None:
     )
 
 
+def audit_event_row(
+    ctx: RunContext,
+    event_type: str,
+    payload: dict,
+    before: dict | None = None,
+) -> AuditEvent:
+    """The audit row for an event, for a caller that adds it to its own session."""
+    return AuditEvent(
+        tenant_id=ctx.tenant_id,
+        actor=ctx.actor,
+        actor_type="user" if ctx.actor else "system",
+        action=event_type,
+        entity_type=entity_type_for(event_type, ctx.case_id),
+        entity_id=ctx.case_id or None,
+        before=before,
+        after=payload,
+        request_id=ctx.run_id or None,
+        ip=(ctx.settings or {}).get("ip") or None,
+    )
+
+
 class PgAuditSink:
     """Append-only audit trail. Durable on call."""
 
@@ -790,20 +811,7 @@ class PgAuditSink:
         before: dict | None = None,
     ) -> None:
         with tenant_session(ctx.tenant_id, self.url) as session:
-            session.add(
-                AuditEvent(
-                    tenant_id=ctx.tenant_id,
-                    actor=ctx.actor,
-                    actor_type="user" if ctx.actor else "system",
-                    action=event_type,
-                    entity_type=entity_type_for(event_type, ctx.case_id),
-                    entity_id=ctx.case_id or None,
-                    before=before,
-                    after=payload,
-                    request_id=ctx.run_id or None,
-                    ip=(ctx.settings or {}).get("ip") or None,
-                )
-            )
+            session.add(audit_event_row(ctx, event_type, payload, before))
 
     def query(self, tenant_id: str, limit: int = 100) -> list[AuditEvent]:
         with tenant_session(tenant_id, self.url) as session:
@@ -3088,7 +3096,14 @@ class PgUserDirectory:
         role: str,
         uid: str | None,
         display_name: str | None,
+        *,
+        audit: tuple[RunContext, str, dict] | None = None,
+        now: datetime | None = None,
     ) -> dict:
+        """Create the row; with `audit`, its event commits or rolls back with it.
+
+        The event's payload gains the new row's `user_id`, known only here.
+        """
         with tenant_session(tenant_id, self.url) as session:
             row = User(
                 tenant_id=tenant_id,
@@ -3096,9 +3111,17 @@ class PgUserDirectory:
                 role=role,
                 uid=uid,
                 display_name=display_name,
+                last_login_at=now,
             )
             session.add(row)
             session.flush()
+            if audit is not None:
+                ctx, event_type, payload = audit
+                session.add(
+                    audit_event_row(
+                        ctx, event_type, {**payload, "user_id": row.id}
+                    )
+                )
             return _user_dict(row, self._tenant_name(session, tenant_id))
 
     def set_role(self, tenant_id: str, user_id: str, role: str) -> dict:

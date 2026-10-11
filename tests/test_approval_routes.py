@@ -887,6 +887,9 @@ def test_unreadable_routing_table_is_503_not_unrouted(env, monkeypatch):
 
     monkeypatch.setattr(service, "_approvals", None)
     monkeypatch.setattr(db_session, "get_engine", down)
+    # With the whole database down, sign-in itself now refuses (503) before
+    # routing is reached. Keep this test about routing: sign-in on claims.
+    monkeypatch.setattr(auth, "_sso_services", lambda: None)
     r = act(env, "approver:anyone")
     assert r.status_code == 503
     assert r.json()["detail"] == "Approval routing is unavailable."

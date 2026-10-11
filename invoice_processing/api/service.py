@@ -428,10 +428,19 @@ def _sso_services():
     """Sign-in's dependencies, or None where there is no database."""
     from .. import sso  # noqa: PLC0415
 
-    directory = get_user_directory()
-    if directory is None:
+    global _user_directory
+    if not _database_configured():
         return None
-    return sso.SsoServices(directory, get_claims_writer(), get_audit())
+    if _user_directory is None:
+        # Raises when the database cannot be asked: a configured database that
+        # is down must refuse sign-in, not fall back to claims and admit a
+        # deactivated user. Only a table that is really absent means claims.
+        if not _table_exists("users", "sign-in", raise_on_error=True):
+            return None
+        from ..db.repositories import PgUserDirectory  # noqa: PLC0415
+
+        _user_directory = PgUserDirectory()
+    return sso.SsoServices(_user_directory, get_claims_writer(), get_audit())
 
 
 auth.set_sso_services(_sso_services)

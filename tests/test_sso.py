@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from invoice_processing import sso
 from invoice_processing.api.auth import AuthError, Principal
@@ -19,6 +20,8 @@ class FakeDirectory:
         self.domains = {d["domain"]: d for d in domains or []}
         self.fail = fail
         self.touched, self.linked, self.provisioned = [], [], []
+        self.audits = []
+        self.provision_conflict, self.provision_conflict_row = False, None
 
     def find(self, tenant_id, email):
         if self.fail:
@@ -32,7 +35,16 @@ class FakeDirectory:
     def link_uid(self, tenant_id, user_id, uid):
         self.linked.append((user_id, uid))
 
-    def provision(self, tenant_id, email, role, uid, display_name):
+    def provision(
+        self, tenant_id, email, role, uid, display_name, *, audit=None, now=None
+    ):
+        if self.provision_conflict:
+            # A concurrent first login inserted the row first.
+            self.provision_conflict = False
+            self.users[(tenant_id, email.lower())] = self.provision_conflict_row
+            raise IntegrityError(
+                "INSERT INTO users", {}, Exception("uq_user_email")
+            )
         row = {
             "id": f"id-{email}",
             "tenant_id": tenant_id,
@@ -41,11 +53,16 @@ class FakeDirectory:
             "is_active": True,
             "uid": uid,
             "display_name": display_name,
-            "last_login_at": None,
+            "last_login_at": now,
             "tenant_name": "Acme Pty Ltd",
         }
         self.users[(tenant_id, email.lower())] = row
         self.provisioned.append(row)
+        if audit is not None:
+            ctx, event, payload = audit
+            self.audits.append(
+                (ctx.tenant_id, event, {**payload, "user_id": row["id"]})
+            )
         return dict(row)
 
     def domain(self, domain):
@@ -235,7 +252,9 @@ class TestUnclaimedTokens:
         assert d.provisioned[0]["uid"] == "fb-9"
         assert d.provisioned[0]["display_name"] == "New Person"
         assert c.written == [("fb-9", {"tenant_id": ACME, "role": "viewer"})]
-        assert a.events == [
+        # Written in the insert's own transaction, never as a separate emit.
+        assert a.events == []
+        assert d.audits == [
             (
                 ACME,
                 "user_provisioned_by_sso",
@@ -243,9 +262,68 @@ class TestUnclaimedTokens:
                     "email": "new@acme.com",
                     "role": "viewer",
                     "domain": "acme.com",
+                    "user_id": "id-new@acme.com",
                 },
             )
         ]
+
+    def test_provisioning_stamps_the_login_without_a_second_write(self):
+        d = FakeDirectory(domains=[BOUND])
+        sso.resolve_principal(unclaimed(), services(directory=d), now=NOW)
+        assert d.provisioned[0]["last_login_at"] == NOW
+        assert d.touched == []
+
+    def test_a_binding_for_another_provider_refuses_a_google_account(self):
+        bound = dict(BOUND, provider="microsoft")
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                unclaimed(),
+                services(directory=FakeDirectory(domains=[bound])),
+                now=NOW,
+            )
+        assert exc.value.status_code == 403
+
+    def test_a_concurrent_first_login_proceeds_as_the_winning_row(self):
+        d = FakeDirectory(domains=[BOUND])
+        d.provision_conflict = True
+        d.provision_conflict_row = dict(
+            ROW, email="new@acme.com", role="viewer"
+        )
+        p = sso.resolve_principal(unclaimed(), services(directory=d), now=NOW)
+        assert (p.tenant_id, p.role) == (ACME, "viewer")
+        assert d.provisioned == [] and d.audits == []
+
+    @pytest.mark.parametrize("provider", ["password", "anonymous"])
+    def test_only_google_can_earn_a_tenant(self, provider):
+        token = unclaimed(firebase={"sign_in_provider": provider})
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                token,
+                services(directory=FakeDirectory(domains=[BOUND])),
+                now=NOW,
+            )
+        assert exc.value.status_code == 403
+
+    def test_a_string_true_is_not_a_verified_email(self):
+        token = unclaimed(email_verified="true")
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                token,
+                services(directory=FakeDirectory(domains=[BOUND])),
+                now=NOW,
+            )
+        assert exc.value.status_code == 403
+
+    @pytest.mark.parametrize(
+        "email", ["x@acme.com@evil.test", "x@acme.com.evil.test"]
+    )
+    def test_a_lookalike_address_is_not_the_bound_domain(self, email):
+        d = FakeDirectory(domains=[BOUND])
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                unclaimed(email=email), services(directory=d), now=NOW
+            )
+        assert exc.value.status_code == 403 and d.provisioned == []
 
     def test_an_existing_row_is_linked_not_duplicated(self):
         pre = dict(ROW, email="new@acme.com", uid=None, role="clerk")
