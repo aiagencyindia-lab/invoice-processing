@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError
 
 from invoice_processing.db import repositories
 from invoice_processing.db.models import AuditEvent, Base, Tenant, User
@@ -59,6 +59,28 @@ class TestDirectory:
         with tenant_session(ACME, db) as session:
             user(session)
         assert PgUserDirectory(db).find(ACME, "Pat@Acme.com") is not None
+
+    def test_case_variant_rows_resolve_to_the_oldest(self, db):
+        with tenant_session(ACME, db) as session:
+            user(session, email="pat@acme.com", role="viewer", created_at=NOW)
+            user(
+                session,
+                email="PAT@acme.com",
+                role="approver",
+                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            )
+        for _ in range(3):
+            assert PgUserDirectory(db).find(ACME, "pat@acme.com")["role"] == (
+                "approver"
+            )
+
+    def test_get_reads_one_row_by_id_within_the_tenant(self, db):
+        with tenant_session(ACME, db) as session:
+            user_id = user(session, uid="fb-1").id
+        directory = PgUserDirectory(db)
+        assert directory.get(ACME, user_id)["email"] == "pat@acme.com"
+        assert directory.get(GLOBEX, user_id) is None
+        assert directory.get(ACME, "nope") is None
 
     def test_find_never_crosses_tenants(self, db):
         with tenant_session(ACME, db) as session:
@@ -141,6 +163,65 @@ class TestDirectory:
         assert (off["previous_active"], off["is_active"]) == (True, False)
         assert directory.find(ACME, "pat@acme.com")["is_active"] is False
 
+    def test_set_role_and_set_active_write_their_audit_rows(self, db):
+        with tenant_session(ACME, db) as session:
+            user_id = user(session).id
+        ctx = RunContext(tenant_id=ACME, case_id="", actor="admin@acme.com")
+        directory = PgUserDirectory(db)
+        directory.set_role(
+            ACME,
+            user_id,
+            "approver",
+            audit=(
+                ctx,
+                "user_role_changed",
+                {"role": "approver"},
+                {"role": "clerk"},
+            ),
+        )
+        directory.set_active(
+            ACME, user_id, False, audit=(ctx, "user_deactivated", {}, None)
+        )
+        with tenant_session(ACME, db) as session:
+            events = session.query(AuditEvent).all()
+            assert sorted(e.action for e in events) == [
+                "user_deactivated",
+                "user_role_changed",
+            ]
+            changed = next(e for e in events if e.action == "user_role_changed")
+            assert changed.before == {"role": "clerk"}
+
+    @pytest.mark.parametrize("change", ["role", "active"])
+    def test_an_audit_row_that_cannot_be_built_leaves_the_user_unchanged(
+        self, db, monkeypatch, change
+    ):
+        with tenant_session(ACME, db) as session:
+            user_id = user(session).id
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("audit down")
+
+        monkeypatch.setattr(repositories, "audit_event_row", broken)
+        ctx = RunContext(tenant_id=ACME, case_id="", actor="admin@acme.com")
+        directory = PgUserDirectory(db)
+        with pytest.raises(RuntimeError):
+            if change == "role":
+                directory.set_role(
+                    ACME,
+                    user_id,
+                    "admin",
+                    audit=(ctx, "user_role_changed", {}, None),
+                )
+            else:
+                directory.set_active(
+                    ACME,
+                    user_id,
+                    False,
+                    audit=(ctx, "user_deactivated", {}, None),
+                )
+        found = directory.find(ACME, "pat@acme.com")
+        assert (found["role"], found["is_active"]) == ("clerk", True)
+
     def test_set_role_on_another_tenants_user_is_a_lookup_error(self, db):
         with tenant_session(ACME, db) as session:
             user_id = user(session).id
@@ -195,7 +276,9 @@ class TestDomains:
             )
 
     def test_only_the_domain_constraint_means_taken(self, db):
-        with pytest.raises(IntegrityError):
+        # A foreign-key failure: IntegrityError on SQLite, ProgrammingError
+        # through pg8000. Either way it is not "taken".
+        with pytest.raises(DBAPIError) as raised:
             PgSsoDomainRepository(db).add(
                 "no-such-tenant",
                 domain="nobody.com",
@@ -203,6 +286,7 @@ class TestDomains:
                 default_role="viewer",
                 created_by="a",
             )
+        assert not isinstance(raised.value, DomainTaken)
 
     def test_lookup_by_domain_needs_no_tenant(self, db):
         """The lookup happens before anyone knows which tenant the caller is."""

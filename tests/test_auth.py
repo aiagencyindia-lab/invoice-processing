@@ -29,7 +29,7 @@ from invoice_processing.api.auth import (
     principal_from_claims,
     require_role,
 )
-from tests.test_sso import FakeAudit, FakeClaims, FakeDirectory
+from tests.test_sso import FakeClaims, FakeDirectory
 
 
 class FakeVerifier:
@@ -299,6 +299,29 @@ class TestDevIdentityHeader:
         )
         assert response.status_code == 401
 
+    @pytest.mark.parametrize("where", ["connect", "query"])
+    def test_an_unreachable_database_refuses_the_dev_identity(
+        self, app, local, monkeypatch, where
+    ):
+        """A deactivated person must not get in because the check could not run."""
+
+        def unreachable():
+            raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(
+            auth,
+            "_sso_services",
+            unreachable
+            if where == "connect"
+            else lambda: sso.SsoServices(
+                FakeDirectory(fail=True), FakeClaims()
+            ),
+        )
+        response = app.get(
+            "/whoami", headers={self.HEADER: "alice@e2e.test:admin"}
+        )
+        assert response.status_code == 503
+
     def test_ignored_outside_a_local_environment(self, app, monkeypatch):
         monkeypatch.setenv("AUTH_DISABLED", "1")
         monkeypatch.setenv("ENV", "production")
@@ -315,7 +338,7 @@ class TestTheUsersTableHasASay:
         monkeypatch.setattr(
             auth,
             "_sso_services",
-            lambda: sso.SsoServices(d, FakeClaims(), FakeAudit()),
+            lambda: sso.SsoServices(d, FakeClaims()),
         )
         return d
 

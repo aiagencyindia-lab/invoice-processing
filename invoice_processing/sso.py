@@ -42,7 +42,6 @@ MICROSOFT = "microsoft.com"
 class SsoServices(NamedTuple):
     directory: Any  # PgUserDirectory-shaped
     claims: Any  # ClaimsWriter
-    audit: Any  # AuditSink
 
 
 def normalize_domain(value: str) -> str:
@@ -123,6 +122,13 @@ def resolve_principal(
         except Exception as exc:
             raise _unavailable(exc) from exc
         if row is None:
+            # Deactivation cannot reach a person with no row; say so.
+            logger.warning(
+                "claimed token for %s has no users row in %s; claim role %s stands",
+                base.email,
+                base.tenant_id,
+                base.role,
+            )
             return base
         _refuse_inactive(row)
         _touch(services, {**row, "tenant_id": base.tenant_id}, now)
@@ -189,7 +195,16 @@ def resolve_principal(
                     raise
         if not created:
             _refuse_inactive(row)
-            if not row.get("uid") and uid:
+            if uid and row.get("uid") != uid:
+                if row.get("uid"):
+                    # The verified address is the identity; the account
+                    # behind it changed (deleted and re-created, say).
+                    logger.warning(
+                        "Relinking %s from uid %s to %s",
+                        email,
+                        row["uid"],
+                        uid,
+                    )
                 services.directory.link_uid(tenant_id, row["id"], uid)
     except AuthError:
         raise

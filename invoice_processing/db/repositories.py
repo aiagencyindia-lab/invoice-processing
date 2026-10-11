@@ -3050,7 +3050,8 @@ class PgUserDirectory:
     """The users rows as the request path reads them.
 
     Small on purpose: `find` is on every authenticated request, so it is one
-    indexed read; the writes happen once per sign-in at most.
+    statement -- the row and its tenant's name together; the writes happen
+    once per sign-in at most.
     """
 
     def __init__(self, url: str | None = None):
@@ -3061,17 +3062,35 @@ class PgUserDirectory:
         return session.scalar(select(Tenant.name).where(Tenant.id == tenant_id))
 
     def find(self, tenant_id: str, email: str) -> dict | None:
+        """The row for this address, compared case-insensitively.
+
+        Rows stored before emails were lowercased can differ only in case;
+        the oldest wins, so the answer never flips between requests.
+        """
         wanted = (email or "").strip().lower()
         with tenant_session(tenant_id, self.url) as session:
-            row = session.scalar(
-                select(User).where(
+            found = session.execute(
+                select(User, Tenant.name)
+                .outerjoin(Tenant, Tenant.id == User.tenant_id)
+                .where(
                     User.tenant_id == tenant_id,
                     func.lower(User.email) == wanted,
                 )
-            )
-            if row is None:
+                .order_by(User.created_at, User.id)
+                .limit(1)
+            ).first()
+            if found is None:
                 return None
-            return _user_dict(row, self._tenant_name(session, tenant_id))
+            return _user_dict(found[0], found[1])
+
+    def get(self, tenant_id: str, user_id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            row = session.scalar(
+                select(User).where(
+                    User.tenant_id == tenant_id, User.id == user_id
+                )
+            )
+            return None if row is None else _user_dict(row, None)
 
     def _row(self, session, tenant_id: str, user_id: str) -> User:
         row = session.scalar(
@@ -3124,18 +3143,50 @@ class PgUserDirectory:
                 )
             return _user_dict(row, self._tenant_name(session, tenant_id))
 
-    def set_role(self, tenant_id: str, user_id: str, role: str) -> dict:
+    def set_role(
+        self,
+        tenant_id: str,
+        user_id: str,
+        role: str,
+        *,
+        audit: tuple[RunContext, str, dict, dict | None] | None = None,
+    ) -> dict:
+        """Change the role; with `audit`, its event commits or rolls back
+        with it. The event's `before` gains the role this transaction
+        replaced, whatever the caller read earlier."""
         with tenant_session(tenant_id, self.url) as session:
             row = self._row(session, tenant_id, user_id)
             previous, row.role = row.role, role
             session.flush()
+            if audit is not None:
+                ctx, event_type, payload, before = audit
+                session.add(
+                    audit_event_row(
+                        ctx,
+                        event_type,
+                        payload,
+                        {**(before or {}), "role": previous},
+                    )
+                )
             return {**_user_dict(row, None), "previous_role": previous}
 
-    def set_active(self, tenant_id: str, user_id: str, active: bool) -> dict:
+    def set_active(
+        self,
+        tenant_id: str,
+        user_id: str,
+        active: bool,
+        *,
+        audit: tuple[RunContext, str, dict, dict | None] | None = None,
+    ) -> dict:
+        """Change the flag; with `audit`, its event commits or rolls back
+        with it."""
         with tenant_session(tenant_id, self.url) as session:
             row = self._row(session, tenant_id, user_id)
             previous, row.is_active = bool(row.is_active), active
             session.flush()
+            if audit is not None:
+                ctx, event_type, payload, before = audit
+                session.add(audit_event_row(ctx, event_type, payload, before))
             return {**_user_dict(row, None), "previous_active": previous}
 
     def domain(self, domain: str) -> dict | None:
@@ -3210,10 +3261,10 @@ class PgSsoDomainRepository:
         except IntegrityError as exc:
             # The unique constraint is the arbiter; a check-then-insert would
             # let two admins race for the same domain.
-            diag = getattr(exc.orig, "diag", None)
-            if getattr(
-                diag, "constraint_name", None
-            ) == "uq_sso_domain" or "sso_domains.domain" in str(exc.orig):
+            # Matched on the message: pg8000 (production) carries no `.diag`;
+            # it names the constraint, SQLite names the column.
+            text = str(exc.orig)
+            if "uq_sso_domain" in text or "sso_domains.domain" in text:
                 raise DomainTaken(domain) from exc
             raise
 

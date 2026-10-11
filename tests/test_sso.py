@@ -81,19 +81,10 @@ class FakeClaims:
         self.written.append((uid, claims))
 
 
-class FakeAudit:
-    def __init__(self):
-        self.events = []
-
-    def emit(self, ctx, event, payload, before=None):
-        self.events.append((ctx.tenant_id, event, payload))
-
-
 def services(**kw):
     return sso.SsoServices(
         kw.get("directory", FakeDirectory()),
         kw.get("claims", FakeClaims()),
-        kw.get("audit", FakeAudit()),
     )
 
 
@@ -183,6 +174,15 @@ class TestClaimedTokens:
         p = sso.resolve_principal(claimed(), services(), now=NOW)
         assert p.role == "clerk"
 
+    def test_no_row_is_logged_so_the_gap_is_visible(self, caplog):
+        with caplog.at_level("WARNING", logger="invoice_processing.sso"):
+            sso.resolve_principal(claimed(), services(), now=NOW)
+        assert (
+            "claimed token for pat@acme.com has no users row in"
+            in (caplog.text)
+            and "claim role clerk stands" in caplog.text
+        )
+
     def test_a_deactivated_user_is_refused_on_every_request(self):
         off = dict(ROW, is_active=False)
         with pytest.raises(AuthError) as exc:
@@ -240,10 +240,8 @@ class TestClaimedTokens:
 
 class TestUnclaimedTokens:
     def test_a_bound_domain_provisions_the_default_role(self):
-        d, c, a = FakeDirectory(domains=[BOUND]), FakeClaims(), FakeAudit()
-        p = sso.resolve_principal(
-            unclaimed(), sso.SsoServices(d, c, a), now=NOW
-        )
+        d, c = FakeDirectory(domains=[BOUND]), FakeClaims()
+        p = sso.resolve_principal(unclaimed(), sso.SsoServices(d, c), now=NOW)
         assert (p.tenant_id, p.role, p.email) == (
             ACME,
             "viewer",
@@ -252,8 +250,7 @@ class TestUnclaimedTokens:
         assert d.provisioned[0]["uid"] == "fb-9"
         assert d.provisioned[0]["display_name"] == "New Person"
         assert c.written == [("fb-9", {"tenant_id": ACME, "role": "viewer"})]
-        # Written in the insert's own transaction, never as a separate emit.
-        assert a.events == []
+        # Written in the insert's own transaction: services has no sink.
         assert d.audits == [
             (
                 ACME,
@@ -292,6 +289,15 @@ class TestUnclaimedTokens:
         p = sso.resolve_principal(unclaimed(), services(directory=d), now=NOW)
         assert (p.tenant_id, p.role) == (ACME, "viewer")
         assert d.provisioned == [] and d.audits == []
+
+    def test_a_uid_held_by_another_persons_row_refuses_sign_in(self):
+        """uq_user_uid fires and no row exists for this email: refuse, and
+        never proceed as whoever holds the uid."""
+        d = FakeDirectory(domains=[BOUND])
+        d.provision_conflict = True  # the insert loses, and no row appears
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(unclaimed(), services(directory=d), now=NOW)
+        assert exc.value.status_code == 503 and d.provisioned == []
 
     @pytest.mark.parametrize("provider", ["password", "anonymous"])
     def test_only_google_can_earn_a_tenant(self, provider):
@@ -334,6 +340,22 @@ class TestUnclaimedTokens:
             and d.provisioned == []
             and d.linked == [("u-1", "fb-9")]
         )
+
+    def test_a_row_linked_to_another_uid_is_relinked_to_this_one(self, caplog):
+        pre = dict(ROW, email="new@acme.com", uid="fb-old", role="clerk")
+        d = FakeDirectory([pre], domains=[BOUND])
+        with caplog.at_level("WARNING", logger="invoice_processing.sso"):
+            p = sso.resolve_principal(
+                unclaimed(), services(directory=d), now=NOW
+            )
+        assert p.role == "clerk" and d.linked == [("u-1", "fb-9")]
+        assert "fb-old" in caplog.text and "fb-9" in caplog.text
+
+    def test_a_row_already_linked_to_this_uid_is_left_alone(self):
+        pre = dict(ROW, email="new@acme.com", uid="fb-9", role="clerk")
+        d = FakeDirectory([pre], domains=[BOUND])
+        sso.resolve_principal(unclaimed(), services(directory=d), now=NOW)
+        assert d.linked == []
 
     def test_an_unbound_domain_is_not_a_member(self):
         with pytest.raises(AuthError) as exc:
@@ -382,6 +404,14 @@ class TestEnforceActive:
         )
         with pytest.raises(AuthError):
             sso.enforce_active(p, services(directory=FakeDirectory([off])))
+
+    def test_an_unreachable_database_refuses_the_dev_identity(self):
+        p = Principal(
+            user_id="dev", email="dev@acme.com", tenant_id=ACME, role="admin"
+        )
+        with pytest.raises(AuthError) as exc:
+            sso.enforce_active(p, services(directory=FakeDirectory(fail=True)))
+        assert exc.value.status_code == 503
 
     def test_the_header_role_is_kept(self):
         row = dict(ROW, email="dev@acme.com", role="viewer")

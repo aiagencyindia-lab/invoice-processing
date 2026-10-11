@@ -58,10 +58,15 @@ which creates a new tenant.
 - Public mailbox domains are refused by name when binding: `gmail.com`,
   `googlemail.com`, `outlook.com`, `hotmail.com`, `live.com`, `yahoo.com`,
   `icloud.com`, `proton.me`, `protonmail.com`.
-- No DNS proof of ownership in this slice. A bound domain admits only
-  Google-verified accounts of exactly that domain, and Google verifies only
-  addresses it hosts, so a wrongly bound domain admits no one. Binding is
-  admin-only and takes effect at once.
+- No DNS proof of ownership in this slice. Instead an admin may bind only
+  the domain of their own sign-in address, which comes from a
+  signature-verified token; this stops one tenant claiming another company's
+  domain. Residual risk, documented: a Google account can be created on a
+  non-Google address and verified once by email, and Firebase tokens carry no
+  `hd` claim, so a person who once received mail at a bound domain (a leaver
+  whose address was recycled) can sign in with such an account. Deactivation
+  handles known leavers; `last_login_at` on the admin page is the audit
+  surface.
 - Migration revises `b8c4d1e2f3a5`; `RLS_TABLES = ["sso_domains"]`; the RLS
   parametrize and the forced-policy list in `tests/test_gcs_and_migrations.py`
   are extended.

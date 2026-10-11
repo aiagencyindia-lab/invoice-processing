@@ -765,7 +765,8 @@ class TestWritesDoNotCross:
                 Tenant(id=t, slug=t, name=t) for t in (ACME, GLOBEX)
             )
         body = {
-            "domain": "acme.com",
+            # acme's admin signs in as admin@acme.test, and may bind only that.
+            "domain": "acme.test",
             "provider": "google",
             "default_role": "viewer",
         }

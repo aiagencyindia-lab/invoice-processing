@@ -289,7 +289,8 @@ export default function AdminPage() {
                   <td>{d.provider}</td>
                   <td><span className="badge">{d.default_role}</span></td>
                   <td>
-                    <button type="button" className="btn-chip" onClick={() => removeDomain(d)}>
+                    <button type="button" className="btn-chip" aria-label={`Disconnect ${d.domain}`}
+                            onClick={() => removeDomain(d)}>
                       Disconnect
                     </button>
                   </td>
@@ -311,7 +312,7 @@ export default function AdminPage() {
             <select className="input-field" aria-label="Provider" value={newProvider}
                     onChange={(e) => setNewProvider(e.target.value as "google" | "microsoft")}>
               <option value="google">Google Workspace</option>
-              <option value="microsoft">Microsoft 365 (not enabled yet)</option>
+              <option value="microsoft">Microsoft 365 — admits nobody until Microsoft sign-in is enabled</option>
             </select>
           </label>
           <label style={{ fontSize: 12 }}>
@@ -361,14 +362,21 @@ export default function AdminPage() {
                         className="input-field"
                         aria-label={`Role of ${user.email}`}
                         value={user.role}
-                        disabled={user.email === me?.email}
-                        onChange={(event) =>
+                        // Until /api/me answers, any row could be the caller's own.
+                        disabled={!me || user.email === me.email}
+                        onChange={(event) => {
+                          const role = event.target.value;
+                          if (
+                            role === "admin" &&
+                            !window.confirm(`Make ${user.email} an admin? They can then manage everyone here.`)
+                          )
+                            return;
                           patchUser(
                             user,
-                            { role: event.target.value },
-                            `${user.email} is now ${event.target.value}; it applies on their next request.`,
-                          )
-                        }
+                            { role },
+                            `${user.email} is now ${role}; it applies on their next request.`,
+                          );
+                        }}
                       >
                         {(users?.roles ?? ["viewer", "clerk", "approver", "admin"]).map(
                           (value) => (
@@ -410,10 +418,11 @@ export default function AdminPage() {
                       ) : null}
                     </td>
                     <td>
-                      {user.email === me?.email ? null : (
+                      {!me || user.email === me.email ? null : (
                         <button
                           type="button"
                           className="btn-chip"
+                          aria-label={`${user.is_active === false ? "Reactivate" : "Deactivate"} ${user.email}`}
                           onClick={() => setActive(user, user.is_active === false)}
                         >
                           {user.is_active === false ? "Reactivate" : "Deactivate"}

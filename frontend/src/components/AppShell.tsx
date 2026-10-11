@@ -122,6 +122,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     watchUser((value) => {
       if (cancelled) return;
+      // Signed out: the next person to sign in here gets their own refresh.
+      if (!value) refreshed.current = false;
       setUser(value);
       identify();
     }).then((stop) => {
