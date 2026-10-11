@@ -389,6 +389,41 @@ def get_gl_rules():
     return _gl_rules
 
 
+_user_directory = None
+_sso_domains = None
+
+
+def get_user_directory():
+    """The users rows as the request path reads them. None without a
+    database, and None when the users table is not there -- the suite runs
+    with an in-memory database that has no schema, and a file-store
+    deployment must keep answering from claims alone."""
+    global _user_directory
+    if (
+        _user_directory is None
+        and _database_configured()
+        and _table_exists("users", "sign-in")
+    ):
+        from ..db.repositories import PgUserDirectory  # noqa: PLC0415
+
+        _user_directory = PgUserDirectory()
+    return _user_directory
+
+
+def get_sso_domains():
+    """Domain bindings. None without the table."""
+    global _sso_domains
+    if (
+        _sso_domains is None
+        and _database_configured()
+        and _table_exists("sso_domains", "single sign-on")
+    ):
+        from ..db.repositories import PgSsoDomainRepository  # noqa: PLC0415
+
+        _sso_domains = PgSsoDomainRepository()
+    return _sso_domains
+
+
 def get_purchase_orders():
     """Purchase orders, their lines and goods receipts. `None` without the table.
 

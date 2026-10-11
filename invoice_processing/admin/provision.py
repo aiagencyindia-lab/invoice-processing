@@ -274,6 +274,10 @@ class Provisioner:
                     "display_name": u.display_name,
                     "is_active": u.is_active,
                     "manager_email": u.manager_email,
+                    "uid": u.uid,
+                    "last_login_at": u.last_login_at.isoformat()
+                    if u.last_login_at
+                    else None,
                     "created_at": u.created_at.isoformat()
                     if u.created_at
                     else None,

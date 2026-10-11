@@ -471,6 +471,7 @@ class TestMigration:
             ("d8e1f2a3b4c5", 1),
             ("a7b3c9d2e4f6", 0),
             ("b8c4d1e2f3a5", 0),
+            ("c9d5e2f3a4b6", 1),
         ],
     )
     def test_migration_protects_exactly_the_tables_it_creates(
@@ -545,6 +546,7 @@ class TestMigration:
                 "goods_receipts",
                 "grn_lines",
                 "supporting_documents",
+                "sso_domains",
             ]
             with engine.connect() as c:
                 policies = {
@@ -566,6 +568,8 @@ class TestMigration:
             for table in tables:
                 assert (table, f"{table}_isolation") in policies, table
                 assert forced.get(table) is True, table
+            # The pre-tenant domain lookup relies on this second policy.
+            assert ("sso_domains", "sso_domains_lookup") in policies
         finally:
             with admin.connect() as c:
                 c.execute(text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
