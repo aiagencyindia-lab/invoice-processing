@@ -38,6 +38,7 @@ from invoice_processing.api import (
     auth,
     config_routes,
     gl_routes,
+    kpi_routes,
     po_routes,
     service,
     supporting_routes,
@@ -1009,6 +1010,23 @@ class TestSheetIsolation:
         assert body["total"] == 1
         assert body["vendors"] == 1
 
+    def test_kpis_count_only_this_tenant(self, sheet_clients):
+        body = (
+            sheet_clients("globex").get("/api/kpis", params={"days": 0}).json()
+        )
+        assert body["received"] == 1
+
+    def test_kpi_drill_down_names_only_this_tenants_cases(self, sheet_clients):
+        """The seeded rows were inserted directly, not projected: no routing,
+        no decision column, no human_decision. They fall in `other`, and
+        acme's must not appear for globex."""
+        body = (
+            sheet_clients("globex")
+            .get("/api/kpis/cases", params={"reason": "other", "days": 0})
+            .json()
+        )
+        assert body["case_ids"] == ["globex-case"]
+
     def test_facets_do_not_name_another_tenants_vendors(self, sheet_clients):
         body = sheet_clients("globex").get("/api/sheet/facets").json()
         assert body["vendors"] == ["Globex Supplier"]
@@ -1225,6 +1243,8 @@ class TestCoverage:
     }
 
     PROBED: ClassVar[set] = {
+        "/api/kpis",
+        "/api/kpis/cases",
         "/api/invoices",
         "/api/invoices/{case_id}",
         "/api/invoices/{case_id}/document",
@@ -1326,6 +1346,7 @@ class TestCoverage:
             approval_routes,
             config_routes,
             gl_routes,
+            kpi_routes,
             po_routes,
             supporting_routes,
             system,

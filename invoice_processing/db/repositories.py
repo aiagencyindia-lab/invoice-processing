@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import uuid
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
@@ -212,6 +213,19 @@ class PgCaseRepository:
             for column, value in columns.items():
                 setattr(invoice, column, value)
 
+            # The human decision time wins. A touchless invoice is decided
+            # the moment it is projected, and keeps that time on retries so a
+            # re-run does not move it. Nothing here ever writes None: the
+            # worker re-projects from files that never hold the workflow
+            # artifact, and clearing the column would erase a real decision.
+            decided = case_projection.decided_at(artifacts)
+            if decided is not None:
+                invoice.decided_at = decided
+            elif invoice.decided_at is None and case_projection.is_touchless(
+                artifacts
+            ):
+                invoice.decided_at = datetime.now(timezone.utc)
+
             # The case id *is* the document id everywhere in this system, so
             # the link needs no extra bookkeeping -- but it is only set when
             # that document really exists, because a dangling foreign key
@@ -255,8 +269,17 @@ class PgCaseRepository:
                     )
                 )
 
+            # One run row per invoice. Every approval, correction, GL coding
+            # and rematch re-projects; appending on each made the same cost
+            # count several times over. Replace only when there is a run to
+            # replace it with: a projection without an audit_log must not
+            # erase the cost already recorded.
             run = case_projection.run(artifacts)
             if run is not None:
+                session.query(PipelineRun).filter(
+                    PipelineRun.tenant_id == ctx.tenant_id,
+                    PipelineRun.invoice_id == invoice.id,
+                ).delete(synchronize_session=False)
                 session.add(
                     PipelineRun(
                         tenant_id=ctx.tenant_id,
@@ -2737,6 +2760,256 @@ def record_pipeline_run(ctx: RunContext, **fields) -> None:
     """Persist reproducibility metadata for one run."""
     with tenant_session(ctx.tenant_id) as session:
         session.add(PipelineRun(tenant_id=ctx.tenant_id, **fields))
+
+
+# ---------------------------------------------------------------------------
+# KPIs
+# ---------------------------------------------------------------------------
+
+# Why an invoice needed a person, first match wins. "other" exists so the
+# buckets always add up to the exceptions; a non-zero "other" is a data
+# problem to look at, not a category to design around.
+BUCKETS = (
+    "rejected_by_rules",
+    "three_way_hold",
+    "low_confidence",
+    "approval_required",
+    "manual_decision",
+    "other",
+)
+KPI_CASES_LIMIT = 500
+
+
+def percentile(values: list[float], p: float) -> float | None:
+    """Nearest-rank percentile; None of nothing."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = max(1, math.ceil(p * len(ordered)))
+    return round(float(ordered[rank - 1]), 2)
+
+
+def exception_bucket(
+    decision: str | None,
+    held: bool,
+    routing: str | None,
+    chain: bool,
+    human_decision: str | None,
+) -> str:
+    from .. import case_projection  # noqa: PLC0415
+
+    if case_projection.classify_verdict(decision) == "reject":
+        return "rejected_by_rules"
+    if held:
+        return "three_way_hold"
+    if routing == "REVIEW":
+        return "low_confidence"
+    if chain:
+        return "approval_required"
+    if human_decision is not None:
+        return "manual_decision"
+    return "other"
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    # SQLite hands back naive datetimes for timezone-aware columns.
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _rate(numerator: int, denominator: int) -> float | None:
+    return round(numerator / denominator, 3) if denominator else None
+
+
+def _hours(start: datetime, end: datetime) -> float:
+    return (end - start).total_seconds() / 3600
+
+
+class KpiRepository:
+    """The operating numbers an AP manager is judged on, over one window.
+
+    Reads typed columns only -- never the artifact JSON -- so a month of
+    invoices costs one indexed select. One row per invoice comes back and the
+    arithmetic happens here; SQLite has no percentile function and the
+    drill-down wants the same rows anyway.
+    """
+
+    # ponytail: one row per invoice in the window; aggregate in SQL if a
+    # window ever exceeds ~100k invoices.
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    def _rows(self, session, tenant_id: str, since: datetime | None) -> list:
+        received = func.coalesce(Document.created_at, Invoice.created_at)
+        held = exists(
+            select(Finding.id).where(
+                Finding.tenant_id == tenant_id,
+                Finding.invoice_id == Invoice.id,
+                Finding.step == "2.3",
+                Finding.passed.is_(False),
+            )
+        )
+        chain = exists(
+            select(ApprovalStep.id).where(
+                ApprovalStep.tenant_id == tenant_id,
+                ApprovalStep.case_id == Invoice.case_id,
+            )
+        )
+        # The latest run, not the sum: databases projected before the
+        # one-row-per-invoice fix still hold duplicates of the same cost.
+        cost = (
+            select(PipelineRun.cost_usd)
+            .where(
+                PipelineRun.tenant_id == tenant_id,
+                PipelineRun.invoice_id == Invoice.id,
+            )
+            .order_by(PipelineRun.created_at.desc(), PipelineRun.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        statement = (
+            select(
+                Invoice.case_id,
+                received.label("received"),
+                Invoice.decided_at,
+                Invoice.human_decision,
+                Invoice.decision,
+                Invoice.routing,
+                Invoice.po_number,
+                held.label("held"),
+                chain.label("chain"),
+                cost.label("cost_usd"),
+            )
+            .select_from(Invoice)
+            .outerjoin(
+                Document,
+                and_(
+                    Document.tenant_id == tenant_id,
+                    Document.id == Invoice.case_id,
+                ),
+            )
+            .where(
+                Invoice.tenant_id == tenant_id,
+                # A scanned PO or receipt is never an invoice (same test as
+                # the sheet).
+                or_(Document.kind.is_(None), Document.kind == "invoice"),
+            )
+            .order_by(received.desc())
+        )
+        if since is not None:
+            statement = statement.where(received >= since)
+        return session.execute(statement).all()
+
+    @staticmethod
+    def _decided(row) -> bool:
+        # The worker projects a touchless invoice as decided before it routes
+        # the approval chain; a chain nobody has finished means it is not.
+        return row.decided_at is not None and (
+            row.human_decision is not None or not row.chain
+        )
+
+    def summary(
+        self,
+        tenant_id: str,
+        since: datetime | None,
+        now: datetime | None = None,
+    ) -> dict:
+        now = now or datetime.now(timezone.utc)
+        with tenant_session(tenant_id, self.url) as session:
+            rows = self._rows(session, tenant_id, since)
+
+        decided = [r for r in rows if self._decided(r)]
+        touchless = [r for r in decided if r.human_decision is None]
+        touchless_ids = {r.case_id for r in touchless}
+
+        buckets = dict.fromkeys(BUCKETS, 0)
+        for r in rows:
+            if r.case_id not in touchless_ids:
+                buckets[
+                    exception_bucket(
+                        r.decision, r.held, r.routing, r.chain, r.human_decision
+                    )
+                ] += 1
+
+        cycle: list[float] = []
+        skipped = 0
+        for r in decided:
+            start, end = _aware(r.received), _aware(r.decided_at)
+            hours = _hours(start, end) if start and end else None
+            if hours is None or hours < 0:
+                skipped += (
+                    1  # fail closed: a bad clock never shortens the median
+                )
+            else:
+                cycle.append(hours)
+
+        open_rows = [r for r in rows if not self._decided(r)]
+        oldest = min(
+            (_aware(r.received) for r in open_rows if r.received), default=None
+        )
+
+        po_rows = [r for r in rows if r.po_number]
+        # A hold is a three-way-match outcome: only PO-backed rows can have
+        # one, so the rate can never exceed 1.
+        held = [r for r in po_rows if r.held]
+
+        costs = [float(r.cost_usd) for r in rows if r.cost_usd is not None]
+
+        return {
+            "received": len(rows),
+            "decided": len(decided),
+            "touchless": len(touchless),
+            "touchless_rate": _rate(len(touchless), len(rows)),
+            "exception_rate": _rate(len(rows) - len(touchless), len(rows)),
+            "exceptions": buckets,
+            "cycle_hours": {
+                "median": percentile(cycle, 0.5),
+                "p90": percentile(cycle, 0.9),
+                "skipped": skipped,
+            },
+            "open": {
+                "count": len(open_rows),
+                "oldest_hours": round(_hours(oldest, now), 1)
+                if oldest
+                else None,
+            },
+            "three_way": {
+                "po_invoices": len(po_rows),
+                "held": len(held),
+                "hold_rate": _rate(len(held), len(po_rows)),
+            },
+            "ai_cost": {
+                "per_invoice_usd": round(sum(costs) / len(costs), 4)
+                if costs
+                else None,
+                "total_usd": round(sum(costs), 4),
+            },
+        }
+
+    def cases(
+        self,
+        tenant_id: str,
+        since: datetime | None,
+        reason: str,
+    ) -> dict:
+        """The invoices behind one bucket, newest received first."""
+        with tenant_session(tenant_id, self.url) as session:
+            rows = self._rows(session, tenant_id, since)
+        matching = [
+            r.case_id
+            for r in rows
+            if not (self._decided(r) and r.human_decision is None)
+            and exception_bucket(
+                r.decision, r.held, r.routing, r.chain, r.human_decision
+            )
+            == reason
+        ]
+        return {
+            "case_ids": matching[:KPI_CASES_LIMIT],
+            "truncated": len(matching) > KPI_CASES_LIMIT,
+        }
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ No test touches GCS; a fake client records calls.
 """
 
 import glob
+import json
 import os
 import sqlite3
 import subprocess
@@ -265,6 +266,66 @@ class TestMigration:
         }
         assert remaining == {"alembic_version"}, f"left behind: {remaining}"
 
+    def test_decided_at_is_backfilled_from_the_workflow_artifact(
+        self, tmp_path
+    ):
+        """History must not start blank: a decision made last month has a
+        time, and the new column should know it."""
+        db = tmp_path / "b.db"
+        assert _alembic("upgrade d8e1f2a3b4c5", db).returncode == 0
+
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "insert into tenants (id, slug, name, region, status, settings, "
+            "created_at, updated_at) values ('t1', 't1', 'T1', 'au', 'active', "
+            "'{}', '2026-01-01', '2026-01-01')"
+        )
+        rows = [
+            (
+                "decided",
+                {
+                    "workflow": {
+                        "decision": "approve",
+                        "decided_at": "2026-09-30T08:00:00Z",
+                    }
+                },
+            ),
+            ("pending", {"workflow": {}}),
+            (
+                "garbage",
+                {
+                    "workflow": {
+                        "decision": "reject",
+                        "decided_at": "last tuesday",
+                    }
+                },
+            ),
+        ]
+        for case_id, fields in rows:
+            conn.execute(
+                "insert into invoices (id, tenant_id, case_id, status, fields, "
+                "created_at, updated_at) values (?, 't1', ?, 'processed', ?, "
+                "'2026-09-01', '2026-09-01')",
+                (case_id, case_id, json.dumps(fields)),
+            )
+        conn.commit()
+        conn.close()
+
+        up = _alembic("upgrade head", db)
+        assert up.returncode == 0, up.stderr
+        got = dict(
+            sqlite3.connect(db)
+            .execute("select case_id, decided_at from invoices")
+            .fetchall()
+        )
+        assert got["decided"] is not None and got["decided"].startswith(
+            "2026-09-30"
+        )
+        assert got["pending"] is None
+        assert got["garbage"] is None
+
+        assert _alembic("downgrade d8e1f2a3b4c5", db).returncode == 0
+
     def test_migration_carries_rls(self):
         """A schema deployed without RLS has no database-level isolation."""
         path = glob.glob(
@@ -333,6 +394,7 @@ class TestMigration:
             ("b21ac023e07e", 1),
             ("c4d7e8f91a02", 4),
             ("d8e1f2a3b4c5", 1),
+            ("a7b3c9d2e4f6", 0),
         ],
     )
     def test_migration_protects_exactly_the_tables_it_creates(
@@ -431,6 +493,104 @@ class TestMigration:
         finally:
             with admin.connect() as c:
                 c.execute(text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+            admin.dispose()
+
+    @pytest.mark.skipif(
+        not (os.getenv("TEST_DATABASE_URL") or "").startswith("postgresql"),
+        reason="FORCE RLS exists only on Postgres",
+    )
+    def test_decided_at_backfill_sees_rows_under_forced_rls(self):
+        """Production migrates as a role without BYPASSRLS. Under FORCE RLS
+        that role sees no invoice unless app.tenant_id names its tenant, so a
+        backfill that never sets it silently updates nothing."""
+        import uuid  # noqa: PLC0415
+
+        from sqlalchemy import create_engine, text  # noqa: PLC0415
+        from sqlalchemy.engine import make_url  # noqa: PLC0415
+
+        server = make_url(os.environ["TEST_DATABASE_URL"])
+        suffix = uuid.uuid4().hex[:12]
+        name, role, password = f"bf_{suffix}", f"kpi_mig_{suffix}", "kpi_mig"
+        admin = create_engine(server, isolation_level="AUTOCOMMIT")
+        with admin.connect() as c:
+            c.execute(text(f"CREATE DATABASE {name}"))
+            c.execute(
+                text(
+                    f"CREATE ROLE {role} LOGIN PASSWORD '{password}' "
+                    "NOSUPERUSER NOBYPASSRLS"
+                )
+            )
+        url = server.set(database=name)
+
+        def alembic(target, as_url):
+            return subprocess.run(
+                [sys.executable, "-m", "alembic", "upgrade", target],
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False,
+                env={
+                    **os.environ,
+                    "DATABASE_URL": as_url.render_as_string(
+                        hide_password=False
+                    ),
+                },
+            )
+
+        try:
+            up = alembic("d8e1f2a3b4c5", url)
+            assert up.returncode == 0, up.stderr
+            engine = create_engine(url, isolation_level="AUTOCOMMIT")
+            with engine.connect() as c:
+                c.execute(
+                    text(
+                        "insert into tenants (id, slug, name, region, status, "
+                        "settings, created_at, updated_at) values ('t1', 't1', "
+                        "'T1', 'au', 'active', '{}', now(), now())"
+                    )
+                )
+                c.execute(
+                    text(
+                        "insert into invoices (id, tenant_id, case_id, status, "
+                        "fields, created_at, updated_at) values ('i1', 't1', "
+                        "'decided', 'processed', cast(:f as jsonb), now(), now())"
+                    ),
+                    {
+                        "f": json.dumps(
+                            {
+                                "workflow": {
+                                    "decision": "approve",
+                                    "decided_at": "2026-09-30T08:00:00Z",
+                                }
+                            }
+                        )
+                    },
+                )
+                # The migration role owns what it alters, so FORCE RLS binds it
+                # exactly as it binds production's app role.
+                c.execute(text(f"GRANT ALL ON SCHEMA public TO {role}"))
+                for (table,) in c.execute(
+                    text(
+                        "select tablename from pg_tables where schemaname = 'public'"
+                    )
+                ).all():
+                    c.execute(text(f"ALTER TABLE {table} OWNER TO {role}"))
+            mig = url.set(username=role, password=password)
+            up = alembic("head", mig)
+            assert up.returncode == 0, up.stderr
+            with engine.connect() as c:
+                decided = c.execute(
+                    text("select decided_at from invoices where id = 'i1'")
+                ).scalar()
+            engine.dispose()
+            assert decided is not None and decided.isoformat().startswith(
+                "2026-09-30"
+            )
+        finally:
+            with admin.connect() as c:
+                c.execute(text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+                c.execute(text(f"DROP ROLE IF EXISTS {role}"))
             admin.dispose()
 
     def test_no_connection_string_is_committed(self):
