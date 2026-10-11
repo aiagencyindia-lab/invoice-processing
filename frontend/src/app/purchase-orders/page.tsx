@@ -152,16 +152,20 @@ function AwaitingConfirmation({
   onNotice: (notice: string) => void;
   onAccepted: () => void;
 }) {
-  // ponytail: an admin's poll lists every accepted scan to find the few that
-  // stored nothing; add a server-side filter if that list grows large.
   const { data, error, reload } = usePoll<{ documents: SupportingDocument[] }>(
-    `/api/supporting-documents?status=pending,blocked${admin ? ",accepted" : ""}`,
+    "/api/supporting-documents?status=pending,blocked",
+  );
+  const orphans = usePoll<{ documents: SupportingDocument[] }>(
+    admin ? "/api/supporting-documents?status=accepted&stored=false" : null,
   );
   const [open, setOpen] = useState<string | null>(null);
   if (error?.includes("needs a database")) return null;
-  const docs = (data?.documents ?? []).filter(
-    (d) => d.status !== "accepted" || !d.stored,
-  );
+  const docs = [
+    ...(data?.documents ?? []),
+    // The server leaves out one accepted moments ago (it may still be
+    // storing, and its reopen would be refused).
+    ...(orphans.data?.documents ?? []),
+  ];
   if (docs.length === 0 && !error) return null;
   return (
     <section className="stack" style={{ gap: 8 }} aria-labelledby="awaiting-h">
@@ -203,6 +207,7 @@ function AwaitingConfirmation({
             setOpen(null);
             onNotice(notice);
             reload();
+            orphans.reload();
             onAccepted();
           }}
         />

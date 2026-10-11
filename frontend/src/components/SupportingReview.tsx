@@ -60,6 +60,20 @@ function typed(key: string, raw: string): Cell {
   return Number.isFinite(n) ? n : raw;
 }
 
+/** The two decisions with no form of their own, confirmed inline as
+ *  "Confirm reject" is: what each will do, and its confirm button. */
+const CONFIRM = {
+  reopen: {
+    what: "Reopening puts it back to awaiting confirmation, to be accepted or rejected again.",
+    button: "Confirm reopen",
+  },
+  "process-as-invoice": {
+    what: "This closes the review and runs the document through the invoice pipeline; it does not come back here.",
+    button: "Confirm process as invoice",
+  },
+} as const;
+type Confirmable = keyof typeof CONFIRM;
+
 const confidenceOf = (ev: unknown) => {
   const c = (ev as Evidence | undefined)?.confidence;
   return typeof c === "number" ? ` · confidence ${Math.round(c * 100)}%` : "";
@@ -87,6 +101,7 @@ export default function SupportingReview({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+  const [confirming, setConfirming] = useState<Confirmable | null>(null);
   const [reason, setReason] = useState("");
   const [poLines, setPoLines] = useState<number[] | null>(null);
   const [poLinesFailed, setPoLinesFailed] = useState(false);
@@ -143,7 +158,7 @@ export default function SupportingReview({
     };
   }, [rechosen, poNumber]);
 
-  async function decide(path: "accept" | "reject" | "reopen" | "process-as-invoice") {
+  async function decide(path: "accept" | "reject" | Confirmable) {
     if (!detail) return;
     setBusy(true);
     setError(null);
@@ -167,7 +182,8 @@ export default function SupportingReview({
         {
           method: "POST",
           body: JSON.stringify({
-            fields: convert(fields),
+            // The reason goes only with a correction; otherwise it is null.
+            fields: convert(correcting ? fields : { ...fields, reason: "" }),
             lines: lines.map(convert),
             lines_rechosen: rechosen,
           }),
@@ -201,6 +217,9 @@ export default function SupportingReview({
   const undecided = detail?.status === "pending" || blocked;
   const reopenable = admin && detail?.status === "accepted" && detail.stored === false;
   const columns = detail ? LINE_COLUMNS[detail.kind] : [];
+  // A negative received quantity is a correction, which needs its reason.
+  const correcting = isGrn && lines.some((ln) => Number(ln.quantity_received) < 0);
+  const shownKeys = keys.filter((key) => key !== "reason" || correcting);
   const setLine = (i: number, key: string, value: string) =>
     setLines((all) => all.map((ln, j) => (j === i ? { ...ln, [key]: value } : ln)));
 
@@ -241,7 +260,7 @@ export default function SupportingReview({
               </div>
             ) : null}
             <div>
-              {keys.map((key) => {
+              {shownKeys.map((key) => {
                 const ev = evidence[key] as Evidence | undefined;
                 const check = flagged.has(key);
                 return (
@@ -352,7 +371,25 @@ export default function SupportingReview({
                 </tbody>
               </table>
             </div>
-            {reopenable ? (
+            {confirming ? (
+              <div className="stack" style={{ gap: 6 }}>
+                <div id="confirm-what">{CONFIRM[confirming].what}</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    aria-describedby="confirm-what"
+                    disabled={busy}
+                    onClick={() => decide(confirming)}
+                  >
+                    {CONFIRM[confirming].button}
+                  </button>
+                  <button type="button" className="btn-chip" onClick={() => setConfirming(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : reopenable ? (
               <div className="stack" style={{ gap: 6 }}>
                 <div role="status" className="muted">
                   Accepted, but nothing was stored from it.
@@ -362,7 +399,7 @@ export default function SupportingReview({
                     type="button"
                     className="btn-primary"
                     disabled={busy}
-                    onClick={() => decide("reopen")}
+                    onClick={() => setConfirming("reopen")}
                   >
                     Reopen
                   </button>
@@ -414,7 +451,7 @@ export default function SupportingReview({
                   type="button"
                   className="btn-chip"
                   disabled={busy}
-                  onClick={() => decide("process-as-invoice")}
+                  onClick={() => setConfirming("process-as-invoice")}
                 >
                   Process as invoice
                 </button>
