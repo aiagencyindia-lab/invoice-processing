@@ -87,7 +87,7 @@ Return ONLY valid JSON:
   "vendor_name": "string or null (the supplier the order is placed with)",
   "vendor_tax_id": "string or null (the supplier's tax registration)",
   "customer_name": "string or null (the buyer placing the order)",
-  "currency": "string or null (as printed)",
+  "currency": "string or null (ISO 4217 code, e.g. INR, for the currency the order is in)",
   "total_amount": decimal or null (the order total as printed),
   "amount_basis": "inc_tax" or "ex_tax" or null (whether that total includes tax, only when the page says so),
   "lines": [
@@ -284,7 +284,7 @@ def to_import_payload(kind: str, fields: dict, lines: list[dict]) -> dict:
             "amount_basis": fields.get("amount_basis"),
             "lines": [
                 {
-                    "line_number": ln.get("line_number") or i,
+                    "line_number": ln.get("line_number"),
                     "item_code": ln.get("item_code"),
                     "description": ln.get("description") or "",
                     "qty_ordered": ln.get("quantity"),
@@ -292,7 +292,7 @@ def to_import_payload(kind: str, fields: dict, lines: list[dict]) -> dict:
                     "uom": ln.get("unit"),
                     "receipt_required": None,
                 }
-                for i, ln in enumerate(lines, start=1)
+                for ln in lines
             ],
         }
     if kind == GOODS_RECEIPT:

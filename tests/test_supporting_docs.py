@@ -355,3 +355,38 @@ def test_a_goods_receipt_payload_carries_its_correction_reason():
     )
     assert payload["reason"] == "returned damaged"
     assert po_routes.validate_receipts([payload]) == []
+
+
+def test_an_ocr_page_grounds_an_identifier_but_never_repairs_it(monkeypatch):
+    """OCR confuses O and 0 exactly as the extractor does, so its reading of
+    "GRN-1O5" confirms "GRN-105" without correcting it to the misread."""
+    monkeypatch.setattr(confidence, "extract_page_text", lambda p: [""])
+    monkeypatch.setattr(
+        confidence,
+        "ocr_page_text",
+        lambda p: [GRN_PAGE.replace("GRN-105", "GRN-1O5")],
+    )
+    out = supporting_docs.extract("g.pdf", "goods_receipt", call=_fake(_grn()))
+    assert out["fields"]["grn_number"] == "GRN-105"
+    assert out["_repairs"] == []
+    ev = out["_evidence"]
+    assert ev["grn_number"]["grounded"] is True
+    assert ev["_summary"]["has_text_layer"] is False
+
+
+def test_the_po_prompt_asks_for_the_currency_code():
+    # Not grounded (see _NOT_GROUNDED): so it must not be asked "as printed".
+    assert '"currency": "string or null (ISO 4217 code' in (
+        supporting_docs.PO_PROMPT
+    )
+    assert "INR" in supporting_docs.PO_PROMPT
+
+
+@pytest.mark.parametrize("printed", [0, 7])
+def test_a_po_line_number_is_imported_as_given(printed):
+    payload = supporting_docs.to_import_payload(
+        "purchase_order",
+        {"po_number": "PO-1"},
+        [{"line_number": printed, "description": "rod", "quantity": 1}],
+    )
+    assert payload["lines"][0]["line_number"] == printed
