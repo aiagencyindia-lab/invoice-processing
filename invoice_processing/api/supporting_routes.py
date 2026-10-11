@@ -10,11 +10,19 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+)
 
 from .. import po_matching, supporting_docs
 from ..ports import ConcurrentWrite, StatusChanged, UploadOwned
@@ -44,15 +52,23 @@ _SHAPE = {
         _keys(supporting_docs.PoLineExtraction),
     ),
     GOODS_RECEIPT: (
-        _keys(supporting_docs.GoodsReceiptExtraction),
+        # A correction (negative quantities) needs its reason, as on import.
+        (*_keys(supporting_docs.GoodsReceiptExtraction), "reason"),
         _keys(supporting_docs.GrnLineExtraction),
     ),
 }
 
 Key = Annotated[str, Field(max_length=64)]
 # Text as well as numbers: a misread "six" must reach the import validation
-# and come back as a named problem, not as a schema error.
-Value = int | float | Annotated[str, Field(max_length=8000)] | None
+# and come back as a named problem, not as a schema error. Strict, so true is
+# never read as 1; a boolean is let through only to be refused by name.
+Value = (
+    StrictBool
+    | StrictInt
+    | StrictFloat
+    | Annotated[str, Field(max_length=8000)]
+    | None
+)
 Record = Annotated[dict[Key, Value], Field(max_length=32)]
 
 
@@ -106,6 +122,11 @@ ACCEPTABLE = ("pending", "blocked")
 REJECTABLE = ("pending", "blocked")
 
 
+RACED = (
+    "This document is being decided by someone else; reload to see the result."
+)
+
+
 def _not_decidable(status: str, blocked_reason: str | None) -> HTTPException:
     if status == "blocked":
         return HTTPException(
@@ -114,17 +135,52 @@ def _not_decidable(status: str, blocked_reason: str | None) -> HTTPException:
     return HTTPException(409, f"This document was already {status}.")
 
 
-def _decidable(supporting, principal: Principal, row_id: str, allowed) -> dict:
+def _stored(orders, tenant_id: str, rows: list[dict]) -> set[str]:
+    """Document ids of `rows` that something stored came from."""
+    po_numbers = {
+        r["document_id"]: ((r["extracted"] or {}).get("fields") or {}).get(
+            "po_number"
+        )
+        for r in rows
+        if r["kind"] == PURCHASE_ORDER
+    }
+    return orders.stored_documents(
+        tenant_id, [r["document_id"] for r in rows], po_numbers
+    )
+
+
+def _refusal(orders, principal: Principal, row: dict, status: str):
+    """Why `row`, now `status`, cannot be decided. Accepted with nothing
+    stored may be an accept still storing, so nobody is told it succeeded."""
+    if status == "accepted":
+        try:
+            stored = row["document_id"] in _stored(
+                orders, principal.tenant_id, [row]
+            )
+        except Exception:
+            logger.exception("Store of %s not read", row["id"])
+            stored = False
+        if not stored:
+            return HTTPException(409, RACED)
+    return _not_decidable(status, row["blocked_reason"])
+
+
+def _decidable(
+    supporting, orders, principal: Principal, row_id: str, allowed
+) -> dict:
     row = _found(supporting, principal, row_id)
     if row["status"] not in allowed:
-        raise _not_decidable(row["status"], row["blocked_reason"])
+        raise _refusal(orders, principal, row, row["status"])
     return row
 
 
-def _mark(supporting, principal: Principal, row: dict, allowed, **decision):
-    """The decision, only if nobody decided this document meanwhile."""
+def _mark(
+    supporting, orders, principal: Principal, row: dict, allowed, **decision
+) -> dict:
+    """The decision, only if nobody decided this document meanwhile; returns
+    the row with `previous`, the status and block the decision replaced."""
     try:
-        supporting.mark(
+        return supporting.mark(
             principal.tenant_id,
             row["id"],
             reviewed_by=principal.email,
@@ -132,14 +188,15 @@ def _mark(supporting, principal: Principal, row: dict, allowed, **decision):
             **decision,
         )
     except StatusChanged as exc:
-        raise _not_decidable(exc.status, row["blocked_reason"]) from None
+        raise _refusal(orders, principal, row, exc.status) from None
 
 
-def _pairing(orders, principal: Principal, row: dict):
-    """(PO on file or None, the PO line each extracted receipt line pairs to)."""
+def _pairing(orders, principal: Principal, row: dict, po_number):
+    """(PO `po_number` if on file, else None; the line of it each extracted
+    receipt line pairs to)."""
     order = (
-        orders.get_order(principal.tenant_id, row["po_number"])
-        if row["po_number"]
+        orders.get_order(principal.tenant_id, str(po_number))
+        if po_number
         else None
     )
     paired = None
@@ -158,19 +215,46 @@ def _refuse_stale_pairing(orders, principal, row, fields, lines) -> None:
     new_key = po_matching.normalize_po_number(new) if new else None
     if new_key == row["po_number"]:
         return
-    order = orders.get_order(principal.tenant_id, str(new)) if new else None
+    try:
+        order = orders.get_order(principal.tenant_id, str(new)) if new else None
+    except Exception:
+        logger.exception("PO %s not read to check the pairing", new)
+        raise HTTPException(
+            503, "Purchase-order lines could not be read; try again."
+        ) from None
     paired = (
         supporting_docs.pair_grn_lines(lines, order["lines"])
         if order is not None
         else [None] * len(lines)
     )
     if [ln.get("po_line_number") for ln in lines] != paired:
+        if not new:
+            raise HTTPException(
+                400,
+                "The PO number was cleared; enter the PO number and choose "
+                "the PO lines again.",
+            )
         was = ((row["extracted"] or {}).get("fields") or {}).get("po_number")
         raise HTTPException(
             400,
             f"The PO number changed from {was or row['po_number']} to {new}; "
             "choose the PO lines again.",
         )
+
+
+def _refuse_booleans(body: AcceptIn) -> None:
+    """true/false is never a value of a PO or receipt; named, not coerced."""
+    places = [("", body.fields)] + [
+        (f"line {i}: ", ln) for i, ln in enumerate(body.lines, start=1)
+    ]
+    for where, record in places:
+        for key, value in record.items():
+            if isinstance(value, bool):
+                raise HTTPException(
+                    400,
+                    f"{where}{key} must be a number or text, not true or "
+                    "false.",
+                )
 
 
 def _one_record(message: str) -> str:
@@ -199,20 +283,27 @@ def _changed(before: dict, after: dict) -> dict:
     }
 
 
-def _read_lines_changed(orders, principal, row, lines, keys) -> int | None:
-    """Lines the clerk changed, the PO line they chose included; None when
-    the pairing cannot be read (the audit then lacks only this count)."""
+def _read_lines_changed(
+    orders, principal, row, fields, lines, keys
+) -> int | None:
+    """Lines the clerk changed, the PO line they chose included -- against
+    the pairing to the PO they confirmed, which may not be the scanned one.
+    None when the pairing cannot be read (the audit then lacks this count)."""
     read = (row["extracted"] or {}).get("lines") or []
     if row["kind"] == GOODS_RECEIPT:
         try:
-            _, paired = _pairing(orders, principal, row)
+            _, paired = _pairing(
+                orders, principal, row, fields.get("po_number")
+            )
+            read = [
+                {**ln, "po_line_number": p}
+                for ln, p in zip(
+                    read, paired or [None] * len(read), strict=True
+                )
+            ]
         except Exception:
             logger.exception("Pairing of %s not read for its audit", row["id"])
             return None
-        read = [
-            {**ln, "po_line_number": p}
-            for ln, p in zip(read, paired or [None] * len(read), strict=True)
-        ]
     return _lines_changed(read, lines, keys)
 
 
@@ -230,14 +321,19 @@ def list_supporting_documents(
     principal: Annotated[Principal, Depends(require_role("clerk"))],
     status: Annotated[str, Query(max_length=64)] = "pending,blocked",
 ) -> dict:
-    supporting, _ = _repos()
+    supporting, orders = _repos()
     wanted = tuple(s.strip() for s in status.split(",") if s.strip())
     if not wanted or set(wanted) - set(STATUSES):
         raise HTTPException(
             400, f"status must be some of {', '.join(STATUSES)}."
         )
     rows = supporting.list(principal.tenant_id, wanted)
-    return {"documents": [_public(r) for r in rows]}
+    stored = _stored(orders, principal.tenant_id, rows)
+    return {
+        "documents": [
+            {**_public(r), "stored": r["document_id"] in stored} for r in rows
+        ]
+    }
 
 
 @router.get("/api/supporting-documents/{row_id}")
@@ -247,8 +343,14 @@ def read_supporting_document(
 ) -> dict:
     supporting, orders = _repos()
     row = _found(supporting, principal, row_id)
-    order, paired = _pairing(orders, principal, row)
-    return {**_public(row), "po_on_file": order is not None, "paired": paired}
+    order, paired = _pairing(orders, principal, row, row["po_number"])
+    return {
+        **_public(row),
+        "po_on_file": order is not None,
+        "paired": paired,
+        "stored": row["document_id"]
+        in _stored(orders, principal.tenant_id, [row]),
+    }
 
 
 def _store_order(orders, principal: Principal, row: dict, clean: list) -> dict:
@@ -299,7 +401,7 @@ def accept_supporting_document(
     """Confirm the corrected document into the match. Body: `{fields, lines}`
     in the extraction's shape; a receipt line carries `po_line_number`."""
     supporting, orders = _repos()
-    row = _decidable(supporting, principal, row_id, ACCEPTABLE)
+    row = _decidable(supporting, orders, principal, row_id, ACCEPTABLE)
     kind = row["kind"]
     field_keys, line_keys = _SHAPE[kind]
     before = row["extracted"] or {}
@@ -310,6 +412,7 @@ def accept_supporting_document(
     kept = (
         (*line_keys, "po_line_number") if kind == GOODS_RECEIPT else line_keys
     )
+    _refuse_booleans(body)
     lines = [{k: ln[k] for k in kept if k in ln} for ln in body.lines]
     if kind == PURCHASE_ORDER and not lines:
         raise HTTPException(400, NO_LINES)
@@ -340,17 +443,18 @@ def accept_supporting_document(
         "number": number,
         "changed": _changed(before.get("fields") or {}, fields),
         "lines_changed": _read_lines_changed(
-            orders, principal, row, lines, kept
+            orders, principal, row, fields, lines, kept
         ),
     }
 
     # Claim the row first: a reject arriving while the PO or receipt is being
     # written is then refused, rather than contradicted by what was stored.
-    _mark(
-        supporting, principal, row, ACCEPTABLE,
+    claimed = _mark(
+        supporting, orders, principal, row, ACCEPTABLE,
         status="accepted",
         extracted={**before, "fields": fields, "lines": lines},
     )  # fmt: skip
+    previous = claimed["previous"]
     try:
         if kind == PURCHASE_ORDER:
             out = _store_order(orders, principal, row, clean)
@@ -361,14 +465,15 @@ def accept_supporting_document(
         try:
             supporting.revert_to_pending(
                 principal.tenant_id, row["id"], extracted=before,
-                status=row["status"],
+                status=previous["status"],
+                blocked_reason=previous["blocked_reason"],
             )  # fmt: skip
         except Exception:
             logger.exception("Scanned document %s left accepted", row["id"])
         raise
-    po_routes._audit().emit(
-        principal.context(), "supporting_document_accepted", accepted
-    )
+    # Stored is stored: a trail that could not be written is logged, not
+    # turned into a failure the clerk would retry into a duplicate.
+    _emit(principal, "supporting_document_accepted", accepted)
     if kind == PURCHASE_ORDER:
         po_routes.unblock_receipts(principal, [number])
         return out
@@ -386,10 +491,10 @@ def reject_supporting_document(
     body: RejectIn,
     principal: Annotated[Principal, Depends(require_role("clerk"))],
 ) -> dict:
-    supporting, _ = _repos()
-    row = _decidable(supporting, principal, row_id, REJECTABLE)
+    supporting, orders = _repos()
+    row = _decidable(supporting, orders, principal, row_id, REJECTABLE)
     _mark(
-        supporting, principal, row, REJECTABLE,
+        supporting, orders, principal, row, REJECTABLE,
         status="rejected", note=body.reason,
     )  # fmt: skip
     po_routes._audit().emit(
@@ -403,3 +508,79 @@ def reject_supporting_document(
         },
     )
     return {"status": "rejected"}
+
+
+# An accept claims the row, then stores: until it has had time to finish, an
+# accepted row with nothing stored may be one still storing, not an orphan.
+# ponytail: a time window, not a lock; the store usually takes under a second.
+STILL_STORING = timedelta(minutes=5)
+
+
+@router.post("/api/supporting-documents/{row_id}/reopen")
+def reopen_supporting_document(
+    row_id: str,
+    principal: Annotated[Principal, Depends(require_role("admin"))],
+) -> dict:
+    """Put an acceptance that stored nothing (a crash between the claim and
+    the store) back to pending, so it can be confirmed again."""
+    supporting, orders = _repos()
+    row = _found(supporting, principal, row_id)
+    if row["status"] != "accepted":
+        raise HTTPException(
+            409,
+            "Only an accepted document can be reopened; this one is "
+            f"{row['status']}.",
+        )
+    reviewed = row["reviewed_at"]
+    if (
+        reviewed
+        and datetime.now(timezone.utc)
+        - _aware(datetime.fromisoformat(reviewed))
+        < STILL_STORING
+    ):
+        raise HTTPException(
+            409,
+            "This document was accepted moments ago and may still be "
+            "storing; try again in a few minutes.",
+        )
+    try:
+        stored = row["document_id"] in _stored(
+            orders, principal.tenant_id, [row]
+        )
+    except Exception:
+        logger.exception("Store of %s not read", row["id"])
+        raise HTTPException(
+            503, "Purchase orders could not be read; try again."
+        ) from None
+    if stored:
+        raise HTTPException(
+            409,
+            "Something was stored from this document; it cannot be reopened.",
+        )
+    try:
+        supporting.revert_to_pending(
+            principal.tenant_id, row["id"], extracted=row["extracted"]
+        )
+    except StatusChanged as exc:
+        raise _not_decidable(exc.status, row["blocked_reason"]) from None
+    _emit(
+        principal,
+        "supporting_document_reopened",
+        {
+            "id": row["id"],
+            "document_id": row["document_id"],
+            "kind": row["kind"],
+        },
+    )
+    return {"status": "pending"}
+
+
+def _aware(at: datetime) -> datetime:
+    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+
+
+def _emit(principal: Principal, event: str, payload: dict) -> None:
+    try:
+        po_routes._audit().emit(principal.context(), event, payload)
+    except Exception:
+        logger.exception("%s for %s not audited", event, payload.get("id"))

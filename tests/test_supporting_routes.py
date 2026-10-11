@@ -419,6 +419,7 @@ def test_503_without_database(tmp_path, monkeypatch):
         c.get("/api/supporting-documents/x"),
         c.post("/api/supporting-documents/x/accept", json=_grn_body()),
         c.post("/api/supporting-documents/x/reject", json={"reason": "r"}),
+        _client("admin").post("/api/supporting-documents/x/reopen"),
     ):
         assert r.status_code == 503 and "needs a database" in r.json()["detail"]
 
@@ -433,11 +434,17 @@ def test_documents_listing_shows_kind_and_review_stage(env):
     accepted = env["scan"](PO_READ)
     rejected = env["scan"](PO_READ)
     env["supporting"].mark(
-        TENANT, accepted["id"], status="accepted", reviewed_by="c"
-    )
+        TENANT, accepted["id"], status="accepted", reviewed_by="c",
+        expect=("pending",),
+    )  # fmt: skip
+    env["orders"].upsert_orders(
+        TENANT, [{**ORDER, "po_number": "PO-4471"}], uploaded_by="c",
+        source="document", document_id=accepted["document_id"],
+    )  # fmt: skip
     env["supporting"].mark(
-        TENANT, rejected["id"], status="rejected", reviewed_by="c", note="x"
-    )
+        TENANT, rejected["id"], status="rejected", reviewed_by="c", note="x",
+        expect=("pending",),
+    )  # fmt: skip
     rows = {
         d["document_id"]: d
         for d in _client().get("/api/documents").json()["documents"]
@@ -468,6 +475,9 @@ def test_review_events_name_the_supporting_document():
         "supporting_document_rejected",
         "supporting_document_unblocked",
         "supporting_document_unblock_failed",
+        "supporting_document_reopened",
+        "supporting_document_sent_to_invoices",
+        "supporting_document_reclassified",
     ):
         assert entity_type_for(name) == "supporting_document", name
 
@@ -508,14 +518,15 @@ def test_a_decision_racing_another_is_refused(env, monkeypatch):
     row = env["scan"](PO_READ)
     stale = env["supporting"].get(TENANT, row["id"])
     env["supporting"].mark(
-        TENANT, row["id"], status="accepted", reviewed_by="other"
-    )
+        TENANT, row["id"], status="accepted", reviewed_by="other",
+        expect=("pending",),
+    )  # fmt: skip
     monkeypatch.setattr(env["supporting"], "get", lambda *a: dict(stale))
     r = _client().post(
         f"/api/supporting-documents/{row['id']}/reject", json={"reason": "x"}
     )
     assert r.status_code == 409
-    assert r.json()["detail"] == "This document was already accepted."
+    assert r.json()["detail"] == RACED
     monkeypatch.undo()
     assert env["supporting"].get(TENANT, row["id"])["reviewed_by"] == "other"
 
@@ -558,7 +569,7 @@ def test_a_reject_racing_an_accept_loses(env, monkeypatch):
     monkeypatch.setattr(env["orders"], "record_receipts", record_while_rejected)
     assert _accept(row, _grn_body()).status_code == 200
     assert raced[0].status_code == 409
-    assert raced[0].json()["detail"] == "This document was already accepted."
+    assert raced[0].json()["detail"] == RACED
     assert len(env["orders"].list_receipts(TENANT)) == 1
     assert env["supporting"].get(TENANT, row["id"])["status"] == "accepted"
 
@@ -682,7 +693,8 @@ def test_a_blocked_receipt_is_accepted_once_its_po_number_is_corrected(env):
     assert r.status_code == 200, r.text
     [receipt] = env["orders"].list_receipts(TENANT)
     assert receipt["po_number"] == "PO-9001"
-    assert env["supporting"].get(TENANT, row["id"])["status"] == "accepted"
+    done = env["supporting"].get(TENANT, row["id"])
+    assert done["status"] == "accepted" and done["blocked_reason"] is None
 
 
 def test_replacing_the_po_set_keeps_scan_confirmed_orders(env):
@@ -702,3 +714,259 @@ def test_replacing_the_po_set_keeps_scan_confirmed_orders(env):
     assert r.status_code == 200, r.text
     assert env["orders"].get_order(TENANT, "PO-4471")["source"] == "upload"
     assert env["orders"].get_order(TENANT, "PO-9001") is None
+
+
+# --- deferred minors (batch A) ---------------------------------------------
+RACED = (
+    "This document is being decided by someone else; reload to see the result."
+)
+
+
+def test_a_po_rescan_dropping_a_received_line_is_named_and_reverted(env):
+    row = env["scan"](PO_READ)
+    body = {"fields": PO_READ["fields"], "lines": PO_READ["lines"]}
+    assert _accept(row, body).status_code == 201
+    env["orders"].record_receipts(
+        TENANT,
+        [
+            {
+                "grn_number": "G-1",
+                "po_number": "PO-4471",
+                "received_on": "2026-10-01",
+                "lines": [{"line_number": 1, "qty_received": 2}],
+            }
+        ],
+        recorded_by="u",
+    )
+    rescan = env["scan"](PO_READ)
+    moved = {**PO_READ["lines"][0], "line_number": 2}
+    r = _accept(rescan, {"fields": PO_READ["fields"], "lines": [moved]})
+    assert r.status_code == 400
+    assert r.json()["detail"] == (
+        "PO PO-4471 line 1 has goods received and cannot be removed"
+    )
+    back = env["supporting"].get(TENANT, rescan["id"])
+    assert back["status"] == "pending" and back["reviewed_by"] is None
+
+
+@pytest.mark.parametrize("where", ["field", "line"])
+def test_true_or_false_is_never_a_number(env, where):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    row = env["scan"](GRN_READ)
+    body = _grn_body()
+    if where == "field":
+        body["fields"]["grn_number"] = True
+        named = "grn_number must be a number or text, not true or false."
+    else:
+        body["lines"][0]["quantity_received"] = True
+        named = (
+            "line 1: quantity_received must be a number or text, "
+            "not true or false."
+        )
+    r = _accept(row, body)
+    assert r.status_code == 400
+    assert r.json()["detail"] == named
+    assert env["orders"].list_receipts(TENANT) == []
+
+
+def test_a_failed_audit_after_storing_still_answers_success(env, monkeypatch):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    row = env["scan"](GRN_READ)
+
+    class Broken:
+        def emit(self, *a, **k):
+            raise RuntimeError("audit down")
+
+    monkeypatch.setattr(po_routes, "_audit", Broken)
+    r = _accept(row, _grn_body())
+    assert r.status_code == 200, r.text
+    assert len(env["orders"].list_receipts(TENANT)) == 1
+
+
+def test_a_changed_po_counts_lines_against_the_new_po_s_pairing(env):
+    env["orders"].upsert_orders(TENANT, [ORDER, ORDER_2], uploaded_by="u")
+    row = env["scan"](GRN_READ)
+    chosen = _grn_body(po_number="PO-9002")
+    chosen["lines"][0]["po_line_number"] = 2  # what PO-9002's pairing says
+    r = _accept(row, {**chosen, "lines_rechosen": True})
+    assert r.status_code == 200, r.text
+    [event] = env["events"]("supporting_document_accepted")
+    assert event["payload"]["lines_changed"] == 0
+
+
+def test_a_failed_store_restores_the_status_the_claim_replaced(
+    env, monkeypatch
+):
+    """Read as blocked, unblocked before the claim: the undo puts it back to
+    pending, what the claim actually replaced."""
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    assert _accept(env["scan"](GRN_READ), _grn_body()).status_code == 200
+    second = env["scan"](GRN_READ)
+    stale = {
+        **env["supporting"].get(TENANT, second["id"]),
+        "status": "blocked",
+        "blocked_reason": "Purchase order PO-9001 is not on file",
+    }
+    real_get = env["supporting"].get
+    monkeypatch.setattr(
+        env["supporting"],
+        "get",
+        lambda t, i: dict(stale) if i == second["id"] else real_get(t, i),
+    )
+    r = _accept(second, _grn_body())
+    assert r.status_code == 400  # GRN-77 is already recorded
+    monkeypatch.undo()
+    back = env["supporting"].get(TENANT, second["id"])
+    assert back["status"] == "pending" and back["blocked_reason"] is None
+
+
+def test_an_unreadable_new_po_is_a_503(env, monkeypatch):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    row = env["scan"](GRN_READ)
+
+    def down(*a, **k):
+        raise RuntimeError("read failed")
+
+    monkeypatch.setattr(env["orders"], "get_order", down)
+    r = _accept(row, _grn_body(po_number="PO-9002"))
+    assert r.status_code == 503
+    assert r.json()["detail"] == (
+        "Purchase-order lines could not be read; try again."
+    )
+    assert env["supporting"].get(TENANT, row["id"])["status"] == "pending"
+
+
+def test_a_cleared_po_number_says_so(env):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    row = env["scan"](GRN_READ)
+    r = _accept(row, _grn_body(po_number=None))
+    assert r.status_code == 400
+    assert r.json()["detail"] == (
+        "The PO number was cleared; enter the PO number and choose the PO "
+        "lines again."
+    )
+
+
+def test_a_scanned_correction_carries_its_reason(env):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    assert _accept(env["scan"](GRN_READ), _grn_body()).status_code == 200
+    fix = env["scan"](
+        {**GRN_READ, "fields": {**GRN_READ["fields"], "grn_number": "GRN-78"}}
+    )
+    body = _grn_body(grn_number="GRN-78")
+    body["lines"][0]["quantity_received"] = -2
+    refused = _accept(fix, body)
+    assert refused.status_code == 400
+    assert "a negative qty_received needs a reason" in refused.json()["detail"]
+
+    body["fields"]["reason"] = "2 returned damaged"
+    r = _accept(fix, body)
+    assert r.status_code == 200, r.text
+    stored = {g["grn_number"]: g for g in env["orders"].list_receipts(TENANT)}
+    assert stored["GRN-78"]["reason"] == "2 returned damaged"
+    assert stored["GRN-78"]["lines"][0]["qty_received"] == -2
+
+
+def _orphan(env, read=GRN_READ):
+    """Accepted, as a crash between the claim and the store leaves it."""
+    row = env["scan"](read)
+    env["supporting"].mark(
+        TENANT, row["id"], status="accepted", reviewed_by="c",
+        expect=("pending",),
+    )  # fmt: skip
+    return row
+
+
+@pytest.fixture
+def settled(monkeypatch):
+    from datetime import timedelta  # noqa: PLC0415
+
+    from invoice_processing.api import supporting_routes  # noqa: PLC0415
+
+    monkeypatch.setattr(supporting_routes, "STILL_STORING", timedelta(0))
+
+
+def test_an_accepted_row_says_whether_anything_was_stored(env):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    done = env["scan"](GRN_READ)
+    assert _accept(done, _grn_body()).status_code == 200
+    orphan = _orphan(
+        env,
+        {**GRN_READ, "fields": {**GRN_READ["fields"], "grn_number": "G-2"}},
+    )
+    c = _client()
+    assert c.get(f"/api/supporting-documents/{done['id']}").json()["stored"]
+    assert not c.get(f"/api/supporting-documents/{orphan['id']}").json()[
+        "stored"
+    ]
+    listed = {
+        d["id"]: d["stored"]
+        for d in c.get("/api/supporting-documents?status=accepted").json()[
+            "documents"
+        ]
+    }
+    assert listed == {done["id"]: True, orphan["id"]: False}
+    rows = {
+        d["document_id"]: d for d in c.get("/api/documents").json()["documents"]
+    }
+    assert rows[orphan["document_id"]]["stage"] == "accepted_unstored"
+    assert rows[orphan["document_id"]]["explanation"] == (
+        "Accepted but nothing was stored; an admin can reopen it."
+    )
+    assert rows[done["document_id"]]["stage"] == "done"
+
+
+def test_an_admin_reopens_an_orphaned_acceptance(env, settled):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    orphan = _orphan(env)
+    url = f"/api/supporting-documents/{orphan['id']}/reopen"
+    assert _client("clerk").post(url).status_code == 403
+    r = _client("admin").post(url)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"status": "pending"}
+    back = env["supporting"].get(TENANT, orphan["id"])
+    assert back["status"] == "pending" and back["reviewed_by"] is None
+    [event] = env["events"]("supporting_document_reopened")
+    assert event["payload"]["id"] == orphan["id"]
+    again = _client("admin").post(url)
+    assert again.status_code == 409
+    assert again.json()["detail"] == (
+        "Only an accepted document can be reopened; this one is pending."
+    )
+    assert _accept(back, _grn_body()).status_code == 200
+
+
+def test_a_stored_acceptance_cannot_be_reopened(env, settled):
+    env["orders"].upsert_orders(TENANT, [ORDER], uploaded_by="u")
+    row = env["scan"](GRN_READ)
+    assert _accept(row, _grn_body()).status_code == 200
+    r = _client("admin").post(f"/api/supporting-documents/{row['id']}/reopen")
+    assert r.status_code == 409
+    assert r.json()["detail"] == (
+        "Something was stored from this document; it cannot be reopened."
+    )
+    assert env["supporting"].get(TENANT, row["id"])["status"] == "accepted"
+
+
+def test_a_fresh_acceptance_may_still_be_storing(env):
+    orphan = _orphan(env)
+    r = _client("admin").post(
+        f"/api/supporting-documents/{orphan['id']}/reopen"
+    )
+    assert r.status_code == 409
+    assert "may still be storing" in r.json()["detail"]
+    assert env["supporting"].get(TENANT, orphan["id"])["status"] == "accepted"
+
+
+def test_an_unreadable_store_refuses_the_reopen(env, settled, monkeypatch):
+    orphan = _orphan(env)
+
+    def down(*a, **k):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(env["orders"], "stored_documents", down)
+    r = _client("admin").post(
+        f"/api/supporting-documents/{orphan['id']}/reopen"
+    )
+    assert r.status_code == 503
+    assert env["supporting"].get(TENANT, orphan["id"])["status"] == "accepted"

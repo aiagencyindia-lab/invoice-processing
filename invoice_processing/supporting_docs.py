@@ -300,6 +300,7 @@ def to_import_payload(kind: str, fields: dict, lines: list[dict]) -> dict:
             "grn_number": fields.get("grn_number"),
             "po_number": fields.get("po_number"),
             "received_on": fields.get("received_on"),
+            "reason": fields.get("reason"),
             "lines": [
                 {
                     "line_number": ln.get("po_line_number"),

@@ -48,6 +48,8 @@ UNKNOWN = "unknown"
 # A scanned PO or receipt waits for a person rather than a worker.
 AWAITING_CONFIRMATION = "awaiting_confirmation"
 BLOCKED = "blocked"
+# Accepted, but the PO or receipt was never written (a crash in between).
+ACCEPTED_UNSTORED = "accepted_unstored"
 
 
 # ---------------------------------------------------------------------------
@@ -292,11 +294,16 @@ def _progress_sentence(progress: dict | None) -> str:
     )
 
 
-def _review_stage(row: dict) -> tuple[str, str]:
+def _review_stage(row: dict, stored: bool = True) -> tuple[str, str]:
     """Stage and explanation of a scanned PO or receipt, from its review."""
     status = row.get("status")
     if status == "blocked":
         return BLOCKED, f"Blocked: {row.get('blocked_reason')}"
+    if status == "accepted" and not stored:
+        return (
+            ACCEPTED_UNSTORED,
+            "Accepted but nothing was stored; an admin can reopen it.",
+        )
     if status == "accepted":
         return DONE, "Confirmed."
     if status == "rejected":
@@ -362,13 +369,32 @@ def list_documents(
     )
 
     reviews = _reviews(principal.tenant_id, listing)
+    from .supporting_routes import _stored  # noqa: PLC0415
+
+    accepted = [r for r in reviews.values() if r.get("status") == "accepted"]
+    # Unknown reads as stored: the reopen route checks again for itself.
+    stored = _safe(
+        lambda: (
+            _stored(
+                service.get_purchase_orders(), principal.tenant_id, accepted
+            )
+            if accepted
+            else set()
+        ),
+        default=None,
+    )
 
     out: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
     for document in listing:
         review = reviews.get(str(document.get("id") or ""))
         if review is not None:
-            (stage, explanation), progress = _review_stage(review), None
+            (stage, explanation), progress = (
+                _review_stage(
+                    review, stored is None or review["document_id"] in stored
+                ),
+                None,
+            )
         else:
             stage, explanation, progress = document_stage(
                 document,

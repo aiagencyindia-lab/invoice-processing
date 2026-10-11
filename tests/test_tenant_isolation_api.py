@@ -569,6 +569,7 @@ class TestWritesDoNotCross:
             globex.post(f"{base}/reject", json={"reason": "x"}).status_code
             == 404
         )
+        assert globex.post(f"{base}/reopen").status_code == 404
         # Nothing of ACME's moved, and ACME itself still can.
         assert supporting.get(ACME, row["id"])["status"] == "pending"
         assert po_db.list_receipts(ACME) == []
@@ -1246,6 +1247,7 @@ class TestCoverage:
         "/api/supporting-documents/{row_id}",
         "/api/supporting-documents/{row_id}/accept",
         "/api/supporting-documents/{row_id}/reject",
+        "/api/supporting-documents/{row_id}/reopen",
         "/api/vendors",
         "/api/vendors/{vendor_id}",
         "/api/vendors/{vendor_id}/bank-changes",

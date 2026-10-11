@@ -303,6 +303,7 @@ def test_a_goods_receipt_payload_imports_cleanly(page):
         "grn_number": "GRN-105",
         "po_number": "PO-4471",
         "received_on": "2026-09-12",
+        "reason": None,
         "lines": [
             {"line_number": 1, "item_code": "ST-10", "qty_received": 38},
             {"line_number": 2, "item_code": "ST-20", "qty_received": 10},
@@ -339,3 +340,18 @@ def test_by_default_it_calls_the_pdf_extractor(page, monkeypatch):
     )
     out = supporting_docs.extract("g.pdf", "goods_receipt")
     assert out["fields"]["grn_number"] == "GRN-105"
+
+
+def test_a_goods_receipt_payload_carries_its_correction_reason():
+    payload = supporting_docs.to_import_payload(
+        "goods_receipt",
+        {
+            "grn_number": "GRN-2",
+            "po_number": "PO-1",
+            "received_on": "2026-09-12",
+            "reason": "returned damaged",
+        },
+        [{"po_line_number": 1, "quantity_received": -2}],
+    )
+    assert payload["reason"] == "returned damaged"
+    assert po_routes.validate_receipts([payload]) == []
