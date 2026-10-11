@@ -259,6 +259,21 @@ def set_verifier(verifier: TokenVerifier | None) -> None:
     _verifier = verifier
 
 
+# What sign-in needs from the rest of the app: the users directory, the
+# claims writer and the audit sink. Registered by `api.service` at import
+# (this module cannot import service without a cycle); tests set it directly.
+_sso_services = None
+
+
+def set_sso_services(provider) -> None:
+    global _sso_services
+    _sso_services = provider
+
+
+def _services():
+    return _sso_services() if _sso_services is not None else None
+
+
 def get_verifier() -> TokenVerifier:
     global _verifier
     if _verifier is None:
@@ -301,11 +316,15 @@ def current_principal(request: Request) -> Principal:
     """
     token = bearer_token(request)
     if token:
-        return principal_from_claims(get_verifier().verify(token))
+        from .. import sso  # noqa: PLC0415
+
+        return sso.resolve_principal(get_verifier().verify(token), _services())
 
     dev = dev_principal(request)
     if dev is not None:
-        return dev
+        from .. import sso  # noqa: PLC0415
+
+        return sso.enforce_active(dev, _services())
 
     raise AuthError("Authentication required.")
 

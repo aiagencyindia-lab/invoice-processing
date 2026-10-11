@@ -25,6 +25,7 @@ from invoice_processing.db.repositories import (
     PgApprovalRepository,
     PgCaseRepository,
     PgPurchaseOrderRepository,
+    PgUserDirectory,
 )
 from invoice_processing.db.session import (
     create_all,
@@ -1058,9 +1059,12 @@ def test_the_refusal_act_gives_is_the_reason_the_chain_gives(env):
 
 def test_a_seat_holder_without_the_approver_role_cannot_decide(env):
     # Named on the step, then demoted: act would 403 on the role, so the
-    # chain must not offer the decision either.
+    # chain must not offer the decision either. The users row decides the
+    # role now, so the demotion is the row's, and the token agrees with it.
     two_tier(env)
     route_case(env)
+    users = PgUserDirectory(env["url"])
+    users.set_role(TENANT, users.find(TENANT, "a@x.test")["id"], "clerk")
     assert chain_for(env, "clerk:a") == (
         False,
         "'approver' or higher is required.",

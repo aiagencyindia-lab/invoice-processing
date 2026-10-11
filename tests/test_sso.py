@@ -1,0 +1,316 @@
+"""Who a verified token is, once the users table has a say."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from invoice_processing import sso
+from invoice_processing.api.auth import AuthError, Principal
+
+NOW = datetime(2026, 10, 12, 9, 0, tzinfo=timezone.utc)
+ACME = "tenant-acme"
+
+
+class FakeDirectory:
+    def __init__(self, users=None, domains=None, fail=False):
+        self.users = {(u["tenant_id"], u["email"]): u for u in users or []}
+        self.domains = {d["domain"]: d for d in domains or []}
+        self.fail = fail
+        self.touched, self.linked, self.provisioned = [], [], []
+
+    def find(self, tenant_id, email):
+        if self.fail:
+            raise RuntimeError("db down")
+        u = self.users.get((tenant_id, email.lower()))
+        return dict(u, tenant_name="Acme Pty Ltd") if u else None
+
+    def touch_login(self, tenant_id, user_id, now):
+        self.touched.append((user_id, now))
+
+    def link_uid(self, tenant_id, user_id, uid):
+        self.linked.append((user_id, uid))
+
+    def provision(self, tenant_id, email, role, uid, display_name):
+        row = {
+            "id": f"id-{email}",
+            "tenant_id": tenant_id,
+            "email": email.lower(),
+            "role": role,
+            "is_active": True,
+            "uid": uid,
+            "display_name": display_name,
+            "last_login_at": None,
+            "tenant_name": "Acme Pty Ltd",
+        }
+        self.users[(tenant_id, email.lower())] = row
+        self.provisioned.append(row)
+        return dict(row)
+
+    def domain(self, domain):
+        if self.fail:
+            raise RuntimeError("db down")
+        return self.domains.get(domain)
+
+
+class FakeClaims:
+    def __init__(self, fail=False):
+        self.written, self.fail = [], fail
+
+    def set_claims(self, uid, claims):
+        if self.fail:
+            raise RuntimeError("identity platform down")
+        self.written.append((uid, claims))
+
+
+class FakeAudit:
+    def __init__(self):
+        self.events = []
+
+    def emit(self, ctx, event, payload, before=None):
+        self.events.append((ctx.tenant_id, event, payload))
+
+
+def services(**kw):
+    return sso.SsoServices(
+        kw.get("directory", FakeDirectory()),
+        kw.get("claims", FakeClaims()),
+        kw.get("audit", FakeAudit()),
+    )
+
+
+def claimed(**extra):
+    return {
+        "sub": "fb-1",
+        "email": "pat@acme.com",
+        "email_verified": True,
+        "tenant_id": ACME,
+        "role": "clerk",
+        **extra,
+    }
+
+
+def unclaimed(**extra):
+    return {
+        "sub": "fb-9",
+        "email": "new@acme.com",
+        "email_verified": True,
+        "name": "New Person",
+        "firebase": {"sign_in_provider": "google.com"},
+        **extra,
+    }
+
+
+ROW = {
+    "id": "u-1",
+    "tenant_id": ACME,
+    "email": "pat@acme.com",
+    "role": "approver",
+    "is_active": True,
+    "uid": "fb-1",
+    "display_name": None,
+    "last_login_at": None,
+}
+BOUND = {
+    "id": "d-1",
+    "tenant_id": ACME,
+    "tenant_name": "Acme Pty Ltd",
+    "domain": "acme.com",
+    "provider": "google",
+    "default_role": "viewer",
+}
+
+
+class TestDomains:
+    def test_public_mailboxes_are_refused(self):
+        for d in (
+            "gmail.com",
+            "Googlemail.com",
+            "outlook.com",
+            "hotmail.com",
+            "live.com",
+            "yahoo.com",
+            "icloud.com",
+            "proton.me",
+            "protonmail.com",
+        ):
+            with pytest.raises(ValueError):
+                sso.normalize_domain(d)
+
+    def test_domains_are_lower_cased_and_validated(self):
+        assert sso.normalize_domain(" Acme.COM ") == "acme.com"
+        for bad in (
+            "",
+            "acme",
+            "a b.com",
+            "-acme.com",
+            "acme.com/x",
+            "x" * 250 + ".com",
+        ):
+            with pytest.raises(ValueError):
+                sso.normalize_domain(bad)
+
+    def test_domain_of_email(self):
+        assert sso.domain_of("Pat+x@Acme.com") == "acme.com"
+
+
+class TestClaimedTokens:
+    def test_the_row_role_beats_the_claim(self):
+        p = sso.resolve_principal(
+            claimed(), services(directory=FakeDirectory([ROW])), now=NOW
+        )
+        assert p.role == "approver" and p.tenant_id == ACME
+
+    def test_no_row_keeps_the_claim_role(self):
+        p = sso.resolve_principal(claimed(), services(), now=NOW)
+        assert p.role == "clerk"
+
+    def test_a_deactivated_user_is_refused_on_every_request(self):
+        off = dict(ROW, is_active=False)
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                claimed(), services(directory=FakeDirectory([off])), now=NOW
+            )
+        assert exc.value.status_code == 403
+        assert (
+            "deactivated" in exc.value.detail
+            and "Acme Pty Ltd" in exc.value.detail
+        )
+
+    def test_a_row_in_another_tenant_never_speaks_for_this_one(self):
+        other = dict(ROW, tenant_id="tenant-globex", role="admin")
+        p = sso.resolve_principal(
+            claimed(), services(directory=FakeDirectory([other])), now=NOW
+        )
+        assert p.role == "clerk"
+
+    def test_email_is_normalised_before_lookup_and_storage(self):
+        d = FakeDirectory([ROW])
+        p = sso.resolve_principal(
+            claimed(email="Pat@Acme.com"), services(directory=d), now=NOW
+        )
+        assert p.role == "approver"
+
+    def test_last_login_is_touched_at_most_every_fifteen_minutes(self):
+        d = FakeDirectory([ROW])
+        sso.resolve_principal(claimed(), services(directory=d), now=NOW)
+        assert d.touched == [("u-1", NOW)]
+        d.users[(ACME, "pat@acme.com")]["last_login_at"] = NOW
+        sso.resolve_principal(
+            claimed(), services(directory=d), now=NOW + timedelta(minutes=5)
+        )
+        assert len(d.touched) == 1
+        sso.resolve_principal(
+            claimed(), services(directory=d), now=NOW + timedelta(minutes=16)
+        )
+        assert len(d.touched) == 2
+
+    def test_a_directory_error_refuses_rather_than_guessing(self):
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                claimed(), services(directory=FakeDirectory(fail=True)), now=NOW
+            )
+        assert (
+            exc.value.status_code == 503
+            and "needs a database" in exc.value.detail
+        )
+
+    def test_without_services_claims_are_the_authority(self):
+        p = sso.resolve_principal(claimed(), None, now=NOW)
+        assert p.role == "clerk"
+
+
+class TestUnclaimedTokens:
+    def test_a_bound_domain_provisions_the_default_role(self):
+        d, c, a = FakeDirectory(domains=[BOUND]), FakeClaims(), FakeAudit()
+        p = sso.resolve_principal(
+            unclaimed(), sso.SsoServices(d, c, a), now=NOW
+        )
+        assert (p.tenant_id, p.role, p.email) == (
+            ACME,
+            "viewer",
+            "new@acme.com",
+        )
+        assert d.provisioned[0]["uid"] == "fb-9"
+        assert d.provisioned[0]["display_name"] == "New Person"
+        assert c.written == [("fb-9", {"tenant_id": ACME, "role": "viewer"})]
+        assert a.events == [
+            (
+                ACME,
+                "user_provisioned_by_sso",
+                {
+                    "email": "new@acme.com",
+                    "role": "viewer",
+                    "domain": "acme.com",
+                },
+            )
+        ]
+
+    def test_an_existing_row_is_linked_not_duplicated(self):
+        pre = dict(ROW, email="new@acme.com", uid=None, role="clerk")
+        d = FakeDirectory([pre], domains=[BOUND])
+        p = sso.resolve_principal(unclaimed(), services(directory=d), now=NOW)
+        assert (
+            p.role == "clerk"
+            and d.provisioned == []
+            and d.linked == [("u-1", "fb-9")]
+        )
+
+    def test_an_unbound_domain_is_not_a_member(self):
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(unclaimed(), services(), now=NOW)
+        assert exc.value.status_code == 403 and "tenant_id" in exc.value.detail
+
+    def test_microsoft_is_not_enabled_yet(self):
+        token = unclaimed(firebase={"sign_in_provider": "microsoft.com"})
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                token,
+                services(directory=FakeDirectory(domains=[BOUND])),
+                now=NOW,
+            )
+        assert "Microsoft" in exc.value.detail
+
+    def test_an_unverified_email_is_refused(self):
+        token = unclaimed(email_verified=False)
+        with pytest.raises(AuthError):
+            sso.resolve_principal(
+                token,
+                services(directory=FakeDirectory(domains=[BOUND])),
+                now=NOW,
+            )
+
+    def test_a_claims_write_failure_does_not_block_the_first_login(self):
+        d = FakeDirectory(domains=[BOUND])
+        p = sso.resolve_principal(
+            unclaimed(),
+            services(directory=d, claims=FakeClaims(fail=True)),
+            now=NOW,
+        )
+        assert p.tenant_id == ACME and d.provisioned
+
+    def test_without_services_an_unclaimed_token_is_refused(self):
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(unclaimed(), None, now=NOW)
+        assert exc.value.status_code == 403
+
+
+class TestEnforceActive:
+    def test_a_deactivated_dev_identity_is_refused(self):
+        off = dict(ROW, is_active=False, email="dev@acme.com")
+        p = Principal(
+            user_id="dev", email="dev@acme.com", tenant_id=ACME, role="admin"
+        )
+        with pytest.raises(AuthError):
+            sso.enforce_active(p, services(directory=FakeDirectory([off])))
+
+    def test_the_header_role_is_kept(self):
+        row = dict(ROW, email="dev@acme.com", role="viewer")
+        p = Principal(
+            user_id="dev", email="dev@acme.com", tenant_id=ACME, role="admin"
+        )
+        assert (
+            sso.enforce_active(p, services(directory=FakeDirectory([row]))).role
+            == "admin"
+        )
