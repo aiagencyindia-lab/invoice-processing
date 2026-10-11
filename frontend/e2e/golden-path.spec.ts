@@ -417,6 +417,8 @@ test("a held PO invoice is coded from its PO lines", async ({ page }) => {
   // Both lines paired by description at seed time; the PO carries 6100/6200.
   await expect(page.getByText("PO line 1", { exact: true })).toBeVisible();
   await expect(page.getByText("PO line 2", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("GL account for line 1")).toHaveValue("6100");
+  await expect(page.getByLabel("GL account for line 2")).toHaveValue("6200");
 });
 
 test("Held invoice shows the three-way panel and a GRN clears it", async ({

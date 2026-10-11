@@ -91,6 +91,8 @@ def po_accounts_from_match(
         ln.get("line_number"): _str(ln.get("gl_account"))
         for ln in book_lines or []
         if isinstance(ln, dict)
+        and isinstance(ln.get("line_number"), int)
+        and not isinstance(ln.get("line_number"), bool)
     }
     out: dict[int, tuple[int, str]] = {}
     for paired, number in zip(

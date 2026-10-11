@@ -128,6 +128,9 @@ def seed_database() -> None:
         target.project_case(ctx, artifacts)
         # The worker never runs in this stack, so code the lines here the
         # way it would: PO-line accounts first, then the tenant's rules.
+        # The private worker function is used on purpose: the seed must code
+        # lines exactly as the worker would (PO lines first, then rules), and a
+        # hand-written artifact would drift from it.
         coded = runner._code_gl(
             ctx,
             target,

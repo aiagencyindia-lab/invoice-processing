@@ -136,6 +136,14 @@ def test_clerk_imports_json_and_lists_and_reads_detail(env):
     assert imported[0]["actor"] == "clerk@x.test"
 
 
+def test_an_explicit_null_gl_account_is_none(env):
+    line = {**ORDER["lines"][0], "gl_account": None}
+    r = po_import(env, {"purchase_orders": [{**ORDER, "lines": [line]}]})
+    assert r.status_code == 201
+    detail = env["client"]("clerk").get("/api/purchase-orders/PO-9001").json()
+    assert detail["lines"][0]["gl_account"] is None
+
+
 def test_unknown_po_is_404(env):
     assert (
         env["client"]("clerk").get("/api/purchase-orders/PO-NOPE").status_code

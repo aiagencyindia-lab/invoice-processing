@@ -240,6 +240,30 @@ def test_po_accounts_follow_the_pairing_and_skip_blank_accounts():
     assert po_accounts_from_match(THREE_WAY, BOOK, [1, 2]) == {1: (1, "6100")}
 
 
+def test_a_book_row_with_a_bad_line_number_is_ignored():
+    rows = [{"line_number": [1], "gl_account": "6100"}, BOOK[0]]
+    assert po_accounts_from_match(THREE_WAY, rows, [1, 2]) == {1: (1, "6100")}
+
+
+def test_bool_and_float_po_line_numbers_are_skipped():
+    odd = [
+        {"line_number": 1, "po_line_number": True},
+        {"line_number": 2, "po_line_number": 1.0},
+    ]
+    assert po_accounts_from_match(odd, BOOK, [1, 2]) == {}
+
+
+def test_two_invoice_lines_may_share_a_po_line():
+    shared = [
+        {"line_number": 1, "po_line_number": 1},
+        {"line_number": 2, "po_line_number": 1},
+    ]
+    assert po_accounts_from_match(shared, BOOK, [1, 2]) == {
+        1: (1, "6100"),
+        2: (1, "6100"),
+    }
+
+
 def test_an_unpaired_line_falls_to_rules():
     unpaired = [{**THREE_WAY[0], "po_line_number": None, "paired_by": None}]
     assert po_accounts_from_match(unpaired, BOOK, [1]) == {}

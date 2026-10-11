@@ -38,7 +38,7 @@ instead of being guessed again by vendor and keyword rules.
   whole file is refused.
 - `PgPurchaseOrderRepository`: the upsert writes it with the other line
   fields; `_line_dict` returns it, so `book()`, `get_order` and the PO detail
-  route expose it. `po_book.FileBook` passes the raw JSON line through.
+  route expose it. Tenants whose purchase orders live only in the JSON file book never inherit: the worker hands GL coding the database book only, which is the only place an ERP upload can put an account.
 - `supporting_docs.to_import_payload` does not set it.
 - A replace-all or re-import overwrites it with the rest of the line.
 
