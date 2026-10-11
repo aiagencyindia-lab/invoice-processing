@@ -382,14 +382,19 @@ def test_the_po_prompt_asks_for_the_currency_code():
     assert "INR" in supporting_docs.PO_PROMPT
 
 
-@pytest.mark.parametrize("printed", [0, 7])
-def test_a_po_line_number_is_imported_as_given(printed):
+def test_a_po_line_number_is_imported_as_given_or_numbered_when_missing():
+    """The review drawer sends a cleared line number as null; a 0 is a value
+    for validation to judge, not a blank."""
     payload = supporting_docs.to_import_payload(
         "purchase_order",
         {"po_number": "PO-1"},
-        [{"line_number": printed, "description": "rod", "quantity": 1}],
+        [
+            {"line_number": 0, "description": "rod", "quantity": 1},
+            {"line_number": None, "description": "plate", "quantity": 1},
+            {"line_number": 7, "description": "bolt", "quantity": 1},
+        ],
     )
-    assert payload["lines"][0]["line_number"] == printed
+    assert [ln["line_number"] for ln in payload["lines"]] == [0, 2, 7]
 
 
 STAMPED_GRN_PAGE = GRN_PAGE + " RECEIVED 04/09/2026 Accounts Dept."

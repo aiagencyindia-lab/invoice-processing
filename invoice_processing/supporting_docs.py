@@ -329,7 +329,10 @@ def to_import_payload(kind: str, fields: dict, lines: list[dict]) -> dict:
             "amount_basis": fields.get("amount_basis"),
             "lines": [
                 {
-                    "line_number": ln.get("line_number"),
+                    # A clerk clearing the field sends null; 0 stays 0.
+                    "line_number": i
+                    if ln.get("line_number") is None
+                    else ln["line_number"],
                     "item_code": ln.get("item_code"),
                     "description": ln.get("description") or "",
                     "qty_ordered": ln.get("quantity"),
@@ -337,7 +340,7 @@ def to_import_payload(kind: str, fields: dict, lines: list[dict]) -> dict:
                     "uom": ln.get("unit"),
                     "receipt_required": None,
                 }
-                for ln in lines
+                for i, ln in enumerate(lines, start=1)
             ],
         }
     if kind == GOODS_RECEIPT:

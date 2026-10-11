@@ -443,7 +443,7 @@ def _sent_to_invoices(tenant_id: str, document_id: str) -> bool:
             detail="Could not check whether this document was sent to the "
             "invoice queue; try again.",
         ) from exc
-    return any(r.get("note") == SENT_TO_INVOICES for r in rows or [])
+    return any(r.get("note") == SENT_TO_INVOICES for r in rows)
 
 
 @router.post("/api/documents/{document_id}/retry")
