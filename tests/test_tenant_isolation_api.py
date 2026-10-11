@@ -560,7 +560,8 @@ class TestWritesDoNotCross:
         base = f"/api/supporting-documents/{row['id']}"
         globex = clients("globex")
         assert globex.get("/api/supporting-documents").json() == {
-            "documents": []
+            "documents": [],
+            "truncated": False,
         }
         assert globex.get(base).status_code == 404
         body = {"fields": fields, "lines": [{**lines[0], "po_line_number": 1}]}

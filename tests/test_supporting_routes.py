@@ -1192,3 +1192,25 @@ def test_a_fresh_acceptance_is_not_listed_as_an_orphan(env):
     _orphan(env)
     r = _client().get("/api/supporting-documents?status=accepted&stored=false")
     assert r.status_code == 200 and r.json()["documents"] == []
+
+
+def test_a_capped_list_says_it_was_cut(env):
+    for _ in range(3):
+        env["scan"](GRN_READ)
+    c = _client()
+    cut = c.get("/api/supporting-documents?limit=2").json()
+    assert len(cut["documents"]) == 2 and cut["truncated"] is True
+    whole = c.get("/api/supporting-documents?limit=3").json()
+    assert len(whole["documents"]) == 3 and whole["truncated"] is False
+
+
+def test_other_statuses_never_crowd_out_an_orphan(env, settled):
+    orphan = _orphan(env)  # the oldest row
+    for _ in range(3):
+        env["scan"](GRN_READ)
+    r = _client().get(
+        "/api/supporting-documents?status=pending,accepted&stored=false&limit=2"
+    )
+    assert r.status_code == 200, r.text
+    assert [d["id"] for d in r.json()["documents"]] == [orphan["id"]]
+    assert r.json()["truncated"] is False

@@ -347,24 +347,34 @@ def list_supporting_documents(
         raise HTTPException(
             400, f"status must be some of {', '.join(STATUSES)}."
         )
-    rows = supporting.list(
-        principal.tenant_id,
-        wanted,
-        limit=limit,
-        newest_first=stored is not None,
+    if stored is None:
+        # One past the cap, to say whether the cap cut the list.
+        rows = supporting.list(principal.tenant_id, wanted, limit=limit + 1)
+        done = _stored_or_all(orders, principal.tenant_id, rows[:limit])
+        listed = [
+            {**_public(r), "stored": r["document_id"] in done}
+            for r in rows[:limit]
+        ]
+        return {"documents": listed, "truncated": len(rows) > limit}
+    # Filtered before the cap, so rows of other statuses never crowd out an
+    # orphan. ponytail: reads every acceptance; filter `stored` in SQL if
+    # that grows past a few thousand.
+    rows = (
+        supporting.list(
+            principal.tenant_id, ("accepted",), limit=None, newest_first=True
+        )
+        if "accepted" in wanted
+        else []
     )
     done = _stored_or_all(orders, principal.tenant_id, rows)
-    listed = [{**_public(r), "stored": r["document_id"] in done} for r in rows]
-    if stored is not None:
-        listed = [
-            r
-            for r in listed
-            if r["status"] == "accepted"
-            and r["stored"] is stored
-            # Not yet an orphan: it may still be storing.
-            and (stored or not _still_storing(r))
-        ]
-    return {"documents": listed}
+    listed = [
+        {**_public(r), "stored": r["document_id"] in done}
+        for r in rows
+        if (r["document_id"] in done) is stored
+        # Not yet an orphan: it may still be storing.
+        and (stored or not _still_storing(r))
+    ]
+    return {"documents": listed[:limit], "truncated": len(listed) > limit}
 
 
 @router.get("/api/supporting-documents/{row_id}")

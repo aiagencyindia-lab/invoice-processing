@@ -10,6 +10,7 @@ import {
   type PurchaseOrderDetail,
   type PurchaseOrderList,
   type SupportingDocument,
+  type SupportingList,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import SupportingReview from "@/components/SupportingReview";
@@ -152,10 +153,10 @@ function AwaitingConfirmation({
   onNotice: (notice: string) => void;
   onAccepted: () => void;
 }) {
-  const { data, error, reload } = usePoll<{ documents: SupportingDocument[] }>(
+  const { data, error, reload } = usePoll<SupportingList>(
     "/api/supporting-documents?status=pending,blocked",
   );
-  const orphans = usePoll<{ documents: SupportingDocument[] }>(
+  const orphans = usePoll<SupportingList>(
     admin ? "/api/supporting-documents?status=accepted&stored=false" : null,
   );
   const [open, setOpen] = useState<string | null>(null);
@@ -171,6 +172,11 @@ function AwaitingConfirmation({
     <section className="stack" style={{ gap: 8 }} aria-labelledby="awaiting-h">
       <h2 id="awaiting-h">Documents awaiting confirmation</h2>
       {error ? <div className="empty-state">{error}</div> : null}
+      {data?.truncated ? (
+        <div className="muted" role="status" style={{ fontSize: 12.5 }}>
+          Showing the oldest 200; decide some to see the rest.
+        </div>
+      ) : null}
       <div className="card-list">
         {docs.map((d) => (
           <div key={d.id} className="panel row-between" style={{ padding: "10px 14px" }}>

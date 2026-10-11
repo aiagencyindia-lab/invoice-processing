@@ -427,6 +427,12 @@ export type SupportingDocument = {
   } | null;
 };
 
+export type SupportingList = {
+  documents: SupportingDocument[];
+  /** The server's cap (200) cut the list. */
+  truncated: boolean;
+};
+
 export type SupportingDetail = SupportingDocument & {
   /** Per extracted receipt line, the PO line number it pairs to (null: none). */
   paired: (number | null)[] | null;
