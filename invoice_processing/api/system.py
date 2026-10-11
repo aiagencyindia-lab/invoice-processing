@@ -457,7 +457,12 @@ def retry_document(
     result.storage_key = document.get("storage_key", "")
 
     message_id = enqueue_document(
-        service.get_queue(), principal.context(document_id), result
+        service.get_queue(),
+        principal.context(document_id),
+        result,
+        # Classified an invoice (or sent to the invoice queue by a clerk):
+        # a retry must not divert it to PO review again.
+        force_invoice=document.get("kind") == "invoice",
     )
     service.get_audit().emit(
         principal.context(document_id),

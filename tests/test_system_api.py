@@ -513,6 +513,20 @@ class TestRetry:
         [message] = env["queue"].pull()
         assert message.payload["sha256"] == "a" * 64
 
+    def test_an_invoice_is_retried_as_an_invoice(self, env):
+        """Sent to the invoice queue from PO review, it must not be diverted
+        back there by a retry; an unclassified document is not forced."""
+        doc_id = add_document(env, sha="r5")
+        other = add_document(env, sha="r6")
+        service.get_documents().set_kind(TENANT, doc_id, "invoice")
+        for d in (doc_id, other):
+            env["client"]("approver").post(f"/api/documents/{d}/retry")
+        forced = {
+            m.payload["document_id"]: m.payload.get("force_invoice")
+            for m in env["queue"].pull(max_messages=5)
+        }
+        assert forced == {doc_id: True, other: None}
+
     def test_retry_is_audited(self, env):
         doc_id = add_document(env, sha="r3")
         env["client"]("approver").post(f"/api/documents/{doc_id}/retry")

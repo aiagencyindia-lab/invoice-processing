@@ -420,6 +420,7 @@ def test_503_without_database(tmp_path, monkeypatch):
         c.post("/api/supporting-documents/x/accept", json=_grn_body()),
         c.post("/api/supporting-documents/x/reject", json={"reason": "r"}),
         _client("admin").post("/api/supporting-documents/x/reopen"),
+        c.post("/api/supporting-documents/x/process-as-invoice"),
     ):
         assert r.status_code == 503 and "needs a database" in r.json()["detail"]
 
@@ -970,3 +971,39 @@ def test_an_unreadable_store_refuses_the_reopen(env, settled, monkeypatch):
     )
     assert r.status_code == 503
     assert env["supporting"].get(TENANT, orphan["id"])["status"] == "accepted"
+
+
+def test_a_misclassified_scan_is_sent_to_the_invoice_queue(
+    env, tmp_path, monkeypatch
+):
+    from invoice_processing.db.repositories import PgClaimStore  # noqa: PLC0415
+
+    url = env["orders"].url
+    claims = PgClaimStore(url)
+    monkeypatch.setattr(service, "_claim_store", claims)
+    row = env["scan"](GRN_READ)
+    claims.claim(TENANT, row["document_id"])
+    claims.complete(TENANT, row["document_id"])
+    go = f"/api/supporting-documents/{row['id']}/process-as-invoice"
+    assert _client("viewer").post(go).status_code == 403
+
+    r = _client().post(go)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "rejected" and r.json()["queued"]
+    done = env["supporting"].get(TENANT, row["id"])
+    assert done["status"] == "rejected"
+    assert done["note"] == "Sent to the invoice queue"
+    assert done["reviewed_by"] == "clerk@x.test"
+    assert service.get_documents().get(TENANT, row["document_id"])["kind"] == (
+        "invoice"
+    )
+    assert claims.state(TENANT, row["document_id"]) is None
+    [message] = LocalQueue(tmp_path / "queue").pull()
+    assert message.payload["force_invoice"] is True
+    assert message.payload["document_id"] == row["document_id"]
+    [event] = env["events"]("supporting_document_sent_to_invoices")
+    assert event["payload"]["id"] == row["id"]
+
+    again = _client().post(go)
+    assert again.status_code == 409
+    assert again.json()["detail"] == "This document was already rejected."

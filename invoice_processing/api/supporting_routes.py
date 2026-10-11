@@ -510,6 +510,61 @@ def reject_supporting_document(
     return {"status": "rejected"}
 
 
+SENT_TO_INVOICES = "Sent to the invoice queue"
+
+
+@router.post("/api/supporting-documents/{row_id}/process-as-invoice")
+def process_supporting_document_as_invoice(
+    row_id: str,
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+) -> dict:
+    """The classifier was wrong: this is an invoice. Closes the review and
+    runs the document through the invoice pipeline, which is told not to
+    divert it again."""
+    from ..worker.runner import enqueue_document  # noqa: PLC0415
+    from . import service  # noqa: PLC0415
+
+    supporting, orders = _repos()
+    row = _decidable(supporting, orders, principal, row_id, REJECTABLE)
+    _mark(
+        supporting, orders, principal, row, REJECTABLE,
+        status="rejected", note=SENT_TO_INVOICES,
+    )  # fmt: skip
+    document_id = row["document_id"]
+    try:
+        documents = service.get_documents()
+        document = documents.get(principal.tenant_id, document_id) or {}
+        documents.set_kind(principal.tenant_id, document_id, "invoice")
+        # As a retry does: a kept claim would make the worker skip it.
+        service.get_claim_store().release(principal.tenant_id, document_id)
+
+        class _Result:
+            pass
+
+        result = _Result()
+        result.document_id = document_id
+        result.sha256 = document.get("sha256", "")
+        result.storage_key = document.get("storage_key", "")
+        message_id = enqueue_document(
+            service.get_queue(),
+            principal.context(document_id),
+            result,
+            force_invoice=True,
+        )
+    except Exception:
+        logger.exception("%s not queued as an invoice", document_id)
+        raise HTTPException(
+            503,
+            "The document could not be queued; retry it from Documents.",
+        ) from None
+    _emit(
+        principal,
+        "supporting_document_sent_to_invoices",
+        {"id": row["id"], "document_id": document_id, "kind": row["kind"]},
+    )
+    return {"status": "rejected", "queued": message_id}
+
+
 # An accept claims the row, then stores: until it has had time to finish, an
 # accepted row with nothing stored may be one still storing, not an orphan.
 # ponytail: a time window, not a lock; the store usually takes under a second.
