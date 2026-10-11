@@ -35,8 +35,13 @@ function money(value: number | null | undefined, digits = 4): string {
 function KpisView() {
   const params = useSearchParams();
   const router = useRouter();
-  const days = Number(params.get("days") ?? "30");
-  const { data, error, loading } = usePoll<Kpis>(`/api/kpis?days=${days}`);
+  // Unknown or empty ?days= falls back to 30 rather than querying an odd window.
+  const raw = Number(params.get("days") || "30");
+  const days = WINDOWS.some((w) => w.days === raw) ? raw : 30;
+  const { data: latest, error } = usePoll<Kpis>(`/api/kpis?days=${days}`);
+  // usePoll keeps the previous window's data while a new path loads or after a
+  // failed fetch; the response names its own window, so only trust a match.
+  const data = latest && !error && latest.window.days === days ? latest : null;
 
   const reasons = data
     ? (Object.keys(data.exceptions) as KpiReason[]).filter(
@@ -65,8 +70,13 @@ function KpisView() {
         </div>
       </div>
 
-      {error ? <div className="empty-state">{error}</div> : null}
-      {!error && !loading && data && data.received === 0 ? (
+      {error ? (
+        <div className="empty-state" role="alert">
+          {error}
+        </div>
+      ) : null}
+      {!error && !data ? <div className="empty-state">Loading…</div> : null}
+      {data && data.received === 0 ? (
         <div className="empty-state">No invoices received in this window.</div>
       ) : null}
 
