@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   api,
@@ -16,7 +17,10 @@ import {
   type InvoiceDetail,
   type InvoiceField,
   type InvoiceList,
+  type KpiCases,
+  type KpiReason,
   type Me,
+  REASON_LABELS,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { DecisionDialog } from "@/components/DecisionDialog";
@@ -66,6 +70,15 @@ function InvoicesWorkbench() {
     QUEUE_POLL_MS,
   );
 
+  // A KPI drill-down: only the invoices behind one reason. The list route
+  // cannot compute the reason itself (it needs the findings and the approval
+  // chain), so the KPI route names the cases and this page keeps to them.
+  const reason = params.get("reason") as KpiReason | null;
+  const reasonDays = params.get("days") ?? "30";
+  const { data: drill, error: drillError } = usePoll<KpiCases>(
+    reason ? `/api/kpis/cases?reason=${reason}&days=${reasonDays}` : null,
+  );
+
   const [selected, setSelected] = useState<string | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string | null>(null);
@@ -76,7 +89,13 @@ function InvoicesWorkbench() {
 
   // Memoised because it is a dependency of the keyboard handler: a fresh []
   // on every render would re-bind the listener on every render.
-  const queue = useMemo(() => list?.invoices ?? [], [list]);
+  const queue = useMemo(() => {
+    const all = list?.invoices ?? [];
+    if (!reason || drillError) return all; // a failed narrowing shows everything
+    if (!drill) return []; // still asking which cases
+    const keep = new Set(drill.case_ids);
+    return all.filter((invoice) => keep.has(invoice.case_id));
+  }, [list, reason, drill, drillError]);
   // Falls through to the first invoice rather than an effect that selects it:
   // the choice is derivable from what we have, so it needs no state of its own.
   const current =
@@ -348,6 +367,23 @@ function InvoicesWorkbench() {
           </label>
         </div>
       </div>
+
+      {reason ? (
+        <div className="panel" style={{ padding: "8px 12px" }} data-drill={reason}>
+          {drillError ? (
+            <>
+              Could not narrow to {REASON_LABELS[reason] ?? reason}: {drillError}
+            </>
+          ) : (
+            <>
+              Showing {queue.length} invoice{queue.length === 1 ? "" : "s"} that
+              needed a person: <strong>{REASON_LABELS[reason] ?? reason}</strong>
+              {drill?.truncated ? " (newest 500)" : ""}
+            </>
+          )}{" "}
+          · <Link href="/invoices">Show all</Link>
+        </div>
+      ) : null}
 
       {inFlight.length > 0 ? (
         <div className="panel" style={{ padding: "12px 16px" }} role="status">
