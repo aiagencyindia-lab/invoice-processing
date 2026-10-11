@@ -177,6 +177,11 @@ function AwaitingConfirmation({
           Showing the oldest 200; decide some to see the rest.
         </div>
       ) : null}
+      {orphans.data?.truncated ? (
+        <div className="muted" role="status" style={{ fontSize: 12.5 }}>
+          Showing 200 orphaned acceptances; reopen some to see the rest.
+        </div>
+      ) : null}
       <div className="card-list">
         {docs.map((d) => (
           <div key={d.id} className="panel row-between" style={{ padding: "10px 14px" }}>
