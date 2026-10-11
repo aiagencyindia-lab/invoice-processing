@@ -585,3 +585,112 @@ class TestRoleAndActive:
             and pat["is_active"] is True
             and "last_login_at" in pat
         )
+
+
+class TestPartialFailures:
+    def test_a_failing_claims_write_still_reports_the_change(
+        self, env, tmp_path, monkeypatch
+    ):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users",
+            json={"email": "pat@acme.com", "role": "clerk", "uid": "fb-pat"},
+        )
+        pat = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == "pat@acme.com"
+        )
+
+        def boom(uid, claims):
+            raise RuntimeError("identity platform down")
+
+        monkeypatch.setattr(env["claims"], "set_claims", boom)
+        r = client.patch(
+            f"/api/admin/users/{pat['id']}", json={"role": "approver"}
+        )
+        assert r.status_code == 200, r.text
+        assert (
+            r.json()["role"] == "approver"
+            and r.json()["claims_applied"] is False
+        )
+        assert [e["event_type"] for e in _events(tmp_path)].count(
+            "user_role_changed"
+        ) == 1
+
+    def test_claims_applied_is_true_when_written(self, env):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users",
+            json={"email": "pat@acme.com", "role": "clerk", "uid": "fb-pat"},
+        )
+        pat = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == "pat@acme.com"
+        )
+        r = client.patch(
+            f"/api/admin/users/{pat['id']}", json={"role": "approver"}
+        )
+        assert r.json()["claims_applied"] is True
+
+    def test_set_claims_stores_the_uid(self, env):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users", json={"email": "pat@acme.com", "role": "clerk"}
+        )
+        assert (
+            client.post(
+                "/api/admin/users/claims",
+                json={"email": "pat@acme.com", "uid": "fb-pat"},
+            ).status_code
+            == 200
+        )
+        pat = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == "pat@acme.com"
+        )
+        assert pat["uid"] == "fb-pat"
+
+    @pytest.mark.parametrize("who", ["pat@acme.com", "admin@x.test"])
+    def test_a_refused_combined_patch_changes_nothing(self, env, tmp_path, who):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users", json={"email": "admin@x.test", "role": "admin"}
+        )
+        client.post(
+            "/api/admin/users", json={"email": "pat@acme.com", "role": "clerk"}
+        )
+        target = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == who
+        )
+        body = {
+            "manager_email": "admin@x.test",
+            "role": "boss" if who == "pat@acme.com" else "clerk",
+        }
+        r = client.patch(f"/api/admin/users/{target['id']}", json=body)
+        assert r.status_code == (422 if who == "pat@acme.com" else 409)
+        after = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["id"] == target["id"]
+        )
+        assert after["manager_email"] is None
+        assert "user_updated" not in [
+            e["event_type"] for e in _events(tmp_path)
+        ]
+
+
+def test_re_adding_your_own_domain_says_so(env):
+    client = env["client"]("admin")
+    body = {
+        "domain": "acme.com",
+        "provider": "google",
+        "default_role": "viewer",
+    }
+    assert client.post("/api/admin/sso-domains", json=body).status_code == 201
+    r = client.post("/api/admin/sso-domains", json=body)
+    assert r.status_code == 409 and "your organisation" in r.json()["detail"]

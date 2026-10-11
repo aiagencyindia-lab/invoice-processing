@@ -3030,7 +3030,7 @@ class KpiRepository:
 
 
 class DomainTaken(Exception):
-    """Another tenant already holds this domain."""
+    """This domain is already bound, by this tenant or another."""
 
 
 def _user_dict(u: User, tenant_name: str | None) -> dict:
@@ -3210,7 +3210,12 @@ class PgSsoDomainRepository:
         except IntegrityError as exc:
             # The unique constraint is the arbiter; a check-then-insert would
             # let two admins race for the same domain.
-            raise DomainTaken(domain) from exc
+            diag = getattr(exc.orig, "diag", None)
+            if getattr(
+                diag, "constraint_name", None
+            ) == "uq_sso_domain" or "sso_domains.domain" in str(exc.orig):
+                raise DomainTaken(domain) from exc
+            raise
 
     def remove(self, tenant_id: str, domain_id: str) -> bool:
         with tenant_session(tenant_id, self.url) as session:

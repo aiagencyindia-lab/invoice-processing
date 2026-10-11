@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from invoice_processing.db import repositories
 from invoice_processing.db.models import AuditEvent, Base, Tenant, User
@@ -191,6 +192,16 @@ class TestDomains:
                 provider="google",
                 default_role="clerk",
                 created_by="g",
+            )
+
+    def test_only_the_domain_constraint_means_taken(self, db):
+        with pytest.raises(IntegrityError):
+            PgSsoDomainRepository(db).add(
+                "no-such-tenant",
+                domain="nobody.com",
+                provider="google",
+                default_role="viewer",
+                created_by="a",
             )
 
     def test_lookup_by_domain_needs_no_tenant(self, db):

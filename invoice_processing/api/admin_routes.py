@@ -21,6 +21,7 @@ customer's admin has no business reading it.
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
 from typing import Annotated, Literal
@@ -29,6 +30,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from .auth import Principal, require_role
+
+logger = logging.getLogger(__name__)
 
 # `admin.provision` imports `api.auth`, so importing it at module scope closes
 # a cycle through the api package. It is imported inside the helpers instead.
@@ -68,7 +71,7 @@ class UserCreate(BaseModel):
 
 class UserPatch(BaseModel):
     manager_email: str | None = Field(default=None, max_length=320)
-    role: str | None = None
+    role: Literal["viewer", "clerk", "approver", "admin"] | None = None
     is_active: bool | None = None
 
 
@@ -293,6 +296,24 @@ def patch_user(
     fields = request.model_fields_set
     if not fields:
         raise HTTPException(status_code=400, detail="Nothing to change.")
+    wants_state = "role" in fields or "is_active" in fields
+    if wants_state:
+        directory = _directory()
+        try:
+            current = next(
+                u
+                for u in _provisioner().list_users(principal.tenant_id)
+                if u["id"] == user_id
+            )
+        except StopIteration:
+            raise HTTPException(
+                status_code=404, detail="Unknown user"
+            ) from None
+        if current["email"].lower() == principal.email.lower():
+            raise HTTPException(
+                status_code=409,
+                detail="You cannot change your own role or deactivate yourself; ask another admin.",
+            )
     record: dict = {"id": user_id}
     if "manager_email" in fields:
         try:
@@ -314,32 +335,9 @@ def patch_user(
             before={"manager_email": previous},
         )
         record.update(changed)
-    if "role" in fields or "is_active" in fields:
-        from .auth import ROLE_RANK  # noqa: PLC0415
-
-        directory = _directory()
-        try:
-            current = next(
-                u
-                for u in _provisioner().list_users(principal.tenant_id)
-                if u["id"] == user_id
-            )
-        except StopIteration:
-            raise HTTPException(
-                status_code=404, detail="Unknown user"
-            ) from None
-        if current["email"].lower() == principal.email.lower():
-            raise HTTPException(
-                status_code=409,
-                detail="You cannot change your own role or deactivate yourself; ask another admin.",
-            )
+    if wants_state:
         try:
             if "role" in fields:
-                if request.role not in ROLE_RANK:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"Unknown role {request.role!r}.",
-                    )
                 changed = directory.set_role(
                     principal.tenant_id, user_id, request.role
                 )
@@ -371,12 +369,20 @@ def patch_user(
                 status_code=404, detail="Unknown user"
             ) from None
         if current.get("uid"):
-            # The claim is a cache of the row; keep it in step where it is live.
-            fresh = directory.find(principal.tenant_id, current["email"])
-            service.get_claims_writer().set_claims(
-                current["uid"],
-                {"tenant_id": principal.tenant_id, "role": fresh["role"]},
-            )
+            # The claim is a cache of the row, and the row has already changed:
+            # a failed write is reported, not turned into a 500 that invites a retry.
+            try:
+                fresh = directory.find(principal.tenant_id, current["email"])
+                service.get_claims_writer().set_claims(
+                    current["uid"],
+                    {"tenant_id": principal.tenant_id, "role": fresh["role"]},
+                )
+                record["claims_applied"] = True
+            except Exception:
+                logger.warning(
+                    "Claims write failed for user %s", user_id, exc_info=True
+                )
+                record["claims_applied"] = False
     record.pop("previous_role", None)
     record.pop("previous_active", None)
     record.pop("tenant_name", None)
@@ -418,6 +424,14 @@ def add_sso_domain(
             created_by=principal.email,
         )
     except DomainTaken:
+        if any(
+            d["domain"] == domain
+            for d in _sso_domains().list(principal.tenant_id)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="That domain is already connected to your organisation.",
+            ) from None
         # Which organisation holds it is their business, not the caller's.
         raise HTTPException(
             status_code=409,

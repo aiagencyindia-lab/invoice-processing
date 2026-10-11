@@ -415,6 +415,7 @@ class Provisioner:
                     f"No user {email} in tenant {tenant_slug!r}. Add them first."
                 )
             role = user.role
+            user.uid = uid
 
         claims = {"tenant_id": tenant.id, "role": role}
         self.claims.set_claims(uid, claims)
