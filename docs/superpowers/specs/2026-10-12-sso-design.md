@@ -46,7 +46,7 @@ which creates a new tenant.
 
 ## 1. Data model
 
-- New tenant table `sso_domains` (in `TENANT_TABLES`, under RLS):
+- New tenant table `sso_domains` (in `TENANT_TABLES`, under RLS, plus a read-only lookup policy: the pre-tenant domain lookup runs in a session whose tenant setting is the sentinel `sso-lookup`, which no real tenant can equal, and that policy permits SELECT on this one table only):
   `id`, `tenant_id`, `domain` (lower-cased; unique across all tenants, so
   two organisations cannot both claim `acme.com`), `provider` ∈
   {`google`, `microsoft`}, `default_role` ∈ {`viewer`, `clerk`},
@@ -97,7 +97,7 @@ function `resolve_principal(claims, directory)` decides, in this order:
      failure is logged and the request proceeds on the row; the next request
      repairs the claims.
 3. **No database configured** → step 2 is skipped and claims are the only
-   authority, as today. The dev bypass is unchanged.
+   authority, as today. The dev bypass applies only the active check: a deactivated dev identity is refused, but the role named in the header stands (the e2e identities depend on it).
 
 The database reads sit behind a small `UserDirectory` port
 (`PgUserDirectory`; `None` without a database), so `tests/test_auth.py` can
