@@ -1377,8 +1377,9 @@ class TestSupportingDocuments:
         out = self._run(tmp_path, monkeypatch, book={"po-4471": {"po": {}}})
         supporting = out["supporting"]
         supporting.mark(
-            "t", out["row"]["id"], status="accepted", reviewed_by="a@b.c"
-        )
+            "t", out["row"]["id"], status="accepted", reviewed_by="a@b.c",
+            expect=("pending",),
+        )  # fmt: skip
         out["stored"].clear()
         out["emitted"].clear()
 

@@ -2275,6 +2275,43 @@ class PgPurchaseOrderRepository:
             o = self._order(session, tenant_id, po_number)
             return o is not None and o.source == "upload"
 
+    def stored_documents(
+        self, tenant_id: str, document_ids, po_numbers: dict | None = None
+    ) -> set[str]:
+        """The documents something stored came from: a PO or receipt that
+        carries the document's id, or -- for a scanned PO, `po_numbers` maps
+        its document to the number it confirmed -- that PO being on file,
+        since a later rescan or ERP upload takes the PO's link over."""
+        ids = list(document_ids)
+        if not ids:
+            return set()
+        with tenant_session(tenant_id, self.url) as session:
+            found = set()
+            for model in (PurchaseOrder, GoodsReceipt):
+                found |= set(
+                    session.scalars(
+                        select(model.document_id).where(
+                            model.tenant_id == tenant_id,
+                            model.document_id.in_(ids),
+                        )
+                    )
+                )
+            keys = {
+                doc: po_matching.normalize_po_number(n)
+                for doc, n in (po_numbers or {}).items()
+                if n and doc in ids
+            }
+            on_file = set(
+                session.scalars(
+                    select(PurchaseOrder.po_number).where(
+                        PurchaseOrder.tenant_id == tenant_id,
+                        PurchaseOrder.po_number.in_(set(keys.values())),
+                    )
+                )
+            ) if keys else set()  # fmt: skip
+            found |= {doc for doc, key in keys.items() if key in on_file}
+            return found
+
     def book(self, tenant_id: str, po_number) -> dict | None:
         with tenant_session(tenant_id, self.url) as session:
             o = self._order(session, tenant_id, po_number)
@@ -2333,21 +2370,33 @@ class PgSupportingDocumentRepository:
             self._select(tenant_id).where(SupportingDocument.id == id)
         ).first()
 
-    def upsert_from_extraction(
+    @staticmethod
+    def _existing(session, tenant_id: str, document_id: str):
+        return session.scalar(
+            select(SupportingDocument).where(
+                SupportingDocument.tenant_id == tenant_id,
+                SupportingDocument.document_id == document_id,
+            )
+        )
+
+    def upsert_from_extraction(self, tenant_id: str, **kw) -> dict | None:
+        """Create the row, or overwrite it while pending/blocked. A decided
+        row is left alone and None is returned."""
+        try:
+            return self._upsert(tenant_id, **kw)
+        except IntegrityError:
+            # Another worker inserted it after this one looked: the row now
+            # exists, so the same overwrite rule applies to it.
+            return self._upsert(tenant_id, **kw)
+
+    def _upsert(
         self, tenant_id: str, *, document_id: str, kind: str, extracted: dict,
         po_number: str | None, blocked_reason: str | None,
         extraction_error: str | None,
     ) -> dict | None:  # fmt: skip
-        """Create the row, or overwrite it while pending/blocked. A decided
-        row is left alone and None is returned."""
         po = po_matching.normalize_po_number(po_number) if po_number else None
         with tenant_session(tenant_id, self.url) as session:
-            row = session.scalar(
-                select(SupportingDocument).where(
-                    SupportingDocument.tenant_id == tenant_id,
-                    SupportingDocument.document_id == document_id,
-                )
-            )
+            row = self._existing(session, tenant_id, document_id)
             if row is None:
                 row = SupportingDocument(
                     tenant_id=tenant_id, document_id=document_id
@@ -2390,12 +2439,14 @@ class PgSupportingDocumentRepository:
 
     def mark(
         self, tenant_id: str, id: str, *, status: str, reviewed_by: str,
-        note: str | None = None, extracted: dict | None = None,
-        expect: tuple[str, ...] | None = None,
+        expect: tuple[str, ...], note: str | None = None,
+        extracted: dict | None = None,
     ) -> dict:  # fmt: skip
-        """Record the decision. With `expect`, only while the row is still in
-        one of those statuses (one conditional UPDATE, so two reviewers
-        cannot both decide); otherwise StatusChanged."""
+        """Record the decision, only while the row is still in one of the
+        `expect` statuses (a conditional UPDATE, so two reviewers cannot both
+        decide); otherwise StatusChanged. Accepting clears the block. The
+        result's `previous` is the status and block the decision replaced,
+        so an undo restores exactly that."""
         values = {
             "status": status,
             "reviewed_by": reviewed_by,
@@ -2404,31 +2455,47 @@ class PgSupportingDocumentRepository:
         }
         if extracted is not None:
             values["extracted"] = extracted  # the clerk's corrected version
-        stmt = update(SupportingDocument).where(
-            SupportingDocument.tenant_id == tenant_id,
-            SupportingDocument.id == id,
-        )
-        if expect is not None:
-            stmt = stmt.where(SupportingDocument.status.in_(expect))
+        if status == "accepted":
+            values["blocked_reason"] = None
         with tenant_session(tenant_id, self.url) as session:
-            changed = session.execute(
-                stmt.values(**values).execution_options(
-                    synchronize_session=False
-                )
-            ).rowcount
-            found = self._one(session, tenant_id, id)
-            if found is None:
-                raise KeyError(id)
-            if not changed:
-                raise StatusChanged(found[0].status)
-            return self._dict(*found)
+            # Compare-and-set on what was read: the UPDATE matches only if
+            # status and block are still those, so `previous` is exact.
+            for _ in range(3):
+                found = self._one(session, tenant_id, id)
+                if found is None:
+                    raise KeyError(id)
+                current = found[0]
+                was = {
+                    "status": current.status,
+                    "blocked_reason": current.blocked_reason,
+                }
+                if was["status"] not in expect:
+                    raise StatusChanged(was["status"])
+                session.expire(current)
+                changed = session.execute(
+                    update(SupportingDocument)
+                    .where(
+                        SupportingDocument.tenant_id == tenant_id,
+                        SupportingDocument.id == id,
+                        SupportingDocument.status == was["status"],
+                        SupportingDocument.blocked_reason.is_not_distinct_from(
+                            was["blocked_reason"]
+                        ),
+                    )
+                    .values(**values)
+                    .execution_options(synchronize_session=False)
+                ).rowcount
+                if changed:
+                    found = self._one(session, tenant_id, id)
+                    return {**self._dict(*found), "previous": was}
+            raise StatusChanged(self._one(session, tenant_id, id)[0].status)
 
     def revert_to_pending(
         self, tenant_id: str, id: str, *, extracted: dict,
-        status: str = "pending",
+        status: str = "pending", blocked_reason: str | None = None,
     ) -> dict:  # fmt: skip
-        """Undo an acceptance whose storage failed: back to `status` (what it
-        was before), with the original reading and no reviewer. Only from
+        """Undo an acceptance: back to `status` and `blocked_reason` (what the
+        acceptance replaced), with `extracted` and no reviewer. Only from
         accepted (StatusChanged)."""
         with tenant_session(tenant_id, self.url) as session:
             changed = session.execute(
@@ -2440,6 +2507,7 @@ class PgSupportingDocumentRepository:
                 )
                 .values(
                     status=status,
+                    blocked_reason=blocked_reason,
                     extracted=extracted,
                     reviewed_by=None,
                     reviewed_at=None,

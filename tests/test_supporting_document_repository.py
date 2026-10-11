@@ -100,7 +100,7 @@ def test_decided_rows_are_not_overwritten_and_mark_stores_correction(env):
     a = _up(repo, "t1", ids["t1"][0])
     m = repo.mark(
         "t1", a["id"], status="accepted", reviewed_by="c@x", note="ok",
-        extracted={"fixed": True},
+        extracted={"fixed": True}, expect=("pending",),
     )  # fmt: skip
     assert m["status"] == "accepted" and m["extracted"] == {"fixed": True}
     assert m["reviewed_at"] and m["reviewed_by"] == "c@x"
@@ -132,7 +132,10 @@ def test_tenants_are_isolated(env):
     assert repo.list("t2", ("pending", "blocked")) == []
     assert repo.unblock("t2", "po-1") == []
     with pytest.raises(KeyError):
-        repo.mark("t2", a["id"], status="rejected", reviewed_by="x")
+        repo.mark(
+            "t2", a["id"], status="rejected", reviewed_by="x",
+            expect=("blocked",),
+        )  # fmt: skip
 
 
 def test_set_kind_and_listing(env):
@@ -238,7 +241,10 @@ def test_revert_puts_a_blocked_row_back_to_blocked(env):
         "t1", a["id"], status="accepted", reviewed_by="c",
         expect=("pending", "blocked"),
     )  # fmt: skip
-    back = repo.revert_to_pending("t1", a["id"], extracted={}, status="blocked")
+    back = repo.revert_to_pending(
+        "t1", a["id"], extracted={}, status="blocked",
+        blocked_reason="PO-1 not on file",
+    )  # fmt: skip
     assert back["status"] == "blocked"
     assert back["blocked_reason"] == "PO-1 not on file"
 
@@ -274,8 +280,9 @@ def test_json_fallback_matches_the_contract(tmp_path):
     _up(repo, "t1", "d1", blocked_reason="x")
     assert repo.unblock("t1", "po-1") == [a["id"]]
     m = repo.mark(
-        "t1", a["id"], status="rejected", reviewed_by="c", extracted={"q": 1}
-    )
+        "t1", a["id"], status="rejected", reviewed_by="c", extracted={"q": 1},
+        expect=("pending",),
+    )  # fmt: skip
     assert m["extracted"] == {"q": 1}
     with pytest.raises(StatusChanged):
         repo.mark(
@@ -294,3 +301,176 @@ def test_json_fallback_matches_the_contract(tmp_path):
     d = docs.create("t1", filename="f")
     docs.set_kind("t1", d, "goods_receipt")
     assert docs.list_documents("t1")[0]["kind"] == "goods_receipt"
+
+
+# --- schema defaults, migration, and the CAS details -------------------------
+import os  # noqa: E402
+import sqlite3  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from sqlalchemy.exc import IntegrityError  # noqa: E402
+
+
+def test_a_bare_row_defaults_to_pending_and_empty_and_is_unique(env):
+    url, _, ids, _ = env
+    with tenant_session("t1", url) as s:
+        s.add(
+            models.SupportingDocument(
+                tenant_id="t1", document_id=ids["t1"][0], kind="goods_receipt"
+            )
+        )
+    with tenant_session("t1", url) as s:
+        row = s.scalar(select_sd("t1"))
+        assert row.status == "pending" and row.extracted == {}
+    with pytest.raises(IntegrityError):
+        with tenant_session("t1", url) as s:
+            s.add(
+                models.SupportingDocument(
+                    tenant_id="t1", document_id=ids["t1"][0], kind="x"
+                )
+            )
+
+
+def select_sd(tenant_id):
+    from sqlalchemy import select  # noqa: PLC0415
+
+    return select(models.SupportingDocument).where(
+        models.SupportingDocument.tenant_id == tenant_id
+    )
+
+
+def test_the_migration_round_trips_on_sqlite(tmp_path):
+    db = tmp_path / "m.db"
+    env = {
+        **os.environ,
+        "DATABASE_URL": f"sqlite:///{db}",
+        "CLOUD_SQL_INSTANCE": "",
+        "GCS_BUCKET": "",
+    }
+    repo_root = Path(__file__).resolve().parents[1]
+
+    def alembic(*args):
+        done = subprocess.run(
+            [sys.executable, "-m", "alembic", *args], cwd=repo_root, env=env,
+            capture_output=True, text=True, timeout=180, check=False,
+        )  # fmt: skip
+        assert done.returncode == 0, done.stderr
+
+    def tables():
+        with sqlite3.connect(db) as c:
+            return {
+                r[0]
+                for r in c.execute(
+                    "select name from sqlite_master where type='table'"
+                )
+            }
+
+    alembic("upgrade", "head")
+    assert "supporting_documents" in tables()
+    with sqlite3.connect(db) as c:
+        cols = {r[1] for r in c.execute("pragma table_info(documents)")}
+    assert "kind" in cols
+    alembic("downgrade", "base")
+    assert tables() == {"alembic_version"}
+
+
+def test_a_concurrent_first_insert_falls_back_to_the_overwrite_rule(
+    env, monkeypatch
+):
+    _, _, ids, repo = env
+    first = _up(repo, "t1", ids["t1"][0])
+    real = PgSupportingDocumentRepository._existing
+    calls = []
+
+    def missed_once(*a, **k):
+        # As if another worker inserted the row after this one looked.
+        calls.append(1)
+        return None if len(calls) == 1 else real(*a, **k)
+
+    monkeypatch.setattr(
+        PgSupportingDocumentRepository, "_existing", staticmethod(missed_once)
+    )
+    again = _up(repo, "t1", ids["t1"][0], extracted={"a": 2})
+    assert again["id"] == first["id"] and again["extracted"] == {"a": 2}
+    repo.mark(
+        "t1", first["id"], status="accepted", reviewed_by="c",
+        expect=("pending",),
+    )  # fmt: skip
+    calls.clear()
+    assert _up(repo, "t1", ids["t1"][0], extracted={"z": 1}) is None
+
+
+@pytest.mark.parametrize("kind", ["pg", "json"])
+def test_mark_needs_the_expected_statuses(env, tmp_path, kind):
+    _, _, ids, pg = env
+    repo = (
+        pg
+        if kind == "pg"
+        else JsonSupportingDocumentRepository(tmp_path / "sd.json")
+    )
+    doc = ids["t1"][0] if kind == "pg" else "d1"
+    a = _up(repo, "t1", doc)
+    with pytest.raises(TypeError):
+        repo.mark("t1", a["id"], status="rejected", reviewed_by="c")
+
+
+@pytest.mark.parametrize("kind", ["pg", "json"])
+def test_mark_reports_what_it_replaced_and_accepting_clears_the_block(
+    env, tmp_path, kind
+):
+    _, _, ids, pg = env
+    repo = (
+        pg
+        if kind == "pg"
+        else JsonSupportingDocumentRepository(tmp_path / "sd.json")
+    )
+    doc = ids["t1"][0] if kind == "pg" else "d1"
+    a = _up(repo, "t1", doc, blocked_reason="PO-1 not on file")
+    m = repo.mark(
+        "t1", a["id"], status="accepted", reviewed_by="c",
+        expect=("pending", "blocked"),
+    )  # fmt: skip
+    assert m["previous"] == {
+        "status": "blocked",
+        "blocked_reason": "PO-1 not on file",
+    }
+    assert m["blocked_reason"] is None
+    back = repo.revert_to_pending(
+        "t1", a["id"], extracted={}, status="blocked",
+        blocked_reason="PO-1 not on file",
+    )  # fmt: skip
+    assert back["status"] == "blocked"
+    assert back["blocked_reason"] == "PO-1 not on file"
+
+
+def test_json_rows_carry_the_document_filename(tmp_path):
+    docs = JsonDocumentRepository(tmp_path / "documents.json")
+    d = docs.create("t1", filename="grn.pdf")
+    repo = JsonSupportingDocumentRepository(tmp_path / "sd.json")
+    a = _up(repo, "t1", d)
+    assert a["filename"] == "grn.pdf"
+    assert repo.get("t1", a["id"])["filename"] == "grn.pdf"
+    assert repo.list("t1", ("pending",))[0]["filename"] == "grn.pdf"
+    assert repo.for_documents("t1", [d])[0]["filename"] == "grn.pdf"
+
+
+def test_stored_documents_names_what_a_po_or_receipt_came_from(env):
+    url, _, ids, _ = env
+    po = PgPurchaseOrderRepository(url)
+    d0, d1 = ids["t1"]
+    assert po.stored_documents("t1", [d0, d1]) == set()
+    po.upsert_orders(
+        "t1", [PO], uploaded_by="a", source="document", document_id=d0
+    )
+    po.record_receipts(
+        "t1", [GRN], recorded_by="a", source="document", document_id=d1
+    )
+    assert po.stored_documents("t1", [d0, d1]) == {d0, d1}
+    assert po.stored_documents("t2", [d0, d1]) == set()
+    # A later upload takes the PO over: still stored, by its number.
+    po.upsert_orders("t1", [PO], uploaded_by="erp")
+    assert po.stored_documents("t1", [d0]) == set()
+    assert po.stored_documents("t1", [d0], {d0: "po 1"}) == {d0}
+    assert po.stored_documents("t1", [], {}) == set()

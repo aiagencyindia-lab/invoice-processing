@@ -504,9 +504,17 @@ class JsonDocumentRepository:
 class JsonSupportingDocumentRepository:
     """Single-process file fallback for `PgSupportingDocumentRepository`."""
 
-    def __init__(self, path: Path | None = None):
+    def __init__(
+        self,
+        path: Path | None = None,
+        documents: JsonDocumentRepository | None = None,
+    ):
         self.path = (
             Path(path) if path else paths.DATA_DIR / "supporting_documents.json"
+        )
+        # The documents store beside this file, as the defaults place them.
+        self.documents = documents or JsonDocumentRepository(
+            self.path.parent / "documents.json"
         )
 
     def _read(self) -> dict:
@@ -522,6 +530,14 @@ class JsonSupportingDocumentRepository:
             json.dumps(data, indent=2, default=str), encoding="utf-8"
         )
         os.replace(tmp, self.path)
+
+    def _shown(self, tenant_id, rows: list[dict]) -> list[dict]:
+        """Rows with their document's filename, as the database joins it."""
+        names = {
+            d.get("id"): d.get("filename")
+            for d in self.documents._read().get(tenant_id, {}).values()
+        }
+        return [{**r, "filename": names.get(r["document_id"])} for r in rows]
 
     @staticmethod
     def _norm(po_number) -> str | None:
@@ -544,7 +560,6 @@ class JsonSupportingDocumentRepository:
                 "reviewed_at": None,
                 "note": None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "filename": None,  # ponytail: no join to documents here
             }
             rows[row["id"]] = row
         elif row["status"] not in ("pending", "blocked"):
@@ -558,7 +573,7 @@ class JsonSupportingDocumentRepository:
             status="blocked" if blocked_reason else "pending",
         )
         self._write(data)
-        return row
+        return self._shown(tenant_id, [row])[0]
 
     def list(self, tenant_id, statuses) -> list[dict]:
         rows = [
@@ -566,26 +581,34 @@ class JsonSupportingDocumentRepository:
             for r in self._read().get(tenant_id, {}).values()
             if r["status"] in statuses
         ]
-        return sorted(rows, key=lambda r: (r["created_at"], r["id"]))
+        rows.sort(key=lambda r: (r["created_at"], r["id"]))
+        return self._shown(tenant_id, rows)
 
     def get(self, tenant_id, id) -> dict | None:
-        return self._read().get(tenant_id, {}).get(id)
+        row = self._read().get(tenant_id, {}).get(id)
+        return self._shown(tenant_id, [row])[0] if row else None
 
     def for_documents(self, tenant_id, document_ids) -> list[dict]:
         wanted = set(document_ids)
         rows = self._read().get(tenant_id, {}).values()
-        return [r for r in rows if r["document_id"] in wanted]
+        return self._shown(
+            tenant_id, [r for r in rows if r["document_id"] in wanted]
+        )
 
     def mark(
-        self, tenant_id, id, *, status, reviewed_by, note=None, extracted=None,
-        expect=None,
+        self, tenant_id, id, *, status, reviewed_by, expect, note=None,
+        extracted=None,
     ) -> dict:  # fmt: skip
         data = self._read()
         row = data.get(tenant_id, {}).get(id)
         if row is None:
             raise KeyError(id)
-        if expect is not None and row["status"] not in expect:
+        if row["status"] not in expect:
             raise StatusChanged(row["status"])
+        was = {
+            "status": row["status"],
+            "blocked_reason": row.get("blocked_reason"),
+        }
         row.update(
             status=status,
             reviewed_by=reviewed_by,
@@ -594,11 +617,13 @@ class JsonSupportingDocumentRepository:
         )
         if extracted is not None:
             row["extracted"] = extracted
+        if status == "accepted":
+            row["blocked_reason"] = None
         self._write(data)
-        return row
+        return {**self._shown(tenant_id, [row])[0], "previous": was}
 
     def revert_to_pending(
-        self, tenant_id, id, *, extracted, status="pending"
+        self, tenant_id, id, *, extracted, status="pending", blocked_reason=None
     ) -> dict:
         data = self._read()
         row = data.get(tenant_id, {}).get(id)
@@ -607,11 +632,11 @@ class JsonSupportingDocumentRepository:
         if row["status"] != "accepted":
             raise StatusChanged(row["status"])
         row.update(
-            status=status, extracted=extracted, reviewed_by=None,
-            reviewed_at=None, note=None,
+            status=status, blocked_reason=blocked_reason, extracted=extracted,
+            reviewed_by=None, reviewed_at=None, note=None,
         )  # fmt: skip
         self._write(data)
-        return row
+        return self._shown(tenant_id, [row])[0]
 
     def unblock(self, tenant_id, po_number) -> list[str]:
         data = self._read()
