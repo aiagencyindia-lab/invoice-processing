@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 /** The flow the product is sold on: a document arrives, a reviewer reads the
  *  decision and the evidence behind it, corrects what is wrong, approves, and
@@ -416,9 +416,16 @@ test("Held invoice shows the three-way panel and a GRN clears it", async ({
 // Seeded by scripts/e2e_api.py: a receipt scan for PO-E2E-2 whose line 1 was
 // read as 10 when 1 arrived, and one blocked on a PO not on file.
 function scanCard(page: Page, po: string) {
+  return scanCardFor(page, `Goods receipt · PO ${po}`);
+}
+
+/** The awaiting-confirmation card showing `text`. Further scans seeded by
+ *  scripts/e2e_api.py: GRN-E2E-23 (no PO number read) and GRN-E2E-24 (really
+ *  an invoice), one per test. */
+function scanCardFor(page: Page, text: string) {
   return page
     .locator(".panel")
-    .filter({ hasText: `Goods receipt · PO ${po}` })
+    .filter({ hasText: text })
     .filter({ has: page.getByRole("button", { name: "Review" }) });
 }
 
@@ -493,14 +500,63 @@ test("a receipt for a PO not on file is refused until its PO number is corrected
   await expect(card).toHaveCount(0);
 });
 
+/** The cell of `row` under the "Kind" column of the documents table. */
+async function kindCell(page: Page, row: Locator) {
+  const headers = await page.getByRole("columnheader").allTextContents();
+  const at = headers.indexOf("Kind");
+  expect(at, `no "Kind" column among ${JSON.stringify(headers)}`).toBeGreaterThanOrEqual(0);
+  return row.getByRole("cell").nth(at);
+}
+
 test("the documents page names a scanned receipt as one", async ({ page }) => {
   await goto(page, "/documents");
   const row = page.getByRole("row").filter({ hasText: "grn-e2e-21-scan.pdf" });
   await expect(row).toBeVisible();
-  const headers = await page.getByRole("columnheader").allTextContents();
-  await expect(row.getByRole("cell").nth(headers.indexOf("Kind"))).toHaveText(
-    "Goods receipt",
-  );
+  await expect(await kindCell(page, row)).toHaveText("Goods receipt");
+});
+
+test("a receipt with no PO number read offers the PO's lines once one is typed", async ({
+  page,
+}) => {
+  await as(page, "alice@e2e.test:clerk");
+  await goto(page, "/purchase-orders");
+  const card = scanCardFor(page, "GRN-E2E-23");
+  // The card names the scan's own number, date and weakest reading.
+  await expect(card).toContainText("2026-10-09");
+  await expect(card).toContainText("lowest confidence 40%");
+  await card.getByRole("button", { name: "Review" }).click();
+
+  const drawer = page.getByRole("dialog", { name: "Review scanned document" });
+  const poLine = drawer.getByLabel("PO line for line 1");
+  await expect(poLine.locator("option")).toHaveCount(1); // only "no match"
+  await drawer.getByLabel("Po number").fill("PO-E2E-2");
+  await expect(poLine.locator("option[value='1']")).toHaveCount(1);
+  await poLine.selectOption("1");
+  await expect(poLine).toHaveValue("1");
+  // Left undecided: accepting would record a receipt against PO-E2E-2.
+  await drawer.getByRole("button", { name: "Close" }).click();
+});
+
+test("a scan that is really an invoice is sent to the invoice queue", async ({
+  page,
+}) => {
+  await as(page, "alice@e2e.test:clerk");
+  await goto(page, "/purchase-orders");
+  const card = scanCardFor(page, "GRN-E2E-24");
+  await card.getByRole("button", { name: "Review" }).click();
+  const drawer = page.getByRole("dialog", { name: "Review scanned document" });
+  await drawer.getByRole("button", { name: "Process as invoice" }).click();
+
+  await expect(
+    page
+      .getByRole("status")
+      .filter({ hasText: "Sent the document to be processed as an invoice" }),
+  ).toBeVisible();
+  await expect(card).toHaveCount(0);
+
+  await goto(page, "/documents");
+  const row = page.getByRole("row").filter({ hasText: "grn-e2e-24-scan.pdf" });
+  await expect(await kindCell(page, row)).toHaveText("Invoice");
 });
 
 test("the sign-in page is a real route", async ({ page }) => {

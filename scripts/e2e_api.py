@@ -26,6 +26,7 @@ they stay queued exactly as the upload left them. It stops with the API.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -181,18 +182,31 @@ def seed_purchase_order(po_number: str, vendor: str, grn: str) -> None:
     )
 
 
-def _scan(grn: str, po_number: str, quantity: float, description: str) -> dict:
+def _scan(
+    grn: str, po_number: str | None, quantity: float, description: str
+) -> dict:
     """What `supporting_docs.extract` stores for a one-line receipt whose
     quantity was read with low confidence."""
     evidence = {
-        "grn_number": {"value": grn, "grounded": True, "page": 1, "confidence": 0.95},
+        "grn_number": {
+            "value": grn,
+            "grounded": True,
+            "page": 1,
+            "confidence": 0.95,
+        },
         "po_number": {
-            "value": po_number, "grounded": True, "page": 1, "confidence": 0.95,
+            "value": po_number,
+            "grounded": True,
+            "page": 1,
+            "confidence": 0.95,
         },
         "lines[0].quantity_received": {
-            "value": quantity, "grounded": False, "page": None, "confidence": 0.4,
+            "value": quantity,
+            "grounded": False,
+            "page": None,
+            "confidence": 0.4,
         },
-    }  # fmt: skip
+    }
     evidence["_summary"] = {
         "min_confidence": 0.4,
         "fields_needing_review": ["lines[0].quantity_received"],
@@ -223,14 +237,14 @@ def _scan(grn: str, po_number: str, quantity: float, description: str) -> dict:
 
 
 def seed_scans() -> None:
-    """Two scanned receipts waiting on a clerk, as the worker leaves them:
-    one pending against SCAN_PO, one blocked on a PO that is not on file.
+    """Scanned receipts waiting on a clerk, as the worker leaves them: one
+    pending against SCAN_PO, one blocked on a PO that is not on file, one
+    with no PO number read, and one that is really an invoice. Each test
+    decides its own.
 
     Each has a stored PDF and its `supporting_extraction` artifact, so the
     review drawer's document pane serves bytes rather than a 404.
     """
-    import hashlib  # noqa: PLC0415
-
     from invoice_processing.api import service  # noqa: PLC0415
     from invoice_processing.db.repositories import (  # noqa: PLC0415
         PgCaseRepository,
@@ -250,10 +264,13 @@ def seed_scans() -> None:
             "case_001",
             "Purchase order PO-NOT-YET is not on file",
         ),
+        ("GRN-E2E-23", None, "case_002", None),
+        ("GRN-E2E-24", None, "case_002", None),
     ):
+        # Marked with its number so every scan is its own document.
         data = (
             REPO / "invoice_processing" / "exemplary_data" / pdf / "invoice.pdf"
-        ).read_bytes()
+        ).read_bytes() + f"%{grn}\n".encode()
         sha = hashlib.sha256(data).hexdigest()
         key = f"documents/{sha}.pdf"
         blobs.put(key, data, "application/pdf")
