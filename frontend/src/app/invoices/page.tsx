@@ -76,8 +76,12 @@ function InvoicesWorkbench() {
   const reason = params.get("reason") as KpiReason | null;
   const reasonDays = params.get("days") ?? "30";
   const { data: drill, error: drillError } = usePoll<KpiCases>(
-    reason ? `/api/kpis/cases?reason=${reason}&days=${reasonDays}` : null,
+    reason
+      ? `/api/kpis/cases?${new URLSearchParams({ reason, days: reasonDays })}`
+      : null,
   );
+
+  const waiting = !!reason && !drill && !drillError;
 
   const [selected, setSelected] = useState<string | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
@@ -96,10 +100,14 @@ function InvoicesWorkbench() {
     const keep = new Set(drill.case_ids);
     return all.filter((invoice) => keep.has(invoice.case_id));
   }, [list, reason, drill, drillError]);
+  // Under a drill-down a ?case= outside the narrowed queue is ignored.
+  const urlCase = params.get("case");
+  const urlCaseUsable =
+    !reason || queue.some((invoice) => invoice.case_id === urlCase);
   // Falls through to the first invoice rather than an effect that selects it:
   // the choice is derivable from what we have, so it needs no state of its own.
   const current =
-    selected ?? params.get("case") ?? queue[0]?.case_id ?? null;
+    selected ?? (urlCaseUsable ? urlCase : null) ?? queue[0]?.case_id ?? null;
   const index = queue.findIndex((i) => i.case_id === current);
 
   const { data: detail, reload: reloadDetail } = usePoll<InvoiceDetail>(
@@ -370,7 +378,9 @@ function InvoicesWorkbench() {
 
       {reason ? (
         <div className="panel" style={{ padding: "8px 12px" }} data-drill={reason}>
-          {drillError ? (
+          {waiting ? (
+            <>Narrowing to {REASON_LABELS[reason] ?? reason}…</>
+          ) : drillError ? (
             <>
               Could not narrow to {REASON_LABELS[reason] ?? reason}: {drillError}
             </>
@@ -403,7 +413,9 @@ function InvoicesWorkbench() {
         </div>
       ) : null}
 
-      {queue.length === 0 ? (
+      {queue.length === 0 && waiting ? (
+        <div className="empty-state">Loading…</div>
+      ) : queue.length === 0 ? (
         <div className="empty-state">
           Nothing to review. Upload a PDF here or from Documents; a worker
           extracts it and it appears in this queue.
@@ -1028,11 +1040,19 @@ function Corrections({ corrections }: { corrections: Correction[] }) {
   );
 }
 
+function KeyedWorkbench() {
+  // usePoll keeps the last answer across a path change, so a new drill-down
+  // gets a fresh workbench rather than the previous reason's case ids.
+  const params = useSearchParams();
+  const key = `${params.get("reason") ?? ""}|${params.get("days") ?? ""}`;
+  return <InvoicesWorkbench key={key} />;
+}
+
 export default function InvoicesPage() {
   // useSearchParams needs a Suspense boundary for this route to stay static.
   return (
     <Suspense fallback={<div className="empty-state">Loading…</div>}>
-      <InvoicesWorkbench />
+      <KeyedWorkbench />
     </Suspense>
   );
 }
