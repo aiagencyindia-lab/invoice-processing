@@ -20,6 +20,7 @@ from invoice_processing.adapters import (
     FsCaseRepository,
     JsonDocumentRepository,
     JsonlAuditSink,
+    JsonSupportingDocumentRepository,
 )
 from invoice_processing.api import auth, service, system
 from invoice_processing.api.service import app
@@ -76,6 +77,13 @@ def env(tmp_path, monkeypatch):
     # to a different claim store than the API is.
     claims = ClaimStore(tmp_path / "claims")
     monkeypatch.setattr(service, "_claim_store", claims)
+    monkeypatch.setattr(
+        service,
+        "_supporting_documents",
+        JsonSupportingDocumentRepository(
+            tmp_path / "supporting_documents.json", documents
+        ),
+    )
     monkeypatch.setattr(service.paths, "SESSIONS_DIR", tmp_path)
 
     return {
@@ -526,6 +534,15 @@ class TestRetry:
             for m in env["queue"].pull(max_messages=5)
         }
         assert forced == {doc_id: True, other: None}
+
+    def test_a_database_without_scans_retries_unforced(self, env, monkeypatch):
+        """No supporting-documents table: nothing was ever sent over."""
+        doc_id = add_document(env, sha="r7")
+        monkeypatch.setattr(service, "get_supporting_documents", lambda: None)
+        r = env["client"]("approver").post(f"/api/documents/{doc_id}/retry")
+        assert r.status_code == 200, r.text
+        [message] = env["queue"].pull()
+        assert message.payload.get("force_invoice") is None
 
     def test_retry_is_audited(self, env):
         doc_id = add_document(env, sha="r3")

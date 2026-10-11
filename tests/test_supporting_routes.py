@@ -1063,6 +1063,30 @@ def test_a_failed_kind_change_still_retries_as_an_invoice(
     assert message.payload["force_invoice"] is True
 
 
+def test_an_unreadable_review_row_does_not_retry_unforced(
+    env, tmp_path, monkeypatch
+):
+    """Not knowing whether a clerk sent it to the invoice queue is not the
+    same as knowing they did not: an unforced retry could divert it back."""
+    row, _ = _sent(env, tmp_path, monkeypatch)
+
+    def down(*a, **k):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(
+        service.get_supporting_documents(), "for_documents", down
+    )
+    retried = _client("approver").post(
+        f"/api/documents/{row['document_id']}/retry"
+    )
+    assert retried.status_code == 503
+    assert retried.json()["detail"] == (
+        "Could not check whether this document was sent to the invoice "
+        "queue; try again."
+    )
+    assert LocalQueue(tmp_path / "queue").pull() == []
+
+
 def test_a_stored_acceptance_is_not_sent_to_invoices(
     env, tmp_path, monkeypatch
 ):

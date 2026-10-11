@@ -425,15 +425,24 @@ def list_documents(
 
 
 def _sent_to_invoices(tenant_id: str, document_id: str) -> bool:
+    """Whether a clerk sent this scan to the invoice queue.
+
+    Not `_safe`: an unreadable store is not "no", and an unforced retry of a
+    document a clerk sent over would divert it back to review.
+    """
     from . import service  # noqa: PLC0415
     from .supporting_routes import SENT_TO_INVOICES  # noqa: PLC0415
 
-    rows = _safe(
-        lambda: service.get_supporting_documents().for_documents(
-            tenant_id, [document_id]
-        ),
-        default=[],
-    )
+    try:
+        store = service.get_supporting_documents()
+        # None: a database without the table has never held a scan.
+        rows = store.for_documents(tenant_id, [document_id]) if store else []
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not check whether this document was sent to the "
+            "invoice queue; try again.",
+        ) from exc
     return any(r.get("note") == SENT_TO_INVOICES for r in rows or [])
 
 
@@ -460,6 +469,12 @@ def retry_document(
     if document is None:
         raise HTTPException(status_code=404, detail="Unknown document")
 
+    # Classified an invoice, or sent to the invoice queue by a clerk (even if
+    # marking its kind failed): never diverted to review again. Asked before
+    # the claim is released, so a failed check leaves the document as it was.
+    force_invoice = document.get("kind") == "invoice" or _sent_to_invoices(
+        principal.tenant_id, document_id
+    )
     service.get_claim_store().release(principal.tenant_id, document_id)
 
     message_id = enqueue_document(
@@ -470,10 +485,7 @@ def retry_document(
             sha256=document.get("sha256", ""),
             storage_key=document.get("storage_key", ""),
         ),
-        # Classified an invoice, or sent to the invoice queue by a clerk
-        # (even if marking its kind failed): never diverted to review again.
-        force_invoice=document.get("kind") == "invoice"
-        or _sent_to_invoices(principal.tenant_id, document_id),
+        force_invoice=force_invoice,
     )
     service.get_audit().emit(
         principal.context(document_id),
