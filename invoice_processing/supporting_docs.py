@@ -9,6 +9,7 @@ call and reading the PDF's text.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -146,6 +147,43 @@ _IDENTIFIERS = ("po_number", "grn_number")
 _NOT_GROUNDED = {"currency", "amount_basis"}
 _OCR_MISREAD = {"po_number", "grn_number", "vendor_tax_id"}
 
+# The renderings confidence._candidates matches, read off the page: day first
+# when numeric, any of / . - between parts (locate ignores the separator).
+_MONTH = "(" + "|".join(short for short, _ in confidence._MONTHS) + ")[a-z]*"
+_DATE_PATTERNS = (
+    (re.compile(r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)"), "ymd"),
+    (re.compile(r"(?<!\d)(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})(?!\d)"), "dmy"),
+    (re.compile(rf"(?<![0-9a-z])(\d{{1,2}})[ -]{_MONTH}[ -](\d{{4}})"), "dMy"),
+    (re.compile(rf"(?<![a-z]){_MONTH} (\d{{1,2}}),? (\d{{4}})"), "Mdy"),
+)
+_MONTH_NUMBER = {short: n for n, (short, _) in enumerate(confidence._MONTHS, 1)}
+
+
+def _dates_on(pages: list[str]) -> set[tuple[int, int, int]]:
+    """Each distinct (day, month, year) the pages print.
+
+    ponytail: a numeric date is read day first, so one date printed both
+    12/09 and 09/12 counts twice -- that only over-flags, which fails closed.
+    """
+    found = set()
+    for text in map(confidence._normalize_page, pages):
+        for pattern, order in _DATE_PATTERNS:
+            for m in pattern.finditer(text):
+                if order == "ymd":
+                    y, mo, d = m.groups()
+                elif order == "dmy":
+                    d, mo, y = m.groups()
+                elif order == "dMy":
+                    d, mo, y = m.group(1), _MONTH_NUMBER[m.group(2)], m.group(3)
+                else:
+                    mo, d, y = _MONTH_NUMBER[m.group(1)], m.group(2), m.group(3)
+                d, mo, y = int(d), int(mo), int(y)
+                if mo > 12 >= d:  # month first, as _candidates also reads
+                    d, mo = mo, d
+                if 1 <= d <= 31 and 1 <= mo <= 12 and 1900 <= y <= 2100:
+                    found.add((d, mo, y))
+    return found
+
 
 def _read_pages(pdf_path) -> tuple[list[str], list[str], bool]:
     """(text layer, pages to ground against, has a text layer)."""
@@ -232,6 +270,13 @@ def extract(
                 evidence[f"lines[{i}].{key}"] = _evidence(
                     value, pages, by_ocr, False
                 )
+
+    # A RECEIVED stamp prints its own date, and the page then grounds either
+    # reading of "the date the goods were received": a person must choose.
+    stamp = evidence.get("received_on")
+    if stamp and len(_dates_on(pages)) > 1:
+        stamp["confidence"] = min(stamp["confidence"], confidence.MEDIUM)
+        stamp["checks"] = {"only_date_on_page": False}
 
     floor = min(
         (e["confidence"] for e in evidence.values()), default=confidence.LOW

@@ -390,3 +390,45 @@ def test_a_po_line_number_is_imported_as_given(printed):
         [{"line_number": printed, "description": "rod", "quantity": 1}],
     )
     assert payload["lines"][0]["line_number"] == printed
+
+
+STAMPED_GRN_PAGE = GRN_PAGE + " RECEIVED 04/09/2026 Accounts Dept."
+
+
+def test_a_second_date_on_the_page_puts_the_receipt_date_in_review(page):
+    """A RECEIVED stamp carries its own date, and the extractor has read it
+    as the receipt date; the page grounds either reading."""
+    page(STAMPED_GRN_PAGE)
+    out = supporting_docs.extract("g.pdf", "goods_receipt", call=_fake(_grn()))
+    ev = out["_evidence"]
+    assert ev["received_on"]["grounded"] is True
+    assert ev["received_on"]["confidence"] < confidence.HIGH
+    assert "received_on" in ev["_summary"]["fields_needing_review"]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    ["", " Printed 12-Sep-2026", " Printed 2026-09-12", " Printed 12.09.2026"],
+)
+def test_one_date_printed_twice_is_not_a_second_date(page, extra):
+    page(GRN_PAGE + extra)
+    out = supporting_docs.extract("g.pdf", "goods_receipt", call=_fake(_grn()))
+    review = out["_evidence"]["_summary"]["fields_needing_review"]
+    assert "received_on" not in review
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        " Stamp 02.09.2026",
+        " Stamp 5 Sep 2026",
+        " Stamp Sep 5, 2026",
+        " Stamp 2026-09-05",
+        " Stamp 09/25/2026",
+    ],
+)
+def test_every_date_format_counts_as_a_second_date(page, extra):
+    page(GRN_PAGE + extra)
+    out = supporting_docs.extract("g.pdf", "goods_receipt", call=_fake(_grn()))
+    review = out["_evidence"]["_summary"]["fields_needing_review"]
+    assert "received_on" in review

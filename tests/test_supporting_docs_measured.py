@@ -37,10 +37,28 @@ def _same(truth, got) -> bool:
     return " ".join(str(got or "").split()).casefold() == truth.casefold()
 
 
+def _second_date_on_page(rec, key) -> bool:
+    """Today's rule (`supporting_docs._dates_on`) over the recorded run.
+
+    The page text was not recorded, so this applies the rule to what the
+    fixture's `source` says each page prints: every GRN its own date, and an
+    adversarial one also a RECEIVED stamp dated September -- never a GRN date
+    (May-Aug) -- so two distinct dates. Only where the page was read at all:
+    `grounded` None means no readable text, and the field is in review anyway.
+    ponytail: assumes OCR read both dates; recapture with page text to drop it.
+    """
+    stamp = rec["extracted"]["_evidence"].get("received_on") or {}
+    return (
+        key == "received_on"
+        and rec["difficulty"] == "adversarial"
+        and stamp.get("grounded") is not None
+    )
+
+
 def _flagged(rec, key, got) -> bool:
     # a blank is as visible to the reviewer as a listed field
     review = rec["extracted"]["_evidence"]["_summary"]["fields_needing_review"]
-    return got is None or key in review
+    return got is None or key in review or _second_date_on_page(rec, key)
 
 
 def score(records):
@@ -92,9 +110,10 @@ def score(records):
 # GRN lines paired to the right PO line, wrong values flagged for review.
 # ponytail: pinned to this one run of 26 documents, not a gate; turn these into
 # floors once the scan set grows enough for a rate to mean something.
-PINNED = ((56, 60), (17, 18), (34, 34), (28, 28), (3, 5))
-# GRN-03/09/12/15 read the RECEIVED stamp's date (OCR grounds 03 and 09, so
-# they go unflagged); SVC-INV-089 prints no total row and the total is blank.
+PINNED = ((56, 60), (17, 18), (34, 34), (28, 28), (5, 5))
+# GRN-03/09/12/15 read the RECEIVED stamp's date (OCR grounds 03 and 09, and
+# the stamp's second date flags them); SVC-INV-089 prints no total row and the
+# total is blank.
 PINNED_WRONG = [
     ("GRN-03.pdf", "received_on"),
     ("GRN-09.pdf", "received_on"),

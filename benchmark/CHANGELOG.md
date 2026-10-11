@@ -1452,13 +1452,19 @@ the dataset's 6 PURCHASE_ORDER documents. One real Gemini 2.5 Pro run per PDF
 | PO header (po_number, vendor_name, total) | 17 / 18 |
 | line quantities (received on GRNs, ordered on POs) | 34 / 34 |
 | GRN lines paired to the right PO line | 28 / 28 |
-| wrong values flagged for review (or left blank) | 3 / 5 |
+| wrong values flagged for review (or left blank) | 5 / 5 (was 3 / 5) |
 
 Every wrong value, with its reason:
 
 - GRN-03, GRN-09 (adversarial) `received_on`: the model took the RECEIVED
   stamp's date (2026-09-02, 2026-09-04) over the printed GRN date. The stamp
-  date is on the page, so OCR grounds it and it reaches the clerk **unflagged**.
+  date is on the page, so OCR grounds it; as first measured it reached the
+  clerk **unflagged**. Now flagged: `received_on` goes to review whenever the
+  page prints more than one distinct date (re-scored 2026-10-11 from the
+  committed fixture, no new model run; the page text was not recorded, so the
+  re-score applies the rule to the dates the fixture's `source` says each page
+  prints). The cost: the two adversarial GRNs read correctly (GRN-06, GRN-18)
+  now send their right `received_on` to review too.
 - GRN-12, GRN-15 (adversarial) `received_on`: the same stamp misread; OCR did
   not find the stamp date, so both were flagged.
 - SVC-INV-089 (PO, text layer) `total`: the page prints only the line amount,
