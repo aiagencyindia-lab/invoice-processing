@@ -244,6 +244,17 @@ class TestKeywordFallback:
                 "Bill of supply 22\nPurchase Order: PO-1",
                 NON_TAX_INVOICE,
             ),
+            # "Invoice To" is an address, not a title: still a PO.
+            (
+                "ACME LTD\nInvoice To: Foo Pvt Ltd\nPURCHASE ORDER\nPO No 5\n"
+                "GSTIN 29AAA",
+                "purchase_order",
+            ),
+            ("ACME LTD\nInvoice No: 4\nGOODS RECEIPT NOTE", "goods_receipt"),
+            # An invoice marker on the same line as a supporting one wins.
+            ("PURCHASE ORDER / TAX INVOICE\nGSTIN 29AAA", TAX_INVOICE),
+            ("TAX INVOICE CUM DELIVERY CHALLAN\nGSTIN 29AAA", TAX_INVOICE),
+            ("INVOICE AGAINST PURCHASE ORDER\nPO-1", NON_TAX_INVOICE),
             # Untitled: the markers are only in the body, so nothing is told.
             (
                 "ACME TRADERS\nPlot 4\nPeenya\nBengaluru\nPh 080\n"

@@ -148,8 +148,9 @@ def test_a_bundle_with_an_invoice_stays_on_the_invoice_path(
 def test_a_keyword_guess_never_diverts_a_document(
     stub_agents, monkeypatch, tmp_path: Path
 ):
-    """A keyword guess can still be wrong about a page, so a document it
-    calls a GRN stays in the queue a person watches."""
+    """Only a model classification diverts (the `classified_by == "model"`
+    gate): a keyword guess can be wrong about a page, so a document it calls
+    a GRN stays in the queue a person watches."""
     monkeypatch.setattr(
         general_invoice_agent,
         "ClassifierAgent",

@@ -1295,14 +1295,15 @@ Return ONLY this JSON:
 
     # Supporting documents are named in their title; an invoice names them in
     # its body ("PO No", "GRN No", "Challan No"). So their markers count only
-    # in the title region, and only up to the first line naming an invoice.
+    # in the title region, and only on lines before one titling an invoice --
+    # which "Invoice To:" or "Invoice No" does not: a PO prints those too.
     _SUPPORTING_KINDS: ClassVar[frozenset[str]] = frozenset(
         {"purchase_order", GOODS_RECEIPT, "delivery_challan"}
     )
-    _INVOICE_MARKERS: ClassVar[tuple[str, ...]] = (
-        "tax invoice",
-        "invoice",
-        "bill of supply",
+    _INVOICE_TITLE: ClassVar[re.Pattern] = re.compile(
+        r"tax invoice|bill of supply"
+        r"|^\W*invoice\b(?!\s*(?:(?:to|no|number|date|address|ref)\b|[#:.]))"
+        r"|^\W*(?:\w+\s+){0,2}invoice\W*$"
     )
     _TITLE_LINES: ClassVar[int] = 5
 
@@ -1324,13 +1325,11 @@ Return ONLY this JSON:
             (
                 i
                 for i, line in enumerate(lines)
-                if any(m in line for m in self._INVOICE_MARKERS)
+                if self._INVOICE_TITLE.search(line.strip())
             ),
             len(lines),
         )
-        title = "\n".join(
-            lines[: min(self._TITLE_LINES, first_invoice_line + 1)]
-        )
+        title = "\n".join(lines[: min(self._TITLE_LINES, first_invoice_line)])
         document_type = next(
             (
                 kind
