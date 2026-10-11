@@ -33,13 +33,19 @@ uses.
 
 Per invoice:
 
-- **Received**: `documents.created_at` (already exposed as `received_at`).
+- **Received**: `documents.created_at` (already exposed as `received_at`),
+  falling back to `invoices.created_at` when the case has no document row
+  (seeded and legacy cases). Left join, never inner.
 - **Decided**: new column `invoices.decided_at`.
   - Human decision → the workflow artifact's `decided_at` (written by
     `_record_workflow` in `api/service.py`).
   - Touchless (routing AUTO, machine verdict accept, no failed step-2.3
     finding, no approval chain) → the time the case was first projected.
   - Null while the invoice waits on a person.
+  The worker routes the approval chain *after* projecting the case, so a
+  touchless `decided_at` can exist before a chain does. The query therefore
+  treats an invoice as decided only when `decided_at` is set and either a
+  person decided it (`human_decision` not null) or it has no approval chain.
 - **Touchless**: decided and `human_decision` is null.
 - **Exception**: not touchless. One bucket per invoice, first match wins:
   1. `rejected_by_rules` — `case_projection.machine_verdict` is reject.
@@ -48,6 +54,10 @@ Per invoice:
   4. `approval_required` — has `approval_steps` rows (pending or decided).
   5. `manual_decision` — none of the above, but a person decided it (for
      example an AUTO invoice approved from the workbench).
+  6. `other` — an exception matching none of the above (for example an invoice
+     projected before `decided_at` existed). Counted so the buckets always sum
+     to the exceptions; a non-zero `other` is a data-quality signal, not a
+     category to design around.
   The buckets are exhaustive over exceptions and say why a person was needed,
   not the current state: an invoice that was REVIEW and is now approved still
   counts under `low_confidence`.
@@ -81,26 +91,31 @@ Per invoice:
 
 ## 3. Query
 
-One class, `KpiRepository(url)`, with one method
-`summary(tenant_id, since: datetime | None) -> dict`. It opens one
-`tenant_session(tenant_id, url)` and filters `tenant_id` explicitly on every
-table it touches:
+One class, `KpiRepository(url)`, in `db/repositories.py`, with two methods:
 
-- base: `Invoice ⋈ Document` where `Document.kind IS NULL` and
-  (`since` is null or `Document.created_at >= since`).
-- counts: received, decided, touchless, and the exception buckets (a CASE
-  expression over EXISTS subqueries on `findings` and `approval_steps`).
-- cycle: fetch `(decided_at, received)` for decided rows; percentiles in
-  Python (SQLite has no percentile function; a window of tens of thousands of
-  rows is fine).
-- open: count and `min(received)`.
-- three-way: count of `po_number IS NOT NULL`; held via
-  `EXISTS(findings step='2.3' AND passed=false)`.
-- cost: `avg` and `sum` of `pipeline_runs.cost_usd` joined on invoice id.
+- `summary(tenant_id, since: datetime | None) -> dict`
+- `cases(tenant_id, since, reason) -> dict` — `{"case_ids": [...], "truncated": bool}`,
+  at most 500 ids, newest received first.
 
-The only pure logic is `percentile(values, p)` and the bucket rule; both are
-small functions in the repository module with direct unit tests. No separate
-pure module for two functions.
+Both call one private `_rows(session, tenant_id, since)` that selects **one row
+per invoice in the window** from typed columns only: `case_id`, received
+(`coalesce(documents.created_at, invoices.created_at)`), `decided_at`,
+`human_decision`, `decision`, `routing`, `po_number`, `held` (EXISTS a
+`findings` row with `step='2.3'` and `passed=false`), `chain` (EXISTS an
+`approval_steps` row for the case) and `cost_usd` (the latest `pipeline_runs`
+row for the invoice, as a scalar subquery). Scans are excluded with the same
+`~exists(documents.kind not null and != 'invoice')` the sheet uses. The window
+filter is on received. The numbers — counts, buckets, nearest-rank
+percentiles, open age, hold rate, cost — are then computed in Python over
+those rows. No artifact JSON is loaded.
+
+ponytail: one row per invoice in the window; aggregate in SQL if a window ever
+exceeds ~100k invoices.
+
+The bucket rule is one pure function `exception_bucket(decision, held,
+routing, chain, human_decision) -> str` and the percentile is one pure
+function `percentile(values, p)`, both in the repository module and
+unit-tested directly.
 
 ## 4. API
 
@@ -110,10 +125,19 @@ pure module for two functions.
 GET /api/kpis?days=30     viewer+; days ∈ {0,7,30,90} else 422
 ```
 
-DB-only: without a database it returns 503 whose text contains
+DB-only: without a database both routes return 503 whose text contains
 "needs a database" (same guard as `api/sheet.py`). Read-only, so no audit
-event. Memoised accessor `get_kpis()` in `service.py`, reset in
-`tests/conftest.py`.
+event and no memoised accessor: the repository is constructed per request,
+as the sheet's is.
+
+Second route, for the drill-down:
+
+```
+GET /api/kpis/cases?reason=<bucket>&days=30   viewer+
+→ {"case_ids": ["..."], "truncated": false}
+```
+
+`reason` must be one of the six buckets, else 422.
 
 Response:
 
@@ -141,9 +165,10 @@ Response:
   (hint: held of PO-backed), AI cost per invoice (hint: total).
 - Exceptions by reason: a table of reason / count / share; each row links to
   `/invoices?reason=<bucket>`.
-- `/invoices` accepts `?reason=` and filters the loaded list client-side with
-  the same bucket rule. If the list row lacks a field the rule needs, the
-  field is added to the row rather than a second endpoint.
+- `/invoices` accepts `?reason=<bucket>&days=N`. When present it fetches
+  `/api/kpis/cases` once and shows only the queue items whose case id is in
+  the answer, with a banner "Showing N invoices needing a person: <reason>"
+  and a "Show all" link back to `/invoices`.
 - Empty window → "No invoices received in this window". 503 → the friendly
   "needs a database" message through `ApiError.friendly`.
 - Sidebar entry "KPIs"; the dashboard's touchless tile links to `/kpis`.
