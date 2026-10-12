@@ -514,7 +514,8 @@ def _parse_cursor(cursor: str) -> tuple[datetime, str]:
     try:
         if not sep or not event_id:
             raise ValueError
-        return datetime.fromisoformat(stamp), event_id
+        # Pasted unencoded into a URL, "+00:00" arrives as " 00:00".
+        return datetime.fromisoformat(stamp.replace(" ", "+")), event_id
     except ValueError:
         raise HTTPException(
             status_code=422,
@@ -556,6 +557,10 @@ def list_audit(
     """
     from . import service  # noqa: PLC0415
 
+    # A naive bound means UTC everywhere: Postgres would read it in the
+    # session's zone, the local file already reads it as UTC.
+    since = _as_utc(since) if since is not None else None
+    until = _as_utc(until) if until is not None else None
     before = _parse_cursor(cursor) if cursor else None
     sink = service.get_audit()
     limit = max(1, min(limit, 500))
@@ -631,6 +636,7 @@ def export_audit(
 
     from . import service  # noqa: PLC0415
 
+    since, until = _as_utc(since), _as_utc(until)  # as list_audit does
     sink = service.get_audit()
 
     def query(before):
@@ -658,11 +664,18 @@ def export_audit(
 
     # Recorded once the data is known to be readable, still before any byte
     # goes out: a refused export is not a pull, a dropped download still is.
-    sink.emit(
-        principal.context(),
-        "audit_exported",
-        {"since": since.isoformat(), "until": until.isoformat()},
-    )
+    try:
+        sink.emit(
+            principal.context(),
+            "audit_exported",
+            {"since": since.isoformat(), "until": until.isoformat()},
+        )
+    except Exception:
+        # An export that cannot be recorded is not handed out.
+        raise HTTPException(
+            status_code=503,
+            detail="Exporting the audit trail needs a database to record the export, and it could not be reached.",
+        ) from None
 
     def rows():
         if first is None:  # local JSONL sink: one slice, no paging

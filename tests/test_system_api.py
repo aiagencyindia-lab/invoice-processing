@@ -721,6 +721,50 @@ class TestAudit:
         assert [e["id"] for e in rest["events"]] == ["e0"]
         assert rest["next_cursor"] is None
 
+    def test_a_pasted_cursor_whose_plus_became_a_space_still_pages(
+        self, env, monkeypatch
+    ):
+        """Postgres stamps carry "+00:00"; pasted unencoded into a URL the
+        "+" arrives as a space. A cursor the server issued must still page."""
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        events = [
+            SimpleNamespace(
+                id=f"e{i}",
+                occurred_at=t0 + timedelta(hours=i),
+                actor="a",
+                actor_type="user",
+                action="x",
+                entity_type=None,
+                entity_id=None,
+                after=None,
+                before=None,
+                request_id=None,
+                ip=None,
+            )
+            for i in range(3)
+        ][::-1]
+
+        class Fake:
+            def query(self, tenant_id, limit=100, before=None, **k):
+                rows = [
+                    e
+                    for e in events
+                    if before is None or (e.occurred_at, e.id) < before
+                ]
+                return rows[:limit]
+
+        monkeypatch.setattr(service, "_audit", Fake())
+        client = env["client"]()
+        first = client.get("/api/audit?limit=2").json()
+        assert "+00:00" in first["next_cursor"]
+        pasted = first["next_cursor"].replace("+", " ")
+        rest = client.get(f"/api/audit?limit=2&cursor={pasted}")
+        assert rest.status_code == 200, rest.text
+        assert [e["id"] for e in rest.json()["events"]] == ["e0"]
+
     def test_a_cursor_is_not_answered_from_the_local_file_when_the_database_fails(
         self, env, monkeypatch
     ):
@@ -836,6 +880,13 @@ class TestAudit:
         assert r.status_code == 200
         rows = list(csv.reader(io.StringIO(r.text)))
         assert len(rows) == 1501
+        data_rows = rows[1:]
+        # Across the 1000-row page boundary: nothing repeated, nothing out
+        # of order.
+        assert len({row[0] for row in data_rows}) == 1500
+        stamps = [row[1] for row in data_rows]
+        assert stamps == sorted(stamps, reverse=True)
+        assert data_rows[999][0] == "e0500" and data_rows[1000][0] == "e0499"
         assert rows[1][2] == "a,b"
         assert json.loads(rows[1][10])["n"]["m"] == 'q,"r'
         assert rows[1][9] == ""
@@ -929,6 +980,61 @@ class TestAudit:
             )
         assert "Audit export failed" in caplog.text
 
+    def test_an_export_whose_record_cannot_be_written_is_a_clean_503(
+        self, env, monkeypatch
+    ):
+        """The data is readable but the pull cannot be recorded: refuse it,
+        rather than a 500 or an unrecorded download."""
+
+        class CannotRecord:
+            def emit(self, *a, **k):
+                raise RuntimeError("audit write failed")
+
+            def query(self, *a, **k):
+                return []
+
+        monkeypatch.setattr(service, "_audit", CannotRecord())
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        assert r.status_code == 503
+        assert "needs a database" in r.json()["detail"]
+        assert not r.headers["content-type"].startswith("text/csv")
+
+    def test_a_naive_window_is_read_as_utc(self, env, monkeypatch):
+        """JSONL treats a naive time as UTC; Postgres would read it in the
+        session's zone. Both entry points hand the sink the same instant."""
+        seen = []
+
+        class Recording:
+            def emit(self, *a, **k):
+                pass
+
+            def query(self, tenant_id, **k):
+                seen.append((k["since"], k["until"]))
+                return []
+
+        monkeypatch.setattr(service, "_audit", Recording())
+        client = env["client"]("admin")
+        for naive, zoned in (
+            (
+                "/api/audit?since=2026-10-01T09:00:00&until=2026-10-02T09:00:00",
+                "/api/audit?since=2026-10-01T09:00:00Z&until=2026-10-02T09:00:00Z",
+            ),
+            (
+                "/api/audit/export?since=2026-10-01T09:00:00&until=2026-10-02T09:00:00",
+                "/api/audit/export?since=2026-10-01T09:00:00Z&until=2026-10-02T09:00:00Z",
+            ),
+        ):
+            seen.clear()
+            assert client.get(naive).status_code == 200
+            assert client.get(zoned).status_code == 200
+            (n_since, n_until), (z_since, z_until) = seen
+            for n, z in ((n_since, z_since), (n_until, z_until)):
+                assert n.tzinfo is not None, naive
+                assert n == z
+
+    @pytest.mark.slow
     def test_the_local_file_export_has_no_row_cap(
         self, env, monkeypatch, tmp_path
     ):
