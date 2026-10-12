@@ -58,12 +58,41 @@ from ..adapters import (
 )
 from ..masking import BANK_FIELDS, MASK_PREFIX, mask_bank
 from ..ports import LockHeld
-from . import auth
+from . import auth, preflight
 from .auth import Principal, current_principal, require_role
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Invoice Review Workbench", version="0.1.0")
+# The schema pages describe every route to anyone who asks. Fine on a
+# laptop; on a deployed host they are a map handed to a stranger. ENV is
+# fixed for the life of a process, so this is decided once at import.
+_SERVE_DOCS = not preflight.is_deployed()
+app = FastAPI(
+    title="Invoice Review Workbench",
+    version="0.1.0",
+    docs_url="/docs" if _SERVE_DOCS else None,
+    redoc_url="/redoc" if _SERVE_DOCS else None,
+    openapi_url="/openapi.json" if _SERVE_DOCS else None,
+)
+
+# What a browser may do with a response. The app in `frontend/` sets the
+# same set on its own pages; the API repeats them so a direct call is no
+# weaker than a proxied one.
+_FIXED_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+# The API's own HTML is the landing page and the schema browser: static,
+# styled inline, scripts from jsdelivr for Swagger and ReDoc.
+_HTML_CSP = (
+    "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net "
+    "'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net "
+    "'unsafe-inline'; img-src 'self' data: https://fastapi.tiangolo.com; "
+    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; "
+    "object-src 'none'"
+)
 
 
 @app.middleware("http")
@@ -92,6 +121,24 @@ async def _identify_request(request, call_next):
         auth.current_request_id.reset(id_token)
         auth.current_client_ip.reset(ip_token)
     response.headers["x-request-id"] = request_id
+    response.headers.update(_FIXED_HEADERS)
+    if preflight.is_deployed():
+        # Only where TLS is real: a browser that saw HSTS from a local http
+        # host would refuse that host for a year.
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    content_type = response.headers.get("content-type", "")
+    if content_type.startswith("text/html"):
+        response.headers["Content-Security-Policy"] = _HTML_CSP
+    elif (
+        request.url.path.startswith("/api/")
+        and content_type.startswith("application/json")
+        and "content-disposition" not in response.headers
+    ):
+        # Tenant data must not sit in a shared cache; downloads keep the
+        # default so "Save as" works.
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
