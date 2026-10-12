@@ -66,7 +66,11 @@ export default function ActivityPage() {
     try {
       await downloadFile(`/api/audit/export?${q}`, name);
     } catch (caught) {
-      setProblem(caught instanceof ApiError ? caught.friendly : String(caught));
+      setProblem(
+        caught instanceof ApiError
+          ? caught.friendly
+          : "Could not download the export. Check your connection and try again.",
+      );
     }
   };
   const [action, setAction] = useState("");
@@ -124,9 +128,9 @@ export default function ActivityPage() {
           ))}
         </select>
         <input type="datetime-local" className="input-field" style={{ width: "auto" }}
-          aria-label="Since" value={since} onChange={(e) => setSince(e.target.value)} />
+          aria-label="Since" value={since} onChange={(e) => { setSince(e.target.value); setProblem(""); }} />
         <input type="datetime-local" className="input-field" style={{ width: "auto" }}
-          aria-label="Until" value={until} onChange={(e) => setUntil(e.target.value)} />
+          aria-label="Until" value={until} onChange={(e) => { setUntil(e.target.value); setProblem(""); }} />
         <select
           className="input-field"
           style={{ width: "auto" }}
@@ -138,9 +142,11 @@ export default function ActivityPage() {
           <option value={100}>Last 100</option>
           <option value={500}>Last 500</option>
         </select>
+        {/* Only Since/Until bound the export; the action, actor and limit
+            filters narrow this screen, not the file. */}
         {me?.role === "admin" ? (
           <button type="button" className="btn-secondary" onClick={exportCsv}>
-            Export CSV
+            Export CSV (whole range)
           </button>
         ) : null}
       </div>

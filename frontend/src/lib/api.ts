@@ -615,8 +615,12 @@ export async function downloadFile(path: string, filename: string): Promise<void
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
+  // Firefox ignores a click on a detached anchor; revoking synchronously can
+  // cancel the download before the browser has started it.
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(url);
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 export type Check = {
