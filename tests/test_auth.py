@@ -134,6 +134,21 @@ class TestTenantComesFromTheToken:
         with pytest.raises(AuthError):
             principal_from_claims({**ACME, "email_verified": False})
 
+    def test_a_token_without_email_verified_is_refused(self):
+        """Firebase always sets it, so its absence means a token we do not
+        understand -- refuse rather than assume."""
+        claims = {k: v for k, v in ACME.items() if k != "email_verified"}
+        with pytest.raises(AuthError) as caught:
+            principal_from_claims(claims)
+        assert caught.value.status_code == 403
+
+    def test_email_verified_must_be_the_boolean_true(self):
+        with pytest.raises(AuthError):
+            principal_from_claims({**ACME, "email_verified": "true"})
+
+    def test_a_verified_email_is_admitted(self):
+        assert principal_from_claims(ACME).email == "clerk@acme.test"
+
     def test_missing_email_is_refused(self):
         claims = {k: v for k, v in ACME.items() if k != "email"}
         with pytest.raises(AuthError):

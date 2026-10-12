@@ -175,9 +175,10 @@ def principal_from_claims(claims: dict[str, Any]) -> Principal:
     email = claims.get("email")
     if not email:
         raise AuthError("Token carries no email claim.", status_code=403)
-    if claims.get("email_verified") is False:
+    if claims.get("email_verified") is not True:
         # Unverified email means anyone who can receive at that address can
         # claim it, and our audit trail is keyed on email.
+        # Absent or non-boolean counts as unverified: we only trust what Google asserted.
         raise AuthError("Email address is not verified.", status_code=403)
 
     return Principal(

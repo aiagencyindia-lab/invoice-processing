@@ -26,6 +26,7 @@ CLAIMS = {
     "tok-ada": {
         "user_id": "u-ada",
         "email": "ada@acme.test",
+        "email_verified": True,
         "tenant_id": TENANT,
         "role": "approver",
     }
