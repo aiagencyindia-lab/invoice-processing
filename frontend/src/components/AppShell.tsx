@@ -148,15 +148,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // already signed in ended up pressing the sign-in button again.
   // Navigating is a side effect: done during render it updates the Router
   // while AppShell is still rendering, which React warns about.
-  const redirectTo =
-    !isPublic && me === null && !denied?.includes("deactivated")
-      ? denied
-        ? "/signup"
-        : "/login"
-      : null;
+  const redirect = !isPublic && me === null && !denied?.includes("deactivated");
+  const target = denied ? "/signup" : "/login";
   useEffect(() => {
-    if (redirectTo) router.replace(redirectTo);
-  }, [redirectTo, router]);
+    if (redirect) router.replace(target);
+  }, [redirect, target, router]);
 
   if (isPublic) return <>{children}</>;
 
