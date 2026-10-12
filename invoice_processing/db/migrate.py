@@ -19,9 +19,9 @@ remembering:
   together against one file, and the loser of that race used to die on
   `duplicate column name` halfway through a migration the winner had applied.
 
-Set `RUN_MIGRATIONS=0` to turn it off -- for a deployment where migrations are
-applied by a separate release step, which is the better arrangement once there
-is a release process to hang it on.
+Deployed environments set `RUN_MIGRATIONS=0` and run
+`python -m invoice_processing.db.migrate` as the owner role in a release step
+(Railway: the pre-deploy command); the app's connection has no DDL rights.
 """
 
 from __future__ import annotations
@@ -131,3 +131,35 @@ def current_revision() -> str | None:
 
     with get_engine().connect() as connection:
         return MigrationContext.configure(connection).get_current_revision()
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m invoice_processing.db.migrate`: the release step.
+
+    The API and worker connect as a role that owns nothing and cannot run
+    DDL (see db/bootstrap.sql). Migrations run here, as the owner, before a
+    deploy serves traffic. MIGRATE_* name the owner's connection so the
+    app's own settings stay the least-privilege ones.
+    """
+    for source, target in (
+        ("MIGRATE_DATABASE_URL", "DATABASE_URL"),
+        ("MIGRATE_CLOUD_SQL_USER", "CLOUD_SQL_USER"),
+    ):
+        if os.getenv(source):
+            os.environ[target] = os.environ[source]
+    os.environ["RUN_MIGRATIONS"] = "1"
+    logging.basicConfig(level=logging.INFO)
+    try:
+        print(upgrade_to_head())
+    except Exception:
+        logger.exception(
+            "Migration failed; nothing is serving a schema it could not reach."
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())

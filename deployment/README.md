@@ -1,3 +1,30 @@
+# Release (Railway + Postgres)
+
+The API and worker connect as a least-privilege app role that owns nothing and
+cannot run DDL. Migrations run in a release step as the owner role.
+`invoice_processing/db/bootstrap.sql` has two sections: §1 before the first
+migrate (roles and ownership), §2 after (grants on the migrated tables).
+
+1. Roles, as `postgres`:
+   `psql "$ADMIN_URL" -v owner=ledgerly_owner -v app=ledgerly_app -v owner_pw=... -v app_pw=... -f invoice_processing/db/bootstrap.sql` (§1)
+2. Migrate as the owner:
+   `MIGRATE_DATABASE_URL=postgresql+pg8000://ledgerly_owner:...@host/db python -m invoice_processing.db.migrate`
+3. Run bootstrap §2 the same way as step 1.
+4. Run the VERIFY query at the end of `bootstrap.sql` and confirm the app role
+   has no DDL rights.
+
+Railway service variables:
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | the app role's connection |
+| `MIGRATE_DATABASE_URL` | the owner role's connection |
+| `RUN_MIGRATIONS` | `0` |
+
+Pre-deploy command: `python -m invoice_processing.db.migrate`
+
+---
+
 # Deployment Guide
 
 Deploy an ADK agent to Agent Runtime and optionally register it on Gemini Enterprise.

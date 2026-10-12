@@ -847,6 +847,40 @@ class TestMigrationsRunAtStartup:
         present = set(inspect(session.get_engine()).get_table_names())
         assert set(TENANT_TABLES) <= present
 
+    @staticmethod
+    def _isolate_env(monkeypatch, tmp_path):
+        """main() writes these straight into os.environ; register them so
+        teardown restores them."""
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'app.db'}")
+        monkeypatch.setenv("RUN_MIGRATIONS", "0")
+        monkeypatch.setenv("CLOUD_SQL_INSTANCE", "")
+        monkeypatch.delenv("CLOUD_SQL_USER", raising=False)
+        monkeypatch.delenv("MIGRATE_CLOUD_SQL_USER", raising=False)
+        monkeypatch.setattr(session, "_engine", None)
+
+    def test_the_release_command_migrates_as_the_owner(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The app role cannot run DDL, so a release step runs it as the
+        owner. MIGRATE_DATABASE_URL names that connection."""
+        self._isolate_env(monkeypatch, tmp_path)
+        owner = f"sqlite:///{tmp_path / 'owner.db'}"
+        monkeypatch.setenv("MIGRATE_DATABASE_URL", owner)
+
+        assert migrate.main() == 0
+
+        assert os.environ["DATABASE_URL"] == owner
+        assert migrate.current_revision() is not None
+        assert migrate.current_revision() in capsys.readouterr().out
+
+    def test_the_release_command_fails_loudly(self, tmp_path, monkeypatch):
+        self._isolate_env(monkeypatch, tmp_path)
+        monkeypatch.setenv(
+            "MIGRATE_DATABASE_URL",
+            "postgresql+pg8000://nobody:x@127.0.0.1:1/none",
+        )
+        assert migrate.main() == 1
+
 
 # Run in a child process. Each child marks itself ready, waits for the other,
 # then migrates -- so both reach the DDL together, as the API and the worker do
