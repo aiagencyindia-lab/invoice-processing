@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { AuditEvent } from "@/lib/api";
+import { ApiError, downloadFile, type AuditEvent, type Me } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 
 const POLL_MS = 10000;
@@ -43,10 +43,32 @@ function when(value: string | null): string {
 
 export default function ActivityPage() {
   const [limit, setLimit] = useState(100);
+  const [since, setSince] = useState("");
+  const [until, setUntil] = useState("");
+  const [problem, setProblem] = useState("");
+  const { data: me } = usePoll<Me>("/api/me");
+
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (since) params.set("since", new Date(since).toISOString());
+  if (until) params.set("until", new Date(until).toISOString());
   const { data, error } = usePoll<{ events: AuditEvent[]; count: number }>(
-    `/api/audit?limit=${limit}`,
+    `/api/audit?${params}`,
     POLL_MS,
   );
+
+  const exportCsv = async () => {
+    // The server requires both bounds; default to "everything so far".
+    const from = since ? new Date(since) : new Date(0);
+    const to = until ? new Date(until) : new Date();
+    const q = new URLSearchParams({ since: from.toISOString(), until: to.toISOString() });
+    const name = `audit-${from.toISOString().slice(0, 10)}-${to.toISOString().slice(0, 10)}.csv`;
+    setProblem("");
+    try {
+      await downloadFile(`/api/audit/export?${q}`, name);
+    } catch (caught) {
+      setProblem(caught instanceof ApiError ? caught.friendly : String(caught));
+    }
+  };
   const [action, setAction] = useState("");
   const [actor, setActor] = useState("");
 
@@ -101,6 +123,10 @@ export default function ActivityPage() {
             </option>
           ))}
         </select>
+        <input type="datetime-local" className="input-field" style={{ width: "auto" }}
+          aria-label="Since" value={since} onChange={(e) => setSince(e.target.value)} />
+        <input type="datetime-local" className="input-field" style={{ width: "auto" }}
+          aria-label="Until" value={until} onChange={(e) => setUntil(e.target.value)} />
         <select
           className="input-field"
           style={{ width: "auto" }}
@@ -112,7 +138,16 @@ export default function ActivityPage() {
           <option value={100}>Last 100</option>
           <option value={500}>Last 500</option>
         </select>
+        {me?.role === "admin" ? (
+          <button type="button" className="btn-secondary" onClick={exportCsv}>
+            Export CSV
+          </button>
+        ) : null}
       </div>
+
+      {problem ? (
+        <p role="alert" style={{ color: "var(--error)", fontSize: 12.5 }}>{problem}</p>
+      ) : null}
 
       {error ? <div className="empty-state">{error}</div> : null}
 

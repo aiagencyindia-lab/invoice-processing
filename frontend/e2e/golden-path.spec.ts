@@ -946,3 +946,14 @@ test("a refused or missing session is sent to the right screen", async ({
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/signup$/);
 });
+
+test("an admin can narrow the activity trail and export it", async ({ page }) => {
+  await goto(page, "/activity");
+  await page.getByLabel("Since").fill("2000-01-01T00:00");
+  await expect(page.getByRole("button", { name: "Export CSV" })).toBeVisible();
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "Export CSV" }).click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^audit-.*\.csv$/);
+});
