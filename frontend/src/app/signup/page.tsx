@@ -33,7 +33,14 @@ export default function SignUpPage() {
   const settle = useCallback(async (value: SignedInUser | null) => {
     setUser(value);
     if (!value) return setStep("account");
-    setStep((await isEmailVerified()) ? "organisation" : "verify");
+    if (await isEmailVerified()) {
+      // reload() updates the user, not the ID token: the cached token still
+      // says email_verified=false and the server would refuse signup.
+      await refreshToken();
+      setStep("organisation");
+    } else {
+      setStep("verify");
+    }
   }, []);
 
   useEffect(() => {
@@ -126,9 +133,12 @@ export default function SignUpPage() {
               className="btn-primary"
               onClick={async () => {
                 setProblem(null);
-                setStep((await isEmailVerified()) ? "organisation" : "verify");
-                if (!(await isEmailVerified()))
+                if (await isEmailVerified()) {
+                  await refreshToken();
+                  setStep("organisation");
+                } else {
                   setProblem("Not verified yet — open the link, then try again.");
+                }
               }}
             >
               I have verified
