@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
 from .. import (
@@ -56,7 +56,7 @@ from ..adapters import (
     JsonSupportingDocumentRepository,
     LocalBlobStore,
 )
-from ..masking import BANK_FIELDS, MASK_PREFIX, mask_bank
+from ..masking import BANK_FIELDS, MASK_PREFIX, mask_bank, mask_correction
 from ..ports import LockHeld
 from . import auth, preflight
 from .auth import Principal, current_principal, require_role
@@ -117,6 +117,15 @@ async def _identify_request(request, call_next):
     ip_token = auth.current_client_ip.set(client)
     try:
         response = await call_next(request)
+    except Exception:
+        # Caught here rather than left to Starlette, whose 500 would go out
+        # without the request id or any of the headers below.
+        logger.exception(
+            "Unhandled error on %s %s", request.method, request.url.path
+        )
+        response = JSONResponse(
+            status_code=500, content={"detail": "Internal Server Error"}
+        )
     finally:
         auth.current_request_id.reset(id_token)
         auth.current_client_ip.reset(ip_token)
@@ -978,7 +987,14 @@ def get_invoice(
         "lines": case_projection.lines(artifacts),
         "gl_coding": artifacts.get("gl_coding"),
         "findings": _findings(artifacts),
-        "corrections": get_corrections().list(principal.tenant_id, case_id),
+        "corrections": [
+            correction
+            if principal.can("approver")
+            else mask_correction(correction)
+            for correction in get_corrections().list(
+                principal.tenant_id, case_id
+            )
+        ],
         "evidence_summary": evidence.get("_summary") or {},
         # Who decided, why, and whether they agreed with the pipeline. The
         # detail endpoint returned none of this, so the one screen a reviewer
@@ -1159,20 +1175,31 @@ def edit_fields(
             {
                 "count": len(recorded),
                 "fields": [r["field_path"] for r in recorded],
-                "values": {r["field_path"]: r["new_value"] for r in recorded},
+                "values": {
+                    r["field_path"]: r["new_value"]
+                    for r in map(mask_correction, recorded)
+                },
             },
             # The trail said which fields changed and by whom, never what they
             # were. That answer lived only in the corrections store, so an
             # auditor reading the trail alone could not reconstruct the edit.
+            # Bank numbers go in masked: every role reads the trail, and the
+            # corrections store keeps the full values, as vendor bank-change
+            # events already do.
             before={
-                "values": {r["field_path"]: r["old_value"] for r in recorded}
+                "values": {
+                    r["field_path"]: r["old_value"]
+                    for r in map(mask_correction, recorded)
+                }
             },
         )
         # After fields_corrected so the trail reads cause then effect.
         rerouted = _reroute_if_needed(ctx, artifacts, extraction, recorded)
 
     return {
-        "corrections": recorded,
+        "corrections": recorded
+        if principal.can("approver")
+        else [mask_correction(r) for r in recorded],
         "count": len(recorded),
         "approvals_rerouted": rerouted,
     }

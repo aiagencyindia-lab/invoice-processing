@@ -116,3 +116,28 @@ class TestDocs:
         )
         assert out.returncode == 0, out.stderr[-2000:]
         assert out.stdout.strip().splitlines()[-1] == "404 404 404"
+
+
+class TestACrash:
+    def test_a_server_error_still_carries_the_headers(self, monkeypatch):
+        """An exception escaped the middleware, so Starlette's 500 went out
+        with none of them, not even the request id."""
+        from invoice_processing.api import service  # noqa: PLC0415
+
+        monkeypatch.delenv("AUTH_DISABLED", raising=False)
+        monkeypatch.setattr(auth, "_verifier", FakeVerifier())
+
+        def boom():
+            raise RuntimeError("store down")
+
+        monkeypatch.setattr(service, "get_cases", boom)
+        response = TestClient(
+            app,
+            headers={"Authorization": "Bearer tok"},
+            raise_server_exceptions=False,
+        ).get("/api/invoices")
+        assert response.status_code == 500
+        for key, value in FIXED.items():
+            assert response.headers[key] == value, key
+        assert response.headers["x-request-id"]
+        assert response.headers["cache-control"] == "no-store"

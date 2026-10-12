@@ -41,3 +41,10 @@ def test_mask_row_touches_only_bank_fields_and_copies():
     }
     assert row["bank_account_number"] == "901031925572"
     assert set(BANK_FIELDS) == {"bank_account_number", "bank_iban"}
+
+
+def test_a_structured_value_is_hidden_entirely():
+    """Only a number or text has meaningful last digits; anything else would
+    mask to a fragment of its repr."""
+    assert mask_bank({"a": 1}) == "…"
+    assert mask_bank(["901031925572"]) == "…"

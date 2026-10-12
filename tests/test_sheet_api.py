@@ -1044,3 +1044,9 @@ class TestBankNumbersMaskByRole:
             invoice(session, case_id="bank", bank_account_number="901031925572")
         row = rows(lambda: client("approver"))["rows"][0]
         assert row["bank_account_number"] == "901031925572"
+
+
+def test_bank_numbers_are_not_sortable(db, client):
+    """Sorting masked cells would order them by the hidden digits."""
+    columns = {c["key"]: c for c in rows(client)["columns"]}
+    assert columns["bank_account_number"]["sortable"] is False

@@ -63,7 +63,11 @@ COLUMNS: tuple[Column, ...] = (
     ),
     Column("payment_terms", "Terms", "text", "column"),
     Column("bank_account_name", "Bank account name", "text", "column"),
-    Column("bank_account_number", "Bank account", "text", "column"),
+    # Not sortable: non-approvers see it masked, and an order over masked
+    # cells would still be an order over the hidden digits.
+    Column(
+        "bank_account_number", "Bank account", "text", "column", sortable=False
+    ),
     Column("bank_code", "Bank code", "text", "column"),
     Column("decision", "Pipeline decision", "text", "column"),
     Column("routing", "Routing", "text", "column"),

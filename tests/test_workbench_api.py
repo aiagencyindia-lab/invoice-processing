@@ -584,3 +584,58 @@ class TestBankNumbersAreMaskedByRole:
             },
         )
         assert r.status_code == 200, r.text
+
+
+class TestBankNumbersDoNotLeakThroughTheRecord:
+    NUMBER = "901031925572"
+
+    def _seed(self, roles):
+        r = roles("admin").patch(
+            "/api/invoices/case_002/fields",
+            json={
+                "edits": [
+                    {"field": "bank_account_number", "value": self.NUMBER}
+                ]
+            },
+        )
+        assert r.status_code == 200, r.text
+
+    def test_corrections_in_the_detail_are_masked_for_a_viewer(self, roles):
+        """The corrections list beside the fields carried the number as
+        old/new values, and the workbench renders it."""
+        self._seed(roles)
+        assert (
+            self.NUMBER
+            not in roles("viewer").get("/api/invoices/case_002").text
+        )
+        assert (
+            self.NUMBER in roles("approver").get("/api/invoices/case_002").text
+        )
+
+    def test_a_clerk_edit_does_not_echo_the_old_number(self, roles):
+        self._seed(roles)
+        r = roles("clerk").patch(
+            "/api/invoices/case_002/fields",
+            json={
+                "edits": [
+                    {"field": "bank_account_number", "value": "123456789"}
+                ]
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert self.NUMBER not in r.text
+
+    def test_the_audit_trail_records_a_bank_edit_masked(self, roles):
+        """Every role reads the trail, so it carries what everyone may see,
+        as the vendor bank-change events already do."""
+        self._seed(roles)
+        lines = (
+            service.get_audit().path.read_text(encoding="utf-8").splitlines()
+        )
+        assert self.NUMBER not in "".join(lines)
+        [event] = [
+            e
+            for e in map(json.loads, lines)
+            if e["event_type"] == "fields_corrected"
+        ]
+        assert event["payload"]["values"] == {"bank_account_number": "…5572"}
