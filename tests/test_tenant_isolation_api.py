@@ -246,6 +246,19 @@ class TestWritesDoNotCross:
         acme.post("/api/invoices/case_002/actions", json={"action": "approve"})
         assert globex.get("/api/audit").json()["count"] == 0
 
+    def test_audit_export_does_not_cross_tenants(self, clients):
+        acme, globex = clients("acme"), clients("globex")
+        acme.post("/api/invoices/case_002/actions", json={"action": "approve"})
+        r = globex.get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        assert r.status_code == 200
+        # globex's own export is audited into its own trail; nothing of acme's.
+        rows = r.text.splitlines()[1:]
+        assert all("audit_exported" in line for line in rows)
+        assert "acme" not in r.text
+        assert "approve" not in r.text
+
     def test_system_status_leaks_no_tenant_data(self, clients):
         """Status is infrastructure health, not tenant data -- but it must not
         become a side channel for volume."""
@@ -1289,6 +1302,7 @@ class TestCoverage:
         "/api/documents",
         "/api/documents/{document_id}/retry",
         "/api/audit",
+        "/api/audit/export",
         "/api/system/status",
         "/api/me",
         "/api/admin/sso-domains",

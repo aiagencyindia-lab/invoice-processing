@@ -734,6 +734,109 @@ class TestAudit:
         assert response.status_code == 503
         assert "needs a database" in response.json()["detail"]
 
+    def test_an_admin_can_export_a_window_as_csv(self, env):
+        doc_id = add_document(env, sha="au7")
+        env["client"]("approver").post(f"/api/documents/{doc_id}/retry")
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/csv")
+        assert r.headers["content-disposition"].startswith(
+            'attachment; filename="audit-'
+        )
+        lines = r.text.splitlines()
+        assert (
+            lines[0]
+            == "id,occurred_at,actor,actor_type,action,entity_type,entity_id,request_id,ip,before,after"
+        )
+        assert any("document_retried" in line for line in lines[1:])
+        actions = [
+            e["action"]
+            for e in env["client"]().get("/api/audit").json()["events"]
+        ]
+        assert "audit_exported" in actions
+
+    def test_an_empty_window_still_has_a_header(self, env):
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2000-01-02T00:00:00Z"
+        )
+        assert r.status_code == 200
+        assert r.text.splitlines() == [
+            "id,occurred_at,actor,actor_type,action,entity_type,entity_id,request_id,ip,before,after"
+        ]
+
+    def test_only_an_admin_can_export(self, env):
+        for role in ("viewer", "clerk", "approver"):
+            r = env["client"](role).get(
+                "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+            )
+            assert r.status_code == 403, role
+
+    def test_an_export_with_a_dead_database_is_a_clean_503(
+        self, env, monkeypatch
+    ):
+        class Broken:
+            def emit(self, *a, **k):
+                pass
+
+            def query(self, *a, **k):
+                raise RuntimeError("db down")
+
+        monkeypatch.setattr(service, "_audit", Broken())
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        assert r.status_code == 503
+        assert "needs a database" in r.json()["detail"]
+
+    def test_an_export_pages_and_quotes_nested_values(self, env, monkeypatch):
+        import csv  # noqa: PLC0415
+        import io  # noqa: PLC0415
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        events = [
+            SimpleNamespace(
+                id=f"e{i:04d}",
+                occurred_at=t0 + timedelta(seconds=i),
+                actor="a,b",
+                actor_type="user",
+                action="x",
+                entity_type="invoice",
+                entity_id="1",
+                after={"k": [1, 2], "n": {"m": 'q,"r'}},
+                before=None,
+                request_id="r",
+                ip="1.2.3.4",
+            )
+            for i in range(1500)
+        ][::-1]  # newest first, as the sink returns
+
+        class Fake:
+            def emit(self, *a, **k):
+                pass
+
+            def query(
+                self, tenant_id, limit=100, since=None, until=None, before=None
+            ):
+                rows = events
+                if before is not None:
+                    rows = [e for e in events if (e.occurred_at, e.id) < before]
+                return rows[:limit]
+
+        monkeypatch.setattr(service, "_audit", Fake())
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        assert r.status_code == 200
+        rows = list(csv.reader(io.StringIO(r.text)))
+        assert len(rows) == 1501
+        assert rows[1][2] == "a,b"
+        assert json.loads(rows[1][10])["n"]["m"] == 'q,"r'
+        assert rows[1][9] == ""
+
 
 class BareQueue:
     """A queue with only the four methods the worker needs, and no more.

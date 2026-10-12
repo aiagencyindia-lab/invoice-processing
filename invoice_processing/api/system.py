@@ -587,6 +587,121 @@ def list_audit(
     return {"events": events, "count": len(events), "next_cursor": next_cursor}
 
 
+_CSV_COLUMNS = (
+    "id",
+    "occurred_at",
+    "actor",
+    "actor_type",
+    "action",
+    "entity_type",
+    "entity_id",
+    "request_id",
+    "ip",
+    "before",
+    "after",
+)
+_EXPORT_PAGE = 1000
+
+
+@router.get("/api/audit/export")
+def export_audit(
+    principal: Annotated[Principal, Depends(require_role("admin"))],
+    since: datetime,
+    until: datetime,
+):
+    """The trail for a window, as the file an auditor asks for.
+
+    The export is itself an event, written before the first byte goes out:
+    a dropped connection must still leave the record that someone pulled it.
+    """
+    import csv  # noqa: PLC0415
+    import io  # noqa: PLC0415
+
+    from fastapi.responses import StreamingResponse  # noqa: PLC0415
+
+    from . import service  # noqa: PLC0415
+
+    sink = service.get_audit()
+    sink.emit(
+        principal.context(),
+        "audit_exported",
+        {"since": since.isoformat(), "until": until.isoformat()},
+    )
+
+    def query(before):
+        return sink.query(
+            principal.tenant_id,
+            limit=_EXPORT_PAGE,
+            since=since,
+            until=until,
+            before=before,
+        )
+
+    # The first page is read here, before the response starts: a streamed
+    # response cannot change its status, so a dead database must fail now.
+    # A query that raises is never answered from the local file -- that would
+    # hand an auditor a different, partial trail without saying so.
+    first = None
+    if hasattr(sink, "query"):
+        try:
+            first = query(None)
+        except Exception:
+            raise HTTPException(
+                status_code=503,
+                detail="Exporting the audit trail needs a database that could not be reached.",
+            ) from None
+
+    def rows():
+        if first is None:  # local JSONL sink: one slice, no paging
+            yield from _read_jsonl_audit(
+                principal.tenant_id, 100_000, since, until
+            )
+            return
+        page = first
+        while True:
+            for e in page:
+                yield _audit_dict(e)
+            if len(page) < _EXPORT_PAGE:
+                return
+            page = query((page[-1].occurred_at, page[-1].id))
+
+    def stream():
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(_CSV_COLUMNS)
+        yield buffer.getvalue()
+        for event in rows():
+            buffer.seek(0)
+            buffer.truncate()
+            writer.writerow(
+                [
+                    event["id"],
+                    event["at"],
+                    event["actor"],
+                    event["actor_type"],
+                    event["action"],
+                    event["entity_type"],
+                    event["entity_id"],
+                    event["request_id"],
+                    event["ip"],
+                    json.dumps(event["before"], default=str)
+                    if event["before"] is not None
+                    else "",
+                    json.dumps(event["payload"], default=str)
+                    if event["payload"] is not None
+                    else "",
+                ]
+            )
+            yield buffer.getvalue()
+
+    name = f"audit-{since.date().isoformat()}-{until.date().isoformat()}.csv"
+    return StreamingResponse(
+        stream(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
 def _as_utc(stamp: datetime) -> datetime:
     return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
 
