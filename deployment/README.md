@@ -3,15 +3,18 @@
 The API and worker connect as a least-privilege app role that owns nothing and
 cannot run DDL. Migrations run in a release step as the owner role.
 `invoice_processing/db/bootstrap.sql` has two sections: §1 before the first
-migrate (roles and ownership), §2 after (grants on the migrated tables).
+migrate (roles, schema rights, default privileges), §2 after (grants on the
+migrated tables, append-only audit trail, VERIFY). Run each section on its own;
+`sed` cuts the file at the `-- §2` marker line.
 
-1. Roles, as `postgres`:
-   `psql "$ADMIN_URL" -v owner=ledgerly_owner -v app=ledgerly_app -v owner_pw=... -v app_pw=... -f invoice_processing/db/bootstrap.sql` (§1)
+1. Roles, as `postgres` (§1):
+   `sed -n '1,/^-- §2/p' invoice_processing/db/bootstrap.sql | psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -v owner=ledgerly_owner -v app=ledgerly_app -v owner_pw=... -v app_pw=... -f -`
 2. Migrate as the owner:
    `MIGRATE_DATABASE_URL=postgresql+pg8000://ledgerly_owner:...@host/db python -m invoice_processing.db.migrate`
-3. Run bootstrap §2 the same way as step 1.
-4. Run the VERIFY query at the end of `bootstrap.sql` and confirm the app role
-   has no DDL rights.
+3. Grants, as `postgres` (§2, safe to re-run):
+   `sed -n '/^-- §2/,$p' invoice_processing/db/bootstrap.sql | psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -v owner=ledgerly_owner -v app=ledgerly_app -f -`
+4. Read the VERIFY output that ends step 3: the app role cannot UPDATE
+   `audit_events` but can INSERT, and neither role is superuser or bypasses RLS.
 
 Railway service variables:
 
