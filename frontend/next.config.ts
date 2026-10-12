@@ -6,6 +6,8 @@ const API = process.env.API_ORIGIN ?? "http://127.0.0.1:8000";
 // endpoints, and the popup/iframe hosts. Report-only until sign-in has been
 // exercised against a live Identity Platform project; then enforce.
 const AUTH = process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "*.firebaseapp.com";
+// Deduplicated: with no auth domain configured, AUTH is the wildcard itself.
+const AUTH_HOSTS = [...new Set([`https://${AUTH}`, "https://*.firebaseapp.com"])].join(" ");
 const CSP = [
   "default-src 'self'",
   // Next's inline runtime carries no nonce, and the app styles inline.
@@ -13,8 +15,9 @@ const CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://*.googleusercontent.com",
   "font-src 'self' data:",
-  `connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://${AUTH} https://*.firebaseapp.com`,
-  `frame-src https://${AUTH} https://*.firebaseapp.com https://accounts.google.com https://apis.google.com`,
+  `connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com ${AUTH_HOSTS}`,
+  // The document panes frame blob: URLs of PDFs fetched with the token.
+  `frame-src blob: ${AUTH_HOSTS} https://accounts.google.com https://apis.google.com`,
   "object-src 'none'",
   "base-uri 'self'",
   "frame-ancestors 'none'",
