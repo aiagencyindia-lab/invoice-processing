@@ -28,6 +28,7 @@ means the answer is always the truth as those components see it.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -38,6 +39,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from .auth import Principal, current_principal, require_role
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -603,6 +606,13 @@ _CSV_COLUMNS = (
 _EXPORT_PAGE = 1000
 
 
+def _cell(value: Any) -> str:
+    """One CSV cell, safe to open in a spreadsheet: a leading = + - @ is a
+    formula there, so it is prefixed with a quote."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
 @router.get("/api/audit/export")
 def export_audit(
     principal: Annotated[Principal, Depends(require_role("admin"))],
@@ -622,11 +632,6 @@ def export_audit(
     from . import service  # noqa: PLC0415
 
     sink = service.get_audit()
-    sink.emit(
-        principal.context(),
-        "audit_exported",
-        {"since": since.isoformat(), "until": until.isoformat()},
-    )
 
     def query(before):
         return sink.query(
@@ -651,10 +656,18 @@ def export_audit(
                 detail="Exporting the audit trail needs a database that could not be reached.",
             ) from None
 
+    # Recorded once the data is known to be readable, still before any byte
+    # goes out: a refused export is not a pull, a dropped download still is.
+    sink.emit(
+        principal.context(),
+        "audit_exported",
+        {"since": since.isoformat(), "until": until.isoformat()},
+    )
+
     def rows():
         if first is None:  # local JSONL sink: one slice, no paging
             yield from _read_jsonl_audit(
-                principal.tenant_id, 100_000, since, until
+                principal.tenant_id, None, since, until
             )
             return
         page = first
@@ -663,7 +676,13 @@ def export_audit(
                 yield _audit_dict(e)
             if len(page) < _EXPORT_PAGE:
                 return
-            page = query((page[-1].occurred_at, page[-1].id))
+            try:
+                page = query((page[-1].occurred_at, page[-1].id))
+            except Exception:
+                # Not caught into a clean end: a truncated file that looks
+                # complete is worse than a download that visibly fails.
+                logger.exception("Audit export failed after the first page")
+                raise
 
     def stream():
         buffer = io.StringIO()
@@ -674,7 +693,8 @@ def export_audit(
             buffer.seek(0)
             buffer.truncate()
             writer.writerow(
-                [
+                _cell(v)
+                for v in (
                     event["id"],
                     event["at"],
                     event["actor"],
@@ -686,11 +706,11 @@ def export_audit(
                     event["ip"],
                     json.dumps(event["before"], default=str)
                     if event["before"] is not None
-                    else "",
+                    else None,
                     json.dumps(event["payload"], default=str)
                     if event["payload"] is not None
-                    else "",
-                ]
+                    else None,
+                )
             )
             yield buffer.getvalue()
 
@@ -708,7 +728,7 @@ def _as_utc(stamp: datetime) -> datetime:
 
 def _read_jsonl_audit(
     tenant_id: str,
-    limit: int,
+    limit: int | None,
     since: datetime | None = None,
     until: datetime | None = None,
 ) -> list[dict]:

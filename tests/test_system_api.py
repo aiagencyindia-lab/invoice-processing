@@ -776,9 +776,11 @@ class TestAudit:
     def test_an_export_with_a_dead_database_is_a_clean_503(
         self, env, monkeypatch
     ):
+        emitted = []
+
         class Broken:
             def emit(self, *a, **k):
-                pass
+                emitted.append(a)
 
             def query(self, *a, **k):
                 raise RuntimeError("db down")
@@ -789,6 +791,7 @@ class TestAudit:
         )
         assert r.status_code == 503
         assert "needs a database" in r.json()["detail"]
+        assert emitted == []  # a refused export is not recorded as a pull
 
     def test_an_export_pages_and_quotes_nested_values(self, env, monkeypatch):
         import csv  # noqa: PLC0415
@@ -836,6 +839,118 @@ class TestAudit:
         assert rows[1][2] == "a,b"
         assert json.loads(rows[1][10])["n"]["m"] == 'q,"r'
         assert rows[1][9] == ""
+
+    def test_spreadsheet_formulas_in_cells_are_defused(self, env, monkeypatch):
+        import csv  # noqa: PLC0415
+        import io  # noqa: PLC0415
+        from datetime import datetime, timezone  # noqa: PLC0415
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        def ev(i, **kw):
+            base = dict(  # noqa: C408
+                id=f"e{i}",
+                occurred_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                actor="a",
+                actor_type="user",
+                action="x",
+                entity_type="invoice",
+                entity_id="1",
+                after=None,
+                before=None,
+                request_id="r",
+                ip="1.2.3.4",
+            )
+            base.update(kw)
+            return SimpleNamespace(**base)
+
+        events = [
+            ev(1, actor='=HYPERLINK("http://x")'),
+            ev(2, entity_id="@SUM(1)"),
+            ev(3, action="\tx", request_id="-1+1", ip="+1"),
+        ]
+
+        class Fake:
+            def emit(self, *a, **k):
+                pass
+
+            def query(self, *a, **k):
+                return events
+
+        monkeypatch.setattr(service, "_audit", Fake())
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        rows = list(csv.reader(io.StringIO(r.text)))
+        assert rows[1][2] == '\'=HYPERLINK("http://x")'
+        assert rows[2][6] == "'@SUM(1)"
+        assert rows[3][4] == "'\tx"
+        assert rows[3][7] == "'-1+1"
+        assert rows[3][8] == "'+1"
+
+    def test_a_failure_after_the_first_page_aborts_the_download(
+        self, env, monkeypatch, caplog
+    ):
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        full = [
+            SimpleNamespace(
+                id=f"e{i:04d}",
+                occurred_at=t0 + timedelta(seconds=i),
+                actor="a",
+                actor_type="user",
+                action="x",
+                entity_type="invoice",
+                entity_id="1",
+                after=None,
+                before=None,
+                request_id="r",
+                ip=None,
+            )
+            for i in range(1000)
+        ]
+        calls = []
+
+        class Flaky:
+            def emit(self, *a, **k):
+                pass
+
+            def query(self, *a, **k):
+                calls.append(1)
+                if len(calls) > 1:
+                    raise RuntimeError("db died mid-export")
+                return full
+
+        monkeypatch.setattr(service, "_audit", Flaky())
+        with pytest.raises(Exception):  # noqa: B017
+            env["client"]("admin").get(
+                "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+            )
+        assert "Audit export failed" in caplog.text
+
+    def test_the_local_file_export_has_no_row_cap(
+        self, env, monkeypatch, tmp_path
+    ):
+        from invoice_processing import paths  # noqa: PLC0415
+
+        monkeypatch.setattr(paths, "SESSIONS_DIR", tmp_path)
+        line = json.dumps(
+            {"timestamp": "2026-10-01T00:00:00+00:00", "event_type": "x"}
+        )
+        (tmp_path / "audit.jsonl").write_text(
+            "\n".join([line] * 100_005), encoding="utf-8"
+        )
+
+        class NoQuery:
+            def emit(self, *a, **k):
+                pass
+
+        monkeypatch.setattr(service, "_audit", NoQuery())
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        assert len(r.text.splitlines()) == 100_006
 
 
 class BareQueue:
