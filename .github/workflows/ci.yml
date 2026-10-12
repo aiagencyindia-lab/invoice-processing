@@ -254,3 +254,21 @@ jobs:
           name: playwright-traces
           path: frontend/test-results/
           retention-days: 7
+
+  # Known-vulnerable production dependencies fail the build. Waivers live in
+  # security/audit-allowlist.json with a reason and an expiry date.
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Dependency audit
+        run: python3 scripts/audit_gate.py

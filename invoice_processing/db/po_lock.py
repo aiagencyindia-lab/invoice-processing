@@ -21,7 +21,8 @@ from .session import get_engine, is_postgres
 
 def _digest(tenant_id: str, po_number) -> bytes:
     key = f"{tenant_id}\x00{po_matching.normalize_po_number(po_number)}"
-    return hashlib.sha1(key.encode()).digest()
+    # A lock key, not a secret; the digest is unchanged.
+    return hashlib.sha1(key.encode(), usedforsecurity=False).digest()
 
 
 @contextmanager

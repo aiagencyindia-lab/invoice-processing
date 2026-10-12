@@ -241,7 +241,8 @@ def ocr_page_text(pdf_path: Path) -> list[str]:
             page.render(scale=_OCR_DPI / 72).to_pil().convert("L").save(
                 image, "PNG"
             )
-            done = subprocess.run(
+            # Fixed argv, no shell; the binary path comes from shutil.which.
+            done = subprocess.run(  # noqa: S603
                 [tesseract, "stdin", "stdout", "--psm", "6"],
                 input=image.getvalue(),
                 capture_output=True,
@@ -317,8 +318,9 @@ def locate(
 
 # A token boundary: no letter or digit against the value, and no digit run
 # continuing it through a decimal point or digit-group comma ("1" + "0.00").
-_NOT_AFTER_TOKEN = r"(?<![0-9a-z])(?<![0-9][.,])"
-_NOT_BEFORE_TOKEN = r"(?![0-9a-z])(?![.,][0-9])"
+# (Regex tokens, not passwords: S105 misreads the names.)
+_NOT_AFTER_TOKEN = r"(?<![0-9a-z])(?<![0-9][.,])"  # noqa: S105
+_NOT_BEFORE_TOKEN = r"(?![0-9a-z])(?![.,][0-9])"  # noqa: S105
 _ANY_SEPARATOR = r"[^0-9a-z]{0,3}"
 # What OCR reads one character as another, for identifiers read by OCR only.
 _MISREAD = dict.fromkeys("o0", "[o0]") | dict.fromkeys("i1l", "[i1l]")

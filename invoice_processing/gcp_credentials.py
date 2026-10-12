@@ -79,7 +79,8 @@ def materialise_credentials(path: str | Path | None = None) -> str | None:
     target = Path(
         path
         or os.getenv("GOOGLE_CREDENTIALS_PATH")
-        or "/tmp/gcp-credentials.json"
+        # Written mode 600 below; GOOGLE_CREDENTIALS_PATH overrides it.
+        or "/tmp/gcp-credentials.json"  # noqa: S108
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(raw, encoding="utf-8")

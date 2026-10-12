@@ -1,0 +1,27 @@
+[
+  {
+    "id": "PYSEC-2026-161",
+    "reason": "starlette: fix needs Starlette 1.x, which needs the google-adk 2.x / google-cloud-aiplatform 2.x migration (own sub-project)",
+    "expires": "2026-12-12"
+  },
+  {
+    "id": "PYSEC-2026-248",
+    "reason": "starlette: fix needs Starlette 1.x, which needs the google-adk 2.x / google-cloud-aiplatform 2.x migration (own sub-project)",
+    "expires": "2026-12-12"
+  },
+  {
+    "id": "PYSEC-2026-249",
+    "reason": "starlette: fix needs Starlette 1.x, which needs the google-adk 2.x / google-cloud-aiplatform 2.x migration (own sub-project)",
+    "expires": "2026-12-12"
+  },
+  {
+    "id": "PYSEC-2026-2280",
+    "reason": "starlette: fix needs Starlette 1.x, which needs the google-adk 2.x / google-cloud-aiplatform 2.x migration (own sub-project)",
+    "expires": "2026-12-12"
+  },
+  {
+    "id": "PYSEC-2026-2281",
+    "reason": "starlette: fix needs Starlette 1.x, which needs the google-adk 2.x / google-cloud-aiplatform 2.x migration (own sub-project)",
+    "expires": "2026-12-12"
+  }
+]

@@ -31,6 +31,7 @@ Note:
 
 import argparse
 import json
+import logging
 import os
 import re
 import sys
@@ -60,6 +61,8 @@ except ImportError:
         "pip install google-cloud-aiplatform pydantic pdfplumber python-dotenv"
     )
     sys.exit(1)
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # CONFIGURATION
@@ -557,8 +560,14 @@ def _load_config_defaults() -> dict[str, Any]:
         defaults = load_master_data().get_config_defaults()
         if defaults:
             return {**_FALLBACK_CONFIG, **defaults}
-    except Exception:
-        pass
+    except ImportError as exc:
+        # Run as a script there is no parent package for the relative
+        # import; the built-in defaults are the intended fallback there.
+        logger.debug("Master data not importable here: %s", exc)
+    except Exception as exc:
+        logger.warning(
+            "Master data unavailable, using built-in defaults: %s", exc
+        )
     return dict(_FALLBACK_CONFIG)
 
 

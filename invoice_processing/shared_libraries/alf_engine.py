@@ -206,8 +206,8 @@ def _get_llm_project_id():
             import google.auth  # noqa: PLC0415
 
             _, project = google.auth.default()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("No ambient Google project: %s", exc)
     return project
 
 
