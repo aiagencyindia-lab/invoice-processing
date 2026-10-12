@@ -1,5 +1,6 @@
-# Weekly upgrade proposals. Security updates arrive as their own PRs
-# regardless of this schedule; the audit gate in CI blocks the rest.
+# Weekly upgrade proposals. Security-fix PRs outside this schedule need
+# "Dependabot security updates" enabled in the repository settings; the
+# audit gate in CI blocks a known-vulnerable dependency either way.
 version: 2
 updates:
   - package-ecosystem: uv

@@ -171,7 +171,7 @@ class TestToolOutput:
     @pytest.mark.parametrize("code", [0, 1])
     def test_findings_or_none_are_both_answers(self, code):
         assert audit_gate.parse_tool_output(
-            "npm audit", code, '{"vulnerabilities": {}}'
+            "npm audit", code, '{"vulnerabilities": {}}', "vulnerabilities"
         ) == {"vulnerabilities": {}}
 
     @pytest.mark.parametrize(
@@ -180,4 +180,41 @@ class TestToolOutput:
     )
     def test_a_tool_that_could_not_answer_fails(self, code, stdout):
         with pytest.raises(audit_gate.AuditError):
-            audit_gate.parse_tool_output("pip-audit", code, stdout)
+            audit_gate.parse_tool_output(
+                "pip-audit", code, stdout, "dependencies"
+            )
+
+
+class TestFailClosed:
+    def test_an_npm_registry_error_is_not_a_clean_report(self):
+        """npm audit answers a registry failure with exit 0 and an error
+        object; reading that as "no vulnerabilities" passed the gate."""
+        payload = json.dumps(
+            {
+                "message": "request to https://registry.npmjs.org failed, reason: ECONNREFUSED",
+                "error": {"code": "ECONNREFUSED"},
+            }
+        )
+        with pytest.raises(audit_gate.AuditError):
+            audit_gate.parse_tool_output(
+                "npm audit", 0, payload, "vulnerabilities"
+            )
+
+    def test_a_pip_audit_report_needs_its_key_too(self):
+        with pytest.raises(audit_gate.AuditError):
+            audit_gate.parse_tool_output("pip-audit", 0, "{}", "dependencies")
+
+    def test_an_expiry_must_be_text(self):
+        with pytest.raises(audit_gate.AuditError):
+            audit_gate.load_allowlist(
+                json.dumps([{"id": "X", "reason": "r", "expires": 20261212}])
+            )
+
+    def test_an_npm_advisory_without_url_or_source_is_refused(self):
+        report = {
+            "vulnerabilities": {
+                "x": {"via": [{"name": "x", "severity": "high"}]}
+            }
+        }
+        with pytest.raises(audit_gate.AuditError):
+            audit_gate.findings_from_npm_audit(report)

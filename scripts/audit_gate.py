@@ -75,7 +75,10 @@ def findings_from_npm_audit(report: dict) -> list[Finding]:
             if not isinstance(via, dict):
                 continue
             url = via.get("url") or ""
-            advisory = url.rsplit("/", 1)[-1] if url else str(via.get("source"))
+            if not url and via.get("source") is None:
+                # Unwaivable and unnamed: refuse rather than invent an id.
+                raise AuditError(f"npm advisory for {name} has no id: {via!r}")
+            advisory = url.rsplit("/", 1)[-1] if url else str(via["source"])
             package = via.get("name") or name
             if (package, advisory) in seen:
                 continue
@@ -107,7 +110,9 @@ def load_allowlist(text: str) -> list[dict]:
         if not str(item.get("reason") or "").strip():
             raise AuditError(f"Allowlist entry {item['id']} gives no reason.")
         try:
-            date.fromisoformat(str(item.get("expires")))
+            if not isinstance(item.get("expires"), str):
+                raise ValueError("not text")
+            date.fromisoformat(item["expires"])
         except ValueError as exc:
             raise AuditError(
                 f"Allowlist entry {item['id']} needs expires as YYYY-MM-DD."
@@ -149,7 +154,9 @@ def gate(
     return lines, failed
 
 
-def parse_tool_output(name: str, returncode: int, stdout: str) -> dict:
+def parse_tool_output(
+    name: str, returncode: int, stdout: str, required_key: str
+) -> dict:
     # Both tools exit 1 when they find something; anything else means they
     # could not answer (network, lockfile), which must not read as "clean".
     if returncode not in (0, 1):
@@ -162,6 +169,13 @@ def parse_tool_output(name: str, returncode: int, stdout: str) -> dict:
         ) from exc
     if not isinstance(report, dict):
         raise AuditError(f"{name} printed an unexpected report shape.")
+    # npm answers a registry failure with exit 0 and {"error": ...}: a
+    # report without its findings key is a tool that could not answer.
+    if "error" in report or required_key not in report:
+        detail = (
+            report.get("message") or report.get("error") or "no findings key"
+        )
+        raise AuditError(f"{name} could not audit: {str(detail)[:200]}")
     return report
 
 
@@ -208,14 +222,18 @@ def _python_findings() -> list[Finding]:
     finally:
         Path(requirements).unlink(missing_ok=True)
     return findings_from_pip_audit(
-        parse_tool_output("pip-audit", done.returncode, done.stdout)
+        parse_tool_output(
+            "pip-audit", done.returncode, done.stdout, "dependencies"
+        )
     )
 
 
 def _npm_findings() -> list[Finding]:
     done = _run(["npm", "audit", "--omit=dev", "--json"], REPO / "frontend")
     return findings_from_npm_audit(
-        parse_tool_output("npm audit", done.returncode, done.stdout)
+        parse_tool_output(
+            "npm audit", done.returncode, done.stdout, "vulnerabilities"
+        )
     )
 
 

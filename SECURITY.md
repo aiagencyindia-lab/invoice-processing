@@ -12,8 +12,9 @@ Every change lands by pull request. A pull request merges only when CI is
 green on its head commit:
 
 - **test**: lint (including ruff's security rules), format, the full test
-  suite, the tenant-isolation suite, the evaluation gate and the phase-1
-  acceptance sweep;
+  suite, the tenant-isolation suite, the evaluation gate, the phase-1
+  acceptance sweep, and a scan that fails if a `.env` file or a service
+  account key is committed;
 - **postgres**: migrations up and down, and the database tests against
   Postgres with forced row-level security;
 - **frontend**: lint and a production build;
@@ -23,8 +24,9 @@ green on its head commit:
   `security/audit-allowlist.json` with a reason and an expiry date, and an
   expired waiver fails the build.
 
-Dependabot proposes dependency upgrades weekly and security fixes as they
-are published.
+Dependabot proposes dependency upgrades weekly (`.github/dependabot.yml`).
+Security-fix pull requests outside that schedule need "Dependabot security
+updates" turned on in the repository's Code security settings.
 
 The merge history is the record: every change since the first pull request
 is a merge commit naming its pull request, with its CI run attached.
