@@ -51,7 +51,7 @@ def main(argv=None) -> int:
         ""  # nothing is stored; artifacts come from the jsonl
     )
 
-    from invoice_processing import confidence, extraction_cleanup
+    from invoice_processing import confidence
     from invoice_processing.shared_libraries.acting import (
         general_invoice_agent as agent,
     )
@@ -120,11 +120,9 @@ def main(argv=None) -> int:
                 continue
             pdf = dataset.DATASET / truth[rec["invoice_id"]]["document_file"]
             pages = confidence.extract_page_text(pdf)
-            invoice = extraction_cleanup.clean(
-                dict(rec["extracted"]),
-                charges_and_lines=agent._charges_and_lines,
-                pages=pages,
-            )
+            # The extractor's own clean-then-checksum step, so the recorded
+            # 3.2 verdict is redone on today's cleaned tax ID.
+            invoice = agent.clean_extraction(dict(rec["extracted"]), pages)
             evidence = confidence.build_evidence(invoice, pdf)
             invoice["_routing"] = confidence.routing_decision(evidence)
             extraction = {

@@ -1492,3 +1492,47 @@ REJECT -> SUPPORTING change. The harness was not changed.
 
 **Regression status.** Full suite 2287 passed, 1 skipped; ruff check and
 format clean.
+
+## 2026-10-13 — Replay: the checksum verdict follows the cleaned tax ID
+
+**Problem.** Replays over the run at `9f8c923` rejected `MFG-INV-064`, a clean
+invoice, at 3.2 with "Invalid check character: expected 'Q', found '2'.
+Matches the tax ID recorded for Precision Weld Fabricators" — a verdict that
+contradicts itself. It looked like a regression on `main` when set against
+`replay-scanned-docs`, but that replay is over a different recording
+(`ecb9bbd`, where the model read the GSTIN correctly). Every replay over
+`9f8c923` since `bca701a` has rejected it.
+
+**Root cause.** The model read `24OXMPF9713X1Z2` as `240XMPF9713X1Z2`.
+`replay` re-ran today's `extraction_cleanup.clean`, which reads it back as the
+page prints it, but kept the `_tax_id_validation` recorded for the misread, so
+3.2 matched the corrected ID to the vendor master and failed the stale
+checksum. The extractor itself cleans first and checksums second; the replay
+copied the first half by hand. The 2026-10-07 entry's "MFG-INV-064 is no
+longer rejected for its own misread" was true of the pipeline and never shown
+by the replay.
+
+**Fix.** `general_invoice_agent.clean_extraction(invoice, pages)` cleans and
+then sets the checksum verdict on the result (or drops a recorded one when
+the checksum is off). The extractor and `replay` both call it.
+
+**Tests.** `tests/test_checksum_after_cleanup.py`: the verdict is for the
+cleaned value, a misread with nothing on the page to correct it still fails,
+no checksum setting leaves no verdict, and `replay.py` uses the shared step.
+All four fail without the fix.
+
+**Result (`replay-checksum-fix` over `9f8c923`, against `replay-adk2`).**
+Four records had a stale verdict (`MFG-INV-064`, `-020`, `-010`, `-024`); two
+decisions move and accuracy stays **98.3%**:
+
+- `MFG-INV-064`: REJECT at 3.2 -> ACCEPT. Correct.
+- `MFG-INV-020`: REJECT at 3.2 -> ACCEPT. The dataset expects REJECT at 4.2
+  (a line discount of 500.00 that should be 0.00). Before, it was rejected
+  for the wrong reason; the extraction's line sum equals its subtotal, so 4.2
+  never sees the discount. The recording at `ecb9bbd` accepts it too: an
+  existing miss at 4.2, now visible.
+- `MFG-INV-010`, `MFG-INV-024`: their verdicts change, their decisions do not
+  (an earlier step rejects them).
+
+**Regression status.** Full suite 2682 passed, 4 skipped; ruff check and
+format clean.

@@ -944,6 +944,32 @@ def validate_tax_id(tax_id: str, format_type: str = "ABN") -> tuple[bool, str]:
     return tax_ids.validate(tax_id, format_type)
 
 
+def clean_extraction(invoice_data: dict, pages: list[str]) -> dict:
+    """Mechanical repairs, then the tax-ID checksum on what they produced.
+
+    One step, because the checksum verdict must describe the value check 3.2
+    compares: a verdict kept from before cleanup read a GSTIN back from 0 to
+    O and still called it invalid. The benchmark replay calls this too, so a
+    recorded verdict cannot outlive the value or the setting it was made for.
+    """
+    invoice_data = extraction_cleanup.clean(
+        invoice_data, charges_and_lines=_charges_and_lines, pages=pages
+    )
+    invoice_data.pop("_tax_id_validation", None)
+    if _get_config().get("validate_tax_id_checksum") and invoice_data.get(
+        "vendor_tax_id"
+    ):
+        tax_valid, tax_reason = validate_tax_id(
+            invoice_data["vendor_tax_id"],
+            _get_config().get("tax_id_format", "ABN"),
+        )
+        invoice_data["_tax_id_validation"] = {
+            "valid": tax_valid,
+            "reason": tax_reason,
+        }
+    return invoice_data
+
+
 def call_gemini(
     prompt: str,
     model_name: str | None = None,
@@ -1453,27 +1479,14 @@ class ExtractorAgent(BaseAgent):
                 invoice_data = self._extract_invoice(Path(source["full_path"]))
                 # Mechanical repairs before anything reads the extraction:
                 # look-alike Greek letters in identifiers, and charges the
-                # model repeated as line items. See extraction_cleanup.py.
-                invoice_data = extraction_cleanup.clean(
+                # model repeated as line items (see extraction_cleanup.py);
+                # then the tax-ID checksum on the repaired value.
+                invoice_data = clean_extraction(
                     invoice_data,
-                    charges_and_lines=_charges_and_lines,
                     pages=confidence.extract_page_text(
                         Path(source["full_path"])
                     ),
                 )
-
-                # Validate tax ID if configured
-                if _get_config().get(
-                    "validate_tax_id_checksum"
-                ) and invoice_data.get("vendor_tax_id"):
-                    tax_valid, tax_reason = validate_tax_id(
-                        invoice_data["vendor_tax_id"],
-                        _get_config().get("tax_id_format", "ABN"),
-                    )
-                    invoice_data["_tax_id_validation"] = {
-                        "valid": tax_valid,
-                        "reason": tax_reason,
-                    }
 
                 # Per-field confidence: ground each extracted value in the
                 # document's own text layer and cross-check the arithmetic.
