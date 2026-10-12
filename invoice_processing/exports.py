@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import sheet_columns
+from .masking import mask_row
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +238,9 @@ def run(job_id: str, tenant_id: str) -> dict:
         columns = resolve_columns(spec.get("columns"))
         labels = {column.key: column.label for column in sheet_columns.COLUMNS}
         rows = collect_rows(SheetRepository(), tenant_id, spec)
+        if spec.get("mask_bank", True):
+            # A job from before this flag existed names no caller: mask.
+            rows = [mask_row(row) for row in rows]
 
         writer = WRITERS.get(job["format"])
         if writer is None:

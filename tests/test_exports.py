@@ -488,3 +488,55 @@ class TestAStuckJobCanBeRestarted:
             f"/api/sheet/exports/{job['id']}/retry"
         )
         assert response.status_code == 403
+
+
+def _csv_cells(blobs, job):
+    raw = blobs.stored[job["storage_key"]].decode("utf-8-sig")
+    return list(csv.reader(io.StringIO(raw)))[1:]
+
+
+class TestBankNumbersMaskByRole:
+    NUMBER = "901031925572"
+
+    def test_a_clerk_export_carries_the_last_four(self, db, client, blobs):
+        seed(db, 1, bank_account_number=self.NUMBER)
+        job = export(
+            lambda: client("clerk"),
+            format="csv",
+            columns=["bank_account_number"],
+        )
+        assert _csv_cells(blobs, job) == [["…5572"]]
+
+    def test_an_approver_export_carries_the_number(self, db, client, blobs):
+        seed(db, 1, bank_account_number=self.NUMBER)
+        job = export(
+            lambda: client("approver"),
+            format="csv",
+            columns=["bank_account_number"],
+        )
+        assert _csv_cells(blobs, job) == [[self.NUMBER]]
+
+    def test_a_job_without_the_flag_masks(self, db, client, blobs):
+        """Jobs queued before masking existed say nothing about the caller;
+        the safe reading is the restrictive one."""
+
+        seed(db, 1, bank_account_number=self.NUMBER)
+        job = PgExportJobs().create(
+            TENANT,
+            requested_by="approver@acme.test",
+            fmt="csv",
+            spec={
+                "columns": ["bank_account_number"],
+                "filters": {},
+                "case_ids": [],
+            },
+        )
+        exports.run(job["id"], TENANT)
+        done = PgExportJobs().get(TENANT, job["id"])
+        assert _csv_cells(blobs, done) == [["…5572"]]
+
+    def test_a_download_is_not_marked_no_store(self, db, client):
+        seed(db, 1)
+        job = export(client, format="csv")
+        response = client().get(f"/api/sheet/exports/{job['id']}/download")
+        assert "no-store" not in response.headers.get("cache-control", "")

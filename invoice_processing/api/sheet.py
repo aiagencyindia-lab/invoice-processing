@@ -27,6 +27,7 @@ from fastapi import (
 )
 
 from .. import sheet_columns
+from ..masking import mask_row
 from .auth import Principal, current_principal, require_role
 
 router = APIRouter()
@@ -156,6 +157,9 @@ def list_sheet(
         order="desc" if order == "desc" else "asc",
         limit=max(1, min(limit, MAX_LIMIT)),
     )
+    if not principal.can("approver"):
+        # The repository has no caller; the role is known only here.
+        rows = [mask_row(row) for row in rows]
     return {
         "rows": rows,
         "total": total,
@@ -508,6 +512,8 @@ def create_export(
         "case_ids": body.get("case_ids") or [],
         "sort": body.get("sort") or "approved_at",
         "order": body.get("order") or "desc",
+        # The runner has no caller; carry the decision with the job.
+        "mask_bank": not principal.can("approver"),
     }
 
     job = _jobs().create(
