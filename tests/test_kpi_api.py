@@ -18,6 +18,7 @@ CLAIMS = {
     f"tok-{role}": {
         "user_id": f"u-{role}",
         "email": f"{role}@acme.test",
+        "email_verified": True,
         "tenant_id": TENANT,
         "role": role,
     }

@@ -7,27 +7,36 @@ weigh most heavily on what it refuses.
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from invoice_processing import sso
 from invoice_processing.adapters import JsonlAuditSink
 from invoice_processing.admin.provision import DryRunClaims
 from invoice_processing.api import auth, service, signup
 from invoice_processing.api.service import app
-from invoice_processing.db.models import Base
-from invoice_processing.db.session import get_engine
+from invoice_processing.db.models import Base, Tenant
+from invoice_processing.db.repositories import PgSsoDomainRepository
+from invoice_processing.db.session import create_all, get_engine, tenant_session
+from tests.test_sso import FakeDirectory
 
 
 class FakeVerifier:
-    """Token format: `<email>|<uid>|<tenant or blank>`."""
+    """Token format: `<email>|<uid>|<tenant or blank>|<verified>`.
+
+    `verified` is optional: blank means True, `no` False, `absent` omits the
+    claim, `str` sends the string "true".
+    """
 
     def verify(self, token):
-        email, _, rest = token.partition("|")
-        uid, _, tenant = rest.partition("|")
-        claims = {
-            "sub": uid,
-            "user_id": uid,
-            "email": email,
-            "email_verified": True,
-        }
+        email, uid, tenant, verified = [*token.split("|"), "", "", ""][:4]
+        claims = {"sub": uid, "user_id": uid, "email": email}
+        if verified == "":
+            claims["email_verified"] = True
+        elif verified == "no":
+            claims["email_verified"] = False
+        elif verified == "str":
+            claims["email_verified"] = "true"
         if tenant:
             claims["tenant_id"] = tenant
             claims["role"] = "admin"
@@ -35,12 +44,15 @@ class FakeVerifier:
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
-    url = f"sqlite:///{tmp_path / 'signup.db'}"
+def env(scratch_db, tmp_path, monkeypatch):
+    url = scratch_db("signup.db")
     monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
     monkeypatch.setenv("ALLOW_SELF_SIGNUP", "1")
     monkeypatch.delenv("AUTH_DISABLED", raising=False)
-    Base.metadata.create_all(get_engine(url))
+    engine = get_engine(url)
+    Base.metadata.drop_all(engine)
+    create_all(url)
 
     monkeypatch.setattr(auth, "_verifier", FakeVerifier())
     monkeypatch.setattr(
@@ -85,6 +97,87 @@ class TestItRefuses:
             "/api/signup", json={"organisation": " "}
         )
         assert response.status_code == 400
+
+
+def bind(url, domain, provider="google"):
+    """Bind `domain` to another organisation, as its admin would."""
+    with tenant_session("t-held", url) as session:
+        session.add(Tenant(id="t-held", slug="held", name="Held Co"))
+    PgSsoDomainRepository(url).add(
+        "t-held",
+        domain=domain,
+        provider=provider,
+        default_role="viewer",
+        created_by=f"admin@{domain}",
+    )
+
+
+def slugs(url):
+    with Session(get_engine(url)) as session:
+        return set(session.scalars(select(Tenant.slug)))
+
+
+def audited(env):
+    path = env["tmp"] / "audit.jsonl"
+    return path.exists() and "tenant_self_provisioned" in path.read_text()
+
+
+class TestItRefusesUnprovenIdentity:
+    @pytest.mark.parametrize("verified", ["no", "absent", "str"])
+    def test_an_unverified_address(self, env, verified):
+        """Anyone who can type an address could otherwise found an
+        organisation in its name."""
+        response = client(f"a@b.test|uid-1||{verified}").post(
+            "/api/signup", json={"organisation": "Acme"}
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == (
+            "Verify your email address before creating an organisation."
+        )
+        assert "acme" not in slugs(env["url"])
+
+    @pytest.mark.parametrize("provider", ["google", "microsoft"])
+    def test_an_address_on_a_bound_domain(self, env, provider):
+        """The domain belongs to an organisation already; a rival one on it
+        would split that company's invoices across two tenants."""
+        bind(env["url"], "acme.test", provider)
+        response = client("ann@acme.test|uid-1").post(
+            "/api/signup", json={"organisation": "Acme"}
+        )
+        assert response.status_code == 403
+        detail = response.json()["detail"]
+        assert "Sign in with Google" in detail
+        assert "Held Co" not in detail
+        assert slugs(env["url"]) == {"held"}
+        assert not audited(env)
+
+    def test_the_bound_domain_check_ignores_case(self, env):
+        bind(env["url"], "acme.test")
+        response = client("Ann@ACME.test|uid-1").post(
+            "/api/signup", json={"organisation": "Acme"}
+        )
+        assert response.status_code == 403
+
+    def test_an_unreachable_directory_refuses(self, env, monkeypatch):
+        """No lookup, no signup: the check fails closed like sign-in."""
+        monkeypatch.setattr(
+            auth,
+            "_sso_services",
+            lambda: sso.SsoServices(FakeDirectory(fail=True), None),
+        )
+        response = client("ann@acme.test|uid-1").post(
+            "/api/signup", json={"organisation": "Acme"}
+        )
+        assert response.status_code == 503
+        assert "acme" not in slugs(env["url"])
+
+    def test_an_unbound_domain_still_signs_up(self, env):
+        bind(env["url"], "other.test")
+        response = client("ann@acme.test|uid-1").post(
+            "/api/signup", json={"organisation": "Acme"}
+        )
+        assert response.status_code == 200
+        assert "acme" in slugs(env["url"])
 
 
 class TestItProvisions:
