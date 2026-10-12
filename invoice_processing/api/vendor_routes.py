@@ -21,6 +21,10 @@ from pydantic import BaseModel, Field
 
 from .. import master_files, po_matching, vendor_master
 from ..db import repositories as repos
+
+# Last four only: the queue is read by clerks who must not be able to copy
+# a full account number out of the UI. Shared so every surface masks alike.
+from ..masking import mask_bank as mask
 from .auth import Principal, require_role
 
 router = APIRouter()
@@ -51,15 +55,6 @@ class BankChangeProposal(BaseModel):
 class BankChangeDecision(BaseModel):
     action: str  # approve | reject
     note: str | None = None
-
-
-def mask(value: str | None) -> str | None:
-    """Last four only. The queue is read by clerks who must not be able to
-    copy a full account number out of the UI."""
-    if not value:
-        return None
-    digits = str(value).replace(" ", "")
-    return f"…{digits[-4:]}" if len(digits) > 4 else digits
 
 
 def vendor_out(v: dict) -> dict:

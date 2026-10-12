@@ -56,6 +56,7 @@ from ..adapters import (
     JsonSupportingDocumentRepository,
     LocalBlobStore,
 )
+from ..masking import BANK_FIELDS, MASK_PREFIX, mask_bank
 from ..ports import LockHeld
 from . import auth
 from .auth import Principal, current_principal, require_role
@@ -913,6 +914,12 @@ def get_invoice(
         )
     # Flagged fields first: attention is the scarce resource.
     fields.sort(key=lambda f: (f["confidence"] is None, f["confidence"] or 0))
+    if not principal.can("approver"):
+        # Reading an invoice is not paying one: the full number is for the
+        # people who verify a vendor's bank change, and the PDF shows it anyway.
+        for field in fields:
+            if field["name"] in BANK_FIELDS:
+                field["value"] = mask_bank(field["value"])
 
     return {
         **_summarize(case_id, artifacts),
@@ -1014,6 +1021,15 @@ def edit_fields(
                 status_code=400,
                 detail=f"{edit.field} is not an editable field; edit the "
                 "invoice's header fields here.",
+            )
+        if edit.field in BANK_FIELDS and str(edit.value or "").startswith(
+            MASK_PREFIX
+        ):
+            # Non-approvers are shown the mask; typing it back would replace
+            # a real number with a placeholder.
+            raise HTTPException(
+                status_code=422,
+                detail="That looks like a masked value; enter the full number.",
             )
     require_invoice_case(principal.tenant_id, case_id)
     _require_unlocked(principal, case_id)

@@ -84,6 +84,30 @@ def client(tmp_path, monkeypatch):
     return TestClient(app, headers={"Authorization": "Bearer tok"})
 
 
+ROLE_CLAIMS = {
+    f"tok-{role}": {
+        **ADMIN_CLAIMS,
+        "sub": f"u-{role}",
+        "email": f"{role}@acme.com",
+        "role": role,
+    }
+    for role in ("viewer", "clerk", "approver", "admin")
+}
+
+
+@pytest.fixture
+def roles(client, monkeypatch):
+    """The same isolated stack as `client`, with a token per role."""
+    monkeypatch.setattr(
+        auth, "_verifier", FakeVerifier({"tok": ADMIN_CLAIMS, **ROLE_CLAIMS})
+    )
+
+    def make(role):
+        return TestClient(app, headers={"Authorization": f"Bearer tok-{role}"})
+
+    return make
+
+
 def _field(client, case_id: str, name: str):
     """Current value of a field.
 
@@ -504,3 +528,59 @@ def test_findings_carry_three_way_lines():
     }
     artifacts = {"phase2": {"validations": [{"step": "2.3", "lines": [line]}]}}
     assert _findings(artifacts)[0]["lines"] == [line]
+
+
+class TestBankNumbersAreMaskedByRole:
+    NUMBER = "901031925572"
+
+    def _seed(self, roles):
+        r = roles("admin").patch(
+            "/api/invoices/case_002/fields",
+            json={
+                "edits": [
+                    {"field": "bank_account_number", "value": self.NUMBER}
+                ]
+            },
+        )
+        assert r.status_code == 200, r.text
+
+    @pytest.mark.parametrize("role", ["viewer", "clerk"])
+    def test_a_non_approver_sees_the_last_four(self, roles, role):
+        self._seed(roles)
+        assert _field(roles(role), "case_002", "bank_account_number") == "…5572"
+
+    @pytest.mark.parametrize("role", ["approver", "admin"])
+    def test_an_approver_sees_the_number(self, roles, role):
+        self._seed(roles)
+        assert (
+            _field(roles(role), "case_002", "bank_account_number")
+            == self.NUMBER
+        )
+
+    def test_a_masked_value_cannot_be_saved_back(self, roles):
+        """The editor sends only changed fields, but a person can still type
+        the mask; refusing it keeps a placeholder out of the record."""
+        self._seed(roles)
+        r = roles("clerk").patch(
+            "/api/invoices/case_002/fields",
+            json={
+                "edits": [{"field": "bank_account_number", "value": "…5572"}]
+            },
+        )
+        assert r.status_code == 422
+        assert "masked" in r.json()["detail"]
+        assert (
+            _field(roles("admin"), "case_002", "bank_account_number")
+            == self.NUMBER
+        )
+
+    def test_a_real_number_still_saves(self, roles):
+        r = roles("clerk").patch(
+            "/api/invoices/case_002/fields",
+            json={
+                "edits": [
+                    {"field": "bank_account_number", "value": "123456789"}
+                ]
+            },
+        )
+        assert r.status_code == 200, r.text
