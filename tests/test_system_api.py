@@ -637,7 +637,37 @@ class TestAudit:
         assert env["client"]().get("/api/audit").json() == {
             "events": [],
             "count": 0,
+            "next_cursor": None,
         }
+
+    def test_events_carry_the_request_id_and_the_ip_keys(self, env):
+        doc_id = add_document(env, sha="au5")
+        env["client"]("approver").post(f"/api/documents/{doc_id}/retry")
+        event = env["client"]().get("/api/audit").json()["events"][0]
+        assert event["request_id"]
+        assert set(event) >= {"id", "actor_type", "request_id", "ip"}
+
+    def test_a_window_excludes_what_is_outside_it(self, env):
+        doc_id = add_document(env, sha="au6")
+        env["client"]("approver").post(f"/api/documents/{doc_id}/retry")
+        past = "2000-01-01T00:00:00Z"
+        assert (
+            env["client"]().get(f"/api/audit?until={past}").json()["count"] == 0
+        )
+        assert (
+            env["client"]().get(f"/api/audit?since={past}").json()["count"] >= 1
+        )
+        assert (
+            env["client"]()
+            .get(f"/api/audit?since=2099-01-01T00:00:00Z&until={past}")
+            .json()["count"]
+            == 0
+        )
+
+    def test_a_malformed_cursor_is_refused(self, env):
+        assert (
+            env["client"]().get("/api/audit?cursor=nonsense").status_code == 422
+        )
 
 
 class BareQueue:

@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any
@@ -505,48 +506,89 @@ def retry_document(
 # ---------------------------------------------------------------------------
 
 
+def _parse_cursor(cursor: str) -> tuple[datetime, str]:
+    stamp, sep, event_id = cursor.rpartition("|")
+    try:
+        if not sep or not event_id:
+            raise ValueError
+        return datetime.fromisoformat(stamp), event_id
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail="cursor must be the next_cursor of a previous page.",
+        ) from None
+
+
+def _audit_dict(e) -> dict:
+    """One shape for the list, the export and the local fallback."""
+    return {
+        "id": e.id,
+        "at": e.occurred_at.isoformat() if e.occurred_at else None,
+        "actor": e.actor,
+        "actor_type": e.actor_type,
+        "action": e.action,
+        "entity_type": e.entity_type,
+        "entity_id": e.entity_id,
+        "payload": e.after,
+        "before": e.before,
+        "request_id": e.request_id,
+        "ip": e.ip,
+    }
+
+
 @router.get("/api/audit")
 def list_audit(
     principal: Annotated[Principal, Depends(current_principal)],
     limit: int = 100,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    cursor: str | None = None,
 ) -> dict:
     """Tenant-scoped activity trail.
 
     Read-only for every role: explainability is the point, and a viewer who
     cannot see why an invoice was rejected cannot answer a supplier's question.
+    `since`/`until` bound the window; `cursor` is the previous page's
+    `next_cursor`.
     """
     from . import service  # noqa: PLC0415
 
+    before = _parse_cursor(cursor) if cursor else None
     sink = service.get_audit()
     limit = max(1, min(limit, 500))
 
-    events = _safe(
-        lambda: sink.query(principal.tenant_id, limit=limit), default=None
+    rows = _safe(
+        lambda: sink.query(
+            principal.tenant_id,
+            limit=limit,
+            since=since,
+            until=until,
+            before=before,
+        ),
+        default=None,
     )
-    if events is None:
-        events = _read_jsonl_audit(principal.tenant_id, limit)
+    if rows is None:
+        events = _read_jsonl_audit(principal.tenant_id, limit, since, until)
     else:
-        events = [
-            {
-                "at": e.occurred_at.isoformat() if e.occurred_at else None,
-                "actor": e.actor,
-                "action": e.action,
-                "entity_type": e.entity_type,
-                "entity_id": e.entity_id,
-                "payload": e.after,
-                # What the value was. Both sinks have stored this since the
-                # trail was made able to answer "changed from what?", and this
-                # endpoint dropped it on the floor -- so the Activity page
-                # could say a field was corrected but never what it held
-                # before, which is the half an auditor needs.
-                "before": e.before,
-            }
-            for e in events
-        ]
-    return {"events": events, "count": len(events)}
+        events = [_audit_dict(e) for e in rows]
+    next_cursor = (
+        f"{events[-1]['at']}|{events[-1]['id']}"
+        if rows is not None and len(events) == limit
+        else None
+    )
+    return {"events": events, "count": len(events), "next_cursor": next_cursor}
 
 
-def _read_jsonl_audit(tenant_id: str, limit: int) -> list[dict]:
+def _as_utc(stamp: datetime) -> datetime:
+    return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
+
+
+def _read_jsonl_audit(
+    tenant_id: str,
+    limit: int,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[dict]:
     """The local sink has no query method; read its file directly.
 
     Filtered by tenant even locally, so the two sinks behave the same way and a
@@ -567,6 +609,15 @@ def _read_jsonl_audit(tenant_id: str, limit: int) -> list[dict]:
             continue
         if record.get("tenant_id") not in (None, tenant_id):
             continue
+        if since is not None or until is not None:
+            try:
+                when = _as_utc(datetime.fromisoformat(record["timestamp"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (since is not None and when < _as_utc(since)) or (
+                until is not None and when > _as_utc(until)
+            ):
+                continue
         payload = record.get("payload") or {}
         # `timestamp` is the key JsonlAuditSink.emit writes. Reading "at" here
         # silently produced a null on every local event, so the activity trail
@@ -578,8 +629,10 @@ def _read_jsonl_audit(tenant_id: str, limit: int) -> list[dict]:
         )
         events.append(
             {
+                "id": None,
                 "at": record.get("timestamp"),
                 "actor": record.get("actor"),
+                "actor_type": "user" if record.get("actor") else "system",
                 "action": record.get("event_type"),
                 # Ingestion events carry no case yet -- the document is the
                 # only thing that exists at that point in the pipeline.
@@ -588,6 +641,9 @@ def _read_jsonl_audit(tenant_id: str, limit: int) -> list[dict]:
                 "entity_id": entity_id,
                 "payload": record.get("payload"),
                 "before": record.get("before"),
+                "request_id": record.get("run_id") or None,
+                "ip": None,
             }
         )
+    # ponytail: the local file is one developer's trail; pages by slice only.
     return list(reversed(events))[:limit]
