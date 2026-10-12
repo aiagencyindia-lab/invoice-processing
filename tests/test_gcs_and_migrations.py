@@ -910,10 +910,19 @@ class TestMigration:
                     "drop table audit_events",
                     "alter table users add column evil int",
                     "create table evil (id int)",
+                    "update alembic_version set version_num = 'x'",
                 ):
-                    with pytest.raises(DBAPIError), c.begin():
+                    with pytest.raises(DBAPIError) as refused, c.begin():
                         c.execute(scope, {"t": tenant})
                         c.execute(text(forbidden))
+                    # pg8000 carries the server's error fields; "C" is the
+                    # SQLSTATE. 42501 is insufficient_privilege, which Postgres
+                    # also raises for "must be owner of table" on DDL. Any
+                    # other error (a typo, a missing table) would prove nothing.
+                    sqlstate = refused.value.orig.args[0]["C"]
+                    assert sqlstate == "42501", (forbidden, sqlstate)
+                version = text("select version_num from alembic_version")
+                assert c.execute(version).scalar()
         finally:
             for engine in engines:
                 engine.dispose()

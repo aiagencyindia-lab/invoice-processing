@@ -17,8 +17,13 @@
 -- Cloud SQL IAM: create both users first with
 --   gcloud sql users create <sa>@<project>.iam --type=CLOUD_IAM_SERVICE_ACCOUNT
 -- delete the two CREATE ROLE lines, and pass the IAM names as owner and app.
+-- Do NOT delete the `GRANT :"owner" TO CURRENT_USER` line: Cloud SQL's
+-- `postgres` is not a superuser, and without that membership the default
+-- privileges and the §2 REVOKE on audit_events fail or only WARN, leaving
+-- the trail writable by the app.
 --
--- Order: §1, then migrate as :"owner", then §2 (safe to re-run any time).
+-- Order: §1, then migrate as :"owner", then §2 (safe to re-run any time;
+-- re-run it after every migrate).
 -- The grants come after the first migrate because default privileges apply
 -- only to tables created later, and audit_events already exists by then.
 
@@ -28,6 +33,12 @@ CREATE ROLE :"owner" LOGIN PASSWORD :'owner_pw'
     NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB;
 CREATE ROLE :"app" LOGIN PASSWORD :'app_pw'
     NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB;
+
+-- ALTER DEFAULT PRIVILEGES FOR ROLE owner, and §2's REVOKE on tables the
+-- owner owns, need membership in the owner role. A real superuser has it
+-- implicitly (this is then harmless); Cloud SQL's `postgres` does not, and a
+-- REVOKE by a non-owner only WARNs, which ON_ERROR_STOP does not catch.
+GRANT :"owner" TO CURRENT_USER;
 
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE, CREATE ON SCHEMA public TO :"owner";
@@ -50,9 +61,13 @@ ALTER DEFAULT PRIVILEGES FOR ROLE :"owner" IN SCHEMA public
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO :"app";
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO :"app";
 
--- Last, so no grant above can hand it back: the trail is append-only.
+-- Last, so no grant above can hand it back: the trail is append-only, and
+-- the app may read the schema version but never move it.
+-- Re-run §2 after every migrate: a migration that recreates a table
+-- re-grants through default privileges.
 REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
     ON audit_events FROM :"app";
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON alembic_version FROM :"app";
 
 -- VERIFY -- expected: false, true, then false/false for both roles.
 SELECT has_table_privilege(:'app', 'audit_events', 'UPDATE') AS app_can_update_audit,
