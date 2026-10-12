@@ -793,6 +793,59 @@ test("an admin can add a GL rule, see it listed, and delete it", async ({
   await expect(row).toHaveCount(0);
 });
 
+test("an admin connects a sign-in domain, promotes a colleague, and deactivates another", async ({
+  page,
+}) => {
+  // An admin may bind only the domain of their own sign-in address.
+  const admin = "it@e2e-sso.test:admin";
+  await as(page, admin);
+  await goto(page, "/admin");
+
+  await page.getByLabel("Domain", { exact: true }).fill("e2e-sso.test");
+  await page.getByRole("button", { name: "Connect domain" }).click();
+  await expect(page.locator(".panel[role=status]")).toContainText("e2e-sso.test");
+  await expect(page.getByRole("cell", { name: "e2e-sso.test", exact: true })).toBeVisible();
+
+  try {
+    await page.getByLabel("Role of casey@e2e.test").selectOption("clerk");
+    await expect(page.locator(".panel[role=status]")).toContainText("casey@e2e.test is now clerk");
+
+    page.once("dialog", (d) => d.accept());
+    await page.getByRole("button", { name: "Deactivate casey@e2e.test" }).click();
+    const row = page.getByRole("row").filter({ hasText: "casey@e2e.test" });
+    await expect(row.getByText("deactivated")).toBeVisible();
+
+    // The deactivated person is refused on their very next request.
+    await as(page, "casey@e2e.test:clerk");
+    await page.goto("/dashboard");
+    await expect(page.getByText(/This account has been deactivated/)).toBeVisible();
+
+    await as(page, admin);
+    await goto(page, "/admin");
+    await page.getByRole("button", { name: "Reactivate casey@e2e.test" }).click();
+    await expect(page.locator(".panel[role=status]")).toContainText("casey@e2e.test can sign in again");
+    await page.getByLabel("Role of casey@e2e.test").selectOption("viewer");
+    await expect(page.locator(".panel[role=status]")).toContainText("casey@e2e.test is now viewer");
+    page.once("dialog", (d) => d.accept());
+    await page.getByRole("button", { name: "Disconnect e2e-sso.test" }).click();
+    await expect(page.getByRole("cell", { name: "e2e-sso.test", exact: true })).toHaveCount(0);
+  } finally {
+    // Other tests play casey and share the tenant: leave both as found,
+    // whichever step failed.
+    const headers = { "X-Dev-Principal": admin };
+    const { users } = await (await page.request.get("/api/admin/users", { headers })).json();
+    const casey = users.find((u: { email: string }) => u.email === "casey@e2e.test");
+    await page.request.patch(`/api/admin/users/${casey.id}`, {
+      headers,
+      data: { role: "viewer", is_active: true },
+    });
+    const { domains } = await (await page.request.get("/api/admin/sso-domains", { headers })).json();
+    for (const d of domains.filter((x: { domain: string }) => x.domain === "e2e-sso.test")) {
+      await page.request.delete(`/api/admin/sso-domains/${d.id}`, { headers });
+    }
+  }
+});
+
 // This test owns case_004_gl (cloned in scripts/e2e_api.py); nothing else
 // decides it. The seed codes lines, but with no rules and no PO for this case
 // nothing is coded: manual coding only.

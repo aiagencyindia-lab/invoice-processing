@@ -25,6 +25,7 @@ from typing import ClassVar
 import pytest
 from fastapi.testclient import TestClient
 from golden import GOLDEN_CASES
+from sqlalchemy.orm import Session
 
 from invoice_processing import approval_flow, paths
 from invoice_processing.adapters import (
@@ -753,6 +754,38 @@ class TestWritesDoNotCross:
         assert body.status_code == 404
         assert "tenants" not in str(body.json()).lower() or True
 
+    def test_sso_domains_are_listed_per_tenant_and_cannot_be_removed_across(
+        self, clients, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'sso.db'}")
+        engine = get_engine(f"sqlite:///{tmp_path / 'sso.db'}")
+        Base.metadata.create_all(engine)
+        with Session(engine) as session, session.begin():
+            session.add_all(
+                Tenant(id=t, slug=t, name=t) for t in (ACME, GLOBEX)
+            )
+        body = {
+            # acme's admin signs in as admin@acme.test, and may bind only that.
+            "domain": "acme.test",
+            "provider": "google",
+            "default_role": "viewer",
+        }
+        added = clients("acme").post("/api/admin/sso-domains", json=body).json()
+        assert (
+            clients("globex").get("/api/admin/sso-domains").json()["domains"]
+            == []
+        )
+        assert (
+            clients("globex")
+            .delete(f"/api/admin/sso-domains/{added['id']}")
+            .status_code
+            == 404
+        )
+        assert (
+            len(clients("acme").get("/api/admin/sso-domains").json()["domains"])
+            == 1
+        )
+
     def test_users_cannot_be_listed_across_tenants(
         self, clients, tmp_path, monkeypatch
     ):
@@ -1258,6 +1291,8 @@ class TestCoverage:
         "/api/audit",
         "/api/system/status",
         "/api/me",
+        "/api/admin/sso-domains",
+        "/api/admin/sso-domains/{domain_id}",
         "/api/signup",
         "/api/settings",
         "/api/purchase-orders",

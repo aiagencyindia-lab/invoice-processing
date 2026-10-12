@@ -21,14 +21,17 @@ customer's admin has no business reading it.
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from .auth import Principal, require_role
+
+logger = logging.getLogger(__name__)
 
 # `admin.provision` imports `api.auth`, so importing it at module scope closes
 # a cycle through the api package. It is imported inside the helpers instead.
@@ -68,11 +71,43 @@ class UserCreate(BaseModel):
 
 class UserPatch(BaseModel):
     manager_email: str | None = Field(default=None, max_length=320)
+    role: Literal["viewer", "clerk", "approver", "admin"] | None = None
+    is_active: bool | None = None
+
+
+class SsoDomainCreate(BaseModel):
+    domain: str = Field(max_length=253)
+    provider: Literal["google", "microsoft"]
+    default_role: Literal["viewer", "clerk"]
 
 
 class ClaimsUpdate(BaseModel):
     email: str
     uid: str
+
+
+def _sso_domains():
+    from . import service  # noqa: PLC0415
+
+    repo = service.get_sso_domains()
+    if repo is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Single sign-on needs a database. Set DATABASE_URL or "
+            "CLOUD_SQL_INSTANCE and run the Alembic migrations.",
+        )
+    return repo
+
+
+def _directory():
+    from . import service  # noqa: PLC0415
+
+    directory = service.get_user_directory()
+    if directory is None:
+        raise HTTPException(
+            status_code=503, detail="Managing users needs a database."
+        )
+    return directory
 
 
 def _provisioner():
@@ -254,29 +289,196 @@ def patch_user(
     request: UserPatch,
     principal: Annotated[Principal, Depends(require_role("admin"))],
 ) -> dict:
-    """Set who a user's overdue approvals escalate to (null clears it)."""
+    """Set a user's manager, role or active flag (never one's own role/flag)."""
     from . import service  # noqa: PLC0415
 
     # Omitted and null differ: null clears the manager, omitted is a mistake.
-    if "manager_email" not in request.model_fields_set:
+    fields = request.model_fields_set
+    if not fields:
         raise HTTPException(status_code=400, detail="Nothing to change.")
-    try:
-        with _database_required():
-            record = _provisioner().set_manager(
-                principal.tenant_id, user_id, request.manager_email
+    if ("role" in fields and request.role is None) or (
+        "is_active" in fields and request.is_active is None
+    ):
+        raise HTTPException(
+            status_code=422, detail="role and is_active cannot be null."
+        )
+    wants_state = "role" in fields or "is_active" in fields
+    if wants_state:
+        directory = _directory()
+        current = directory.get(principal.tenant_id, user_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="Unknown user")
+        if current["email"].lower() == principal.email.lower():
+            raise HTTPException(
+                status_code=409,
+                detail="You cannot change your own role or deactivate yourself; ask another admin.",
             )
-    except LookupError:
-        raise HTTPException(status_code=404, detail="Unknown user") from None
-    except _provisioning_error() as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    previous = record.pop("previous_manager_email")
+    record: dict = {"id": user_id}
+    if "manager_email" in fields:
+        try:
+            with _database_required():
+                changed = _provisioner().set_manager(
+                    principal.tenant_id, user_id, request.manager_email
+                )
+        except LookupError:
+            raise HTTPException(
+                status_code=404, detail="Unknown user"
+            ) from None
+        except _provisioning_error() as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        previous = changed.pop("previous_manager_email")
+        service.get_audit().emit(
+            principal.context(),
+            "user_updated",
+            {"user_id": user_id, "manager_email": changed["manager_email"]},
+            before={"manager_email": previous},
+        )
+        record.update(changed)
+    if wants_state:
+        # Each change and its audit row commit together, or neither does.
+        who = {"user_id": user_id, "email": current["email"]}
+        try:
+            if "role" in fields:
+                changed = directory.set_role(
+                    principal.tenant_id,
+                    user_id,
+                    request.role,
+                    audit=(
+                        principal.context(),
+                        "user_role_changed",
+                        {**who, "role": request.role},
+                        None,  # the repository records the role it replaced
+                    ),
+                )
+                record.update(changed)
+            if "is_active" in fields:
+                changed = directory.set_active(
+                    principal.tenant_id,
+                    user_id,
+                    bool(request.is_active),
+                    audit=(
+                        principal.context(),
+                        "user_reactivated"
+                        if request.is_active
+                        else "user_deactivated",
+                        who,
+                        None,
+                    ),
+                )
+                record.update(changed)
+        except LookupError:
+            raise HTTPException(
+                status_code=404, detail="Unknown user"
+            ) from None
+        if current.get("uid"):
+            # The claim is a cache of the row, and the row has already changed:
+            # a failed write is reported, not turned into a 500 that invites a retry.
+            try:
+                fresh = directory.find(principal.tenant_id, current["email"])
+                service.get_claims_writer().set_claims(
+                    current["uid"],
+                    {"tenant_id": principal.tenant_id, "role": fresh["role"]},
+                )
+                record["claims_applied"] = True
+            except Exception:
+                logger.warning(
+                    "Claims write failed for user %s", user_id, exc_info=True
+                )
+                record["claims_applied"] = False
+    record.pop("previous_role", None)
+    record.pop("previous_active", None)
+    record.pop("tenant_name", None)
+    return record
+
+
+@router.get("/api/admin/sso-domains")
+def list_sso_domains(
+    principal: Annotated[Principal, Depends(require_role("admin"))],
+) -> dict:
+    return {"domains": _sso_domains().list(principal.tenant_id)}
+
+
+@router.post("/api/admin/sso-domains", status_code=201)
+def add_sso_domain(
+    request: SsoDomainCreate,
+    principal: Annotated[Principal, Depends(require_role("admin"))],
+) -> dict:
+    """Let a company's verified accounts sign in here.
+
+    No DNS proof of ownership. Instead the domain must be that of the
+    caller's own sign-in address, which comes from a signature-verified
+    token, so one tenant cannot claim another company's domain. Residual
+    risk: someone who once received mail at the domain (a leaver whose
+    address was recycled) may hold a verified Google account for it, and
+    Firebase tokens carry no `hd` claim to tell. Deactivation handles known
+    leavers; `last_login_at` on the admin page is the audit surface.
+    """
+    from .. import sso  # noqa: PLC0415
+    from ..db.repositories import DomainTaken  # noqa: PLC0415
+    from . import service  # noqa: PLC0415
+
+    try:
+        domain = sso.normalize_domain(request.domain)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if sso.domain_of(principal.email) != domain:
+        raise HTTPException(
+            status_code=422,
+            detail="Connect the domain of your own sign-in address; ask "
+            "someone who signs in at that domain to connect it.",
+        )
+    try:
+        record = _sso_domains().add(
+            principal.tenant_id,
+            domain=domain,
+            provider=request.provider,
+            default_role=request.default_role,
+            created_by=principal.email,
+        )
+    except DomainTaken:
+        if any(
+            d["domain"] == domain
+            for d in _sso_domains().list(principal.tenant_id)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="That domain is already connected to your organisation.",
+            ) from None
+        # Which organisation holds it is their business, not the caller's.
+        raise HTTPException(
+            status_code=409,
+            detail="That domain is already connected to another organisation.",
+        ) from None
     service.get_audit().emit(
         principal.context(),
-        "user_updated",
-        {"user_id": user_id, "manager_email": record["manager_email"]},
-        before={"manager_email": previous},
+        "sso_domain_added",
+        {
+            "domain": domain,
+            "provider": request.provider,
+            "default_role": request.default_role,
+        },
     )
     return record
+
+
+@router.delete("/api/admin/sso-domains/{domain_id}", status_code=204)
+def remove_sso_domain(
+    domain_id: str,
+    principal: Annotated[Principal, Depends(require_role("admin"))],
+) -> Response:
+    from . import service  # noqa: PLC0415
+
+    repo = _sso_domains()
+    before = next(
+        (d for d in repo.list(principal.tenant_id) if d["id"] == domain_id),
+        None,
+    )
+    if before is None or not repo.remove(principal.tenant_id, domain_id):
+        raise HTTPException(status_code=404, detail="Unknown domain")
+    service.get_audit().emit(
+        principal.context(), "sso_domain_removed", {"domain": before["domain"]}
+    )
+    return Response(status_code=204)
 
 
 @router.post("/api/admin/users/claims")
@@ -298,7 +500,10 @@ def set_user_claims(
             tenant["slug"], request.email, request.uid
         )
     except _provisioning_error() as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        from ..admin.provision import UidTaken  # noqa: PLC0415
+
+        status = 400 if isinstance(exc, UidTaken) else 404
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
 
     service.get_audit().emit(
         principal.context(),

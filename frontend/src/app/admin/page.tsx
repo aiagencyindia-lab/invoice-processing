@@ -5,6 +5,9 @@ import { useState } from "react";
 import {
   api,
   ApiError,
+  type Me,
+  type SsoDomain,
+  type SsoDomainList,
   type TenantResponse,
   type User,
   type UserList,
@@ -16,6 +19,16 @@ export default function AdminPage() {
     usePoll<TenantResponse>("/api/admin/tenants");
   const { data: users, error: usersError, reload } =
     usePoll<UserList>("/api/admin/users");
+
+  const { data: me } = usePoll<Me>("/api/me");
+  const {
+    data: domains,
+    error: domainsError,
+    reload: reloadDomains,
+  } = usePoll<SsoDomainList>("/api/admin/sso-domains");
+  const [newDomain, setNewDomain] = useState("");
+  const [newProvider, setNewProvider] = useState<"google" | "microsoft">("google");
+  const [newRole, setNewRole] = useState<"viewer" | "clerk">("viewer");
 
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("viewer");
@@ -61,6 +74,71 @@ export default function AdminPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function fail(caught: unknown) {
+    setProblem(caught instanceof ApiError ? caught.friendly : String(caught));
+  }
+
+  async function addDomain() {
+    setNotice(null);
+    setProblem(null);
+    try {
+      const record = await api<SsoDomain>("/api/admin/sso-domains", {
+        method: "POST",
+        body: JSON.stringify({
+          domain: newDomain.trim(),
+          provider: newProvider,
+          default_role: newRole,
+        }),
+      });
+      setNotice(
+        `${record.domain} connected. People at that domain can sign in as ${record.default_role}.`,
+      );
+      setNewDomain("");
+      reloadDomains();
+    } catch (caught) {
+      fail(caught);
+    }
+  }
+
+  async function removeDomain(d: SsoDomain) {
+    if (!window.confirm(`Disconnect ${d.domain}? People already added keep their access.`)) return;
+    setNotice(null);
+    setProblem(null);
+    try {
+      await api(`/api/admin/sso-domains/${d.id}`, { method: "DELETE" });
+      setNotice(`${d.domain} disconnected.`);
+      reloadDomains();
+    } catch (caught) {
+      fail(caught);
+    }
+  }
+
+  async function patchUser(target: User, body: object, done: string) {
+    setNotice(null);
+    setProblem(null);
+    try {
+      await api(`/api/admin/users/${target.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      setNotice(done);
+      reload();
+    } catch (caught) {
+      fail(caught);
+    }
+  }
+
+  function setActive(target: User, active: boolean) {
+    if (!active && !window.confirm(`Deactivate ${target.email}? They will be refused on their next request.`)) return;
+    patchUser(
+      target,
+      { is_active: active },
+      active
+        ? `${target.email} can sign in again.`
+        : `${target.email} can no longer sign in.`,
+    );
   }
 
   async function linkAccount(target: User) {
@@ -193,6 +271,70 @@ export default function AdminPage() {
       </section>
 
       <section className="panel stack" style={{ gap: 12 }}>
+        <div className="eyebrow">Single sign-on</div>
+        <div className="muted" style={{ fontSize: 12.5 }}>
+          People with a Google Workspace account at a connected domain can sign
+          in straight away and are given the default role.
+        </div>
+        {domainsError ? <div className="empty-state">{domainsError}</div> : null}
+        {domains && domains.domains.length > 0 ? (
+          <table className="data-table">
+            <thead>
+              <tr><th>Domain</th><th>Provider</th><th>Default role</th><th /></tr>
+            </thead>
+            <tbody>
+              {domains.domains.map((d) => (
+                <tr key={d.id}>
+                  <td>{d.domain}</td>
+                  <td>{d.provider}</td>
+                  <td><span className="badge">{d.default_role}</span></td>
+                  <td>
+                    <button type="button" className="btn-chip" aria-label={`Disconnect ${d.domain}`}
+                            onClick={() => removeDomain(d)}>
+                      Disconnect
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="muted" style={{ fontSize: 13 }}>No domains connected.</div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+          <label style={{ fontSize: 12 }}>
+            Domain
+            <input className="input-field" aria-label="Domain" value={newDomain}
+                   placeholder="acme.com" onChange={(e) => setNewDomain(e.target.value)} />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            Provider
+            <select className="input-field" aria-label="Provider" value={newProvider}
+                    onChange={(e) => setNewProvider(e.target.value as "google" | "microsoft")}>
+              <option value="google">Google Workspace</option>
+              <option value="microsoft">Microsoft 365 — admits nobody until Microsoft sign-in is enabled</option>
+            </select>
+          </label>
+          <label style={{ fontSize: 12 }}>
+            Default role
+            <select className="input-field" aria-label="Default role" value={newRole}
+                    onChange={(e) => setNewRole(e.target.value as "viewer" | "clerk")}>
+              <option value="viewer">viewer</option>
+              <option value="clerk">clerk</option>
+            </select>
+          </label>
+        </div>
+        <div className="row-between">
+          <span className="muted" style={{ fontSize: 12 }}>
+            Public mailbox domains such as gmail.com cannot be connected.
+          </span>
+          <button type="button" className="btn-primary" disabled={!newDomain.trim()} onClick={addDomain}>
+            Connect domain
+          </button>
+        </div>
+      </section>
+
+      <section className="panel stack" style={{ gap: 12 }}>
         <div className="eyebrow">People</div>
 
         {usersError ? <div className="empty-state">{usersError}</div> : null}
@@ -216,10 +358,39 @@ export default function AdminPage() {
                     <td>{user.email}</td>
                     <td className="muted">{user.display_name ?? "—"}</td>
                     <td>
-                      <span className="badge">{user.role}</span>
+                      <select
+                        className="input-field"
+                        aria-label={`Role of ${user.email}`}
+                        value={user.role}
+                        // Until /api/me answers, any row could be the caller's own.
+                        disabled={!me || user.email === me.email}
+                        onChange={(event) => {
+                          const role = event.target.value;
+                          if (
+                            role === "admin" &&
+                            !window.confirm(`Make ${user.email} an admin? They can then manage everyone here.`)
+                          )
+                            return;
+                          patchUser(
+                            user,
+                            { role },
+                            `${user.email} is now ${role}; it applies on their next request.`,
+                          );
+                        }}
+                      >
+                        {(users?.roles ?? ["viewer", "clerk", "approver", "admin"]).map(
+                          (value) => (
+                            <option key={value} value={value}>
+                              {value}
+                            </option>
+                          ),
+                        )}
+                      </select>
                     </td>
                     <td>
-                      {user.uid ? (
+                      {user.is_active === false ? (
+                        <span className="badge badge-warn">deactivated</span>
+                      ) : user.uid ? (
                         <span className="badge badge-ok">yes</span>
                       ) : (
                         <span className="badge badge-warn">not linked</span>
@@ -247,6 +418,16 @@ export default function AdminPage() {
                       ) : null}
                     </td>
                     <td>
+                      {!me || user.email === me.email ? null : (
+                        <button
+                          type="button"
+                          className="btn-chip"
+                          aria-label={`${user.is_active === false ? "Reactivate" : "Deactivate"} ${user.email}`}
+                          onClick={() => setActive(user, user.is_active === false)}
+                        >
+                          {user.is_active === false ? "Reactivate" : "Deactivate"}
+                        </button>
+                      )}
                       {user.uid ? null : (
                         <button
                           type="button"

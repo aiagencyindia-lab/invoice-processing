@@ -103,6 +103,7 @@ class User(Base, TenantMixin, TimestampMixin):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("tenant_id", "email", name="uq_user_email"),
+        UniqueConstraint("tenant_id", "uid", name="uq_user_uid"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -114,6 +115,13 @@ class User(Base, TenantMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Where an overdue approval step escalates to; unset falls back to an admin.
     manager_email: Mapped[str | None] = mapped_column(String(320))
+    # The Identity Platform account this row is linked to. Null until the
+    # person has signed in (or an admin pasted it). Unique per tenant so two
+    # rows can never claim one account.
+    uid: Mapped[str | None] = mapped_column(String(128))
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -702,6 +710,31 @@ class GlRule(Base, TenantMixin, TimestampMixin):
     created_by: Mapped[str] = mapped_column(String(320), nullable=False)
 
 
+class SsoDomain(Base, TenantMixin):
+    """An email domain whose company accounts may sign in to this tenant.
+
+    `domain` is unique across every tenant: two organisations cannot both
+    claim acme.com, and the lookup that happens before the caller's tenant is
+    known must resolve to exactly one.
+    """
+
+    __tablename__ = "sso_domains"
+    __table_args__ = (UniqueConstraint("domain", name="uq_sso_domain"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    domain: Mapped[str] = mapped_column(String(253), nullable=False)
+    provider: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )  # google|microsoft
+    default_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    # The Entra tenant id, for the Microsoft follow-up. Unused in this slice.
+    idp_tenant_id: Mapped[str | None] = mapped_column(String(64))
+    created_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now
+    )
+
+
 class PurchaseOrder(Base, TenantMixin, TimestampMixin):
     """A purchase order as uploaded from the ERP; lines in PoLine.
 
@@ -895,4 +928,5 @@ TENANT_TABLES = (
     "goods_receipts",
     "grn_lines",
     "supporting_documents",
+    "sso_domains",
 )

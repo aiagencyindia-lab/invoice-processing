@@ -471,6 +471,7 @@ class TestMigration:
             ("d8e1f2a3b4c5", 1),
             ("a7b3c9d2e4f6", 0),
             ("b8c4d1e2f3a5", 0),
+            ("c9d5e2f3a4b6", 1),
         ],
     )
     def test_migration_protects_exactly_the_tables_it_creates(
@@ -545,6 +546,7 @@ class TestMigration:
                 "goods_receipts",
                 "grn_lines",
                 "supporting_documents",
+                "sso_domains",
             ]
             with engine.connect() as c:
                 policies = {
@@ -566,6 +568,8 @@ class TestMigration:
             for table in tables:
                 assert (table, f"{table}_isolation") in policies, table
                 assert forced.get(table) is True, table
+            # The pre-tenant domain lookup relies on this second policy.
+            assert ("sso_domains", "sso_domains_lookup") in policies
         finally:
             with admin.connect() as c:
                 c.execute(text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
@@ -664,6 +668,121 @@ class TestMigration:
                 "2026-09-30"
             )
         finally:
+            with admin.connect() as c:
+                c.execute(text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+                c.execute(text(f"DROP ROLE IF EXISTS {role}"))
+            admin.dispose()
+
+    @pytest.mark.skipif(
+        not (os.getenv("TEST_DATABASE_URL") or "").startswith("postgresql"),
+        reason="FORCE RLS exists only on Postgres",
+    )
+    def test_sso_lookup_sentinel_reads_domains_and_nothing_else(self):
+        """Before a tenant is known, sign-in asks which tenant owns a domain
+        under app.tenant_id = 'sso-lookup'. That setting must open SELECT on
+        sso_domains and nothing more -- as a role RLS actually binds."""
+        import uuid  # noqa: PLC0415
+
+        from sqlalchemy import create_engine, text  # noqa: PLC0415
+        from sqlalchemy.engine import make_url  # noqa: PLC0415
+        from sqlalchemy.exc import DBAPIError  # noqa: PLC0415
+
+        from invoice_processing.db.rls import SSO_LOOKUP_TENANT  # noqa: PLC0415
+
+        server = make_url(os.environ["TEST_DATABASE_URL"])
+        suffix = uuid.uuid4().hex[:12]
+        name, role, password = f"sso_{suffix}", f"sso_app_{suffix}", "sso_app"
+        tenant = "11111111-1111-1111-1111-111111111111"
+        admin = create_engine(server, isolation_level="AUTOCOMMIT")
+        url = server.set(database=name)
+        engines = []
+        try:
+            with admin.connect() as c:
+                c.execute(text(f"CREATE DATABASE {name}"))
+                c.execute(
+                    text(
+                        f"CREATE ROLE {role} LOGIN PASSWORD '{password}' "
+                        "NOSUPERUSER NOBYPASSRLS"
+                    )
+                )
+            up = subprocess.run(
+                [sys.executable, "-m", "alembic", "upgrade", "head"],
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False,
+                env={
+                    **os.environ,
+                    "DATABASE_URL": url.render_as_string(hide_password=False),
+                },
+            )
+            assert up.returncode == 0, up.stderr
+            su = create_engine(url, isolation_level="AUTOCOMMIT")
+            engines.append(su)
+            with su.connect() as c:
+                c.execute(
+                    text(
+                        "insert into tenants (id, slug, name, region, status, "
+                        "settings, created_at, updated_at) values "
+                        f"('{tenant}', 'acme', 'Acme', 'au', 'active', '{{}}', "
+                        "now(), now())"
+                    )
+                )
+                c.execute(
+                    text(
+                        "insert into users (id, tenant_id, email, role, "
+                        "is_active, created_at, updated_at) values ('u1', "
+                        f"'{tenant}', 'pat@acme.com', 'clerk', true, now(), now())"
+                    )
+                )
+                c.execute(
+                    text(
+                        "insert into sso_domains (id, tenant_id, domain, "
+                        "provider, default_role, created_by) values ('d1', "
+                        f"'{tenant}', 'acme.com', 'google', 'viewer', 'a')"
+                    )
+                )
+                c.execute(
+                    text(
+                        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES "
+                        f"IN SCHEMA public TO {role}"
+                    )
+                )
+            app = create_engine(url.set(username=role, password=password))
+            engines.append(app)
+            scope = text("SELECT set_config('app.tenant_id', :t, true)")
+
+            def count(c, table):
+                return c.execute(text(f"select count(*) from {table}")).scalar()
+
+            with app.connect() as c:
+                with c.begin():
+                    c.execute(scope, {"t": SSO_LOOKUP_TENANT})
+                    assert count(c, "sso_domains") == 1
+                    assert count(c, "users") == 0
+                    assert count(c, "invoices") == 0
+                with pytest.raises(DBAPIError), c.begin():
+                    c.execute(scope, {"t": SSO_LOOKUP_TENANT})
+                    c.execute(
+                        text(
+                            "insert into sso_domains (id, tenant_id, domain, "
+                            "provider, default_role, created_by) values ('d2', "
+                            f"'{tenant}', 'evil.com', 'google', 'viewer', 'x')"
+                        )
+                    )
+                with c.begin():
+                    c.execute(scope, {"t": SSO_LOOKUP_TENANT})
+                    updated = c.execute(
+                        text("update sso_domains set default_role = 'clerk'")
+                    ).rowcount
+                    assert updated == 0
+                with c.begin():
+                    c.execute(scope, {"t": tenant})
+                    assert count(c, "users") == 1
+        finally:
+            for engine in engines:
+                engine.dispose()
             with admin.connect() as c:
                 c.execute(text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
                 c.execute(text(f"DROP ROLE IF EXISTS {role}"))

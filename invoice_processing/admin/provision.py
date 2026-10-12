@@ -46,6 +46,7 @@ import sys
 from typing import Any, Protocol, runtime_checkable
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from ..api.auth import ROLE_RANK
 from ..db.models import Tenant, User
@@ -60,6 +61,10 @@ SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 
 class ProvisioningError(RuntimeError):
     """Refused before anything was written."""
+
+
+class UidTaken(ProvisioningError):
+    """The Identity Platform account is already linked to another user row."""
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +279,10 @@ class Provisioner:
                     "display_name": u.display_name,
                     "is_active": u.is_active,
                     "manager_email": u.manager_email,
+                    "uid": u.uid,
+                    "last_login_at": u.last_login_at.isoformat()
+                    if u.last_login_at
+                    else None,
                     "created_at": u.created_at.isoformat()
                     if u.created_at
                     else None,
@@ -365,6 +374,7 @@ class Provisioner:
                 tenant_id=tenant.id,
                 email=email,
                 role=role,
+                uid=uid or None,
                 display_name=display_name,
             )
             session.add(user)
@@ -399,17 +409,27 @@ class Provisioner:
         email = validate_email(email)
         tenant = self._tenant_by_slug(tenant_slug)
 
-        with tenant_session(tenant.id, self.url) as session:
-            user = session.scalar(
-                select(User).where(
-                    User.tenant_id == tenant.id, User.email == email
+        try:
+            with tenant_session(tenant.id, self.url) as session:
+                user = session.scalar(
+                    select(User).where(
+                        User.tenant_id == tenant.id, User.email == email
+                    )
                 )
-            )
-            if user is None:
-                raise ProvisioningError(
-                    f"No user {email} in tenant {tenant_slug!r}. Add them first."
-                )
-            role = user.role
+                if user is None:
+                    raise ProvisioningError(
+                        f"No user {email} in tenant {tenant_slug!r}. Add them first."
+                    )
+                role = user.role
+                user.uid = uid
+        except IntegrityError as exc:
+            # uq_user_uid is the arbiter; pg8000 names it, SQLite the columns.
+            text = str(exc.orig)
+            if "uq_user_uid" in text or "users.uid" in text:
+                raise UidTaken(
+                    "That account is already linked to another person."
+                ) from exc
+            raise
 
         claims = {"tenant_id": tenant.id, "role": role}
         self.claims.set_claims(uid, claims)

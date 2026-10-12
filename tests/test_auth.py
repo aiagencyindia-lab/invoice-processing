@@ -19,7 +19,8 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from invoice_processing.api import auth
+from invoice_processing import sso
+from invoice_processing.api import auth, service
 from invoice_processing.api.auth import (
     AuthError,
     Principal,
@@ -28,6 +29,7 @@ from invoice_processing.api.auth import (
     principal_from_claims,
     require_role,
 )
+from tests.test_sso import FakeClaims, FakeDirectory
 
 
 class FakeVerifier:
@@ -297,6 +299,29 @@ class TestDevIdentityHeader:
         )
         assert response.status_code == 401
 
+    @pytest.mark.parametrize("where", ["connect", "query"])
+    def test_an_unreachable_database_refuses_the_dev_identity(
+        self, app, local, monkeypatch, where
+    ):
+        """A deactivated person must not get in because the check could not run."""
+
+        def unreachable():
+            raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(
+            auth,
+            "_sso_services",
+            unreachable
+            if where == "connect"
+            else lambda: sso.SsoServices(
+                FakeDirectory(fail=True), FakeClaims()
+            ),
+        )
+        response = app.get(
+            "/whoami", headers={self.HEADER: "alice@e2e.test:admin"}
+        )
+        assert response.status_code == 503
+
     def test_ignored_outside_a_local_environment(self, app, monkeypatch):
         monkeypatch.setenv("AUTH_DISABLED", "1")
         monkeypatch.setenv("ENV", "production")
@@ -304,3 +329,81 @@ class TestDevIdentityHeader:
             "/whoami", headers={self.HEADER: "alice@e2e.test:admin"}
         )
         assert response.status_code == 401
+
+
+class TestTheUsersTableHasASay:
+    @pytest.fixture
+    def directory(self, monkeypatch):
+        d = FakeDirectory()
+        monkeypatch.setattr(
+            auth,
+            "_sso_services",
+            lambda: sso.SsoServices(d, FakeClaims()),
+        )
+        return d
+
+    def test_a_deactivated_row_refuses_a_valid_token(self, app, directory):
+        directory.users[("tenant-acme", "clerk@acme.test")] = {
+            "id": "u",
+            "tenant_id": "tenant-acme",
+            "email": "clerk@acme.test",
+            "role": "clerk",
+            "is_active": False,
+            "uid": "u-1",
+            "display_name": None,
+            "last_login_at": None,
+        }
+        r = app.get("/whoami", headers=bearer("acme-token"))
+        assert r.status_code == 403 and "deactivated" in r.json()["detail"]
+
+    def test_the_row_role_decides_what_the_token_may_do(self, app, directory):
+        directory.users[("tenant-acme", "clerk@acme.test")] = {
+            "id": "u",
+            "tenant_id": "tenant-acme",
+            "email": "clerk@acme.test",
+            "role": "approver",
+            "is_active": True,
+            "uid": "u-1",
+            "display_name": None,
+            "last_login_at": None,
+        }
+        assert (
+            app.post("/approve", headers=bearer("acme-token")).status_code
+            == 200
+        )
+
+    def test_a_deactivated_dev_identity_is_refused(
+        self, app, directory, monkeypatch
+    ):
+        monkeypatch.setenv("AUTH_DISABLED", "1")
+        monkeypatch.setenv("ENV", "local")
+        monkeypatch.setenv("AUTH_DEV_TENANT", "tenant-acme")
+        directory.users[("tenant-acme", "gone@acme.test")] = {
+            "id": "u",
+            "tenant_id": "tenant-acme",
+            "email": "gone@acme.test",
+            "role": "admin",
+            "is_active": False,
+            "uid": None,
+            "display_name": None,
+            "last_login_at": None,
+        }
+        r = app.get(
+            "/whoami", headers={"X-Dev-Principal": "gone@acme.test:admin"}
+        )
+        assert r.status_code == 403
+
+
+class TestAnUnreachableDatabaseFailsClosed:
+    def test_a_claimed_token_gets_503_not_claims_only(self, app, monkeypatch):
+        def unreachable(name, unprotected, *, raise_on_error=False):
+            if raise_on_error:
+                raise OSError("connection refused")
+            return False
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://nowhere/db")
+        monkeypatch.setattr(service, "_user_directory", None)
+        monkeypatch.setattr(service, "_table_exists", unreachable)
+        monkeypatch.setattr(auth, "_sso_services", service._sso_services)
+        r = app.get("/whoami", headers=bearer("acme-token"))
+        assert r.status_code == 503 and "needs a database" in r.json()["detail"]

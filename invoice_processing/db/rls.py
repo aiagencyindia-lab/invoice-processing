@@ -29,6 +29,10 @@ from .models import TENANT_TABLES
 # Set per connection/transaction, read by every policy.
 TENANT_SETTING = "app.tenant_id"
 
+# The tenant setting a pre-tenant domain lookup runs under. No real tenant id
+# can equal it (ids are uuids), so it unlocks nothing but the one SELECT below.
+SSO_LOOKUP_TENANT = "sso-lookup"
+
 
 def enable_rls_statements(tables: list[str] | None = None) -> list[str]:
     """DDL enabling RLS and installing per-tenant policies.
@@ -60,6 +64,22 @@ def enable_rls_statements(tables: list[str] | None = None) -> list[str]:
             )
             continue
 
+        if table == "sso_domains":
+            # The usual isolation policy, plus: a request that has not yet
+            # resolved its tenant must be able to ask "which tenant owns
+            # acme.com?". Permissive policies OR together, so this grants
+            # SELECT on this table only, and only to the lookup session.
+            statements.append(
+                f"CREATE POLICY {table}_isolation ON {table} "
+                f"USING (tenant_id = current_setting('{TENANT_SETTING}', true)) "
+                f"WITH CHECK (tenant_id = current_setting('{TENANT_SETTING}', true));"
+            )
+            statements.append(
+                f"CREATE POLICY {table}_lookup ON {table} FOR SELECT "
+                f"USING (current_setting('{TENANT_SETTING}', true) = '{SSO_LOOKUP_TENANT}');"
+            )
+            continue
+
         statements.append(
             f"CREATE POLICY {table}_isolation ON {table} "
             f"USING (tenant_id = current_setting('{TENANT_SETTING}', true)) "
@@ -82,6 +102,10 @@ def disable_rls_statements(tables: list[str] | None = None) -> list[str]:
             statements.append(
                 f"DROP POLICY IF EXISTS {table}_isolation ON {table};"
             )
+            if table == "sso_domains":
+                statements.append(
+                    f"DROP POLICY IF EXISTS {table}_lookup ON {table};"
+                )
         statements.append(f"ALTER TABLE {table} NO FORCE ROW LEVEL SECURITY;")
         statements.append(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY;")
     return statements

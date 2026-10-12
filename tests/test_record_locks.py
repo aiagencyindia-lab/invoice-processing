@@ -296,7 +296,7 @@ class TestWithoutTheTable:
         writes over a missing feature would be worse than the race it prevents.
         """
         monkeypatch.setattr(service, "_locks", None)
-        monkeypatch.setattr(service, "_table_exists", lambda *a: False)
+        monkeypatch.setattr(service, "_table_exists", lambda *a, **k: False)
 
         response = client("dana").post(f"/api/invoices/{CASE}/lock")
         assert response.status_code == 200

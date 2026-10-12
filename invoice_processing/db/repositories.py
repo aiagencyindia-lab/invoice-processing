@@ -62,6 +62,7 @@ from .models import (
     RecordLock,
     Rule,
     SheetView,
+    SsoDomain,
     SupportingDocument,
     Tenant,
     User,
@@ -759,6 +760,7 @@ _ENTITY_TYPES = {
     "goods_receipt": "goods_receipt",
     "supporting_document": "supporting_document",
     "supporting": "supporting_document",
+    "sso_domain": "sso_domain",
 }
 
 
@@ -771,6 +773,27 @@ def entity_type_for(event_type: str, case_id: str = "") -> str | None:
         _ENTITY_TYPES.get(head)
         or _ENTITY_TYPES.get(prefix)
         or ("invoice" if case_id else None)
+    )
+
+
+def audit_event_row(
+    ctx: RunContext,
+    event_type: str,
+    payload: dict,
+    before: dict | None = None,
+) -> AuditEvent:
+    """The audit row for an event, for a caller that adds it to its own session."""
+    return AuditEvent(
+        tenant_id=ctx.tenant_id,
+        actor=ctx.actor,
+        actor_type="user" if ctx.actor else "system",
+        action=event_type,
+        entity_type=entity_type_for(event_type, ctx.case_id),
+        entity_id=ctx.case_id or None,
+        before=before,
+        after=payload,
+        request_id=ctx.run_id or None,
+        ip=(ctx.settings or {}).get("ip") or None,
     )
 
 
@@ -788,20 +811,7 @@ class PgAuditSink:
         before: dict | None = None,
     ) -> None:
         with tenant_session(ctx.tenant_id, self.url) as session:
-            session.add(
-                AuditEvent(
-                    tenant_id=ctx.tenant_id,
-                    actor=ctx.actor,
-                    actor_type="user" if ctx.actor else "system",
-                    action=event_type,
-                    entity_type=entity_type_for(event_type, ctx.case_id),
-                    entity_id=ctx.case_id or None,
-                    before=before,
-                    after=payload,
-                    request_id=ctx.run_id or None,
-                    ip=(ctx.settings or {}).get("ip") or None,
-                )
-            )
+            session.add(audit_event_row(ctx, event_type, payload, before))
 
     def query(self, tenant_id: str, limit: int = 100) -> list[AuditEvent]:
         with tenant_session(tenant_id, self.url) as session:
@@ -3012,6 +3022,263 @@ class KpiRepository:
             "case_ids": matching[:KPI_CASES_LIMIT],
             "truncated": len(matching) > KPI_CASES_LIMIT,
         }
+
+
+# ---------------------------------------------------------------------------
+# Sign-in: who is who, and which domains may sign in where
+# ---------------------------------------------------------------------------
+
+
+class DomainTaken(Exception):
+    """This domain is already bound, by this tenant or another."""
+
+
+def _user_dict(u: User, tenant_name: str | None) -> dict:
+    return {
+        "id": u.id,
+        "email": u.email,
+        "role": u.role,
+        "is_active": bool(u.is_active),
+        "uid": u.uid,
+        "display_name": u.display_name,
+        "last_login_at": u.last_login_at,
+        "tenant_name": tenant_name,
+    }
+
+
+class PgUserDirectory:
+    """The users rows as the request path reads them.
+
+    Small on purpose: `find` is on every authenticated request, so it is one
+    statement -- the row and its tenant's name together; the writes happen
+    once per sign-in at most.
+    """
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    @staticmethod
+    def _tenant_name(session, tenant_id: str) -> str | None:
+        return session.scalar(select(Tenant.name).where(Tenant.id == tenant_id))
+
+    def find(self, tenant_id: str, email: str) -> dict | None:
+        """The row for this address, compared case-insensitively.
+
+        Rows stored before emails were lowercased can differ only in case;
+        the oldest wins, so the answer never flips between requests.
+        """
+        wanted = (email or "").strip().lower()
+        with tenant_session(tenant_id, self.url) as session:
+            found = session.execute(
+                select(User, Tenant.name)
+                .outerjoin(Tenant, Tenant.id == User.tenant_id)
+                .where(
+                    User.tenant_id == tenant_id,
+                    func.lower(User.email) == wanted,
+                )
+                .order_by(User.created_at, User.id)
+                .limit(1)
+            ).first()
+            if found is None:
+                return None
+            return _user_dict(found[0], found[1])
+
+    def get(self, tenant_id: str, user_id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as session:
+            row = session.scalar(
+                select(User).where(
+                    User.tenant_id == tenant_id, User.id == user_id
+                )
+            )
+            return None if row is None else _user_dict(row, None)
+
+    def _row(self, session, tenant_id: str, user_id: str) -> User:
+        row = session.scalar(
+            select(User).where(User.tenant_id == tenant_id, User.id == user_id)
+        )
+        if row is None:
+            raise LookupError(user_id)
+        return row
+
+    def link_uid(self, tenant_id: str, user_id: str, uid: str) -> None:
+        with tenant_session(tenant_id, self.url) as session:
+            self._row(session, tenant_id, user_id).uid = uid
+
+    def touch_login(self, tenant_id: str, user_id: str, now: datetime) -> None:
+        with tenant_session(tenant_id, self.url) as session:
+            self._row(session, tenant_id, user_id).last_login_at = now
+
+    def provision(
+        self,
+        tenant_id: str,
+        email: str,
+        role: str,
+        uid: str | None,
+        display_name: str | None,
+        *,
+        audit: tuple[RunContext, str, dict] | None = None,
+        now: datetime | None = None,
+    ) -> dict:
+        """Create the row; with `audit`, its event commits or rolls back with it.
+
+        The event's payload gains the new row's `user_id`, known only here.
+        """
+        with tenant_session(tenant_id, self.url) as session:
+            row = User(
+                tenant_id=tenant_id,
+                email=email.strip().lower(),
+                role=role,
+                uid=uid,
+                display_name=display_name,
+                last_login_at=now,
+            )
+            session.add(row)
+            session.flush()
+            if audit is not None:
+                ctx, event_type, payload = audit
+                session.add(
+                    audit_event_row(
+                        ctx, event_type, {**payload, "user_id": row.id}
+                    )
+                )
+            return _user_dict(row, self._tenant_name(session, tenant_id))
+
+    def set_role(
+        self,
+        tenant_id: str,
+        user_id: str,
+        role: str,
+        *,
+        audit: tuple[RunContext, str, dict, dict | None] | None = None,
+    ) -> dict:
+        """Change the role; with `audit`, its event commits or rolls back
+        with it. The event's `before` gains the role this transaction
+        replaced, whatever the caller read earlier."""
+        with tenant_session(tenant_id, self.url) as session:
+            row = self._row(session, tenant_id, user_id)
+            previous, row.role = row.role, role
+            session.flush()
+            if audit is not None:
+                ctx, event_type, payload, before = audit
+                session.add(
+                    audit_event_row(
+                        ctx,
+                        event_type,
+                        payload,
+                        {**(before or {}), "role": previous},
+                    )
+                )
+            return {**_user_dict(row, None), "previous_role": previous}
+
+    def set_active(
+        self,
+        tenant_id: str,
+        user_id: str,
+        active: bool,
+        *,
+        audit: tuple[RunContext, str, dict, dict | None] | None = None,
+    ) -> dict:
+        """Change the flag; with `audit`, its event commits or rolls back
+        with it."""
+        with tenant_session(tenant_id, self.url) as session:
+            row = self._row(session, tenant_id, user_id)
+            previous, row.is_active = bool(row.is_active), active
+            session.flush()
+            if audit is not None:
+                ctx, event_type, payload, before = audit
+                session.add(audit_event_row(ctx, event_type, payload, before))
+            return {**_user_dict(row, None), "previous_active": previous}
+
+    def domain(self, domain: str) -> dict | None:
+        """Which tenant owns this domain. Runs before a tenant is known, so
+        under the lookup sentinel; see rls.SSO_LOOKUP_TENANT."""
+        from .rls import SSO_LOOKUP_TENANT  # noqa: PLC0415
+
+        wanted = (domain or "").strip().lower()
+        with tenant_session(SSO_LOOKUP_TENANT, self.url) as session:
+            row = session.scalar(
+                select(SsoDomain).where(SsoDomain.domain == wanted)
+            )
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "tenant_id": row.tenant_id,
+                "tenant_name": self._tenant_name(session, row.tenant_id),
+                "domain": row.domain,
+                "provider": row.provider,
+                "default_role": row.default_role,
+            }
+
+
+class PgSsoDomainRepository:
+    """A tenant's own domain bindings. The API validates; this stores."""
+
+    def __init__(self, url: str | None = None):
+        self.url = url
+
+    @staticmethod
+    def _dict(d: SsoDomain) -> dict:
+        return {
+            "id": d.id,
+            "domain": d.domain,
+            "provider": d.provider,
+            "default_role": d.default_role,
+            "created_by": d.created_by,
+            "created_at": _iso(d.created_at),
+        }
+
+    def list(self, tenant_id: str) -> list[dict]:
+        with tenant_session(tenant_id, self.url) as session:
+            rows = session.scalars(
+                select(SsoDomain)
+                .where(SsoDomain.tenant_id == tenant_id)
+                .order_by(SsoDomain.domain)
+            )
+            return [self._dict(d) for d in rows]
+
+    def add(
+        self,
+        tenant_id: str,
+        *,
+        domain: str,
+        provider: str,
+        default_role: str,
+        created_by: str,
+    ) -> dict:
+        try:
+            with tenant_session(tenant_id, self.url) as session:
+                row = SsoDomain(
+                    tenant_id=tenant_id,
+                    domain=domain.strip().lower(),
+                    provider=provider,
+                    default_role=default_role,
+                    created_by=created_by,
+                )
+                session.add(row)
+                session.flush()
+                return self._dict(row)
+        except IntegrityError as exc:
+            # The unique constraint is the arbiter; a check-then-insert would
+            # let two admins race for the same domain.
+            # Matched on the message: pg8000 (production) carries no `.diag`;
+            # it names the constraint, SQLite names the column.
+            text = str(exc.orig)
+            if "uq_sso_domain" in text or "sso_domains.domain" in text:
+                raise DomainTaken(domain) from exc
+            raise
+
+    def remove(self, tenant_id: str, domain_id: str) -> bool:
+        with tenant_session(tenant_id, self.url) as session:
+            row = session.scalar(
+                select(SsoDomain).where(
+                    SsoDomain.tenant_id == tenant_id, SsoDomain.id == domain_id
+                )
+            )
+            if row is None:
+                return False
+            session.delete(row)
+            return True
 
 
 # ---------------------------------------------------------------------------

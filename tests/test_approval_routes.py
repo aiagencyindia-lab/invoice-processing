@@ -25,6 +25,7 @@ from invoice_processing.db.repositories import (
     PgApprovalRepository,
     PgCaseRepository,
     PgPurchaseOrderRepository,
+    PgUserDirectory,
 )
 from invoice_processing.db.session import (
     create_all,
@@ -886,6 +887,9 @@ def test_unreadable_routing_table_is_503_not_unrouted(env, monkeypatch):
 
     monkeypatch.setattr(service, "_approvals", None)
     monkeypatch.setattr(db_session, "get_engine", down)
+    # With the whole database down, sign-in itself now refuses (503) before
+    # routing is reached. Keep this test about routing: sign-in on claims.
+    monkeypatch.setattr(auth, "_sso_services", lambda: None)
     r = act(env, "approver:anyone")
     assert r.status_code == 503
     assert r.json()["detail"] == "Approval routing is unavailable."
@@ -1058,9 +1062,12 @@ def test_the_refusal_act_gives_is_the_reason_the_chain_gives(env):
 
 def test_a_seat_holder_without_the_approver_role_cannot_decide(env):
     # Named on the step, then demoted: act would 403 on the role, so the
-    # chain must not offer the decision either.
+    # chain must not offer the decision either. The users row decides the
+    # role now, so the demotion is the row's, and the token agrees with it.
     two_tier(env)
     route_case(env)
+    users = PgUserDirectory(env["url"])
+    users.set_role(TENANT, users.find(TENANT, "a@x.test")["id"], "clerk")
     assert chain_for(env, "clerk:a") == (
         False,
         "'approver' or higher is required.",

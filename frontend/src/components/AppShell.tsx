@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import { BrandLockup } from "@/components/Brand";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
   api,
@@ -15,7 +15,9 @@ import {
 } from "@/lib/api";
 import {
   currentIdToken,
+  refreshToken,
   signOut,
+  tokenHasTenant,
   watchUser,
   type SignedInUser,
 } from "@/lib/auth";
@@ -78,6 +80,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SignedInUser | null>(null);
   // Set when the API accepted the token and refused the account anyway.
   const [denied, setDenied] = useState<string | null>(null);
+  const refreshed = useRef(false);
 
   /** Ask the API who we are. The server is the authority on whether a token
    *  is required at all: a deployment with authentication disabled answers
@@ -87,6 +90,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       .then((value) => {
         setMe(value);
         setDenied(null);
+        // Claims written after sign-in are not in the token it holds; pull a
+        // fresh one once so they land without a manual sign-out.
+        if (!refreshed.current) {
+          refreshed.current = true;
+          tokenHasTenant()
+            .then((has) => (has ? undefined : refreshToken()))
+            .catch(() => undefined);
+        }
       })
       .catch((caught) => {
         const status = caught instanceof ApiError ? caught.status : 0;
@@ -111,6 +122,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     watchUser((value) => {
       if (cancelled) return;
+      // Signed out: the next person to sign in here gets their own refresh.
+      if (!value) refreshed.current = false;
       setUser(value);
       identify();
     }).then((stop) => {
@@ -135,6 +148,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return (
       <main style={{ padding: "4rem 2rem" }}>
         <p className="muted">Loading…</p>
+      </main>
+    );
+  }
+
+  if (me === null && denied?.includes("deactivated")) {
+    return (
+      <main style={{ padding: "4rem 2rem" }} className="stack">
+        <p role="alert">{denied}</p>
+        <Link href="/login" onClick={() => void signOut().catch(() => undefined)}>
+          Sign out
+        </Link>
       </main>
     );
   }

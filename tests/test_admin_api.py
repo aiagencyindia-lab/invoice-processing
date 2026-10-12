@@ -18,25 +18,32 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from invoice_processing.adapters import JsonlAuditSink
 from invoice_processing.admin.provision import DryRunClaims, Provisioner
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
-from invoice_processing.db.models import Base
+from invoice_processing.db.models import AuditEvent, Base
 from invoice_processing.db.session import get_engine
 
 
 class FakeVerifier:
-    """Token format: `<role>@<tenant-id>`."""
+    """Token format: `<role>@<tenant-id>[#<email>]`.
+
+    The email defaults to `<role>@x.test` whatever the tenant, so two tenants'
+    admins share the address `admin@x.test` -- and the domain `x.test`.
+    """
 
     def verify(self, token):
+        token, _, email = token.partition("#")
         role, _, tenant = token.partition("@")
         if role not in ("viewer", "clerk", "approver", "admin"):
             raise auth.AuthError("Invalid token")
         return {
             "sub": f"u-{token}",
-            "email": f"{role}@x.test",
+            "email": email or f"{role}@x.test",
             "email_verified": True,
             "tenant_id": tenant,
             "role": role,
@@ -362,3 +369,478 @@ class TestNoDatabaseConfigured:
         assert "DATABASE_URL" in response.json()["detail"], (
             "the message must name the setting that fixes it"
         )
+
+
+def _events(tmp_path):
+    """Every audit event, from the file sink and from the database.
+
+    Role and active-flag changes are written in the change's own transaction,
+    so they land in `audit_events` rather than through the sink. Reading both
+    keeps "exactly one" meaning exactly one.
+    """
+    path = tmp_path / "audit.jsonl"
+    events = (
+        [json.loads(x) for x in path.read_text().splitlines()]
+        if path.exists()
+        else []
+    )
+    with Session(get_engine(f"sqlite:///{tmp_path / 'admin.db'}")) as session:
+        events += [
+            {"event_type": e.action, "payload": e.after, "before": e.before}
+            for e in session.scalars(select(AuditEvent))
+        ]
+    return events
+
+
+class TestSsoDomains:
+    def test_add_list_remove(self, env, tmp_path):
+        client = env["client"]("admin")
+        r = client.post(
+            "/api/admin/sso-domains",
+            json={
+                "domain": " X.TEST ",
+                "provider": "google",
+                "default_role": "clerk",
+            },
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["domain"] == "x.test"
+        listed = client.get("/api/admin/sso-domains").json()["domains"]
+        assert [d["domain"] for d in listed] == ["x.test"]
+        assert (
+            client.delete(
+                f"/api/admin/sso-domains/{listed[0]['id']}"
+            ).status_code
+            == 204
+        )
+        assert client.get("/api/admin/sso-domains").json()["domains"] == []
+        names = [e["event_type"] for e in _events(tmp_path)]
+        assert "sso_domain_added" in names and "sso_domain_removed" in names
+
+    @pytest.mark.parametrize(
+        "domain", ["gmail.com", "outlook.com", "not a domain", ""]
+    )
+    def test_public_and_malformed_domains_are_refused(self, env, domain):
+        r = env["client"]("admin").post(
+            "/api/admin/sso-domains",
+            json={
+                "domain": domain,
+                "provider": "google",
+                "default_role": "viewer",
+            },
+        )
+        assert r.status_code == 422
+
+    def test_bad_provider_or_role_is_refused(self, env):
+        client = env["client"]("admin")
+        assert (
+            client.post(
+                "/api/admin/sso-domains",
+                json={
+                    "domain": "x.test",
+                    "provider": "okta",
+                    "default_role": "viewer",
+                },
+            ).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                "/api/admin/sso-domains",
+                json={
+                    "domain": "x.test",
+                    "provider": "google",
+                    "default_role": "admin",
+                },
+            ).status_code
+            == 422
+        )
+
+    def test_a_domain_held_by_another_tenant_is_refused_without_naming_it(
+        self, env
+    ):
+        acme = env["client"]("admin")
+        globex = env["client"]("admin", env["globex"]["id"])
+        assert (
+            acme.post(
+                "/api/admin/sso-domains",
+                json={
+                    "domain": "x.test",
+                    "provider": "google",
+                    "default_role": "viewer",
+                },
+            ).status_code
+            == 201
+        )
+        r = globex.post(
+            "/api/admin/sso-domains",
+            json={
+                "domain": "x.test",
+                "provider": "google",
+                "default_role": "viewer",
+            },
+        )
+        assert r.status_code == 409
+        # Both admins sign in as admin@x.test (see FakeVerifier), so both may
+        # try for x.test; the second is told no without naming the holder.
+        assert (
+            "another organisation" in r.json()["detail"]
+            and "acme" not in r.json()["detail"].lower()
+        )
+
+    def test_an_admin_binds_the_domain_of_their_own_address(self, env):
+        client = env["client"]("admin", f"{env['acme']['id']}#admin@acme.com")
+        body = {
+            "domain": "acme.com",
+            "provider": "google",
+            "default_role": "viewer",
+        }
+        assert (
+            client.post("/api/admin/sso-domains", json=body).status_code == 201
+        )
+
+    def test_another_companys_domain_is_refused_and_nothing_stored(self, env):
+        """Else one tenant could claim globex.com and admit its staff."""
+        client = env["client"]("admin", f"{env['acme']['id']}#admin@acme.com")
+        r = client.post(
+            "/api/admin/sso-domains",
+            json={
+                "domain": "globex.com",
+                "provider": "google",
+                "default_role": "viewer",
+            },
+        )
+        assert r.status_code == 422
+        assert "your own sign-in address" in r.json()["detail"]
+        assert client.get("/api/admin/sso-domains").json()["domains"] == []
+
+    def test_only_admins_manage_domains(self, env):
+        assert (
+            env["client"]("approver").get("/api/admin/sso-domains").status_code
+            == 403
+        )
+
+    def test_removing_a_domain_keeps_existing_users(self, env):
+        client = env["client"]("admin")
+        d = client.post(
+            "/api/admin/sso-domains",
+            json={
+                "domain": "x.test",
+                "provider": "google",
+                "default_role": "viewer",
+            },
+        ).json()
+        client.post(
+            "/api/admin/users", json={"email": "pat@x.test", "role": "clerk"}
+        )
+        assert (
+            client.delete(f"/api/admin/sso-domains/{d['id']}").status_code
+            == 204
+        )
+        emails = [
+            u["email"] for u in client.get("/api/admin/users").json()["users"]
+        ]
+        assert "pat@x.test" in emails
+
+
+class TestRoleAndActive:
+    def _user(self, env, email="pat@acme.com", role="clerk"):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users",
+            json={"email": email, "role": role, "uid": "fb-pat"},
+        )
+        return next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == email
+        )
+
+    def test_change_role_rewrites_claims_and_audits(self, env, tmp_path):
+        pat = self._user(env)
+        client = env["client"]("admin")
+        r = client.patch(
+            f"/api/admin/users/{pat['id']}", json={"role": "approver"}
+        )
+        assert r.status_code == 200 and r.json()["role"] == "approver"
+        assert (
+            "fb-pat",
+            {"tenant_id": env["acme"]["id"], "role": "approver"},
+        ) in env["claims"].written
+        changed = [
+            e
+            for e in _events(tmp_path)
+            if e["event_type"] == "user_role_changed"
+        ]
+        assert len(changed) == 1
+        assert changed[0]["payload"]["email"] == "pat@acme.com"
+        assert changed[0]["before"] == {"role": "clerk"}
+
+    def test_deactivate_and_reactivate(self, env, tmp_path):
+        pat = self._user(env)
+        client = env["client"]("admin")
+        assert (
+            client.patch(
+                f"/api/admin/users/{pat['id']}", json={"is_active": False}
+            ).json()["is_active"]
+            is False
+        )
+        listed = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["id"] == pat["id"]
+        )
+        assert listed["is_active"] is False and listed["uid"] == "fb-pat"
+        assert (
+            client.patch(
+                f"/api/admin/users/{pat['id']}", json={"is_active": True}
+            ).json()["is_active"]
+            is True
+        )
+        names = [e["event_type"] for e in _events(tmp_path)]
+        assert names.count("user_deactivated") == 1
+        assert names.count("user_reactivated") == 1
+
+    @pytest.mark.parametrize("body", [{"role": "admin"}, {"is_active": False}])
+    def test_a_change_that_cannot_be_audited_does_not_happen(
+        self, env, tmp_path, monkeypatch, body
+    ):
+        from invoice_processing.db import repositories  # noqa: PLC0415
+
+        pat = self._user(env)
+        original = repositories.audit_event_row
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("audit down")
+
+        monkeypatch.setattr(repositories, "audit_event_row", broken)
+        client = TestClient(
+            app,
+            headers={"Authorization": f"Bearer admin@{env['acme']['id']}"},
+            raise_server_exceptions=False,
+        )
+        r = client.patch(f"/api/admin/users/{pat['id']}", json=body)
+        assert r.status_code == 500
+        monkeypatch.setattr(repositories, "audit_event_row", original)
+        after = next(
+            u
+            for u in env["client"]("admin")
+            .get("/api/admin/users")
+            .json()["users"]
+            if u["id"] == pat["id"]
+        )
+        assert (after["role"], after["is_active"]) == ("clerk", True)
+
+    def test_an_admin_cannot_demote_or_deactivate_themself(self, env):
+        client = env["client"]("admin")
+        # The admin token's email is admin@x.test; give it a row.
+        client.post(
+            "/api/admin/users", json={"email": "admin@x.test", "role": "admin"}
+        )
+        me = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == "admin@x.test"
+        )
+        assert (
+            client.patch(
+                f"/api/admin/users/{me['id']}", json={"role": "clerk"}
+            ).status_code
+            == 409
+        )
+        assert (
+            client.patch(
+                f"/api/admin/users/{me['id']}", json={"is_active": False}
+            ).status_code
+            == 409
+        )
+
+    def test_an_unknown_role_is_refused(self, env):
+        pat = self._user(env)
+        assert (
+            env["client"]("admin")
+            .patch(f"/api/admin/users/{pat['id']}", json={"role": "boss"})
+            .status_code
+            == 422
+        )
+
+    def test_users_list_carries_the_new_fields(self, env):
+        pat = self._user(env)
+        assert (
+            pat["uid"] == "fb-pat"
+            and pat["is_active"] is True
+            and "last_login_at" in pat
+        )
+
+
+class TestPartialFailures:
+    def test_a_failing_claims_write_still_reports_the_change(
+        self, env, tmp_path, monkeypatch
+    ):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users",
+            json={"email": "pat@acme.com", "role": "clerk", "uid": "fb-pat"},
+        )
+        pat = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == "pat@acme.com"
+        )
+
+        def boom(uid, claims):
+            raise RuntimeError("identity platform down")
+
+        monkeypatch.setattr(env["claims"], "set_claims", boom)
+        r = client.patch(
+            f"/api/admin/users/{pat['id']}", json={"role": "approver"}
+        )
+        assert r.status_code == 200, r.text
+        assert (
+            r.json()["role"] == "approver"
+            and r.json()["claims_applied"] is False
+        )
+        assert [e["event_type"] for e in _events(tmp_path)].count(
+            "user_role_changed"
+        ) == 1
+
+    def test_claims_applied_is_true_when_written(self, env):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users",
+            json={"email": "pat@acme.com", "role": "clerk", "uid": "fb-pat"},
+        )
+        pat = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == "pat@acme.com"
+        )
+        r = client.patch(
+            f"/api/admin/users/{pat['id']}", json={"role": "approver"}
+        )
+        assert r.json()["claims_applied"] is True
+
+    def test_set_claims_stores_the_uid(self, env):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users", json={"email": "pat@acme.com", "role": "clerk"}
+        )
+        assert (
+            client.post(
+                "/api/admin/users/claims",
+                json={"email": "pat@acme.com", "uid": "fb-pat"},
+            ).status_code
+            == 200
+        )
+        pat = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == "pat@acme.com"
+        )
+        assert pat["uid"] == "fb-pat"
+
+    def test_a_uid_linked_to_someone_else_is_refused_plainly(self, env):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users",
+            json={"email": "pat@acme.com", "role": "clerk", "uid": "fb-pat"},
+        )
+        client.post(
+            "/api/admin/users", json={"email": "sam@acme.com", "role": "clerk"}
+        )
+        r = client.post(
+            "/api/admin/users/claims",
+            json={"email": "sam@acme.com", "uid": "fb-pat"},
+        )
+        assert r.status_code == 400, r.text
+        assert r.json()["detail"] == (
+            "That account is already linked to another person."
+        )
+        sam = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == "sam@acme.com"
+        )
+        assert sam["uid"] is None
+
+    @pytest.mark.parametrize("who", ["pat@acme.com", "admin@x.test"])
+    def test_a_refused_combined_patch_changes_nothing(self, env, tmp_path, who):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users", json={"email": "admin@x.test", "role": "admin"}
+        )
+        client.post(
+            "/api/admin/users", json={"email": "pat@acme.com", "role": "clerk"}
+        )
+        target = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == who
+        )
+        body = {
+            "manager_email": "admin@x.test",
+            "role": "boss" if who == "pat@acme.com" else "clerk",
+        }
+        r = client.patch(f"/api/admin/users/{target['id']}", json=body)
+        assert r.status_code == (422 if who == "pat@acme.com" else 409)
+        after = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["id"] == target["id"]
+        )
+        assert after["manager_email"] is None
+        assert "user_updated" not in [
+            e["event_type"] for e in _events(tmp_path)
+        ]
+
+
+def test_re_adding_your_own_domain_says_so(env):
+    client = env["client"]("admin")
+    body = {
+        "domain": "x.test",
+        "provider": "google",
+        "default_role": "viewer",
+    }
+    assert client.post("/api/admin/sso-domains", json=body).status_code == 201
+    r = client.post("/api/admin/sso-domains", json=body)
+    assert r.status_code == 409 and "your organisation" in r.json()["detail"]
+
+
+class TestNullStateIsRefused:
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"role": None},
+            {"is_active": None},
+            {"manager_email": "admin@x.test", "role": None},
+        ],
+    )
+    def test_null_role_or_active_changes_nothing(self, env, tmp_path, body):
+        client = env["client"]("admin")
+        client.post(
+            "/api/admin/users", json={"email": "pat@acme.com", "role": "clerk"}
+        )
+        pat = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["email"] == "pat@acme.com"
+        )
+        r = client.patch(f"/api/admin/users/{pat['id']}", json=body)
+        assert r.status_code == 422, r.text
+        assert "cannot be null" in r.json()["detail"]
+        after = next(
+            u
+            for u in client.get("/api/admin/users").json()["users"]
+            if u["id"] == pat["id"]
+        )
+        assert (after["role"], after["is_active"], after["manager_email"]) == (
+            "clerk",
+            True,
+            None,
+        )
+        names = [e["event_type"] for e in _events(tmp_path)]
+        assert not {
+            "user_updated",
+            "user_role_changed",
+            "user_deactivated",
+        } & set(names)

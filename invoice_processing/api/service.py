@@ -389,6 +389,63 @@ def get_gl_rules():
     return _gl_rules
 
 
+_user_directory = None
+_sso_domains = None
+
+
+def get_user_directory():
+    """The users rows as the request path reads them. None without a
+    database, and None when the users table is not there -- the suite runs
+    with an in-memory database that has no schema, and a file-store
+    deployment must keep answering from claims alone."""
+    global _user_directory
+    if (
+        _user_directory is None
+        and _database_configured()
+        and _table_exists("users", "sign-in")
+    ):
+        from ..db.repositories import PgUserDirectory  # noqa: PLC0415
+
+        _user_directory = PgUserDirectory()
+    return _user_directory
+
+
+def get_sso_domains():
+    """Domain bindings. None without the table."""
+    global _sso_domains
+    if (
+        _sso_domains is None
+        and _database_configured()
+        and _table_exists("sso_domains", "single sign-on")
+    ):
+        from ..db.repositories import PgSsoDomainRepository  # noqa: PLC0415
+
+        _sso_domains = PgSsoDomainRepository()
+    return _sso_domains
+
+
+def _sso_services():
+    """Sign-in's dependencies, or None where there is no database."""
+    from .. import sso  # noqa: PLC0415
+
+    global _user_directory
+    if not _database_configured():
+        return None
+    if _user_directory is None:
+        # Raises when the database cannot be asked: a configured database that
+        # is down must refuse sign-in, not fall back to claims and admit a
+        # deactivated user. Only a table that is really absent means claims.
+        if not _table_exists("users", "sign-in", raise_on_error=True):
+            return None
+        from ..db.repositories import PgUserDirectory  # noqa: PLC0415
+
+        _user_directory = PgUserDirectory()
+    return sso.SsoServices(_user_directory, get_claims_writer())
+
+
+auth.set_sso_services(_sso_services)
+
+
 def get_purchase_orders():
     """Purchase orders, their lines and goods receipts. `None` without the table.
 

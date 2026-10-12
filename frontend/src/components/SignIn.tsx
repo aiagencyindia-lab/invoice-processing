@@ -104,6 +104,17 @@ export function SignIn({
         {busy ? "Opening Google…" : "Continue with Google"}
       </button>
 
+      {process.env.NEXT_PUBLIC_SSO_MICROSOFT === "1" ? (
+        <button
+          type="button"
+          className="btn-secondary"
+          style={{ width: "100%", marginTop: 10 }}
+          disabled
+        >
+          Sign in with Microsoft
+        </button>
+      ) : null}
+
       {problem ? (
         <p
           role="alert"

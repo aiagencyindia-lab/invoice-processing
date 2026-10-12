@@ -80,6 +80,8 @@ def resolve_adapters_afresh(monkeypatch):
         "_vendors",
         "_approvals",
         "_gl_rules",
+        "_user_directory",
+        "_sso_domains",
         "_purchase_orders",
         "_supporting_documents",
         "_rules",
