@@ -112,7 +112,10 @@ of that commit with the new tests copied in, then remove the worktree.
 - Postgres parity: one signup test that seeds a binding in tenant A and
   signs up from that domain must run on the CI Postgres list
   (`.github/workflows/ci.yml`, "DB-backed tests against Postgres"), proving
-  the sentinel lookup sees another tenant's binding under real RLS.
+  the signup path works on real Postgres and pg8000. (CI connects as a
+  superuser, which bypasses RLS; the sentinel's RLS itself is already proven
+  as a NOBYPASSRLS role by
+  `test_sso_lookup_sentinel_reads_domains_and_nothing_else`.)
 - Frontend: `npm run lint`, `npx tsc --noEmit`, e2e 34/34.
 
 Gates: full pytest, ruff check + format, `benchmark/harness/gates.sh`, the
