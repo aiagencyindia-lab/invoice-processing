@@ -440,7 +440,7 @@ def _sso_services():
         from ..db.repositories import PgUserDirectory  # noqa: PLC0415
 
         _user_directory = PgUserDirectory()
-    return sso.SsoServices(_user_directory, get_claims_writer())
+    return sso.SsoServices(_user_directory, get_claims_writer(), get_audit())
 
 
 auth.set_sso_services(_sso_services)

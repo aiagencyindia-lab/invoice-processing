@@ -81,10 +81,21 @@ class FakeClaims:
         self.written.append((uid, claims))
 
 
+class FakeAudit:
+    def __init__(self, fail=False):
+        self.events, self.fail = [], fail
+
+    def emit(self, ctx, event_type, payload, before=None):
+        if self.fail:
+            raise RuntimeError("audit down")
+        self.events.append((ctx.tenant_id, ctx.actor, event_type, payload))
+
+
 def services(**kw):
     return sso.SsoServices(
         kw.get("directory", FakeDirectory()),
         kw.get("claims", FakeClaims()),
+        kw.get("audit", FakeAudit()),
     )
 
 
@@ -164,6 +175,64 @@ class TestDomains:
 
 
 class TestClaimedTokens:
+    def test_a_deactivated_user_is_recorded_as_refused(self):
+        off = dict(ROW, is_active=False)
+        audit = FakeAudit()
+        with pytest.raises(AuthError):
+            sso.resolve_principal(
+                claimed(),
+                services(directory=FakeDirectory([off]), audit=audit),
+                now=NOW,
+            )
+        assert audit.events == [
+            (
+                ACME,
+                "pat@acme.com",
+                "sign_in_refused",
+                {
+                    "email": "pat@acme.com",
+                    "user_id": "u-1",
+                    "reason": "deactivated",
+                },
+            )
+        ]
+
+    def test_a_refusal_that_cannot_be_recorded_is_a_503(self):
+        """The refusal stands either way; what must not happen is a silent gap."""
+        off = dict(ROW, is_active=False)
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                claimed(),
+                services(
+                    directory=FakeDirectory([off]), audit=FakeAudit(fail=True)
+                ),
+                now=NOW,
+            )
+        assert exc.value.status_code == 503
+
+    def test_a_deactivated_dev_identity_is_recorded_too(self):
+        """enforce_active is the dev-bypass path; it must not be the quiet one."""
+        off = dict(ROW, is_active=False)
+        audit = FakeAudit()
+        dev = Principal(
+            user_id="dev", email="pat@acme.com", tenant_id=ACME, role="admin"
+        )
+        with pytest.raises(AuthError):
+            sso.enforce_active(
+                dev, services(directory=FakeDirectory([off]), audit=audit)
+            )
+        assert [e[2] for e in audit.events] == ["sign_in_refused"]
+
+    def test_without_a_sink_a_refusal_is_still_a_refusal(self):
+        off = dict(ROW, is_active=False)
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                claimed(),
+                services(directory=FakeDirectory([off]), audit=None),
+                now=NOW,
+            )
+        assert exc.value.status_code == 403
+
     def test_the_row_role_beats_the_claim(self):
         p = sso.resolve_principal(
             claimed(), services(directory=FakeDirectory([ROW])), now=NOW

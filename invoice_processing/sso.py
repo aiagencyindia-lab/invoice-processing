@@ -42,6 +42,7 @@ MICROSOFT = "microsoft.com"
 class SsoServices(NamedTuple):
     directory: Any  # PgUserDirectory-shaped
     claims: Any  # ClaimsWriter
+    audit: Any = None  # AuditSink; None when there is no database
 
 
 def normalize_domain(value: str) -> str:
@@ -70,13 +71,33 @@ def _unavailable(exc: Exception) -> AuthError:
     )
 
 
-def _refuse_inactive(row: dict) -> None:
-    if row.get("is_active") is False:
-        raise AuthError(
-            "This account has been deactivated. Ask an admin of "
-            f"{row.get('tenant_name') or 'your organisation'} to reactivate it.",
-            status_code=403,
-        )
+def _refuse_inactive(
+    row: dict, tenant_id: str, email: str, services: SsoServices
+) -> None:
+    if row.get("is_active") is not False:
+        return
+    # ponytail: no database means no sink, and the refusal goes unrecorded;
+    # the same rule as the rest of sign-in.
+    if services.audit is not None:
+        ctx = Principal(
+            user_id=str(row.get("uid") or ""),
+            email=email,
+            tenant_id=tenant_id,
+            role=str(row.get("role") or "viewer"),
+        ).context()
+        try:
+            services.audit.emit(
+                ctx,
+                "sign_in_refused",
+                {"email": email, "user_id": row["id"], "reason": "deactivated"},
+            )
+        except Exception as exc:  # a refusal nobody can see is the real failure
+            raise _unavailable(exc) from exc
+    raise AuthError(
+        "This account has been deactivated. Ask an admin of "
+        f"{row.get('tenant_name') or 'your organisation'} to reactivate it.",
+        status_code=403,
+    )
 
 
 def _touch(services: SsoServices, row: dict, now: datetime) -> None:
@@ -103,7 +124,7 @@ def enforce_active(
     except Exception as exc:
         raise _unavailable(exc) from exc
     if row is not None:
-        _refuse_inactive(row)
+        _refuse_inactive(row, principal.tenant_id, principal.email, services)
     return principal
 
 
@@ -130,7 +151,7 @@ def resolve_principal(
                 base.role,
             )
             return base
-        _refuse_inactive(row)
+        _refuse_inactive(row, base.tenant_id, base.email, services)
         _touch(services, {**row, "tenant_id": base.tenant_id}, now)
         return Principal(
             user_id=base.user_id,
@@ -194,7 +215,7 @@ def resolve_principal(
                 if row is None:
                     raise
         if not created:
-            _refuse_inactive(row)
+            _refuse_inactive(row, tenant_id, email, services)
             if uid and row.get("uid") != uid:
                 if row.get("uid"):
                     # The verified address is the identity; the account

@@ -761,6 +761,9 @@ _ENTITY_TYPES = {
     "supporting_document": "supporting_document",
     "supporting": "supporting_document",
     "sso_domain": "sso_domain",
+    "access": "user",
+    "sign_in": "user",
+    "audit": "audit_trail",
 }
 
 
