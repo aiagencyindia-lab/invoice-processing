@@ -909,6 +909,9 @@ class TestTheTrailCanAnswerWhatChanged:
         assert entity_type_for("tenant_self_provisioned") == "tenant"
         assert entity_type_for("goods_receipt_recorded") == "goods_receipt"
         assert entity_type_for("purchase_orders_imported") == "purchase_order"
+        assert entity_type_for("access_denied") == "user"
+        assert entity_type_for("sign_in_refused") == "user"
+        assert entity_type_for("audit_exported") == "audit_trail"
 
     def test_a_document_event_is_not_labelled_an_invoice(self, db):
         """It was, whenever a case id happened to be present."""
@@ -921,6 +924,35 @@ class TestTheTrailCanAnswerWhatChanged:
 
         [event] = sink.query(ACME)
         assert event.entity_type == "document"
+
+    def test_query_narrows_to_a_window_and_pages_by_cursor(self, db):
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+
+        from invoice_processing.db.models import AuditEvent  # noqa: PLC0415
+
+        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        with tenant_session(ACME, db) as s:
+            for i in range(5):
+                s.add(
+                    AuditEvent(
+                        id=f"e{i}",
+                        tenant_id=ACME,
+                        occurred_at=t0 + timedelta(hours=i),
+                        action="x",
+                    )
+                )
+        sink = PgAuditSink(db)
+        window = sink.query(
+            ACME, since=t0 + timedelta(hours=1), until=t0 + timedelta(hours=3)
+        )
+        assert [e.id for e in window] == ["e3", "e2", "e1"]
+        first = sink.query(ACME, limit=2)
+        rest = sink.query(
+            ACME, limit=10, before=(first[-1].occurred_at, first[-1].id)
+        )
+        assert [e.id for e in first] == ["e4", "e3"]
+        assert [e.id for e in rest] == ["e2", "e1", "e0"]
+        assert sink.query(ACME, since=t0 + timedelta(hours=4), until=t0) == []
 
 
 class TestClaimsHoldAcrossContainers:

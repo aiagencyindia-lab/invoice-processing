@@ -761,6 +761,9 @@ _ENTITY_TYPES = {
     "supporting_document": "supporting_document",
     "supporting": "supporting_document",
     "sso_domain": "sso_domain",
+    "access": "user",
+    "sign_in": "user",
+    "audit": "audit_trail",
 }
 
 
@@ -813,16 +816,34 @@ class PgAuditSink:
         with tenant_session(ctx.tenant_id, self.url) as session:
             session.add(audit_event_row(ctx, event_type, payload, before))
 
-    def query(self, tenant_id: str, limit: int = 100) -> list[AuditEvent]:
-        with tenant_session(tenant_id, self.url) as session:
-            return list(
-                session.scalars(
-                    select(AuditEvent)
-                    .where(AuditEvent.tenant_id == tenant_id)
-                    .order_by(AuditEvent.occurred_at.desc())
-                    .limit(limit)
-                ).all()
+    def query(
+        self,
+        tenant_id: str,
+        limit: int = 100,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        before: tuple[datetime, str] | None = None,
+    ) -> list[AuditEvent]:
+        stmt = select(AuditEvent).where(AuditEvent.tenant_id == tenant_id)
+        if since is not None:
+            stmt = stmt.where(AuditEvent.occurred_at >= since)
+        if until is not None:
+            stmt = stmt.where(AuditEvent.occurred_at <= until)
+        if before is not None:
+            # Keyset, not offset: an auditor paging a year of events must
+            # never see a row twice or skip one because a new row landed.
+            t, i = before
+            stmt = stmt.where(
+                or_(
+                    AuditEvent.occurred_at < t,
+                    and_(AuditEvent.occurred_at == t, AuditEvent.id < i),
+                )
             )
+        stmt = stmt.order_by(
+            AuditEvent.occurred_at.desc(), AuditEvent.id.desc()
+        ).limit(limit)
+        with tenant_session(tenant_id, self.url) as session:
+            return list(session.scalars(stmt).all())
 
 
 # How long a lock lives without being renewed. Long enough for a reviewer to

@@ -29,7 +29,7 @@ from invoice_processing.api.auth import (
     principal_from_claims,
     require_role,
 )
-from tests.test_sso import FakeClaims, FakeDirectory
+from tests.test_sso import FakeAudit, FakeClaims, FakeDirectory
 
 
 class FakeVerifier:
@@ -82,6 +82,13 @@ def app(monkeypatch):
 
     @application.post("/approve")
     def approve(
+        principal: Annotated[Principal, Depends(require_role("approver"))],
+    ):
+        return {"ok": True}
+
+    @application.post("/invoices/{case_id}/approve")
+    def approve_one(
+        case_id: str,
         principal: Annotated[Principal, Depends(require_role("approver"))],
     ):
         return {"ok": True}
@@ -422,3 +429,60 @@ class TestAnUnreachableDatabaseFailsClosed:
         monkeypatch.setattr(auth, "_sso_services", service._sso_services)
         r = app.get("/whoami", headers=bearer("acme-token"))
         assert r.status_code == 503 and "needs a database" in r.json()["detail"]
+
+
+class TestRefusalsAreRecorded:
+    @pytest.fixture
+    def audit(self, monkeypatch):
+        sink = FakeAudit()
+        monkeypatch.setattr(
+            auth,
+            "_sso_services",
+            lambda: sso.SsoServices(FakeDirectory(), FakeClaims(), sink),
+        )
+        return sink
+
+    def test_a_role_refusal_names_the_route_and_the_roles(self, app, audit):
+        r = app.post("/invoices/inv-7/approve", headers=bearer("acme-token"))
+        assert r.status_code == 403
+        assert audit.events == [
+            (
+                "tenant-acme",
+                "clerk@acme.test",
+                "access_denied",
+                {
+                    "path": "/invoices/{case_id}/approve",
+                    "method": "POST",
+                    "required_role": "approver",
+                    "actual_role": "clerk",
+                },
+            )
+        ]
+
+    def test_a_refusal_that_cannot_be_recorded_is_a_503(self, app, monkeypatch):
+        monkeypatch.setattr(
+            auth,
+            "_sso_services",
+            lambda: sso.SsoServices(
+                FakeDirectory(), FakeClaims(), FakeAudit(fail=True)
+            ),
+        )
+        assert (
+            app.post("/approve", headers=bearer("acme-token")).status_code
+            == 503
+        )
+
+    def test_without_services_a_refusal_is_a_plain_403(self, app):
+        assert (
+            app.post("/approve", headers=bearer("acme-token")).status_code
+            == 403
+        )
+
+    def test_a_permitted_call_records_nothing(self, app, audit, monkeypatch):
+        monkeypatch.setattr(
+            auth,
+            "_verifier",
+            FakeVerifier({"boss": {**ACME, "role": "approver"}}),
+        )
+        assert app.post("/approve", headers=bearer("boss")).status_code == 200
+        assert audit.events == []

@@ -946,3 +946,26 @@ test("a refused or missing session is sent to the right screen", async ({
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/signup$/);
 });
+
+test("an admin can narrow the activity trail and export it", async ({ page }) => {
+  await goto(page, "/activity");
+  await page.getByLabel("Since").fill("2000-01-01T00:00");
+  await expect(page.getByRole("button", { name: "Export CSV (whole range)" })).toBeVisible();
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "Export CSV (whole range)" }).click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^audit-.*\.csv$/);
+});
+
+test("a failed export says what to do, and a new range clears it", async ({ page }) => {
+  await page.route("**/api/audit/export**", (route) => route.abort());
+  await goto(page, "/activity");
+  await page.getByRole("button", { name: "Export CSV (whole range)" }).click();
+  const alert = page.locator("p[role=alert]"); // not Next.js's route announcer
+  await expect(alert).toHaveText(
+    "Could not download the export. Check your connection and try again.",
+  );
+  await page.getByLabel("Since").fill("2000-01-01T00:00");
+  await expect(alert).toHaveCount(0);
+});

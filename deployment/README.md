@@ -1,3 +1,42 @@
+# Release (Railway + Postgres)
+
+The API and worker connect as a least-privilege app role that owns nothing and
+cannot run DDL. Migrations run in a release step as the owner role.
+`invoice_processing/db/bootstrap.sql` has two sections: §1 before the first
+migrate (roles, schema rights, default privileges), §2 after (grants on the
+migrated tables, append-only audit trail, VERIFY). Run each section on its own;
+`sed` cuts the file at the `-- §2` marker line.
+
+`$ADMIN_URL` is the `postgres` user's connection to the application database
+(not the `postgres` database): the grants and default privileges are
+per-database, so run elsewhere they protect nothing.
+
+1. Roles, as `postgres` (§1):
+   `sed -n '1,/^-- §2/p' invoice_processing/db/bootstrap.sql | psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -v owner=ledgerly_owner -v app=ledgerly_app -v owner_pw=... -v app_pw=... -f -`
+2. Migrate as the owner:
+   `MIGRATE_DATABASE_URL=postgresql+pg8000://ledgerly_owner:...@host/db python -m invoice_processing.db.migrate`
+3. Grants, as `postgres` (§2, safe to re-run; re-run it after every migrate):
+   `sed -n '/^-- §2/,$p' invoice_processing/db/bootstrap.sql | psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -v owner=ledgerly_owner -v app=ledgerly_app -f -`
+4. Read the VERIFY output that ends step 3: the app role cannot UPDATE
+   `audit_events` but can INSERT, and neither role is superuser or bypasses RLS.
+
+Re-run step 3 after every migrate, not just the first: a migration that
+creates or recreates a table gets the app's grants through §1's default
+privileges, so a recreated `audit_events` (or `alembic_version`) would be
+writable by the app again until §2 revokes it.
+
+Railway service variables:
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | the app role's connection (API and worker) |
+| `MIGRATE_DATABASE_URL` | the owner role's connection (release step only) |
+| `RUN_MIGRATIONS` | `0` on BOTH the API and the worker service: each migrates at startup otherwise (`invoice_processing/worker/__main__.py` too), and as the app role that fails |
+
+Pre-deploy command: `python -m invoice_processing.db.migrate`
+
+---
+
 # Deployment Guide
 
 Deploy an ADK agent to Agent Runtime and optionally register it on Gemini Enterprise.

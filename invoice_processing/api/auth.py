@@ -341,18 +341,40 @@ def require_role(required: str):
     """Dependency factory enforcing a minimum role.
 
     Returns 403, not 404: the caller is authenticated and the resource exists;
-    hiding that would make a permissions problem look like a bug.
+    hiding that would make a permissions problem look like a bug. The refusal
+    is written to the audit trail when there is one: an auditor's first
+    question about access control is whether denials leave a trace.
     """
 
     def dependency(
+        request: Request,
         principal: Annotated[Principal, Depends(current_principal)],
     ) -> Principal:
-        if not principal.can(required):
-            raise AuthError(
-                f"Role '{principal.role}' cannot perform this action; "
-                f"'{required}' or higher is required.",
-                status_code=403,
-            )
-        return principal
+        if principal.can(required):
+            return principal
+        services = _services()
+        if services is not None and services.audit is not None:
+            route = request.scope.get("route")
+            try:
+                services.audit.emit(
+                    principal.context(),
+                    "access_denied",
+                    {
+                        # The template, so one line covers every invoice.
+                        "path": getattr(route, "path", request.url.path),
+                        "method": request.method,
+                        "required_role": required,
+                        "actual_role": principal.role,
+                    },
+                )
+            except Exception as exc:
+                from .. import sso  # noqa: PLC0415
+
+                raise sso._unavailable(exc) from exc
+        raise AuthError(
+            f"Role '{principal.role}' cannot perform this action; "
+            f"'{required}' or higher is required.",
+            status_code=403,
+        )
 
     return dependency

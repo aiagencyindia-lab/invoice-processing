@@ -216,8 +216,10 @@ export type DocumentList = {
 };
 
 export type AuditEvent = {
+  id: string | null;
   at: string | null;
   actor: string | null;
+  actor_type: string | null;
   action: string | null;
   entity_type: string | null;
   entity_id: string | null;
@@ -225,6 +227,8 @@ export type AuditEvent = {
    *  one -- null on an event that created something rather than changing it. */
   payload: Record<string, unknown> | null;
   before: Record<string, unknown> | null;
+  request_id: string | null;
+  ip: string | null;
 };
 
 export type SettingField = {
@@ -602,6 +606,21 @@ export async function objectUrl(path: string): Promise<string> {
     throw new ApiError(response.status, detail || response.statusText);
   }
   return URL.createObjectURL(await response.blob());
+}
+
+/** Fetch a file with the bearer token and hand it to the browser as a
+ *  download. A plain <a href> cannot carry the Authorization header. */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const url = await objectUrl(path);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  // Firefox ignores a click on a detached anchor; revoking synchronously can
+  // cancel the download before the browser has started it.
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 export type Check = {

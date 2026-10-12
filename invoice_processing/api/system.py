@@ -28,8 +28,10 @@ means the answer is always the truth as those components see it.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any
@@ -37,6 +39,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from .auth import Principal, current_principal, require_role
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -505,48 +509,242 @@ def retry_document(
 # ---------------------------------------------------------------------------
 
 
+def _parse_cursor(cursor: str) -> tuple[datetime, str]:
+    stamp, sep, event_id = cursor.rpartition("|")
+    try:
+        if not sep or not event_id:
+            raise ValueError
+        # Pasted unencoded into a URL, "+00:00" arrives as " 00:00".
+        return datetime.fromisoformat(stamp.replace(" ", "+")), event_id
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail="cursor must be the next_cursor of a previous page.",
+        ) from None
+
+
+def _audit_dict(e) -> dict:
+    """One shape for the list, the export and the local fallback."""
+    return {
+        "id": e.id,
+        "at": e.occurred_at.isoformat() if e.occurred_at else None,
+        "actor": e.actor,
+        "actor_type": e.actor_type,
+        "action": e.action,
+        "entity_type": e.entity_type,
+        "entity_id": e.entity_id,
+        "payload": e.after,
+        "before": e.before,
+        "request_id": e.request_id,
+        "ip": e.ip,
+    }
+
+
 @router.get("/api/audit")
 def list_audit(
     principal: Annotated[Principal, Depends(current_principal)],
     limit: int = 100,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    cursor: str | None = None,
 ) -> dict:
     """Tenant-scoped activity trail.
 
     Read-only for every role: explainability is the point, and a viewer who
     cannot see why an invoice was rejected cannot answer a supplier's question.
+    `since`/`until` bound the window; `cursor` is the previous page's
+    `next_cursor`.
     """
     from . import service  # noqa: PLC0415
 
+    # A naive bound means UTC everywhere: Postgres would read it in the
+    # session's zone, the local file already reads it as UTC.
+    since = _as_utc(since) if since is not None else None
+    until = _as_utc(until) if until is not None else None
+    before = _parse_cursor(cursor) if cursor else None
     sink = service.get_audit()
     limit = max(1, min(limit, 500))
 
-    events = _safe(
-        lambda: sink.query(principal.tenant_id, limit=limit), default=None
-    )
-    if events is None:
-        events = _read_jsonl_audit(principal.tenant_id, limit)
+    rows = None
+    if hasattr(sink, "query"):
+        try:
+            rows = sink.query(
+                principal.tenant_id,
+                limit=limit,
+                since=since,
+                until=until,
+                before=before,
+            )
+        except Exception:
+            # The local file cannot honour a cursor; answering page 1 again
+            # would loop a paging client forever.
+            if before is not None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Paging the audit trail needs a database that could not be reached.",
+                ) from None
+    if rows is None:
+        events = _read_jsonl_audit(principal.tenant_id, limit, since, until)
     else:
-        events = [
-            {
-                "at": e.occurred_at.isoformat() if e.occurred_at else None,
-                "actor": e.actor,
-                "action": e.action,
-                "entity_type": e.entity_type,
-                "entity_id": e.entity_id,
-                "payload": e.after,
-                # What the value was. Both sinks have stored this since the
-                # trail was made able to answer "changed from what?", and this
-                # endpoint dropped it on the floor -- so the Activity page
-                # could say a field was corrected but never what it held
-                # before, which is the half an auditor needs.
-                "before": e.before,
-            }
-            for e in events
-        ]
-    return {"events": events, "count": len(events)}
+        events = [_audit_dict(e) for e in rows]
+    next_cursor = (
+        f"{events[-1]['at']}|{events[-1]['id']}"
+        if rows is not None and len(events) == limit
+        else None
+    )
+    return {"events": events, "count": len(events), "next_cursor": next_cursor}
 
 
-def _read_jsonl_audit(tenant_id: str, limit: int) -> list[dict]:
+_CSV_COLUMNS = (
+    "id",
+    "occurred_at",
+    "actor",
+    "actor_type",
+    "action",
+    "entity_type",
+    "entity_id",
+    "request_id",
+    "ip",
+    "before",
+    "after",
+)
+_EXPORT_PAGE = 1000
+
+
+def _cell(value: Any) -> str:
+    """One CSV cell, safe to open in a spreadsheet: a leading = + - @ is a
+    formula there, so it is prefixed with a quote."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+@router.get("/api/audit/export")
+def export_audit(
+    principal: Annotated[Principal, Depends(require_role("admin"))],
+    since: datetime,
+    until: datetime,
+):
+    """The trail for a window, as the file an auditor asks for.
+
+    The export is itself an event, written before the first byte goes out:
+    a dropped connection must still leave the record that someone pulled it.
+    """
+    import csv  # noqa: PLC0415
+    import io  # noqa: PLC0415
+
+    from fastapi.responses import StreamingResponse  # noqa: PLC0415
+
+    from . import service  # noqa: PLC0415
+
+    since, until = _as_utc(since), _as_utc(until)  # as list_audit does
+    sink = service.get_audit()
+
+    def query(before):
+        return sink.query(
+            principal.tenant_id,
+            limit=_EXPORT_PAGE,
+            since=since,
+            until=until,
+            before=before,
+        )
+
+    # The first page is read here, before the response starts: a streamed
+    # response cannot change its status, so a dead database must fail now.
+    # A query that raises is never answered from the local file -- that would
+    # hand an auditor a different, partial trail without saying so.
+    first = None
+    if hasattr(sink, "query"):
+        try:
+            first = query(None)
+        except Exception:
+            raise HTTPException(
+                status_code=503,
+                detail="Exporting the audit trail needs a database that could not be reached.",
+            ) from None
+
+    # Recorded once the data is known to be readable, still before any byte
+    # goes out: a refused export is not a pull, a dropped download still is.
+    try:
+        sink.emit(
+            principal.context(),
+            "audit_exported",
+            {"since": since.isoformat(), "until": until.isoformat()},
+        )
+    except Exception:
+        # An export that cannot be recorded is not handed out.
+        raise HTTPException(
+            status_code=503,
+            detail="Exporting the audit trail needs a database to record the export, and it could not be reached.",
+        ) from None
+
+    def rows():
+        if first is None:  # local JSONL sink: one slice, no paging
+            yield from _read_jsonl_audit(
+                principal.tenant_id, None, since, until
+            )
+            return
+        page = first
+        while True:
+            for e in page:
+                yield _audit_dict(e)
+            if len(page) < _EXPORT_PAGE:
+                return
+            try:
+                page = query((page[-1].occurred_at, page[-1].id))
+            except Exception:
+                # Not caught into a clean end: a truncated file that looks
+                # complete is worse than a download that visibly fails.
+                logger.exception("Audit export failed after the first page")
+                raise
+
+    def stream():
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(_CSV_COLUMNS)
+        yield buffer.getvalue()
+        for event in rows():
+            buffer.seek(0)
+            buffer.truncate()
+            writer.writerow(
+                _cell(v)
+                for v in (
+                    event["id"],
+                    event["at"],
+                    event["actor"],
+                    event["actor_type"],
+                    event["action"],
+                    event["entity_type"],
+                    event["entity_id"],
+                    event["request_id"],
+                    event["ip"],
+                    json.dumps(event["before"], default=str)
+                    if event["before"] is not None
+                    else None,
+                    json.dumps(event["payload"], default=str)
+                    if event["payload"] is not None
+                    else None,
+                )
+            )
+            yield buffer.getvalue()
+
+    name = f"audit-{since.date().isoformat()}-{until.date().isoformat()}.csv"
+    return StreamingResponse(
+        stream(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+def _as_utc(stamp: datetime) -> datetime:
+    return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
+
+
+def _read_jsonl_audit(
+    tenant_id: str,
+    limit: int | None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[dict]:
     """The local sink has no query method; read its file directly.
 
     Filtered by tenant even locally, so the two sinks behave the same way and a
@@ -567,6 +765,15 @@ def _read_jsonl_audit(tenant_id: str, limit: int) -> list[dict]:
             continue
         if record.get("tenant_id") not in (None, tenant_id):
             continue
+        if since is not None or until is not None:
+            try:
+                when = _as_utc(datetime.fromisoformat(record["timestamp"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (since is not None and when < _as_utc(since)) or (
+                until is not None and when > _as_utc(until)
+            ):
+                continue
         payload = record.get("payload") or {}
         # `timestamp` is the key JsonlAuditSink.emit writes. Reading "at" here
         # silently produced a null on every local event, so the activity trail
@@ -578,8 +785,10 @@ def _read_jsonl_audit(tenant_id: str, limit: int) -> list[dict]:
         )
         events.append(
             {
+                "id": None,
                 "at": record.get("timestamp"),
                 "actor": record.get("actor"),
+                "actor_type": "user" if record.get("actor") else "system",
                 "action": record.get("event_type"),
                 # Ingestion events carry no case yet -- the document is the
                 # only thing that exists at that point in the pipeline.
@@ -588,6 +797,9 @@ def _read_jsonl_audit(tenant_id: str, limit: int) -> list[dict]:
                 "entity_id": entity_id,
                 "payload": record.get("payload"),
                 "before": record.get("before"),
+                "request_id": record.get("run_id") or None,
+                "ip": None,
             }
         )
+    # ponytail: the local file is one developer's trail; pages by slice only.
     return list(reversed(events))[:limit]

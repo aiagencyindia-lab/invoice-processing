@@ -637,7 +637,426 @@ class TestAudit:
         assert env["client"]().get("/api/audit").json() == {
             "events": [],
             "count": 0,
+            "next_cursor": None,
         }
+
+    def test_events_carry_the_request_id_and_the_ip_keys(self, env):
+        doc_id = add_document(env, sha="au5")
+        env["client"]("approver").post(f"/api/documents/{doc_id}/retry")
+        event = env["client"]().get("/api/audit").json()["events"][0]
+        assert event["request_id"]
+        assert set(event) >= {"id", "actor_type", "request_id", "ip"}
+
+    def test_a_window_excludes_what_is_outside_it(self, env):
+        doc_id = add_document(env, sha="au6")
+        env["client"]("approver").post(f"/api/documents/{doc_id}/retry")
+        past = "2000-01-01T00:00:00Z"
+        assert (
+            env["client"]().get(f"/api/audit?until={past}").json()["count"] == 0
+        )
+        assert (
+            env["client"]().get(f"/api/audit?since={past}").json()["count"] >= 1
+        )
+        assert (
+            env["client"]()
+            .get(f"/api/audit?since=2099-01-01T00:00:00Z&until={past}")
+            .json()["count"]
+            == 0
+        )
+
+    def test_a_malformed_cursor_is_refused(self, env):
+        assert (
+            env["client"]().get("/api/audit?cursor=nonsense").status_code == 422
+        )
+
+    def test_pages_through_a_database_trail_by_cursor(
+        self, env, scratch_db, monkeypatch
+    ):
+        """The Postgres path end to end: serialisation, full-page rule, cursor."""
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+
+        from invoice_processing.db.models import (  # noqa: PLC0415
+            AuditEvent,
+            Tenant,
+        )
+        from invoice_processing.db.repositories import (  # noqa: PLC0415
+            PgAuditSink,
+        )
+        from invoice_processing.db.session import (  # noqa: PLC0415
+            create_all,
+            tenant_session,
+        )
+
+        url = scratch_db("audit_api.db")
+        Base.metadata.drop_all(get_engine(url))
+        create_all(url)
+        with tenant_session(TENANT, url) as s:
+            s.add(Tenant(id=TENANT, slug="acme", name="Acme"))
+        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        with tenant_session(TENANT, url) as s:
+            for i in range(3):
+                s.add(
+                    AuditEvent(
+                        id=f"e{i}",
+                        tenant_id=TENANT,
+                        occurred_at=t0 + timedelta(hours=i),
+                        action="x",
+                    )
+                )
+        monkeypatch.setattr(service, "_audit", PgAuditSink(url))
+
+        client = env["client"]()
+        first = client.get("/api/audit?limit=2").json()
+        assert [e["id"] for e in first["events"]] == ["e2", "e1"]
+        assert first["next_cursor"]
+        assert set(first["events"][0]) >= {
+            "id",
+            "actor_type",
+            "request_id",
+            "ip",
+        }
+        rest = client.get(
+            "/api/audit", params={"limit": 2, "cursor": first["next_cursor"]}
+        ).json()
+        assert [e["id"] for e in rest["events"]] == ["e0"]
+        assert rest["next_cursor"] is None
+
+    def test_a_pasted_cursor_whose_plus_became_a_space_still_pages(
+        self, env, monkeypatch
+    ):
+        """Postgres stamps carry "+00:00"; pasted unencoded into a URL the
+        "+" arrives as a space. A cursor the server issued must still page."""
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        events = [
+            SimpleNamespace(
+                id=f"e{i}",
+                occurred_at=t0 + timedelta(hours=i),
+                actor="a",
+                actor_type="user",
+                action="x",
+                entity_type=None,
+                entity_id=None,
+                after=None,
+                before=None,
+                request_id=None,
+                ip=None,
+            )
+            for i in range(3)
+        ][::-1]
+
+        class Fake:
+            def query(self, tenant_id, limit=100, before=None, **k):
+                rows = [
+                    e
+                    for e in events
+                    if before is None or (e.occurred_at, e.id) < before
+                ]
+                return rows[:limit]
+
+        monkeypatch.setattr(service, "_audit", Fake())
+        client = env["client"]()
+        first = client.get("/api/audit?limit=2").json()
+        assert "+00:00" in first["next_cursor"]
+        pasted = first["next_cursor"].replace("+", " ")
+        rest = client.get(f"/api/audit?limit=2&cursor={pasted}")
+        assert rest.status_code == 200, rest.text
+        assert [e["id"] for e in rest.json()["events"]] == ["e0"]
+
+    def test_a_cursor_is_not_answered_from_the_local_file_when_the_database_fails(
+        self, env, monkeypatch
+    ):
+        class Broken:
+            def query(self, *a, **k):
+                raise RuntimeError("db down")
+
+        monkeypatch.setattr(service, "_audit", Broken())
+        cursor = "2026-10-01T00:00:00+00:00|e1"
+        response = env["client"]().get("/api/audit", params={"cursor": cursor})
+        assert response.status_code == 503
+        assert "needs a database" in response.json()["detail"]
+
+    def test_an_admin_can_export_a_window_as_csv(self, env):
+        doc_id = add_document(env, sha="au7")
+        env["client"]("approver").post(f"/api/documents/{doc_id}/retry")
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/csv")
+        assert r.headers["content-disposition"].startswith(
+            'attachment; filename="audit-'
+        )
+        lines = r.text.splitlines()
+        assert (
+            lines[0]
+            == "id,occurred_at,actor,actor_type,action,entity_type,entity_id,request_id,ip,before,after"
+        )
+        assert any("document_retried" in line for line in lines[1:])
+        actions = [
+            e["action"]
+            for e in env["client"]().get("/api/audit").json()["events"]
+        ]
+        assert "audit_exported" in actions
+
+    def test_an_empty_window_still_has_a_header(self, env):
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2000-01-02T00:00:00Z"
+        )
+        assert r.status_code == 200
+        assert r.text.splitlines() == [
+            "id,occurred_at,actor,actor_type,action,entity_type,entity_id,request_id,ip,before,after"
+        ]
+
+    def test_only_an_admin_can_export(self, env):
+        for role in ("viewer", "clerk", "approver"):
+            r = env["client"](role).get(
+                "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+            )
+            assert r.status_code == 403, role
+
+    def test_an_export_with_a_dead_database_is_a_clean_503(
+        self, env, monkeypatch
+    ):
+        emitted = []
+
+        class Broken:
+            def emit(self, *a, **k):
+                emitted.append(a)
+
+            def query(self, *a, **k):
+                raise RuntimeError("db down")
+
+        monkeypatch.setattr(service, "_audit", Broken())
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        assert r.status_code == 503
+        assert "needs a database" in r.json()["detail"]
+        assert emitted == []  # a refused export is not recorded as a pull
+
+    def test_an_export_pages_and_quotes_nested_values(self, env, monkeypatch):
+        import csv  # noqa: PLC0415
+        import io  # noqa: PLC0415
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        events = [
+            SimpleNamespace(
+                id=f"e{i:04d}",
+                occurred_at=t0 + timedelta(seconds=i),
+                actor="a,b",
+                actor_type="user",
+                action="x",
+                entity_type="invoice",
+                entity_id="1",
+                after={"k": [1, 2], "n": {"m": 'q,"r'}},
+                before=None,
+                request_id="r",
+                ip="1.2.3.4",
+            )
+            for i in range(1500)
+        ][::-1]  # newest first, as the sink returns
+
+        class Fake:
+            def emit(self, *a, **k):
+                pass
+
+            def query(
+                self, tenant_id, limit=100, since=None, until=None, before=None
+            ):
+                rows = events
+                if before is not None:
+                    rows = [e for e in events if (e.occurred_at, e.id) < before]
+                return rows[:limit]
+
+        monkeypatch.setattr(service, "_audit", Fake())
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        assert r.status_code == 200
+        rows = list(csv.reader(io.StringIO(r.text)))
+        assert len(rows) == 1501
+        data_rows = rows[1:]
+        # Across the 1000-row page boundary: nothing repeated, nothing out
+        # of order.
+        assert len({row[0] for row in data_rows}) == 1500
+        stamps = [row[1] for row in data_rows]
+        assert stamps == sorted(stamps, reverse=True)
+        assert data_rows[999][0] == "e0500" and data_rows[1000][0] == "e0499"
+        assert rows[1][2] == "a,b"
+        assert json.loads(rows[1][10])["n"]["m"] == 'q,"r'
+        assert rows[1][9] == ""
+
+    def test_spreadsheet_formulas_in_cells_are_defused(self, env, monkeypatch):
+        import csv  # noqa: PLC0415
+        import io  # noqa: PLC0415
+        from datetime import datetime, timezone  # noqa: PLC0415
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        def ev(i, **kw):
+            base = dict(  # noqa: C408
+                id=f"e{i}",
+                occurred_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                actor="a",
+                actor_type="user",
+                action="x",
+                entity_type="invoice",
+                entity_id="1",
+                after=None,
+                before=None,
+                request_id="r",
+                ip="1.2.3.4",
+            )
+            base.update(kw)
+            return SimpleNamespace(**base)
+
+        events = [
+            ev(1, actor='=HYPERLINK("http://x")'),
+            ev(2, entity_id="@SUM(1)"),
+            ev(3, action="\tx", request_id="-1+1", ip="+1"),
+        ]
+
+        class Fake:
+            def emit(self, *a, **k):
+                pass
+
+            def query(self, *a, **k):
+                return events
+
+        monkeypatch.setattr(service, "_audit", Fake())
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        rows = list(csv.reader(io.StringIO(r.text)))
+        assert rows[1][2] == '\'=HYPERLINK("http://x")'
+        assert rows[2][6] == "'@SUM(1)"
+        assert rows[3][4] == "'\tx"
+        assert rows[3][7] == "'-1+1"
+        assert rows[3][8] == "'+1"
+
+    def test_a_failure_after_the_first_page_aborts_the_download(
+        self, env, monkeypatch, caplog
+    ):
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        full = [
+            SimpleNamespace(
+                id=f"e{i:04d}",
+                occurred_at=t0 + timedelta(seconds=i),
+                actor="a",
+                actor_type="user",
+                action="x",
+                entity_type="invoice",
+                entity_id="1",
+                after=None,
+                before=None,
+                request_id="r",
+                ip=None,
+            )
+            for i in range(1000)
+        ]
+        calls = []
+
+        class Flaky:
+            def emit(self, *a, **k):
+                pass
+
+            def query(self, *a, **k):
+                calls.append(1)
+                if len(calls) > 1:
+                    raise RuntimeError("db died mid-export")
+                return full
+
+        monkeypatch.setattr(service, "_audit", Flaky())
+        with pytest.raises(Exception):  # noqa: B017
+            env["client"]("admin").get(
+                "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+            )
+        assert "Audit export failed" in caplog.text
+
+    def test_an_export_whose_record_cannot_be_written_is_a_clean_503(
+        self, env, monkeypatch
+    ):
+        """The data is readable but the pull cannot be recorded: refuse it,
+        rather than a 500 or an unrecorded download."""
+
+        class CannotRecord:
+            def emit(self, *a, **k):
+                raise RuntimeError("audit write failed")
+
+            def query(self, *a, **k):
+                return []
+
+        monkeypatch.setattr(service, "_audit", CannotRecord())
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        assert r.status_code == 503
+        assert "needs a database" in r.json()["detail"]
+        assert not r.headers["content-type"].startswith("text/csv")
+
+    def test_a_naive_window_is_read_as_utc(self, env, monkeypatch):
+        """JSONL treats a naive time as UTC; Postgres would read it in the
+        session's zone. Both entry points hand the sink the same instant."""
+        seen = []
+
+        class Recording:
+            def emit(self, *a, **k):
+                pass
+
+            def query(self, tenant_id, **k):
+                seen.append((k["since"], k["until"]))
+                return []
+
+        monkeypatch.setattr(service, "_audit", Recording())
+        client = env["client"]("admin")
+        for naive, zoned in (
+            (
+                "/api/audit?since=2026-10-01T09:00:00&until=2026-10-02T09:00:00",
+                "/api/audit?since=2026-10-01T09:00:00Z&until=2026-10-02T09:00:00Z",
+            ),
+            (
+                "/api/audit/export?since=2026-10-01T09:00:00&until=2026-10-02T09:00:00",
+                "/api/audit/export?since=2026-10-01T09:00:00Z&until=2026-10-02T09:00:00Z",
+            ),
+        ):
+            seen.clear()
+            assert client.get(naive).status_code == 200
+            assert client.get(zoned).status_code == 200
+            (n_since, n_until), (z_since, z_until) = seen
+            for n, z in ((n_since, z_since), (n_until, z_until)):
+                assert n.tzinfo is not None, naive
+                assert n == z
+
+    @pytest.mark.slow
+    def test_the_local_file_export_has_no_row_cap(
+        self, env, monkeypatch, tmp_path
+    ):
+        from invoice_processing import paths  # noqa: PLC0415
+
+        monkeypatch.setattr(paths, "SESSIONS_DIR", tmp_path)
+        line = json.dumps(
+            {"timestamp": "2026-10-01T00:00:00+00:00", "event_type": "x"}
+        )
+        (tmp_path / "audit.jsonl").write_text(
+            "\n".join([line] * 100_005), encoding="utf-8"
+        )
+
+        class NoQuery:
+            def emit(self, *a, **k):
+                pass
+
+        monkeypatch.setattr(service, "_audit", NoQuery())
+        r = env["client"]("admin").get(
+            "/api/audit/export?since=2000-01-01T00:00:00Z&until=2099-01-01T00:00:00Z"
+        )
+        assert len(r.text.splitlines()) == 100_006
 
 
 class BareQueue:
