@@ -494,10 +494,13 @@ test("a clerk corrects a scanned receipt and it clears the held invoice", async 
   const drawer = page.getByRole("dialog", { name: "Review scanned document" });
   await expect(drawer.getByLabel("GRN number")).toHaveValue("GRN-E2E-21");
   // The scan itself is served beside what was read from it.
+  // A blob: URL, fetched with the bearer token: the API refuses to be
+  // framed (X-Frame-Options: DENY), and a bare src carries no token anyway.
   const scan = await drawer.locator("iframe").getAttribute("src");
-  expect((await page.request.get(scan!)).headers()["content-type"]).toBe(
-    "application/pdf",
-  );
+  expect(scan).toMatch(/^blob:/);
+  expect(
+    await page.evaluate(async (url) => (await fetch(url)).headers.get("content-type"), scan!),
+  ).toBe("application/pdf");
   const quantity = drawer.getByLabel("Quantity received, line 1");
   await expect(quantity).toHaveValue("10"); // the misread
   await expect(quantity).toHaveAccessibleDescription(/check this/);
@@ -968,4 +971,17 @@ test("a failed export says what to do, and a new range clears it", async ({ page
   );
   await page.getByLabel("Since").fill("2000-01-01T00:00");
   await expect(alert).toHaveCount(0);
+});
+
+test("every page carries security headers and a report-only CSP", async ({ page }) => {
+  const headers = (await page.request.get("/login")).headers();
+  expect(headers["x-frame-options"]).toBe("DENY");
+  expect(headers["x-content-type-options"]).toBe("nosniff");
+  expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
+  expect(headers["content-security-policy-report-only"]).toContain("identitytoolkit.googleapis.com");
+  expect(headers["content-security-policy-report-only"]).toContain("frame-ancestors 'none'");
+  // The document panes frame blob: URLs; enforcing without it would blank them.
+  expect(headers["content-security-policy-report-only"]).toMatch(/frame-src[^;]*blob:/);
+  // Report-only now: Google sign-in cannot be exercised here, so nothing is blocked yet.
+  expect(headers["content-security-policy"]).toBeUndefined();
 });

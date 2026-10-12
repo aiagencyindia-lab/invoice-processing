@@ -8,6 +8,7 @@ import {
   type ImportResult,
   type PurchaseOrderDetail,
   type SupportingDetail,
+  objectUrl,
 } from "@/lib/api";
 
 type Cell = string | number | null;
@@ -108,6 +109,29 @@ export default function SupportingReview({
   // The PO number was edited: the scan's pairing no longer applies.
   const [rechosen, setRechosen] = useState(false);
   const drawer = useRef<HTMLElement>(null);
+  // The scan is fetched with the bearer token and framed as a blob: URL.
+  // Framing the API path directly fails twice over: a bare src carries no
+  // token, and the API refuses to be framed (X-Frame-Options: DENY).
+  const [scanUrl, setScanUrl] = useState<string | null>(null);
+  const documentUrl = detail?.document_url;
+  useEffect(() => {
+    if (!documentUrl) return;
+    let made: string | null = null;
+    let cancelled = false;
+    objectUrl(documentUrl)
+      .then((url) => {
+        if (cancelled) return URL.revokeObjectURL(url);
+        made = url;
+        setScanUrl(url);
+      })
+      .catch((caught) =>
+        setError(caught instanceof ApiError ? caught.friendly : String(caught)),
+      );
+    return () => {
+      cancelled = true;
+      if (made) URL.revokeObjectURL(made);
+    };
+  }, [documentUrl]);
 
   useEffect(() => drawer.current?.focus(), []);
   useEffect(() => {
@@ -249,7 +273,7 @@ export default function SupportingReview({
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           <iframe
             title="Scanned document"
-            src={detail.document_url}
+            src={scanUrl ?? undefined}
             style={{ flex: "1 1 360px", minHeight: "70vh", border: "1px solid var(--border)" }}
           />
           <div className="stack" style={{ flex: "1 1 420px", gap: 12 }}>

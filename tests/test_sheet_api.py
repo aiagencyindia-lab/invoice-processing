@@ -1030,3 +1030,23 @@ class TestTheTwoExportsDescribeTheSameInvoice:
         ]
         missing = [key for key in CSV_EQUIVALENT.values() if key not in BY_KEY]
         assert missing == []
+
+
+class TestBankNumbersMaskByRole:
+    def test_a_clerk_sees_the_last_four(self, db, client):
+        with tenant_session(TENANT, db) as session:
+            invoice(session, case_id="bank", bank_account_number="901031925572")
+        row = rows(lambda: client("clerk"))["rows"][0]
+        assert row["bank_account_number"] == "…5572"
+
+    def test_an_approver_sees_the_number(self, db, client):
+        with tenant_session(TENANT, db) as session:
+            invoice(session, case_id="bank", bank_account_number="901031925572")
+        row = rows(lambda: client("approver"))["rows"][0]
+        assert row["bank_account_number"] == "901031925572"
+
+
+def test_bank_numbers_are_not_sortable(db, client):
+    """Sorting masked cells would order them by the hidden digits."""
+    columns = {c["key"]: c for c in rows(client)["columns"]}
+    assert columns["bank_account_number"]["sortable"] is False

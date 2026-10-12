@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
 from .. import (
@@ -56,13 +56,43 @@ from ..adapters import (
     JsonSupportingDocumentRepository,
     LocalBlobStore,
 )
+from ..masking import BANK_FIELDS, MASK_PREFIX, mask_bank, mask_correction
 from ..ports import LockHeld
-from . import auth
+from . import auth, preflight
 from .auth import Principal, current_principal, require_role
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Invoice Review Workbench", version="0.1.0")
+# The schema pages describe every route to anyone who asks. Fine on a
+# laptop; on a deployed host they are a map handed to a stranger. ENV is
+# fixed for the life of a process, so this is decided once at import.
+_SERVE_DOCS = not preflight.is_deployed()
+app = FastAPI(
+    title="Invoice Review Workbench",
+    version="0.1.0",
+    docs_url="/docs" if _SERVE_DOCS else None,
+    redoc_url="/redoc" if _SERVE_DOCS else None,
+    openapi_url="/openapi.json" if _SERVE_DOCS else None,
+)
+
+# What a browser may do with a response. The app in `frontend/` sets the
+# same set on its own pages; the API repeats them so a direct call is no
+# weaker than a proxied one.
+_FIXED_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+# The API's own HTML is the landing page and the schema browser: static,
+# styled inline, scripts from jsdelivr for Swagger and ReDoc.
+_HTML_CSP = (
+    "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net "
+    "'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net "
+    "'unsafe-inline'; img-src 'self' data: https://fastapi.tiangolo.com; "
+    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; "
+    "object-src 'none'"
+)
 
 
 @app.middleware("http")
@@ -87,10 +117,37 @@ async def _identify_request(request, call_next):
     ip_token = auth.current_client_ip.set(client)
     try:
         response = await call_next(request)
+    except Exception:
+        # Caught here rather than left to Starlette, whose 500 would go out
+        # without the request id or any of the headers below.
+        logger.exception(
+            "Unhandled error on %s %s", request.method, request.url.path
+        )
+        response = JSONResponse(
+            status_code=500, content={"detail": "Internal Server Error"}
+        )
     finally:
         auth.current_request_id.reset(id_token)
         auth.current_client_ip.reset(ip_token)
     response.headers["x-request-id"] = request_id
+    response.headers.update(_FIXED_HEADERS)
+    if preflight.is_deployed():
+        # Only where TLS is real: a browser that saw HSTS from a local http
+        # host would refuse that host for a year.
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    content_type = response.headers.get("content-type", "")
+    if content_type.startswith("text/html"):
+        response.headers["Content-Security-Policy"] = _HTML_CSP
+    elif (
+        request.url.path.startswith("/api/")
+        and content_type.startswith("application/json")
+        and "content-disposition" not in response.headers
+    ):
+        # Tenant data must not sit in a shared cache; downloads keep the
+        # default so "Save as" works.
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
@@ -913,6 +970,12 @@ def get_invoice(
         )
     # Flagged fields first: attention is the scarce resource.
     fields.sort(key=lambda f: (f["confidence"] is None, f["confidence"] or 0))
+    if not principal.can("approver"):
+        # Reading an invoice is not paying one: the full number is for the
+        # people who verify a vendor's bank change, and the PDF shows it anyway.
+        for field in fields:
+            if field["name"] in BANK_FIELDS:
+                field["value"] = mask_bank(field["value"])
 
     return {
         **_summarize(case_id, artifacts),
@@ -924,7 +987,14 @@ def get_invoice(
         "lines": case_projection.lines(artifacts),
         "gl_coding": artifacts.get("gl_coding"),
         "findings": _findings(artifacts),
-        "corrections": get_corrections().list(principal.tenant_id, case_id),
+        "corrections": [
+            correction
+            if principal.can("approver")
+            else mask_correction(correction)
+            for correction in get_corrections().list(
+                principal.tenant_id, case_id
+            )
+        ],
         "evidence_summary": evidence.get("_summary") or {},
         # Who decided, why, and whether they agreed with the pipeline. The
         # detail endpoint returned none of this, so the one screen a reviewer
@@ -1015,6 +1085,15 @@ def edit_fields(
                 detail=f"{edit.field} is not an editable field; edit the "
                 "invoice's header fields here.",
             )
+        if edit.field in BANK_FIELDS and str(edit.value or "").startswith(
+            MASK_PREFIX
+        ):
+            # Non-approvers are shown the mask; typing it back would replace
+            # a real number with a placeholder.
+            raise HTTPException(
+                status_code=422,
+                detail="That looks like a masked value; enter the full number.",
+            )
     require_invoice_case(principal.tenant_id, case_id)
     _require_unlocked(principal, case_id)
     ctx = principal.context(case_id)
@@ -1096,20 +1175,31 @@ def edit_fields(
             {
                 "count": len(recorded),
                 "fields": [r["field_path"] for r in recorded],
-                "values": {r["field_path"]: r["new_value"] for r in recorded},
+                "values": {
+                    r["field_path"]: r["new_value"]
+                    for r in map(mask_correction, recorded)
+                },
             },
             # The trail said which fields changed and by whom, never what they
             # were. That answer lived only in the corrections store, so an
             # auditor reading the trail alone could not reconstruct the edit.
+            # Bank numbers go in masked: every role reads the trail, and the
+            # corrections store keeps the full values, as vendor bank-change
+            # events already do.
             before={
-                "values": {r["field_path"]: r["old_value"] for r in recorded}
+                "values": {
+                    r["field_path"]: r["old_value"]
+                    for r in map(mask_correction, recorded)
+                }
             },
         )
         # After fields_corrected so the trail reads cause then effect.
         rerouted = _reroute_if_needed(ctx, artifacts, extraction, recorded)
 
     return {
-        "corrections": recorded,
+        "corrections": recorded
+        if principal.can("approver")
+        else [mask_correction(r) for r in recorded],
         "count": len(recorded),
         "approvals_rerouted": rerouted,
     }

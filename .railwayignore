@@ -12,3 +12,6 @@ invoice_processing/data/agent_output
 invoice_processing/data/blobs
 invoice_processing/data/queue
 invoice_processing/data/claims
+# Secrets never reach the builder; the image reads them from Railway variables.
+.env
+frontend/.env.local

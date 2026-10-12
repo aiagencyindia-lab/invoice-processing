@@ -595,8 +595,10 @@ def test_an_unexpected_store_failure_also_puts_the_row_back(env, monkeypatch):
         raise RuntimeError("db went away")
 
     monkeypatch.setattr(env["orders"], "upsert_orders", broken)
-    with pytest.raises(RuntimeError):
-        _accept(row, {"fields": PO_READ["fields"], "lines": PO_READ["lines"]})
+    # A 500 with the usual headers (the middleware catches what escapes a
+    # route); what matters is that the row went back to pending.
+    r = _accept(row, {"fields": PO_READ["fields"], "lines": PO_READ["lines"]})
+    assert r.status_code == 500
     assert env["supporting"].get(TENANT, row["id"])["status"] == "pending"
 
 

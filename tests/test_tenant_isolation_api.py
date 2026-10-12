@@ -1280,10 +1280,10 @@ class TestCoverage:
     # exempt. Anything not listed must be probed above.
     EXEMPT: ClassVar[dict] = {
         "/": "static UI shell, no tenant data",
-        "/openapi.json": "schema only",
-        "/docs": "schema only",
-        "/docs/oauth2-redirect": "schema only",
-        "/redoc": "schema only",
+        "/openapi.json": "schema only; absent when deployed",
+        "/docs": "schema only; absent when deployed",
+        "/docs/oauth2-redirect": "schema only; absent when deployed",
+        "/redoc": "schema only; absent when deployed",
         "/webhooks/email": "provider callback, covered in test_ingestion.py",
         "/api/documents": "upload, covered in test_ingestion.py",
     }
