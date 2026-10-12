@@ -36,7 +36,9 @@ export default function SignUpPage() {
     if (await isEmailVerified()) {
       // reload() updates the user, not the ID token: the cached token still
       // says email_verified=false and the server would refuse signup.
-      await refreshToken();
+      // A failed refresh must not strand the page on "Checking…"; if the
+      // token really is stale, the server's 403 says so in words.
+      await refreshToken().catch(() => undefined);
       setStep("organisation");
     } else {
       setStep("verify");
@@ -134,7 +136,7 @@ export default function SignUpPage() {
               onClick={async () => {
                 setProblem(null);
                 if (await isEmailVerified()) {
-                  await refreshToken();
+                  await refreshToken().catch(() => undefined);
                   setStep("organisation");
                 } else {
                   setProblem("Not verified yet — open the link, then try again.");
