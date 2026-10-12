@@ -87,6 +87,7 @@ select = [
     "B",  # flake8-bugbear
     "UP", # pyupgrade
     "RUF",
+    "S",    # flake8-bandit: security anti-patterns
 ]
 ignore = [
     "E501",    # Long LLM prompts and log messages need long strings
@@ -110,6 +111,12 @@ ignore = [
 # because paths and store resolvers bind at import time; the score module
 # imports the product lazily so scoring a saved run needs no dependencies.
 "benchmark/harness/*.py" = ["PLC0415"]
+# Tests, the benchmark harness and maintenance scripts: assert is the test
+# idiom, fixture credentials are fake, subprocess calls run our own tools,
+# and SQL is built from fixture literals. Product code gets no such pass.
+"tests/**" = ["S101", "S105", "S106", "S107", "S108", "S603", "S607", "S608"]
+"benchmark/**" = ["S101", "S603", "S607", "S608"]
+"scripts/**" = ["S101", "S603", "S607"]
 
 [tool.ruff.format]
 quote-style = "double"

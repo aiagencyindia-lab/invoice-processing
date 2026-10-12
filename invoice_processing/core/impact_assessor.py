@@ -10,11 +10,14 @@ ADK-transferable: single run() entry point, structured I/O.
 """
 
 import hashlib
+import logging
 import random
 from dataclasses import dataclass, field
 
 from ..shared_libraries.alf_engine import ConditionEvaluator
 from .case_loader import CaseLoaderAgent
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -92,15 +95,17 @@ class ImpactAssessorAgent:
                 for cid, case_data in batch(case_ids).items():
                     self._contexts_cache[cid] = case_data.context
                 return self._contexts_cache
-            except Exception:
-                pass  # fall through to one at a time
+            except Exception as exc:
+                logger.warning(
+                    "Batch case load failed, loading one at a time: %s", exc
+                )
 
         for cid in case_ids:
             try:
                 case_data = self._loader.run(cid)
                 self._contexts_cache[cid] = case_data.context
-            except Exception:
-                pass  # skip broken cases
+            except Exception as exc:
+                logger.warning("Skipped case %s: %s", cid, exc)
 
         return self._contexts_cache
 
@@ -165,7 +170,8 @@ class ImpactAssessorAgent:
             seed = hashlib.sha256(
                 "|".join([target_case_id, *other_ids]).encode("utf-8")
             ).hexdigest()
-            sampled_others = random.Random(seed).sample(
+            # Deterministic sampling, not cryptography.
+            sampled_others = random.Random(seed).sample(  # noqa: S311
                 other_ids, min(sample_size - 1, len(other_ids))
             )
             eval_case_ids = [target_case_id, *sorted(sampled_others)]

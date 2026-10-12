@@ -693,8 +693,9 @@ def live_gcs_isolates_tenants():
     finally:
         try:
             acme.delete(key)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Cleanup only; the check's verdict is already decided above.
+            print(f"  (probe object not deleted: {exc})")
     return "round-trip ok, cross-tenant read refused"
 
 

@@ -5,6 +5,7 @@ All paths resolved relative to this file's location.
 LLM config loaded from shared .env file.
 """
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -26,6 +27,8 @@ from ..paths import (  # noqa: F401
     SESSIONS_DIR,
     SHARED_LIBS_DIR,
 )
+
+logger = logging.getLogger(__name__)
 
 CORE_DIR = Path(__file__).resolve().parent  # invoice_processing/core/
 
@@ -77,8 +80,8 @@ def get_llm_project_id():
             import google.auth  # noqa: PLC0415
 
             _, project = google.auth.default()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("No ambient Google project: %s", exc)
     return project
 
 

@@ -357,7 +357,11 @@ def extract_pdf_attachments(raw_email: bytes) -> list[tuple[str, bytes]]:
     for part in message.iter_attachments():
         try:
             payload = part.get_payload(decode=True)
-        except Exception:
+        except Exception as exc:
+            # One undecodable part must not lose the others.
+            logger.warning(
+                "Skipped an attachment that would not decode: %s", exc
+            )
             continue
         if not payload or not payload.startswith(PDF_MAGIC):
             continue
@@ -416,18 +420,18 @@ def _parse_mime(raw: bytes, headers: dict[str, str]) -> InboundMessage:
             message.get("Delivered-To") or message.get("To") or ""
         )
         message_id = str(message.get("Message-ID") or "")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Inbound mail: message headers unreadable: %s", exc)
     # Separate guards: a From that raises must not hide the Reply-To, which is
     # the header a fraudster actually sets.
     try:
         sender = _bare_address(message.get("From"))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Inbound mail: From unreadable: %s", exc)
     try:
         reply_to = _bare_address(message.get("Reply-To"))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Inbound mail: Reply-To unreadable: %s", exc)
     return InboundMessage(
         recipient=recipient,
         message_id=message_id,

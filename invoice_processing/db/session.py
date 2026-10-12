@@ -174,7 +174,8 @@ def tenant_session(tenant_id: str, url: str | None = None) -> Iterator[Session]:
     is the only isolation -- which is why that filtering is tested explicitly.
     """
     engine = get_engine(url)
-    assert _Session is not None
+    if _Session is None:  # asserts vanish under python -O
+        raise RuntimeError("No session factory: get_engine() did not run.")
     session = _Session()
     try:
         if is_postgres(engine):
