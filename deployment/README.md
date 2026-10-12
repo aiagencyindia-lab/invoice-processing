@@ -35,6 +35,9 @@ Railway service variables:
 
 Pre-deploy command: `python -m invoice_processing.db.migrate`
 
+The Dockerfile pins uv 0.5.11; `uv.lock` is written by uv 0.9.28. Check that
+`uv sync --frozen` builds the image before the next deploy.
+
 ---
 
 # Deployment Guide
@@ -50,11 +53,12 @@ Deploy an ADK agent to Agent Runtime and optionally register it on Gemini Enterp
 - Python 3.10+
 - [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) (`gcloud` CLI)
 - A GCP project with Vertex AI API enabled
-- Python packages: `google-adk[vertexai]`, `python-dotenv`
+- Python packages: `google-adk` 2.x, `google-cloud-aiplatform` 2.x, `python-dotenv`
+  (ADK 2.x has no `vertexai` extra; aiplatform is installed by name)
 - (Optional) `google-agents-cli` — required only for Gemini Enterprise registration
 
 ```bash
-pip install "google-adk[vertexai]" python-dotenv
+pip install "google-adk>=2,<3" "google-cloud-aiplatform>=2,<3" python-dotenv
 ```
 
 ---
