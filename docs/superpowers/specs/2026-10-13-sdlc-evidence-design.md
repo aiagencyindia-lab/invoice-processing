@@ -37,6 +37,9 @@ Measured 2026-10-12 on `main` (`abde75f`):
    change process; enforcement waits for a paid plan or an org move. The
    merge history (every change by PR with green CI) is the evidence until
    then.
+3. **Starlette waits for the google-adk 2.x migration.** Its advisories go
+   on the allowlist with a 60-day expiry so CI forces the migration onto the
+   schedule; the migration is its own sub-project, gated by the benchmark.
 
 Out of scope: CodeQL (needs Advanced Security on private repos), secret
 scanning beyond the existing `.env` check in CI, pre-commit hooks, branch
@@ -57,8 +60,9 @@ One script, run by a new CI job `audit`:
   `[{"id": "GHSA-…", "reason": "…", "expires": "YYYY-MM-DD"}]`. An entry
   past its expiry fails the build, so a waiver cannot become permanent. A
   malformed allowlist fails.
-- pip-audit reports no severity for some PyPI advisories; a Python finding
-  with no severity is treated as high (fail closed).
+- pip-audit's JSON carries no severity, so every Python finding is treated
+  as high (fail closed). An allowlist entry matches an advisory by its id or
+  any of its aliases (GHSA, CVE).
 - Output: one line per finding (ecosystem, package, version, advisory id,
   severity, fixed versions), then a verdict. Exit 0 or 1.
 
@@ -68,11 +72,26 @@ Pure functions (`findings_from_pip_audit`, `findings_from_npm_audit`,
 
 ### 2. Fix today's findings
 
-- `next` and `eslint-config-next` → the latest 16.3.x patch above 16.3.7.
-- `firebase` → the latest 12.x whose `@grpc/grpc-js` is fixed.
-- Python: whatever `pip-audit` reports, upgraded within `uv.lock`
-  (`uv lock --upgrade-package <name>`).
-- Anything without a fix gets an allowlist entry, listed in the PR.
+Measured with pip-audit 2.10.1 on 2026-10-13: 17 production Python packages
+carry known advisories. Ruling 3 below governs the two that cannot simply be
+upgraded.
+
+- `next` and `eslint-config-next` 16.3.2 → 16.3.8 (above the vulnerable
+  range 16.0.0–16.3.7).
+- `@grpc/grpc-js`: every Firebase release, 12.x and 13.0, pins `~1.9`; the
+  fix is in 1.13.6. It is the Node-only transport for Firestore, which the
+  app never imports (it uses Firebase Auth). An npm `overrides` entry pins
+  it to `^1.14.6`; the production build and e2e prove the app still works.
+- Python, in `uv.lock` only (`uv lock --upgrade-package …`): aiohttp,
+  anyio, authlib, cryptography, httplib2, idna, mako, mcp, multidict,
+  pillow, pyasn1, pydantic-settings, pyjwt, python-multipart, sqlparse,
+  urllib3. All resolve within today's constraints.
+- Allow-listed, expiring 2026-12-12 (60 days):
+  - Starlette's five advisories (PYSEC-2026-161, -248, -249, -2280,
+    -2281): the fix needs Starlette 1.x, which needs google-adk 2.x and
+    google-cloud-aiplatform 2.x — a migration of the Vertex Gemini layer
+    the pipeline depends on, scheduled as its own sub-project.
+  - PyJWT PYSEC-2026-4146: no fixed version published.
 
 ### 3. Dependabot — `.github/dependabot.yml`
 
@@ -140,3 +159,8 @@ Every `noqa` carries its reason on the same line.
   is the escape hatch.
 - Upgrading Next.js within 16.3.x could change behaviour; the e2e suite is
   the check.
+- Starlette runs with five known advisories until the google-adk 2.x
+  migration; the allowlist expiry on 2026-12-12 fails CI if it slips.
+- The `@grpc/grpc-js` override runs Firestore's transport on a newer minor
+  than Firebase declares; harmless while Firestore is unused, and Dependabot
+  will surface a Firebase release that lifts the pin.
