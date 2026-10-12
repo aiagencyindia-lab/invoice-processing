@@ -12,7 +12,8 @@ What it does not do is weaken any check downstream. The caller must present a
 token this service has verified against Google's keys; the tenant is created
 server-side from that token's identity; and the claims are written by the same
 Provisioner the CLI uses. A caller cannot name their own tenant id, choose
-their own role, or sign up as somebody else.
+their own role, or sign up as somebody else. The address must be verified,
+and its domain must not already be bound to an organisation.
 """
 
 from __future__ import annotations
@@ -90,6 +91,39 @@ def sign_up(
             status_code=409,
             detail="This account already belongs to an organisation.",
         )
+
+    # The verified address is the identity everything below is keyed on; a
+    # token that does not vouch for it cannot found an organisation.
+    if claims.get("email_verified") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Verify your email address before creating an organisation.",
+        )
+
+    # A bound domain already has an organisation; a second one on it would
+    # split a company across tenants. Same accessor and lookup as sign-in,
+    # so an unreachable database refuses (503) instead of skipping the check.
+    # 403, not 409: the page reads 409 as "already a member".
+    from .. import sso  # noqa: PLC0415
+    from .auth import _services  # noqa: PLC0415
+
+    services = _services()
+    if services is not None:
+        try:
+            bound = services.directory.domain(
+                sso.domain_of(str(claims["email"]))
+            )
+        except Exception as exc:
+            raise sso._unavailable(exc) from exc
+        if bound is not None:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Your organisation's domain is already connected to "
+                    "Ledgerly. Sign in with Google using this address and "
+                    "you'll join it."
+                ),
+            )
 
     name = request.organisation.strip()
     if len(name) < 2:
