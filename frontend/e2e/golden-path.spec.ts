@@ -924,3 +924,25 @@ test("a scanned PO's flagged number is described and its total sent as a number"
   await expect(page.getByRole("status").filter({ hasText: "Saved purchase order" })).toBeVisible();
   expect(sent!.fields.total_amount).toBe(1250.5);
 });
+
+test("a refused or missing session is sent to the right screen", async ({
+  page,
+}) => {
+  // The redirect is a navigation, so it has to survive being moved out of
+  // render; both destinations are pinned here.
+  await page.route("**/api/me", (route) =>
+    route.fulfill({ status: 401, json: { detail: "Authentication required." } }),
+  );
+  await page.goto("/dashboard");
+  await expect(page).toHaveURL(/\/login$/);
+
+  await page.unroute("**/api/me");
+  await page.route("**/api/me", (route) =>
+    route.fulfill({
+      status: 403,
+      json: { detail: "Token carries no tenant_id claim." },
+    }),
+  );
+  await page.goto("/dashboard");
+  await expect(page).toHaveURL(/\/signup$/);
+});

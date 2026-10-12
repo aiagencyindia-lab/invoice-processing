@@ -142,6 +142,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     POLL_MS,
   );
 
+  // Signed in but refused goes to /signup, which explains what is missing
+  // and shows the values an administrator needs. Not signed in at all goes
+  // to /login. Sending both to the same screen was how someone who had
+  // already signed in ended up pressing the sign-in button again.
+  // Navigating is a side effect: done during render it updates the Router
+  // while AppShell is still rendering, which React warns about.
+  const redirectTo =
+    !isPublic && me === null && !denied?.includes("deactivated")
+      ? denied
+        ? "/signup"
+        : "/login"
+      : null;
+  useEffect(() => {
+    if (redirectTo) router.replace(redirectTo);
+  }, [redirectTo, router]);
+
   if (isPublic) return <>{children}</>;
 
   if (me === undefined) {
@@ -164,11 +180,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   if (me === null) {
-    // Signed in but refused goes to /signup, which explains what is missing
-    // and shows the values an administrator needs. Not signed in at all goes
-    // to /login. Sending both to the same screen was how someone who had
-    // already signed in ended up pressing the sign-in button again.
-    router.replace(denied ? "/signup" : "/login");
+    // The effect above is navigating; show where to while it does.
     return (
       <main style={{ padding: "4rem 2rem" }}>
         <p className="muted">Taking you to sign in…</p>
