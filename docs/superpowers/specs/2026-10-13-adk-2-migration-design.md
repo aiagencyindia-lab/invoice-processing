@@ -67,6 +67,15 @@ differently.
 - The full 300-invoice live run (87 minutes) only if the smoke disagrees
   with its recording.
 
+**Amended during execution (2026-10-13).** Both comparisons were made
+against a same-day control instead of the recording: `main` (`ea11ab1`) on
+the old lock, run in a scratch worktree. The recording could not isolate
+the libraries: code merged since moved the replay to 98.3%, and the model's
+GSTIN reads have drifted since 2026-10-07. Result: the replay is identical
+on all 300 records on both locks (98.3%), and the live smoke gives the same
+14 decisions and failing steps on both locks. The full live run was not
+needed. Details in `benchmark/CHANGELOG.md`, 2026-10-13.
+
 ## Design
 
 ### 1. Dependencies
