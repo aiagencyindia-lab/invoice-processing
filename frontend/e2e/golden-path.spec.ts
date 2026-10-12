@@ -557,6 +557,9 @@ test("a receipt for a PO not on file is refused until its PO number is corrected
 
 /** The cell of `row` under the "Kind" column of the documents table. */
 async function kindCell(page: Page, row: Locator) {
+  // allTextContents() does not wait; on a slow render it read an empty
+  // header row. Wait for the column itself first.
+  await expect(page.getByRole("columnheader", { name: "Kind", exact: true })).toBeVisible();
   const headers = await page.getByRole("columnheader").allTextContents();
   const at = headers.indexOf("Kind");
   expect(at, `no "Kind" column among ${JSON.stringify(headers)}`).toBeGreaterThanOrEqual(0);
