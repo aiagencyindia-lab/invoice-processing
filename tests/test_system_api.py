@@ -669,6 +669,71 @@ class TestAudit:
             env["client"]().get("/api/audit?cursor=nonsense").status_code == 422
         )
 
+    def test_pages_through_a_database_trail_by_cursor(
+        self, env, scratch_db, monkeypatch
+    ):
+        """The Postgres path end to end: serialisation, full-page rule, cursor."""
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+
+        from invoice_processing.db.models import (  # noqa: PLC0415
+            AuditEvent,
+            Tenant,
+        )
+        from invoice_processing.db.repositories import (  # noqa: PLC0415
+            PgAuditSink,
+        )
+        from invoice_processing.db.session import (  # noqa: PLC0415
+            create_all,
+            tenant_session,
+        )
+
+        url = scratch_db("audit_api.db")
+        Base.metadata.drop_all(get_engine(url))
+        create_all(url)
+        with tenant_session(TENANT, url) as s:
+            s.add(Tenant(id=TENANT, slug="acme", name="Acme"))
+        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        with tenant_session(TENANT, url) as s:
+            for i in range(3):
+                s.add(
+                    AuditEvent(
+                        id=f"e{i}",
+                        tenant_id=TENANT,
+                        occurred_at=t0 + timedelta(hours=i),
+                        action="x",
+                    )
+                )
+        monkeypatch.setattr(service, "_audit", PgAuditSink(url))
+
+        client = env["client"]()
+        first = client.get("/api/audit?limit=2").json()
+        assert [e["id"] for e in first["events"]] == ["e2", "e1"]
+        assert first["next_cursor"]
+        assert set(first["events"][0]) >= {
+            "id",
+            "actor_type",
+            "request_id",
+            "ip",
+        }
+        rest = client.get(
+            "/api/audit", params={"limit": 2, "cursor": first["next_cursor"]}
+        ).json()
+        assert [e["id"] for e in rest["events"]] == ["e0"]
+        assert rest["next_cursor"] is None
+
+    def test_a_cursor_is_not_answered_from_the_local_file_when_the_database_fails(
+        self, env, monkeypatch
+    ):
+        class Broken:
+            def query(self, *a, **k):
+                raise RuntimeError("db down")
+
+        monkeypatch.setattr(service, "_audit", Broken())
+        cursor = "2026-10-01T00:00:00+00:00|e1"
+        response = env["client"]().get("/api/audit", params={"cursor": cursor})
+        assert response.status_code == 503
+        assert "needs a database" in response.json()["detail"]
+
 
 class BareQueue:
     """A queue with only the four methods the worker needs, and no more.

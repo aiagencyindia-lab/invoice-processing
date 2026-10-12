@@ -557,16 +557,24 @@ def list_audit(
     sink = service.get_audit()
     limit = max(1, min(limit, 500))
 
-    rows = _safe(
-        lambda: sink.query(
-            principal.tenant_id,
-            limit=limit,
-            since=since,
-            until=until,
-            before=before,
-        ),
-        default=None,
-    )
+    rows = None
+    if hasattr(sink, "query"):
+        try:
+            rows = sink.query(
+                principal.tenant_id,
+                limit=limit,
+                since=since,
+                until=until,
+                before=before,
+            )
+        except Exception:
+            # The local file cannot honour a cursor; answering page 1 again
+            # would loop a paging client forever.
+            if before is not None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Paging the audit trail needs a database that could not be reached.",
+                ) from None
     if rows is None:
         events = _read_jsonl_audit(principal.tenant_id, limit, since, until)
     else:
