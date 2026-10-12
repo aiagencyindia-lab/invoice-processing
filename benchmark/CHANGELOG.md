@@ -1546,6 +1546,12 @@ decision moves. Against the 2026-10-07 recording, 6 of 14 differ on both locks:
 after writing its report. `replay` given a run directory that does not exist
 replays nothing and exits 0.
 
+**Side effects measured.** Cold `import invoice_processing.api.service`,
+which every API and worker process pays, takes 2.5 s on the new lock against
+7.5 s on the old (aiplatform alone 1.0 s against 4.2 s). google-auth 2.62
+now warns once per process that grpcio below 1.83 lacks post-quantum TLS
+and will be refused from April 2027; the next grpcio bump clears it.
+
 **Regression status.** Full suite 2679 passed, 4 skipped; all nine gates in
 `gates.sh` pass (`benchmark/runs/gates-adk2`); the CI Postgres list 825
 passed; `scripts/audit_gate.py` passes with an empty allowlist.

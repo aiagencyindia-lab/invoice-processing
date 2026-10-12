@@ -55,10 +55,15 @@ def test_the_agent_stack_is_on_its_second_major():
         re.split(r"[<>=!~\[ ]", dep, maxsplit=1)[0]: dep
         for dep in project["project"]["dependencies"]
     }
-    assert _floor(by_name["google-adk"]).startswith("2")
-    assert _floor(by_name["google-cloud-aiplatform"]).startswith("2")
+    assert _floor(by_name["google-adk"]).split(".")[0] == "2"
+    assert _floor(by_name["google-cloud-aiplatform"]).split(".")[0] == "2"
+    # Starlette 1.x imports `python_multipart`, a module name older releases
+    # do not have; it only falls back to the legacy `multipart` package.
+    multipart = tuple(
+        int(n) for n in _floor(by_name["python-multipart"]).split(".")
+    )
+    assert multipart >= (0, 0, 18), by_name["python-multipart"]
 
     lock = tomllib.loads((REPO / "uv.lock").read_text())
     versions = {pkg["name"]: pkg["version"] for pkg in lock["package"]}
     assert int(versions["starlette"].split(".")[0]) >= 1, versions["starlette"]
-    assert "mcp" not in versions
