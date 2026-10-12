@@ -543,7 +543,7 @@ Co-Authored-By: Claude <model> <noreply@anthropic.com>"
 (merge with the existing `scripts/verify_phase*.py` and `benchmark/harness/*.py` entries — ruff applies every matching pattern.)
 
 - [ ] **Step 3: Product code, site by site.**
-  - `api/ingest.py` attachment loop: `except Exception:` → `except Exception:  # noqa: BLE001` is wrong here; instead log and continue:
+  - `api/ingest.py` attachment loop: log what was skipped, then continue:
     ```python
             except Exception as exc:
                 # One undecodable part must not lose the others.
