@@ -1512,19 +1512,13 @@ moved.
 **Replay (no model calls), 300 records of `after-9f8c923`.** `replay-adk2`
 and the old-lock replay agree on all 300 records (decision, first failing
 step, rejection template, work-authorization verdict). Both score **98.3%**
-decision accuracy. The 98.0% of `replay-scanned-docs` (`e992baa`) is older
-code; what `main` merged since (page typing `4ac31ee`, `5bfadcd`, `b09846f`
-and others) moves ten records, the same on either lock:
-
-- Two decisions become right: MFG-INV-020 (a wrong ACCEPT, now REJECT at 3.2;
-  the dataset's first fault is 4.2) and MFG-INV-035 (a wrong REJECT at 1.1,
-  now ACCEPT).
-- One decision becomes wrong: MFG-INV-064, a clean invoice, was ACCEPT and is
-  now REJECT at 3.2 on the recorded extraction's misread GSTIN. Not caused by
-  this change; worth tracing on its own.
-- Six rejection reasons move to the dataset's first failing step (MFG-INV-038,
-  MFG-INV-040, SVC-INV-014, SVC-INV-017, SVC-INV-032, SVC-INV-059) and one
-  moves away from it (TECH-INV-065, 1.5 -> 1.3).
+decision accuracy, as has every replay over `9f8c923` since `bca701a`
+(`replay-head-on-9f8c923`, `replay-tokens-on-9f8c923` and others). The
+spec's expected 98.0% was the figure for replays over a different recording,
+`ecb9bbd` (`replay-three-way-final`, `replay-scanned-docs`); the two
+recordings differ in what the model read, so their replays differ on ten
+records and neither figure says anything about the other. (A first draft of
+this entry blamed the ten on code merged since; that was wrong.)
 
 **Live smoke, the 14 in `smoke.txt`, project `rasayan`.** `smoke-adk2` and
 the old-lock smoke agree on all 14 decisions and first failing steps; both
