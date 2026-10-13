@@ -155,3 +155,47 @@ class TestCli:
             == 1
         )
         assert "active" in capsys.readouterr().err
+
+
+class TestTheApiRefusesASuspendedTenant:
+    @pytest.fixture
+    def api(self, url, tmp_path, monkeypatch):
+        from invoice_processing.adapters import (  # noqa: PLC0415
+            JsonlAuditSink,
+        )
+        from invoice_processing.api import auth, service  # noqa: PLC0415
+        from tests.test_signup_api import FakeVerifier  # noqa: PLC0415
+
+        monkeypatch.setenv("DATABASE_URL", url)
+        monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
+        monkeypatch.delenv("AUTH_DISABLED", raising=False)
+        monkeypatch.setattr(auth, "_verifier", FakeVerifier())
+        monkeypatch.setattr(
+            service, "_audit", JsonlAuditSink(tmp_path / "audit.jsonl")
+        )
+
+    def _get(self, tenant_id):
+        from fastapi.testclient import TestClient  # noqa: PLC0415
+
+        from invoice_processing.api.service import app  # noqa: PLC0415
+
+        token = f"ap@acme.test|uid-1|{tenant_id}|"
+        return TestClient(app).get(
+            "/api/invoices", headers={"Authorization": f"Bearer {token}"}
+        )
+
+    @pytest.mark.parametrize("with_row", [True, False])
+    def test_every_request_is_refused_once_suspended(
+        self, url, acme, api, with_row
+    ):
+        if with_row:
+            Provisioner(url=url).add_user(
+                "acme", "ap@acme.test", "admin", "uid-1"
+            )
+        assert self._get(acme).status_code == 200
+        offboarding.suspend("acme", operator="v", reason="r", url=url)
+        refused = self._get(acme)
+        assert refused.status_code == 403
+        assert "suspended" in refused.json()["detail"]
+        offboarding.reactivate("acme", operator="v", url=url)
+        assert self._get(acme).status_code == 200

@@ -306,3 +306,34 @@ class TestDomains:
             found["default_role"] == "clerk" and found["provider"] == "google"
         )
         assert PgUserDirectory(db).domain("nobody.example") is None
+
+
+class TestTenantStatus:
+    def test_find_domain_and_tenant_status_carry_it(self, db):
+        from invoice_processing.db.models import SsoDomain  # noqa: PLC0415
+
+        tid = "33333333-3333-3333-3333-333333333333"
+        with tenant_session(tid, db) as session:
+            session.add(
+                Tenant(id=tid, slug="closed", name="Closed", status="suspended")
+            )
+            session.flush()
+            session.add(
+                User(tenant_id=tid, email="ap@closed.test", role="clerk")
+            )
+            session.add(
+                SsoDomain(
+                    tenant_id=tid,
+                    domain="closed.test",
+                    provider="google",
+                    default_role="clerk",
+                    created_by="admin@closed.test",
+                )
+            )
+        directory = PgUserDirectory(db)
+        assert directory.find(tid, "ap@closed.test")["tenant_status"] == (
+            "suspended"
+        )
+        assert directory.domain("closed.test")["tenant_status"] == "suspended"
+        assert directory.tenant_status(tid) == "suspended"
+        assert directory.tenant_status("no-such-tenant") is None
