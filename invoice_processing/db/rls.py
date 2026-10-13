@@ -13,8 +13,10 @@ Both layers are deliberate. Either alone is one bug away from a breach:
   that bypasses it.
 
 The session sets `app.tenant_id`; the policies compare each row against it.
-`audit_events` additionally has no UPDATE or DELETE policy: the audit trail is
-append-only by construction, not by convention.
+`audit_events` additionally has no UPDATE policy, and its one DELETE policy
+answers only to `app.purge_tenant`, which the offboarding purge sets as the
+owner role: the app role has no DELETE on the table at all, so for the
+service the trail is append-only by construction, not by convention.
 
 These statements are Postgres-specific and are no-ops on SQLite, which the test
 suite uses for schema and repository behaviour. Cross-tenant isolation must
@@ -124,6 +126,24 @@ def revoke_audit_mutation_statements() -> list[str]:
     return [
         "REVOKE UPDATE, DELETE ON audit_events FROM PUBLIC;",
     ]
+
+
+def audit_purge_policy_statements() -> list[str]:
+    """The one way an audit row is ever deleted: a tenant's whole trail, by
+    its offboarding purge (offboarding.purge).
+
+    Not part of `enable_rls_statements`, which migrations replay as history:
+    adding it there would make the initial migration create a policy the
+    later one then fails to create again.
+    """
+    return [
+        "CREATE POLICY audit_events_purge ON audit_events FOR DELETE "
+        f"USING (tenant_id = current_setting('{PURGE_SETTING}', true));"
+    ]
+
+
+def drop_audit_purge_policy_statements() -> list[str]:
+    return ["DROP POLICY IF EXISTS audit_events_purge ON audit_events;"]
 
 
 def set_tenant_statement() -> str:
