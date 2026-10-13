@@ -76,6 +76,14 @@ _INFRASTRUCTURE_ERROR_PATTERNS = (
     "DEADLINE_EXCEEDED",
     "429",
     "RESOURCE_EXHAUSTED",
+    # The google-genai SDK talks HTTP through httpx, whose transport failures
+    # arrive under their class names (matched via the "Class: message" form),
+    # often with an empty or OS-specific message. Under gRPC all of these were
+    # "503 failed to connect to all addresses".
+    "ConnectError",
+    "RemoteProtocolError",
+    "ReadError",
+    "WriteError",
 )
 # The account, not the request: retrying cannot help and no document caused it.
 _ACCOUNT_ERROR_PATTERNS = (
