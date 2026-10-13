@@ -73,6 +73,14 @@ def db(scratch_db):
 
 
 class TestSchema:
+    def test_every_table_with_a_tenant_id_is_a_tenant_table(self, db):
+        """The reverse of the test below. The purge and RLS both work from
+        TENANT_TABLES, so a table missing from it keeps a purged tenant's
+        rows and has no isolation."""
+        for name, table in Base.metadata.tables.items():
+            if "tenant_id" in table.columns:
+                assert name in TENANT_TABLES, name
+
     def test_every_tenant_table_carries_tenant_id(self, db):
         for table in TENANT_TABLES:
             assert "tenant_id" in Base.metadata.tables[table].columns, (

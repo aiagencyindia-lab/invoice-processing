@@ -29,6 +29,9 @@ from .models import TENANT_TABLES
 # Set per connection/transaction, read by every policy.
 TENANT_SETTING = "app.tenant_id"
 
+# Set only by the offboarding purge, read only by audit_events_purge.
+PURGE_SETTING = "app.purge_tenant"
+
 # The tenant setting a pre-tenant domain lookup runs under. No real tenant id
 # can equal it (ids are uuids), so it unlocks nothing but the one SELECT below.
 SSO_LOOKUP_TENANT = "sso-lookup"

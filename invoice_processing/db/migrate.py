@@ -133,6 +133,24 @@ def current_revision() -> str | None:
         return MigrationContext.configure(connection).get_current_revision()
 
 
+def use_owner_role() -> bool:
+    """Point this process at the owner's connection; True when one is set.
+
+    The release step and the tenant purge are the two things that run as
+    the owner. MIGRATE_* name its connection, so the app's own settings stay
+    the least-privilege ones.
+    """
+    found = False
+    for source, target in (
+        ("MIGRATE_DATABASE_URL", "DATABASE_URL"),
+        ("MIGRATE_CLOUD_SQL_USER", "CLOUD_SQL_USER"),
+    ):
+        if os.getenv(source):
+            os.environ[target] = os.environ[source]
+            found = True
+    return found
+
+
 def main(argv: list[str] | None = None) -> int:
     """`python -m invoice_processing.db.migrate`: the release step.
 
@@ -141,12 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     deploy serves traffic. MIGRATE_* name the owner's connection so the
     app's own settings stay the least-privilege ones.
     """
-    for source, target in (
-        ("MIGRATE_DATABASE_URL", "DATABASE_URL"),
-        ("MIGRATE_CLOUD_SQL_USER", "CLOUD_SQL_USER"),
-    ):
-        if os.getenv(source):
-            os.environ[target] = os.environ[source]
+    use_owner_role()
     os.environ["RUN_MIGRATIONS"] = "1"
     logging.basicConfig(level=logging.INFO)
     try:

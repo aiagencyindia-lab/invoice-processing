@@ -68,6 +68,24 @@ class LocalBlobStore:
         """Local files have no signed URLs; a file:// URI is the honest answer."""
         return self._path(key).as_uri()
 
+    def list_keys(self) -> list[str]:
+        """Every key under this store's root, as `put` was given it."""
+        if not self.root.exists():
+            return []
+        return sorted(
+            p.relative_to(self.root).as_posix()
+            for p in self.root.rglob("*")
+            if p.is_file()
+        )
+
+    def delete(self, key: str) -> None:
+        """Only for tenant offboarding, like `GcsBlobStore.delete`.
+
+        ponytail: empty directories stay behind; they hold no data, and
+        removing them races a concurrent `put` for nothing.
+        """
+        self._path(key).unlink()
+
 
 # ---------------------------------------------------------------------------
 # Case artifacts
