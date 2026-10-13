@@ -53,12 +53,11 @@ Deploy an ADK agent to Agent Runtime and optionally register it on Gemini Enterp
 - Python 3.10+
 - [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) (`gcloud` CLI)
 - A GCP project with Vertex AI API enabled
-- Python packages: `google-adk` 2.x, `google-cloud-aiplatform` 2.x, `python-dotenv`
-  (ADK 2.x has no `vertexai` extra; aiplatform is installed by name)
+- Python packages: `google-adk` 2.x, `google-genai` 2.x, `python-dotenv`
 - (Optional) `google-agents-cli` — required only for Gemini Enterprise registration
 
 ```bash
-pip install "google-adk>=2,<3" "google-cloud-aiplatform>=2,<3" python-dotenv
+pip install "google-adk>=2,<3" "google-genai>=2,<3" python-dotenv
 ```
 
 ---

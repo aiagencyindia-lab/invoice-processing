@@ -40,8 +40,10 @@ def scratch_db(tmp_path):
 def a_project_id_that_is_not_real(monkeypatch):
     """Give Vertex a project so construction never needs a configured machine.
 
-    `google.cloud.aiplatform` resolves its project at client construction and
-    raises when it cannot find one. Anything that builds a model -- including
+    `invoice_processing.gemini.client()` builds a Vertex client from
+    `GOOGLE_CLOUD_PROJECT`; with none set, the SDK falls back to
+    `google.auth.default()`, which fails on a machine without gcloud. Anything
+    that builds a model -- including
     `RuleDiscoveryEngine`, whose cache-key test only wants a hash -- therefore
     failed on a machine with no `GOOGLE_CLOUD_PROJECT`, while passing on a
     developer's because `.env` supplies one.
