@@ -134,7 +134,11 @@ async def _identify_request(request, call_next):
         status = response.status_code
     except Exception:
         # Caught here rather than left to Starlette, whose 500 would go out
-        # without the request id or any of the headers below.
+        # without the request id or any of the headers below. The tenant is
+        # set first so this line, and the Sentry event it raises, name it.
+        observability.current_tenant_id.set(
+            getattr(request.state, "tenant_id", "")
+        )
         logger.exception(
             "Unhandled error on %s %s", request.method, request.url.path
         )

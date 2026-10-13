@@ -208,6 +208,8 @@ class TestTheRequestLine:
         [line] = [r for r in caplog.records if r.getMessage() == "request"]
         assert response.status_code == 500
         assert crash and crash[0].request_id == response.headers["x-request-id"]
+        # The crash's line and its Sentry event name the tenant too.
+        assert crash[0].tenant_id == CLAIMS["tenant_id"]
         assert line.status == 500
 
 
