@@ -33,6 +33,12 @@ credentials. `IdentityToolkitClaims` is the real one.
     python -m invoice_processing.admin.provision add-user \\
         --tenant acme --email ap@acme.test --role clerk --uid <firebase-uid>
     python -m invoice_processing.admin.provision list
+    python -m invoice_processing.admin.provision suspend-tenant \\
+        --tenant acme --operator <you> --reason "contract ended"
+    python -m invoice_processing.admin.provision reactivate-tenant \\
+        --tenant acme --operator <you>
+    python -m invoice_processing.admin.provision purge-tenant \\
+        --tenant acme --operator <you> --confirm acme
 """
 
 from __future__ import annotations
@@ -229,11 +235,21 @@ class Provisioner:
             ]
 
     def _tenant_by_slug(self, slug: str) -> Tenant:
+        """The tenant a grant of access is for; only an active one.
+
+        Both callers (add-user, set-claims) hand out access, and access to a
+        suspended or purged tenant is exactly what offboarding withdrew.
+        """
         with tenant_session("", self.url) as session:
             tenant = session.scalar(select(Tenant).where(Tenant.slug == slug))
             if tenant is None:
                 raise ProvisioningError(
                     f"No tenant {slug!r}. Create it before adding users."
+                )
+            if tenant.status != "active":
+                raise ProvisioningError(
+                    f"Tenant {slug!r} is {tenant.status}; access can only be "
+                    "granted in an active tenant."
                 )
             session.expunge(tenant)
             return tenant
@@ -479,13 +495,44 @@ def build_parser() -> argparse.ArgumentParser:
     claims.add_argument("--email", required=True)
     claims.add_argument("--uid", required=True)
 
+    suspend = subparsers.add_parser("suspend-tenant")
+    suspend.add_argument("--tenant", required=True)
+    suspend.add_argument("--operator", required=True)
+    suspend.add_argument("--reason", required=True)
+
+    reactivate = subparsers.add_parser("reactivate-tenant")
+    reactivate.add_argument("--tenant", required=True)
+    reactivate.add_argument("--operator", required=True)
+
+    purge = subparsers.add_parser("purge-tenant")
+    purge.add_argument("--tenant", required=True)
+    purge.add_argument("--operator", required=True)
+    purge.add_argument(
+        "--confirm", required=True, help="The tenant slug again."
+    )
+    purge.add_argument(
+        "--skip-grace",
+        action="store_true",
+        help="Purge inside the 30-day window; needs --reason.",
+    )
+    purge.add_argument("--reason")
+
     subparsers.add_parser("list")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .. import offboarding  # noqa: PLC0415 - only the CLI needs it
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = build_parser().parse_args(argv)
+    if args.command == "purge-tenant":
+        # Before any engine exists, so every connection is the owner's.
+        try:
+            offboarding.require_owner_role()
+        except offboarding.OffboardingError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
 
     writer: ClaimsWriter = (
         IdentityToolkitClaims() if args.apply else DryRunClaims()
@@ -524,9 +571,39 @@ def main(argv: list[str] | None = None) -> int:
                     indent=2,
                 )
             )
+        elif args.command == "suspend-tenant":
+            print(
+                json.dumps(
+                    offboarding.suspend(
+                        args.tenant, operator=args.operator, reason=args.reason
+                    ),
+                    indent=2,
+                )
+            )
+        elif args.command == "reactivate-tenant":
+            print(
+                json.dumps(
+                    offboarding.reactivate(args.tenant, operator=args.operator),
+                    indent=2,
+                )
+            )
+        elif args.command == "purge-tenant":
+            from ..api import service  # noqa: PLC0415 - the app's blob wiring
+
+            record = offboarding.purge(
+                args.tenant,
+                operator=args.operator,
+                confirm=args.confirm,
+                blobs_for=service.get_blobs,
+                skip_grace=args.skip_grace,
+                reason=args.reason,
+            )
+            # One line: the operator files it in the offboarding register,
+            # the copy that survives a restore from before this purge.
+            print(json.dumps(record, sort_keys=True))
         elif args.command == "list":
             print(json.dumps(provisioner.list_tenants(), indent=2))
-    except ProvisioningError as exc:
+    except (ProvisioningError, offboarding.OffboardingError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0

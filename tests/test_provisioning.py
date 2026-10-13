@@ -328,3 +328,22 @@ class TestDefaults:
         code = provision.main(["create-tenant", "--slug", "BAD", "--name", "x"])
         assert code == 1
         assert "error:" in capsys.readouterr().err
+
+
+class TestClosedTenants:
+    @pytest.mark.parametrize("status", ["suspended", "purged"])
+    def test_no_user_is_added_to_a_closed_tenant(
+        self, provisioner, url, status
+    ):
+        from invoice_processing.db.models import Tenant  # noqa: PLC0415
+        from invoice_processing.db.session import (  # noqa: PLC0415
+            tenant_session,
+        )
+
+        tenant_id = provisioner.create_tenant("acme", "Acme")["id"]
+        with tenant_session("", url) as session:
+            session.get(Tenant, tenant_id).status = status
+        with pytest.raises(ProvisioningError, match=status):
+            provisioner.add_user("acme", "ap@acme.test", "clerk", "uid-1")
+        with pytest.raises(ProvisioningError, match=status):
+            provisioner.set_claims("acme", "ap@acme.test", "uid-1")

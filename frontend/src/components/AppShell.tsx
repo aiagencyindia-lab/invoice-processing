@@ -67,6 +67,10 @@ function pausedMessage(status: SystemStatus): string | null {
 /** Routes that must render without the shell, or an unauthenticated visitor
  *  would be redirected away from the very page that lets them sign in. */
 const PUBLIC_ROUTES = ["/login", "/signup"];
+// Refusals no sign-up can cure: a deactivated person, a suspended
+// organisation. Shown where they land, with a way to sign out. Tied to the
+// server's sentences by tests/test_frontend_reaches_the_flow.py.
+const FINAL_REFUSAL = /deactivated|suspended/;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -148,7 +152,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // already signed in ended up pressing the sign-in button again.
   // Navigating is a side effect: done during render it updates the Router
   // while AppShell is still rendering, which React warns about.
-  const redirect = !isPublic && me === null && !denied?.includes("deactivated");
+  const final = denied !== null && FINAL_REFUSAL.test(denied);
+  const redirect = !isPublic && me === null && !final;
   const target = denied ? "/signup" : "/login";
   useEffect(() => {
     if (redirect) router.replace(target);
@@ -164,7 +169,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (me === null && denied?.includes("deactivated")) {
+  if (me === null && final) {
     return (
       <main style={{ padding: "4rem 2rem" }} className="stack">
         <p role="alert">{denied}</p>

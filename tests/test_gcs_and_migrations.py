@@ -31,6 +31,7 @@ from invoice_processing.db.models import TENANT_TABLES
 from invoice_processing.gcs import GcsBlobStore, for_tenant
 from invoice_processing.ports import BlobStore
 from invoice_processing.worker import __main__ as worker_main
+from tests.pg_roles import bootstrapped_database, pg_only
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -472,6 +473,7 @@ class TestMigration:
             ("a7b3c9d2e4f6", 0),
             ("b8c4d1e2f3a5", 0),
             ("c9d5e2f3a4b6", 1),
+            ("d1a2b3c4e5f6", 0),
         ],
     )
     def test_migration_protects_exactly_the_tables_it_creates(
@@ -788,149 +790,155 @@ class TestMigration:
                 c.execute(text(f"DROP ROLE IF EXISTS {role}"))
             admin.dispose()
 
-    @pytest.mark.skipif(
-        not (os.getenv("TEST_DATABASE_URL") or "").startswith("postgresql"),
-        reason="roles and grants exist only on Postgres",
-    )
+    @pg_only
     def test_app_role_cannot_rewrite_the_audit_trail(self):
         """The API runs as a role that owns nothing. Proven as that role, with
         the real bootstrap.sql: it can append to and read the trail, and
         nothing else about it."""
-        import uuid  # noqa: PLC0415
-
         from sqlalchemy import create_engine, text  # noqa: PLC0415
-        from sqlalchemy.engine import make_url  # noqa: PLC0415
         from sqlalchemy.exc import DBAPIError  # noqa: PLC0415
 
-        server = make_url(os.environ["TEST_DATABASE_URL"])
-        suffix = uuid.uuid4().hex[:12]
-        name = f"roles_{suffix}"
-        owner, app_role = f"owner_{suffix}", f"app_{suffix}"
         tenant = "22222222-2222-2222-2222-222222222222"
-        sql = (REPO / "invoice_processing" / "db" / "bootstrap.sql").read_text()
-        # psql variables, literals before identifiers.
-        for var, value in (
-            (":'owner_pw'", "'pw'"),
-            (":'app_pw'", "'pw'"),
-            (":'owner'", f"'{owner}'"),
-            (":'app'", f"'{app_role}'"),
-            (':"owner"', owner),
-            (':"app"', app_role),
-        ):
-            sql = sql.replace(var, value)
-        part1, part2 = sql.split("\n-- §2")  # the marker line, as sed finds it
-
-        def statements(part):
-            code = "\n".join(
-                line
-                for line in part.splitlines()
-                if not line.strip().startswith("--")
-            )
-            return [
-                s
-                for s in code.split(";")
-                if s.strip() and "has_table_privilege" not in s
-            ]
-
-        admin = create_engine(server, isolation_level="AUTOCOMMIT")
-        url = server.set(database=name)
-        engines = []
-        try:
-            with admin.connect() as c:
-                c.execute(text(f"CREATE DATABASE {name}"))
-            su = create_engine(url, isolation_level="AUTOCOMMIT")
-            engines.append(su)
-            with su.connect() as c:
-                for s in statements(part1):
-                    c.execute(text(s))
-            owner_url = url.set(username=owner, password="pw")
-            up = subprocess.run(
-                [sys.executable, "-m", "alembic", "upgrade", "head"],
-                cwd=REPO,
-                capture_output=True,
-                text=True,
-                timeout=180,
-                check=False,
-                env={
-                    **os.environ,
-                    "DATABASE_URL": owner_url.render_as_string(
-                        hide_password=False
-                    ),
-                },
-            )
-            assert up.returncode == 0, up.stderr[-2000:]
-            with su.connect() as c:
-                for s in statements(part2):
-                    c.execute(text(s))
-                c.execute(
-                    text(
-                        "insert into tenants (id, slug, name, region, status, "
-                        "settings, created_at, updated_at) values "
-                        f"('{tenant}', 'acme', 'Acme', 'au', 'active', '{{}}', "
-                        "now(), now())"
-                    )
-                )
-
-                def can(privilege):
-                    return c.execute(
-                        text(
-                            f"select has_table_privilege('{app_role}', "
-                            f"'audit_events', '{privilege}')"
-                        )
-                    ).scalar()
-
-                assert can("UPDATE") is False
-                assert can("INSERT") is True
-
-            app = create_engine(url.set(username=app_role, password="pw"))
-            engines.append(app)
-            scope = text("SELECT set_config('app.tenant_id', :t, true)")
-            with app.connect() as c:
-                with c.begin():
-                    c.execute(scope, {"t": tenant})
+        with bootstrapped_database() as db:
+            su = create_engine(db.url, isolation_level="AUTOCOMMIT")
+            app = create_engine(db.app_url)
+            try:
+                with su.connect() as c:
                     c.execute(
                         text(
-                            "insert into audit_events (id, tenant_id, "
-                            "occurred_at, actor_type, action) values "
-                            f"('e1', '{tenant}', now(), 'user', 'x')"
+                            "insert into tenants (id, slug, name, region, "
+                            "status, settings, created_at, updated_at) values "
+                            f"('{tenant}', 'acme', 'Acme', 'au', 'active', "
+                            "'{}', now(), now())"
                         )
                     )
-                    count = text("select count(*) from audit_events")
-                    assert c.execute(count).scalar() == 1
-                    renamed = c.execute(
-                        text("update tenants set name = 'Acme Ltd'")
-                    )
-                    assert renamed.rowcount == 1
-                for forbidden in (
-                    "update audit_events set action = 'y'",
-                    "delete from audit_events",
-                    "truncate audit_events",
-                    "alter table audit_events disable row level security",
-                    "alter table audit_events no force row level security",
-                    "drop table audit_events",
-                    "alter table users add column evil int",
-                    "create table evil (id int)",
-                    "update alembic_version set version_num = 'x'",
-                ):
-                    with pytest.raises(DBAPIError) as refused, c.begin():
+
+                    def can(privilege):
+                        return c.execute(
+                            text(
+                                f"select has_table_privilege('{db.app}', "
+                                f"'audit_events', '{privilege}')"
+                            )
+                        ).scalar()
+
+                    assert can("UPDATE") is False
+                    assert can("INSERT") is True
+
+                scope = text("SELECT set_config('app.tenant_id', :t, true)")
+                with app.connect() as c:
+                    with c.begin():
                         c.execute(scope, {"t": tenant})
-                        c.execute(text(forbidden))
-                    # pg8000 carries the server's error fields; "C" is the
-                    # SQLSTATE. 42501 is insufficient_privilege, which Postgres
-                    # also raises for "must be owner of table" on DDL. Any
-                    # other error (a typo, a missing table) would prove nothing.
-                    sqlstate = refused.value.orig.args[0]["C"]
-                    assert sqlstate == "42501", (forbidden, sqlstate)
-                version = text("select version_num from alembic_version")
-                assert c.execute(version).scalar()
-        finally:
-            for engine in engines:
-                engine.dispose()
-            with admin.connect() as c:
-                c.execute(text(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
-                c.execute(text(f"DROP ROLE IF EXISTS {app_role}"))
-                c.execute(text(f"DROP ROLE IF EXISTS {owner}"))
-            admin.dispose()
+                        c.execute(
+                            text(
+                                "insert into audit_events (id, tenant_id, "
+                                "occurred_at, actor_type, action) values "
+                                f"('e1', '{tenant}', now(), 'user', 'x')"
+                            )
+                        )
+                        count = text("select count(*) from audit_events")
+                        assert c.execute(count).scalar() == 1
+                        renamed = c.execute(
+                            text("update tenants set name = 'Acme Ltd'")
+                        )
+                        assert renamed.rowcount == 1
+                    for forbidden in (
+                        "update audit_events set action = 'y'",
+                        "delete from audit_events",
+                        "truncate audit_events",
+                        "alter table audit_events disable row level security",
+                        "alter table audit_events no force row level security",
+                        "drop table audit_events",
+                        "alter table users add column evil int",
+                        "create table evil (id int)",
+                        "update alembic_version set version_num = 'x'",
+                    ):
+                        with pytest.raises(DBAPIError) as refused, c.begin():
+                            c.execute(scope, {"t": tenant})
+                            c.execute(text(forbidden))
+                        # pg8000 carries the server's error fields; "C" is the
+                        # SQLSTATE. 42501 is insufficient_privilege, which
+                        # Postgres also raises for "must be owner of table" on
+                        # DDL. Any other error (a typo, a missing table) would
+                        # prove nothing.
+                        sqlstate = refused.value.orig.args[0]["C"]
+                        assert sqlstate == "42501", (forbidden, sqlstate)
+                    version = text("select version_num from alembic_version")
+                    assert c.execute(version).scalar()
+            finally:
+                su.dispose()
+                app.dispose()
+
+    @pg_only
+    def test_only_the_owner_can_purge_and_only_the_named_tenant(self):
+        from sqlalchemy import create_engine, text  # noqa: PLC0415
+        from sqlalchemy.exc import DBAPIError  # noqa: PLC0415
+
+        from invoice_processing.db import rls  # noqa: PLC0415
+
+        a = "44444444-4444-4444-4444-444444444444"
+        b = "55555555-5555-5555-5555-555555555555"
+        with bootstrapped_database() as db:
+            su = create_engine(db.url, isolation_level="AUTOCOMMIT")
+            owner = create_engine(db.owner_url)
+            app = create_engine(db.app_url)
+            try:
+                with su.connect() as c:
+                    for tid, slug in ((a, "a"), (b, "b")):
+                        c.execute(
+                            text(
+                                "insert into tenants (id, slug, name, region, "
+                                "status, settings, created_at, updated_at) "
+                                f"values ('{tid}', '{slug}', '{slug}', 'au', "
+                                "'suspended', '{}', now(), now())"
+                            )
+                        )
+                        c.execute(
+                            text(
+                                "insert into audit_events (id, tenant_id, "
+                                "occurred_at, actor_type, action) values "
+                                f"('e-{slug}', '{tid}', now(), 'user', 'x')"
+                            )
+                        )
+                scope = text(rls.set_tenant_statement())
+                purge = text("select set_config(:name, :t, true)")
+
+                with app.connect() as c:
+                    with pytest.raises(DBAPIError) as refused, c.begin():
+                        c.execute(scope, {"tenant_id": a})
+                        c.execute(purge, {"name": rls.PURGE_SETTING, "t": a})
+                        c.execute(text("delete from audit_events"))
+                    assert refused.value.orig.args[0]["C"] == "42501"
+
+                with owner.connect() as c, c.begin():
+                    c.execute(scope, {"tenant_id": a})
+                    gone = c.execute(text("delete from audit_events"))
+                    assert gone.rowcount == 0  # no purge setting, no policy
+
+                with owner.connect() as c, c.begin():
+                    c.execute(scope, {"tenant_id": a})
+                    c.execute(purge, {"name": rls.PURGE_SETTING, "t": a})
+                    gone = c.execute(text("delete from audit_events"))
+                    assert gone.rowcount == 1
+
+                with su.connect() as c:
+                    left = c.execute(
+                        text("select tenant_id from audit_events")
+                    ).scalars()
+                    assert list(left) == [b]
+
+                down = db.alembic("downgrade -1")
+                assert down.returncode == 0, down.stderr[-2000:]
+                with su.connect() as c:
+                    names = c.execute(
+                        text(
+                            "select policyname from pg_policies "
+                            "where tablename = 'audit_events'"
+                        )
+                    ).scalars()
+                    assert "audit_events_purge" not in set(names)
+            finally:
+                for engine in (su, owner, app):
+                    engine.dispose()
 
     def test_no_connection_string_is_committed(self):
         """The URL comes from DATABASE_URL, so no password reaches the repo."""

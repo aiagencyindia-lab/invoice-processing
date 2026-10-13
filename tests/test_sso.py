@@ -19,6 +19,7 @@ class FakeDirectory:
         self.users = {(u["tenant_id"], u["email"]): u for u in users or []}
         self.domains = {d["domain"]: d for d in domains or []}
         self.fail = fail
+        self.tenant_statuses = {}
         self.touched, self.linked, self.provisioned = [], [], []
         self.audits = []
         self.provision_conflict, self.provision_conflict_row = False, None
@@ -27,7 +28,18 @@ class FakeDirectory:
         if self.fail:
             raise RuntimeError("db down")
         u = self.users.get((tenant_id, email.lower()))
-        return dict(u, tenant_name="Acme Pty Ltd") if u else None
+        if not u:
+            return None
+        return dict(
+            u,
+            tenant_name="Acme Pty Ltd",
+            tenant_status=self.tenant_statuses.get(tenant_id, "active"),
+        )
+
+    def tenant_status(self, tenant_id):
+        if self.fail:
+            raise RuntimeError("db down")
+        return self.tenant_statuses.get(tenant_id, "active")
 
     def touch_login(self, tenant_id, user_id, now):
         self.touched.append((user_id, now))
@@ -68,7 +80,15 @@ class FakeDirectory:
     def domain(self, domain):
         if self.fail:
             raise RuntimeError("db down")
-        return self.domains.get(domain)
+        bound = self.domains.get(domain)
+        if bound is None:
+            return None
+        return dict(
+            bound,
+            tenant_status=self.tenant_statuses.get(
+                bound["tenant_id"], "active"
+            ),
+        )
 
 
 class FakeClaims:
@@ -502,3 +522,146 @@ def test_sso_never_logs_an_email_address(caplog):
         sso.resolve_principal(unclaimed(), services(directory=d), now=NOW)
     assert caplog.records, "both paths log a warning"
     assert "@" not in caplog.text
+
+
+class TestClosedTenants:
+    """A suspended or purged tenant is refused on every path in."""
+
+    def _user(self, active=True):
+        return {
+            "id": "u1",
+            "tenant_id": ACME,
+            "email": "ap@acme.test",
+            "role": "clerk",
+            "is_active": active,
+            "uid": "uid-1",
+            "last_login_at": NOW,
+        }
+
+    def _audit(self):
+        class Audit:
+            def __init__(self):
+                self.events = []
+
+            def emit(self, ctx, event, payload, before=None):
+                self.events.append((ctx.tenant_id, event, payload))
+
+        return Audit()
+
+    def _claims(self):
+        return {
+            "sub": "uid-1",
+            "user_id": "uid-1",
+            "email": "ap@acme.test",
+            "email_verified": True,
+            "tenant_id": ACME,
+            "role": "clerk",
+        }
+
+    def test_a_suspended_tenants_user_is_refused_and_recorded(self):
+        directory = FakeDirectory(users=[self._user()])
+        directory.tenant_statuses[ACME] = "suspended"
+        audit = self._audit()
+        services = sso.SsoServices(directory, FakeClaims(), audit)
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(self._claims(), services, now=NOW)
+        assert exc.value.status_code == 403
+        assert exc.value.detail == sso.SUSPENDED
+        assert audit.events == [
+            (
+                ACME,
+                "sign_in_refused",
+                {
+                    "email": "ap@acme.test",
+                    "user_id": "u1",
+                    "reason": "tenant_suspended",
+                },
+            )
+        ]
+
+    def test_suspension_outranks_deactivation(self):
+        directory = FakeDirectory(users=[self._user(active=False)])
+        directory.tenant_statuses[ACME] = "suspended"
+        services = sso.SsoServices(directory, FakeClaims(), self._audit())
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(self._claims(), services, now=NOW)
+        assert exc.value.detail == sso.SUSPENDED
+
+    def test_a_dev_identity_in_a_suspended_tenant_is_refused(self):
+        directory = FakeDirectory(users=[self._user()])
+        directory.tenant_statuses[ACME] = "suspended"
+        services = sso.SsoServices(directory, FakeClaims(), self._audit())
+        principal = Principal(
+            user_id="dev", email="ap@acme.test", tenant_id=ACME, role="admin"
+        )
+        with pytest.raises(AuthError) as exc:
+            sso.enforce_active(principal, services)
+        assert exc.value.status_code == 403
+
+    def test_a_token_with_no_row_in_a_purged_tenant_is_refused_silently(self):
+        """The stale token a purge leaves behind. Admitting it with its claim
+        role would let it write fresh rows into the erased tenant; recording
+        the refusal would restart the trail the purge removed."""
+        directory = FakeDirectory()
+        directory.tenant_statuses[ACME] = "purged"
+        audit = self._audit()
+        services = sso.SsoServices(directory, FakeClaims(), audit)
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(self._claims(), services, now=NOW)
+        assert exc.value.detail == sso.SUSPENDED
+        assert audit.events == []
+
+    def test_a_dev_identity_with_no_row_in_a_suspended_tenant_is_refused(
+        self,
+    ):
+        directory = FakeDirectory()
+        directory.tenant_statuses[ACME] = "suspended"
+        audit = self._audit()
+        services = sso.SsoServices(directory, FakeClaims(), audit)
+        principal = Principal(
+            user_id="dev", email="ap@acme.test", tenant_id=ACME, role="admin"
+        )
+        with pytest.raises(AuthError):
+            sso.enforce_active(principal, services)
+        assert [e[2]["reason"] for e in audit.events] == ["tenant_suspended"]
+
+    def test_a_tenant_with_no_tenants_row_keeps_todays_behaviour(self):
+        directory = FakeDirectory()
+        directory.tenant_statuses[ACME] = None
+        services = sso.SsoServices(directory, FakeClaims(), self._audit())
+        assert sso.resolve_principal(self._claims(), services).role == "clerk"
+
+    def test_a_status_lookup_that_fails_is_a_503(self):
+        directory = FakeDirectory()
+        services = sso.SsoServices(directory, FakeClaims(), self._audit())
+        directory.fail = True
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(self._claims(), services, now=NOW)
+        assert exc.value.status_code == 503
+
+    def test_a_bound_domain_of_a_suspended_tenant_provisions_no_one(self):
+        directory = FakeDirectory(
+            domains=[
+                {
+                    "id": "d1",
+                    "tenant_id": ACME,
+                    "tenant_name": "Acme Pty Ltd",
+                    "domain": "acme.test",
+                    "provider": "google",
+                    "default_role": "clerk",
+                }
+            ]
+        )
+        directory.tenant_statuses[ACME] = "suspended"
+        services = sso.SsoServices(directory, FakeClaims(), self._audit())
+        claims = {
+            "sub": "uid-9",
+            "user_id": "uid-9",
+            "email": "new@acme.test",
+            "email_verified": True,
+            "firebase": {"sign_in_provider": "google.com"},
+        }
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(claims, services, now=NOW)
+        assert exc.value.detail == sso.SUSPENDED
+        assert directory.provisioned == []

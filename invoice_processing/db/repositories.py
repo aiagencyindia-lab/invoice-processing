@@ -1758,11 +1758,16 @@ class PgApprovalRepository:
             return self._step_dict(step)
 
     def tenant_ids(self) -> list[str]:
-        """Every tenant id. The one deliberately cross-tenant read here, like
-        `PgDocumentRepository.tenant_id_for_slug`: the SLA sweep has to visit
-        each tenant to find its overdue steps, and `tenants` has no RLS."""
+        """Every active tenant id. The one deliberately cross-tenant read
+        here, like `PgDocumentRepository.tenant_id_for_slug`: the SLA sweep
+        has to visit each tenant to find its overdue steps, and `tenants` has
+        no RLS. A suspended tenant's approvals stop escalating."""
         with tenant_session("", self.url) as session:
-            return list(session.scalars(select(Tenant.id)))
+            return list(
+                session.scalars(
+                    select(Tenant.id).where(Tenant.status == "active")
+                )
+            )
 
     def manager_of(self, tenant_id: str, email: str) -> str | None:
         with tenant_session(tenant_id, self.url) as session:
@@ -3054,7 +3059,9 @@ class DomainTaken(Exception):
     """This domain is already bound, by this tenant or another."""
 
 
-def _user_dict(u: User, tenant_name: str | None) -> dict:
+def _user_dict(
+    u: User, tenant_name: str | None, tenant_status: str | None = None
+) -> dict:
     return {
         "id": u.id,
         "email": u.email,
@@ -3064,6 +3071,7 @@ def _user_dict(u: User, tenant_name: str | None) -> dict:
         "display_name": u.display_name,
         "last_login_at": u.last_login_at,
         "tenant_name": tenant_name,
+        "tenant_status": tenant_status,
     }
 
 
@@ -3071,7 +3079,7 @@ class PgUserDirectory:
     """The users rows as the request path reads them.
 
     Small on purpose: `find` is on every authenticated request, so it is one
-    statement -- the row and its tenant's name together; the writes happen
+    statement -- the row and its tenant's name and status together; the writes happen
     once per sign-in at most.
     """
 
@@ -3091,7 +3099,7 @@ class PgUserDirectory:
         wanted = (email or "").strip().lower()
         with tenant_session(tenant_id, self.url) as session:
             found = session.execute(
-                select(User, Tenant.name)
+                select(User, Tenant.name, Tenant.status)
                 .outerjoin(Tenant, Tenant.id == User.tenant_id)
                 .where(
                     User.tenant_id == tenant_id,
@@ -3102,7 +3110,15 @@ class PgUserDirectory:
             ).first()
             if found is None:
                 return None
-            return _user_dict(found[0], found[1])
+            return _user_dict(found[0], found[1], found[2])
+
+    def tenant_status(self, tenant_id: str) -> str | None:
+        """The tenant's status, for a caller with no users row to join it
+        through. None when there is no tenants row at all."""
+        with tenant_session(tenant_id, self.url) as session:
+            return session.scalar(
+                select(Tenant.status).where(Tenant.id == tenant_id)
+            )
 
     def get(self, tenant_id: str, user_id: str) -> dict | None:
         with tenant_session(tenant_id, self.url) as session:
@@ -3226,6 +3242,9 @@ class PgUserDirectory:
                 "id": row.id,
                 "tenant_id": row.tenant_id,
                 "tenant_name": self._tenant_name(session, row.tenant_id),
+                "tenant_status": session.scalar(
+                    select(Tenant.status).where(Tenant.id == row.tenant_id)
+                ),
                 "domain": row.domain,
                 "provider": row.provider,
                 "default_role": row.default_role,

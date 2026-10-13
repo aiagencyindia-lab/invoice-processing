@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple
 
 from .api.auth import AuthError, Principal, principal_from_claims
+from .offboarding import OPEN
 
 logger = logging.getLogger(__name__)
 
@@ -71,28 +72,75 @@ def _unavailable(exc: Exception) -> AuthError:
     )
 
 
+SUSPENDED = (
+    "This organisation's account is suspended. Contact support to restore it."
+)
+
+
+def _record_refusal(services: SsoServices, ctx, payload: dict) -> None:
+    # ponytail: no database means no sink, and the refusal goes unrecorded;
+    # the same rule as the rest of sign-in.
+    if services.audit is None:
+        return
+    try:
+        services.audit.emit(ctx, "sign_in_refused", payload)
+    except Exception as exc:  # a refusal nobody can see is the real failure
+        raise _unavailable(exc) from exc
+
+
+def _refuse_closed_tenant(
+    status: str | None,
+    tenant_id: str,
+    email: str,
+    uid: str,
+    role: str,
+    services: SsoServices,
+) -> None:
+    """Refuse a suspended or purged tenant when there is no users row."""
+    if status in OPEN:
+        return
+    # A purged tenant's trail is gone; writing to it would start a new one.
+    if status != "purged":
+        ctx = Principal(
+            user_id=uid, email=email, tenant_id=tenant_id, role=role
+        ).context()
+        _record_refusal(
+            services, ctx, {"email": email, "reason": "tenant_suspended"}
+        )
+    raise AuthError(SUSPENDED, status_code=403)
+
+
+def _tenant_status(services: SsoServices, tenant_id: str) -> str | None:
+    try:
+        return services.directory.tenant_status(tenant_id)
+    except Exception as exc:
+        raise _unavailable(exc) from exc
+
+
 def _refuse_inactive(
     row: dict, tenant_id: str, email: str, services: SsoServices
 ) -> None:
-    if row.get("is_active") is not False:
+    status = row.get("tenant_status")
+    if status not in OPEN:
+        reason = "tenant_suspended"
+    elif row.get("is_active") is False:
+        reason = "deactivated"
+    else:
         return
-    # ponytail: no database means no sink, and the refusal goes unrecorded;
-    # the same rule as the rest of sign-in.
-    if services.audit is not None:
+    if status != "purged":
         ctx = Principal(
             user_id=str(row.get("uid") or ""),
             email=email,
             tenant_id=tenant_id,
             role=str(row.get("role") or "viewer"),
         ).context()
-        try:
-            services.audit.emit(
-                ctx,
-                "sign_in_refused",
-                {"email": email, "user_id": row["id"], "reason": "deactivated"},
-            )
-        except Exception as exc:  # a refusal nobody can see is the real failure
-            raise _unavailable(exc) from exc
+        _record_refusal(
+            services,
+            ctx,
+            {"email": email, "user_id": row["id"], "reason": reason},
+        )
+    if reason == "tenant_suspended":
+        raise AuthError(SUSPENDED, status_code=403)
     raise AuthError(
         "This account has been deactivated. Ask an admin of "
         f"{row.get('tenant_name') or 'your organisation'} to reactivate it.",
@@ -128,6 +176,15 @@ def enforce_active(
         raise _unavailable(exc) from exc
     if row is not None:
         _refuse_inactive(row, principal.tenant_id, principal.email, services)
+    else:
+        _refuse_closed_tenant(
+            _tenant_status(services, principal.tenant_id),
+            principal.tenant_id,
+            principal.email,
+            principal.user_id,
+            principal.role,
+            services,
+        )
     return principal
 
 
@@ -146,6 +203,14 @@ def resolve_principal(
         except Exception as exc:
             raise _unavailable(exc) from exc
         if row is None:
+            _refuse_closed_tenant(
+                _tenant_status(services, base.tenant_id),
+                base.tenant_id,
+                base.email,
+                base.user_id,
+                base.role,
+                services,
+            )
             # Deactivation cannot reach a person with no row; say so.
             logger.warning(
                 "claimed token for uid %s has no users row in %s; claim role %s stands",
@@ -191,6 +256,10 @@ def resolve_principal(
     tenant_id = bound["tenant_id"]
     uid = str(claims.get("user_id") or claims.get("sub") or "")
     role = str(bound["default_role"])
+    # Before any provisioning: a suspended tenant gains no one.
+    _refuse_closed_tenant(
+        bound.get("tenant_status"), tenant_id, email, uid, role, services
+    )
     created = False
     try:
         row = services.directory.find(tenant_id, email)

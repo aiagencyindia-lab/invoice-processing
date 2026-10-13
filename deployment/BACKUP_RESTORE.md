@@ -1,0 +1,102 @@
+# Backup and restore
+
+Targets (SECURITY.md): RPO minutes, RTO 4 hours, a drill every 6 months
+and after any production restore.
+
+## What is backed up
+
+- **Cloud SQL:** automated daily backups, 7 retained; point-in-time
+  recovery with 7 days of transaction logs. Check both are on: Cloud SQL →
+  instance → Backups.
+- **Cloud Storage (documents):** soft delete, 7 days. Documents are written
+  once and never modified, so soft delete covers accidental deletion; there
+  is no object versioning.
+
+## Restoring the database
+
+1. Restore into a **new instance** (Backups → Restore, or point-in-time
+   clone to the moment before the incident). Never over the live one.
+2. Run `db/bootstrap.sql` §2 on it as the admin user (the command is in
+   deployment/README.md). A restore carries the tables; re-running §2 is
+   what guarantees the app role's grants and the audit REVOKE.
+3. Check it, as the owner role:
+
+       python -m invoice_processing.db.restore_check \
+           --restored "<owner url of the new instance>"
+
+   Exit 0 and `PASS`, or stop and read each `FAIL` line. Note the
+   "newest audit event" (the effective restore point) and every
+   "not active" tenant.
+4. **Re-purge.** A backup taken before a purge brings that tenant back as
+   `suspended`, because its record lives in the same database. For every
+   entry in the offboarding register whose `purged_at` is after the
+   restore point, run `purge-tenant --tenant <slug> --operator <you>
+   --confirm <slug> --skip-grace --reason "re-purge after restore"`
+   (deployment/OFFBOARDING.md). Backups last 7 days, so the exposure is
+   at most 7 days old. A tenant listed as `purged` that still shows rows
+   in the counts is purged again the same way (no `--skip-grace` needed).
+5. Point `DATABASE_URL` and `MIGRATE_DATABASE_URL` (Railway, both
+   services) at the new instance and redeploy.
+
+## Restoring documents
+
+Cloud Storage → bucket → Soft-deleted objects → restore. A purge's
+deletions are also soft-deleted for 7 days; do not restore those.
+
+## Local drill
+
+Proves the procedure and the check without production. `pg_dump`,
+`pg_restore` and `psql` run inside the Postgres containers (the dev
+machine has none). From the repo root, in zsh:
+
+    docker run -d --rm --name drill-src -e POSTGRES_PASSWORD=postgres \
+        -e POSTGRES_DB=ledgerly -p 55433:5432 postgres:16
+    docker run -d --rm --name drill-dst -e POSTGRES_PASSWORD=postgres \
+        -e POSTGRES_DB=ledgerly -p 55434:5432 postgres:16
+    sleep 5  # both servers accept connections
+    V=(-v ON_ERROR_STOP=1 -v owner=ledgerly_owner -v app=ledgerly_app \
+       -v owner_pw=ownerpw -v app_pw=apppw)
+    export CLOUD_SQL_INSTANCE="" GCS_BUCKET="" PUBSUB_TOPIC=""
+    SRC=localhost:55433/ledgerly DST=localhost:55434/ledgerly
+
+    # Source, built the way production is: §1, migrate as owner, §2.
+    sed -n '1,/^-- §2/p' invoice_processing/db/bootstrap.sql |
+        docker exec -i drill-src psql -q -U postgres -d ledgerly "${V[@]}" -f -
+    MIGRATE_DATABASE_URL=postgresql+pg8000://ledgerly_owner:ownerpw@$SRC \
+        ./.venv/bin/python -m invoice_processing.db.migrate
+    sed -n '/^-- §2/,$p' invoice_processing/db/bootstrap.sql |
+        docker exec -i drill-src psql -q -U postgres -d ledgerly "${V[@]}" -f -
+
+    # Seed it through the app role.
+    export DATABASE_URL=postgresql+pg8000://ledgerly_app:apppw@$SRC
+    P=(./.venv/bin/python -m invoice_processing.admin.provision)
+    $P create-tenant --slug drill-a --name "Drill A"
+    $P create-tenant --slug drill-b --name "Drill B"
+    $P add-user --tenant drill-a --email ap@drill-a.test --role clerk
+    $P add-user --tenant drill-b --email ap@drill-b.test --role admin
+    $P suspend-tenant --tenant drill-b --operator <you> --reason drill
+    unset DATABASE_URL
+
+    # Dump, restore into a fresh server with only the roles, then §2.
+    docker exec drill-src pg_dump -U postgres -Fc ledgerly -f /tmp/l.dump
+    docker cp drill-src:/tmp/l.dump /tmp/l.dump
+    docker cp /tmp/l.dump drill-dst:/tmp/l.dump
+    sed -n '1,/^-- §2/p' invoice_processing/db/bootstrap.sql |
+        docker exec -i drill-dst psql -q -U postgres -d ledgerly "${V[@]}" -f -
+    docker exec drill-dst pg_restore -U postgres -d ledgerly /tmp/l.dump
+    sed -n '/^-- §2/,$p' invoice_processing/db/bootstrap.sql |
+        docker exec -i drill-dst psql -q -U postgres -d ledgerly "${V[@]}" -f -
+
+    ./.venv/bin/python -m invoice_processing.db.restore_check \
+        --restored postgresql+pg8000://ledgerly_owner:ownerpw@$DST \
+        --source postgresql+pg8000://ledgerly_owner:ownerpw@$SRC
+    docker stop drill-src drill-dst; rm /tmp/l.dump
+
+Expected: exit 0, `PASS`, `not active: drill-b: suspended`, and row
+counts for both tenants (tenants' users, drill-b's suspension event).
+
+## Drill log
+
+| Date | Where | Restore point | Result | By |
+|---|---|---|---|---|
+| 2026-10-14 | Local drill (Postgres 16 containers, `pg_dump -Fc` / `pg_restore`), head `d1a2b3c4e5f6` | 2026-10-13 18:38 UTC (newest audit event) | PASS: schema head, forced RLS and policies on all 26 tables, app role NOBYPASSRLS without UPDATE/DELETE/TRUNCATE on `audit_events`, row counts equal to the source for both tenants, suspended tenant listed | Claude Code, for vineetyad |
