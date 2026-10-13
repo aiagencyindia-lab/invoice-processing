@@ -163,6 +163,19 @@ class TestConfigure:
 
 
 class TestSentry:
+    def test_no_test_reaches_the_real_sentry(self):
+        """The developer's .env carries a real SENTRY_DSN, loaded into the
+        environment at import. A test that starts a service (the worker's
+        failed-migration test does) then sent its deliberate errors to the
+        real project, and the run ended waiting on Sentry's flush."""
+        import os  # noqa: PLC0415
+
+        # Names only: a failure here must never print the DSN itself.
+        set_names = {name for name, value in os.environ.items() if value}
+        assert "SENTRY_DSN" not in set_names
+        assert obs.init_sentry("worker") is False
+        assert not obs.sentry_sdk.get_client().is_active()
+
     def test_off_without_a_dsn(self, monkeypatch):
         monkeypatch.delenv("SENTRY_DSN", raising=False)
         calls = []

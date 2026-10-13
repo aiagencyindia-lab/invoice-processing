@@ -94,6 +94,20 @@ def resolve_adapters_afresh(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def never_report_to_real_sentry(monkeypatch):
+    """No test sends an event to the real Sentry project.
+
+    `SENTRY_DSN` is set in `.env`, which `core.config` loads into the
+    environment at import, so a test that starts a service (worker main,
+    the API lifespan) switched Sentry on and reported its deliberate errors
+    to production monitoring. Blanked rather than deleted: a later
+    `load_dotenv` does not override a variable that exists, but would put a
+    deleted one back. Tests of Sentry's own setup set a fake DSN themselves.
+    """
+    monkeypatch.setenv("SENTRY_DSN", "")
+
+
+@pytest.fixture(autouse=True)
 def never_touch_real_cloud_storage(monkeypatch):
     """Fail loudly if a test would construct a real GCS client.
 
