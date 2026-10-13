@@ -322,6 +322,15 @@ def current_principal(request: Request) -> Principal:
     token still identifies the real user rather than being shadowed by the
     bypass.
     """
+    principal = _resolve_principal(request)
+    # For the request's log line. Not a ContextVar: this dependency runs in a
+    # threadpool with a copied context, so a value set here would never reach
+    # the middleware that writes the line. The scope's state is shared.
+    request.state.tenant_id = principal.tenant_id
+    return principal
+
+
+def _resolve_principal(request: Request) -> Principal:
     token = bearer_token(request)
     if token:
         from .. import sso  # noqa: PLC0415

@@ -141,3 +141,71 @@ class TestACrash:
             assert response.headers[key] == value, key
         assert response.headers["x-request-id"]
         assert response.headers["cache-control"] == "no-store"
+
+
+class TestTheRequestLine:
+    def _get(self, client, caplog, path="/api/me", **headers):
+        with caplog.at_level("INFO", logger="invoice_processing.api.service"):
+            response = client.get(path, headers=headers)
+        records = [r for r in caplog.records if r.getMessage() == "request"]
+        return response, records
+
+    def test_one_line_per_request_with_the_id(self, client, caplog):
+        response, records = self._get(client, caplog)
+        [record] = records
+        assert record.method == "GET" and record.route == "/api/me"
+        assert record.status == 200 and record.duration_ms >= 0
+        assert record.request_id == response.headers["x-request-id"]
+
+    def test_a_valid_inbound_id_is_kept(self, client, caplog):
+        response, [record] = self._get(
+            client, caplog, **{"X-Request-Id": "abc-123_XYZ"}
+        )
+        assert response.headers["x-request-id"] == "abc-123_XYZ"
+        assert record.request_id == "abc-123_XYZ"
+
+    @pytest.mark.parametrize("bad", ["x" * 65, "has space", "a%2Fb", "a;b", ""])
+    def test_a_bad_inbound_id_is_replaced(self, client, caplog, bad):
+        response, [record] = self._get(client, caplog, **{"X-Request-Id": bad})
+        issued = response.headers["x-request-id"]
+        assert (
+            issued != bad and len(issued) == 32 and record.request_id == issued
+        )
+
+    def test_the_tenant_is_on_the_line(self, client, caplog):
+        _, [record] = self._get(client, caplog)
+        assert record.tenant_id == CLAIMS["tenant_id"]
+
+    def test_the_tenant_does_not_leak_to_the_next_request(self, client, caplog):
+        self._get(client, caplog)
+        with caplog.at_level("INFO", logger="invoice_processing.api.service"):
+            response = TestClient(app).get("/api/me")  # no token: 401
+        record = [r for r in caplog.records if r.getMessage() == "request"][-1]
+        assert response.status_code == 401
+        assert record.status == 401 and record.tenant_id == ""
+
+    def test_the_crash_line_carries_the_id(self, monkeypatch, caplog):
+        from invoice_processing.api import service  # noqa: PLC0415
+
+        monkeypatch.delenv("AUTH_DISABLED", raising=False)
+        monkeypatch.setattr(auth, "_verifier", FakeVerifier())
+        monkeypatch.setattr(
+            service,
+            "get_cases",
+            lambda: (_ for _ in ()).throw(RuntimeError("down")),
+        )
+        with caplog.at_level("INFO", logger="invoice_processing.api.service"):
+            response = TestClient(
+                app,
+                headers={"Authorization": "Bearer tok"},
+                raise_server_exceptions=False,
+            ).get("/api/invoices")
+        crash = [
+            r
+            for r in caplog.records
+            if r.getMessage().startswith("Unhandled error")
+        ]
+        [line] = [r for r in caplog.records if r.getMessage() == "request"]
+        assert response.status_code == 500
+        assert crash and crash[0].request_id == response.headers["x-request-id"]
+        assert line.status == 500

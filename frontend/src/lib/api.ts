@@ -12,6 +12,9 @@ export class ApiError extends Error {
     /** The raw `detail`, for the refusals that carry structure rather than a
      *  sentence -- a 423 names the lock holder and when it lapses. */
     readonly detail?: unknown,
+    /** The server's X-Request-Id: the key to this request in the server log
+     *  and the audit trail, and what a person quotes when reporting it. */
+    readonly requestId: string | null = null,
   ) {
     super(message);
   }
@@ -33,6 +36,9 @@ export class ApiError extends Error {
       return lock?.holder
         ? `${lock.holder} is editing this invoice until ${clockTime(lock.expires_at)}.`
         : "Someone else is editing this invoice.";
+    }
+    if (this.status >= 500 && this.requestId) {
+      return `Something went wrong (ref ${this.requestId}).`;
     }
     return this.message;
   }
@@ -103,7 +109,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
               )
               .join("\n")
           : response.statusText;
-    throw new ApiError(response.status, message, detail);
+    throw new ApiError(
+      response.status,
+      message,
+      detail,
+      response.headers.get("x-request-id"),
+    );
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
