@@ -195,6 +195,18 @@ class TestSignIn:
             "a stored token goes stale an hour after sign-in"
         )
 
+    def test_an_error_carries_the_request_id_for_support(self):
+        """A 500 shows a reference a person can quote; the id joins the
+        frontend's report to the server log and the audit trail."""
+        api = (FRONTEND / "lib" / "api.ts").read_text(encoding="utf-8")
+        assert 'response.headers.get("x-request-id")' in api
+        assert "requestId" in api
+        assert "(ref " in api
+        # Only the bare 500: a 503 carries a sentence ("... needs a
+        # database") that pages string-match and a person needs to read.
+        assert "this.status === 500 && this.requestId" in api
+        assert "this.status >= 500" not in api
+
     def test_the_server_decides_whether_sign_in_is_required(self):
         """Not a client-side guess: a deployment with authentication disabled
         must never show anyone a sign-in screen."""

@@ -254,3 +254,15 @@ class TestSlugs:
     def test_it_avoids_collisions(self):
         assert signup.slug_for("Acme", {"acme"}) == "acme-2"
         assert signup.slug_for("Acme", {"acme", "acme-2"}) == "acme-3"
+
+
+def test_sign_up_logs_the_tenant_not_the_person(env, caplog):
+    """Token format is `<email>|<uid>|<tenant>|<verified>`; a blank verified
+    means True (see this file's token helper)."""
+    with caplog.at_level("INFO", logger="invoice_processing.api.signup"):
+        response = client("a@b.test|uid-1").post(
+            "/api/signup", json={"organisation": "Acme"}
+        )
+    assert response.status_code in (200, 201), response.text
+    assert "uid-1" in caplog.text
+    assert "@" not in caplog.text

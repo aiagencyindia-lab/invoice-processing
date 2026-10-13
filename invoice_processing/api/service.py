@@ -32,6 +32,8 @@ import io
 import json
 import logging
 import os
+import re
+import time
 from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timezone
 from typing import Annotated, Any
@@ -45,6 +47,7 @@ from .. import (
     approvals,
     case_projection,
     exports,
+    observability,
     paths,
     po_matching,
 )
@@ -95,6 +98,9 @@ _HTML_CSP = (
 )
 
 
+_REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
 @app.middleware("http")
 async def _identify_request(request, call_next):
     """Give one request one id, and remember where it came from.
@@ -102,10 +108,15 @@ async def _identify_request(request, call_next):
     Both are audit columns the trail declared and never filled: every event in
     production had a null `request_id` and a null `ip`, so two events from the
     same action could not be tied together and no action could be placed.
+    It also writes one log line per request, which uvicorn's access log
+    (turned off in observability.configure) used to do without the id.
     """
     from uuid import uuid4  # noqa: PLC0415
 
-    request_id = request.headers.get("x-request-id") or uuid4().hex
+    offered = request.headers.get("x-request-id", "")
+    # The audit column is 64 characters and a log search keys on this value:
+    # anything else a client offers is replaced, not stored.
+    request_id = offered if _REQUEST_ID.fullmatch(offered) else uuid4().hex
     # Railway terminates TLS in front of the app, so `request.client` is the
     # proxy. The first entry of the forwarded chain is the actual caller.
     forwarded = request.headers.get("x-forwarded-for", "")
@@ -115,11 +126,19 @@ async def _identify_request(request, call_next):
 
     id_token = auth.current_request_id.set(request_id)
     ip_token = auth.current_client_ip.set(client)
+    tenant_token = observability.current_tenant_id.set("")
+    started = time.perf_counter()
+    status = 500
     try:
         response = await call_next(request)
+        status = response.status_code
     except Exception:
         # Caught here rather than left to Starlette, whose 500 would go out
-        # without the request id or any of the headers below.
+        # without the request id or any of the headers below. The tenant is
+        # set first so this line, and the Sentry event it raises, name it.
+        observability.current_tenant_id.set(
+            getattr(request.state, "tenant_id", "")
+        )
         logger.exception(
             "Unhandled error on %s %s", request.method, request.url.path
         )
@@ -127,8 +146,31 @@ async def _identify_request(request, call_next):
             status_code=500, content={"detail": "Internal Server Error"}
         )
     finally:
+        # Before the resets, so the line still carries the ids. The tenant
+        # comes from auth.current_principal via the shared request state.
+        observability.current_tenant_id.set(
+            getattr(request.state, "tenant_id", "")
+        )
+        # The route template groups lines; an unmatched path is whatever a
+        # scanner typed, so it is not one.
+        route = getattr(request.scope.get("route"), "path", "<unmatched>")
+        # Every open tab polls the status every few seconds; at INFO that
+        # would be most of the retained log. Failures still show.
+        quiet = route == "/api/system/status" and status == 200
+        logger.log(
+            logging.DEBUG if quiet else logging.INFO,
+            "request",
+            extra={
+                "method": request.method,
+                "route": route,
+                "status": status,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                "ip": client,
+            },
+        )
         auth.current_request_id.reset(id_token)
         auth.current_client_ip.reset(ip_token)
+        observability.current_tenant_id.reset(tenant_token)
     response.headers["x-request-id"] = request_id
     response.headers.update(_FIXED_HEADERS)
     if preflight.is_deployed():
@@ -163,6 +205,7 @@ async def _lifespan(_app: FastAPI):
     """
     from .preflight import enforce  # noqa: PLC0415
 
+    observability.configure("api")
     enforce()
 
     if _database_configured():

@@ -456,6 +456,7 @@ class TestEnqueue:
             "document_id": "doc-9",
             "sha256": "deadbeef",
             "storage_key": "documents/deadbeef.pdf",
+            "request_id": "",  # none in this context; the API passes its own
         }
 
     def test_the_tenant_travels_as_an_attribute_too(self, queue):
@@ -1275,6 +1276,7 @@ class TestRematchJobs:
             "tenant_id": "tenant-acme",
             "case_id": "case-7",
             "po_number": "PO-1",
+            "request_id": "",
         }
         assert runner.REMATCH == "case.rematch"
 

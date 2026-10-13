@@ -31,12 +31,14 @@ import shutil
 import tempfile
 import threading
 import time
-import traceback
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import sentry_sdk
+
+from .. import observability
 from ..ports import RunContext
 from .queue import Message, Queue
 
@@ -435,8 +437,7 @@ def process_document(
         # because the API answering the browser is a different container from
         # the worker doing the work -- a progress file would be invisible to
         # exactly the process that has to report it.
-        def publish_step(record: dict) -> None:
-            cases.put_artifact(ctx, "progress", record)
+        publish_step = _step_publisher(ctx, cases)
 
         from ..api import service  # noqa: PLC0415
 
@@ -861,6 +862,47 @@ class Worker:
     # -- one message -------------------------------------------------------
 
     def handle(self, message: Message) -> str:
+        """Process one message under its request's ids, and log one line.
+
+        The ids come from the payload (a message from before they were
+        carried falls back to its own id), so every log line and audit row
+        the job writes can be joined to the API request that caused it.
+        """
+        payload = message.payload
+        tokens = (
+            observability.current_request_id.set(
+                str(payload.get("request_id") or message.id)
+            ),
+            observability.current_tenant_id.set(
+                str(payload.get("tenant_id") or "")
+            ),
+            observability.current_document_id.set(
+                str(payload.get("document_id") or payload.get("case_id") or "")
+            ),
+        )
+        started = time.perf_counter()
+        outcome = "error"
+        try:
+            outcome = self._handle(message)
+            return outcome
+        finally:
+            logger.info(
+                "job",
+                extra={
+                    "outcome": outcome,
+                    "attempt": message.delivery_attempt or 1,
+                    "duration_ms": round(
+                        (time.perf_counter() - started) * 1000, 1
+                    ),
+                    "message_id": message.id,
+                    "type": payload.get("type", ""),
+                },
+            )
+            observability.current_request_id.reset(tokens[0])
+            observability.current_tenant_id.reset(tokens[1])
+            observability.current_document_id.reset(tokens[2])
+
+    def _handle(self, message: Message) -> str:
         """Process one message. Returns what happened, for the caller to log.
 
         Every path ends in exactly one of ack, nack or dead-letter. A path that
@@ -896,23 +938,23 @@ class Worker:
             result = self.handler(message)
         except PermanentFailure as exc:
             self.claims.complete(tenant_id, document_id, "failed")
-            self._dead_letter(message, f"Permanent failure: {exc}")
+            logger.exception("Permanent failure for %s", document_id)
+            sentry_sdk.capture_exception(exc)
+            self._dead_letter(message, f"Permanent failure: {_brief(exc)}")
             return "dead-lettered:permanent"
         except Exception as exc:
             self.claims.release(tenant_id, document_id)
             attempt = self._count_failure(tenant_id, document_id, message, exc)
-            logger.warning(
-                "Attempt %s/%s failed for %s: %s",
+            # The traceback goes to the log (and Sentry), not the audit row.
+            logger.exception(
+                "Attempt %s/%s failed for %s",
                 attempt,
                 self.max_attempts,
                 document_id,
-                exc,
             )
             if attempt >= self.max_attempts:
-                self._dead_letter(
-                    message,
-                    f"Failed {attempt} times: {exc}\n{traceback.format_exc()}",
-                )
+                sentry_sdk.capture_exception(exc)
+                self._dead_letter(message, _brief(exc))
                 return "dead-lettered:exhausted"
             self.queue.nack(message)
             return "retry"
@@ -952,7 +994,8 @@ class Worker:
                 RunContext(
                     tenant_id=tenant_id,
                     case_id=case_id,
-                    run_id=message.id,
+                    run_id=observability.current_request_id.get("")
+                    or message.id,
                     actor="worker",
                 ),
                 service.get_cases(),
@@ -967,11 +1010,16 @@ class Worker:
             attempt = self._count_failure(
                 tenant_id, case_id, message, exc, log=log
             )
+            logger.exception(
+                "Re-match attempt %s/%s failed for %s",
+                attempt,
+                self.max_attempts,
+                case_id,
+            )
             if attempt >= self.max_attempts:
+                sentry_sdk.capture_exception(exc)
                 self._dead_letter(
-                    message,
-                    f"Failed {attempt} times: {exc}",
-                    event="rematch_dead_lettered",
+                    message, _brief(exc), event="rematch_dead_lettered"
                 )
                 return "dead-lettered:exhausted"
             self.queue.nack(message)
@@ -1043,7 +1091,7 @@ class Worker:
         ctx = RunContext(
             tenant_id=tenant_id,
             case_id=payload.get("case_id") or document["id"],
-            run_id=message.id,
+            run_id=observability.current_request_id.get("") or message.id,
             actor="worker",
         )
         return process_document(
@@ -1144,7 +1192,10 @@ class Worker:
             # the worker wrote -- so "what happened to this document" could
             # not be asked of the trail at all.
             RunContext(
-                tenant_id=tenant_id, case_id=document_id, actor="worker"
+                tenant_id=tenant_id,
+                case_id=document_id,
+                run_id=observability.current_request_id.get(""),
+                actor="worker",
             ),
             event,
             {"document_id": document_id, **payload},
@@ -1158,6 +1209,37 @@ def _artifact_map() -> dict[str, str]:
     return dict(ARTIFACT_MAP)
 
 
+def _step_publisher(ctx: RunContext, cases) -> Callable[[dict], None]:
+    """The pipeline's on_step hook: store the progress record and log a line.
+
+    on_step fires as a step *starts*, so the time since the last call is the
+    previous step's; the line names that step rather than mislabel it.
+    """
+    last = {"at": time.perf_counter(), "key": ""}
+
+    def publish_step(record: dict) -> None:
+        now = time.perf_counter()
+        logger.info(
+            "pipeline step",
+            extra={
+                "step": record.get("key", ""),
+                "label": record.get("label", ""),
+                "index": record.get("step"),
+                "previous_step": last["key"],
+                "previous_step_ms": round((now - last["at"]) * 1000, 1),
+            },
+        )
+        last.update(at=now, key=record.get("key", ""))
+        cases.put_artifact(ctx, "progress", record)
+
+    return publish_step
+
+
+def _brief(exc: BaseException) -> str:
+    """What a dead letter's audit row records: the exception, not its stack."""
+    return f"{type(exc).__name__}: {str(exc)[:300]}"
+
+
 def enqueue_document(
     queue: Queue, ctx: RunContext, result: Any, force_invoice: bool = False
 ) -> str:
@@ -1169,6 +1251,9 @@ def enqueue_document(
         "document_id": result.document_id,
         "sha256": result.sha256,
         "storage_key": result.storage_key,
+        # The request that caused this job: its log lines and audit rows
+        # carry it, so they join the API's line for the upload.
+        "request_id": ctx.run_id or "",
     }
     if force_invoice:
         payload["force_invoice"] = True
@@ -1176,7 +1261,11 @@ def enqueue_document(
 
 
 def enqueue_rematch(
-    queue: Queue, tenant_id: str, case_id: str, po_number: str
+    queue: Queue,
+    tenant_id: str,
+    case_id: str,
+    po_number: str,
+    request_id: str = "",
 ) -> str:
     """Publish a re-match of one held case after a goods receipt."""
     return queue.publish(
@@ -1185,6 +1274,7 @@ def enqueue_rematch(
             "tenant_id": tenant_id,
             "case_id": case_id,
             "po_number": po_number,
+            "request_id": request_id,
         },
         tenant_id=tenant_id,
     )

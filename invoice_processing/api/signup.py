@@ -161,7 +161,9 @@ def sign_up(
         "tenant_self_provisioned",
         {"slug": slug, "email": email},
     )
-    logger.info("Self sign-up created tenant %s for %s", slug, email)
+    # The uid, not the address: log lines are read by more people than the
+    # audit trail, which keeps the address on its own row.
+    logger.info("Self sign-up created tenant %s for uid %s", slug, uid)
 
     return {
         "tenant": tenant,

@@ -45,6 +45,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from .. import po_matching
+from . import auth
 from .auth import Principal, require_role
 
 logger = logging.getLogger(__name__)
@@ -469,7 +470,13 @@ def queue_rematches(principal: Principal, po_numbers: list[str]) -> int:
             for case_id in cases.held_by_receipt(
                 principal.tenant_id, po_number
             ):
-                enqueue_rematch(queue, principal.tenant_id, case_id, po_number)
+                enqueue_rematch(
+                    queue,
+                    principal.tenant_id,
+                    case_id,
+                    po_number,
+                    request_id=auth.current_request_id.get(""),
+                )
                 queued += 1
     except Exception as exc:
         logger.exception("Re-match jobs could not be queued")

@@ -35,6 +35,10 @@ def test_security_policy_says_how_to_report_and_what_ci_enforces():
         "audit-allowlist.json",
         "pull request",
         "not enforced",
+        "Logs and monitoring",
+        "request id",
+        "SENTRY_DSN",
+        "audit trail",
     ):
         assert phrase in text, phrase
 
