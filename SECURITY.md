@@ -53,8 +53,10 @@ Errors are reported to Sentry when `SENTRY_DSN` is set: unhandled request
 errors, jobs that exhaust their retries, and anything logged at ERROR. PII
 collection is off, request bodies are never sent, and `Authorization`,
 `Cookie` and `X-Dev-Principal` headers are removed before an event leaves
-the process. Lines never carry bearer tokens, request bodies, bank account
-numbers or email addresses; exception text is logged as raised.
+the process. Lines never carry bearer tokens, request bodies or bank
+account numbers, and no line names an email address on purpose. Exception text is
+logged as raised, so a database error can repeat a value it was given (a
+duplicate address, say); that is the one way such a value reaches a log.
 
 ## Known gap
 

@@ -22,12 +22,13 @@ import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
 
 HANDLER_NAME = "ledgerly"
-TEXT_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+TEXT_FORMAT = "%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s"
 _DROP_HEADERS = {"authorization", "cookie", "x-dev-principal"}
 # LogRecord's own attributes; anything else on a record came from `extra=`.
 _STANDARD = set(vars(logging.LogRecord("", 0, "", 0, "", (), None))) | {
     "message",
     "asctime",
+    "color_message",  # uvicorn's ANSI copy of its own message
 }
 
 # The request id is set by the API middleware and by the worker per job;
@@ -42,6 +43,9 @@ def _request_id() -> str:
 
 
 def _stamp(record: logging.LogRecord) -> None:
+    # Because every record is born with these three attributes, the stdlib
+    # refuses `extra={"request_id": ...}` (KeyError: "Attempt to overwrite"),
+    # raised in the caller. Set the ContextVar instead.
     record.request_id = _request_id()
     record.tenant_id = current_tenant_id.get("")
     record.document_id = current_document_id.get("")
@@ -125,7 +129,15 @@ def configure(service: str) -> None:
         JsonFormatter() if _json_wanted() else logging.Formatter(TEXT_FORMAT)
     )
     root.addHandler(handler)
-    root.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
+    level = os.getenv("LOG_LEVEL", "INFO").upper()
+    try:
+        root.setLevel(level)
+    except ValueError:
+        # A typo must not stop the API from starting.
+        root.setLevel(logging.INFO)
+        logging.getLogger(__name__).warning(
+            "LOG_LEVEL %r is not a level; using INFO", level
+        )
     # uvicorn's lines go through the same handler; its access log is replaced
     # by the API's own request line (service._identify_request).
     for name in ("uvicorn", "uvicorn.error"):
@@ -143,6 +155,12 @@ def scrub(event: dict, hint: dict) -> dict:
         event["request"]["headers"] = {
             k: v for k, v in headers.items() if k.lower() not in _DROP_HEADERS
         }
+    elif isinstance(headers, list):  # [[name, value], ...]
+        event["request"]["headers"] = [
+            pair
+            for pair in headers
+            if str(pair[0]).lower() not in _DROP_HEADERS
+        ]
     tags = event.setdefault("tags", {})
     tags.update(
         request_id=_request_id(),

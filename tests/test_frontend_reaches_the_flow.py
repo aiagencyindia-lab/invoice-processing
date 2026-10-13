@@ -202,6 +202,10 @@ class TestSignIn:
         assert 'response.headers.get("x-request-id")' in api
         assert "requestId" in api
         assert "(ref " in api
+        # Only the bare 500: a 503 carries a sentence ("... needs a
+        # database") that pages string-match and a person needs to read.
+        assert "this.status === 500 && this.requestId" in api
+        assert "this.status >= 500" not in api
 
     def test_the_server_decides_whether_sign_in_is_required(self):
         """Not a client-side guess: a deployment with authentication disabled

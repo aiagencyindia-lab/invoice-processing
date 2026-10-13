@@ -437,21 +437,7 @@ def process_document(
         # because the API answering the browser is a different container from
         # the worker doing the work -- a progress file would be invisible to
         # exactly the process that has to report it.
-        last = [time.perf_counter()]
-
-        def publish_step(record: dict) -> None:
-            now = time.perf_counter()
-            logger.info(
-                "pipeline step",
-                extra={
-                    "step": record.get("key", ""),
-                    "label": record.get("label", ""),
-                    "index": record.get("step"),
-                    "elapsed_ms": round((now - last[0]) * 1000, 1),
-                },
-            )
-            last[0] = now
-            cases.put_artifact(ctx, "progress", record)
+        publish_step = _step_publisher(ctx, cases)
 
         from ..api import service  # noqa: PLC0415
 
@@ -1221,6 +1207,32 @@ def _artifact_map() -> dict[str, str]:
     from ..core.config import ARTIFACT_MAP  # noqa: PLC0415
 
     return dict(ARTIFACT_MAP)
+
+
+def _step_publisher(ctx: RunContext, cases) -> Callable[[dict], None]:
+    """The pipeline's on_step hook: store the progress record and log a line.
+
+    on_step fires as a step *starts*, so the time since the last call is the
+    previous step's; the line names that step rather than mislabel it.
+    """
+    last = {"at": time.perf_counter(), "key": ""}
+
+    def publish_step(record: dict) -> None:
+        now = time.perf_counter()
+        logger.info(
+            "pipeline step",
+            extra={
+                "step": record.get("key", ""),
+                "label": record.get("label", ""),
+                "index": record.get("step"),
+                "previous_step": last["key"],
+                "previous_step_ms": round((now - last["at"]) * 1000, 1),
+            },
+        )
+        last.update(at=now, key=record.get("key", ""))
+        cases.put_artifact(ctx, "progress", record)
+
+    return publish_step
 
 
 def _brief(exc: BaseException) -> str:

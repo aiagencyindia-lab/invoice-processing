@@ -37,7 +37,9 @@ export class ApiError extends Error {
         ? `${lock.holder} is editing this invoice until ${clockTime(lock.expires_at)}.`
         : "Someone else is editing this invoice.";
     }
-    if (this.status >= 500 && this.requestId) {
+    // Only the bare 500, whose detail says nothing. A 503 carries a
+    // sentence ("... needs a database") that pages match and people read.
+    if (this.status === 500 && this.requestId) {
       return `Something went wrong (ref ${this.requestId}).`;
     }
     return this.message;

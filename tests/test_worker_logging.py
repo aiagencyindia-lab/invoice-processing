@@ -127,3 +127,27 @@ def test_a_dead_letter_keeps_the_traceback_out_of_the_audit_row(
     failed = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert failed and "extractor exploded" in failed[0].exc_text
     assert len(captured) == 1 and isinstance(captured[0], RuntimeError)
+
+
+def test_a_step_line_names_the_step_that_took_the_time(caplog):
+    """on_step fires when a step starts, so the time since the last call
+    belongs to the previous step; the line says which."""
+    published = []
+
+    class Cases:
+        def put_artifact(self, ctx, kind, record):
+            published.append(record)
+
+    ctx = runner.RunContext(tenant_id="acme", case_id="c-1")
+    publish = runner._step_publisher(ctx, Cases())
+    with caplog.at_level("INFO", logger="invoice_processing.worker.runner"):
+        publish({"step": 1, "key": "classification", "label": "Classifier"})
+        publish({"step": 2, "key": "extraction", "label": "Extractor"})
+    first, second = [
+        r for r in caplog.records if r.getMessage() == "pipeline step"
+    ]
+    assert first.step == "classification" and first.previous_step == ""
+    assert second.step == "extraction"
+    assert second.previous_step == "classification"
+    assert second.previous_step_ms >= 0
+    assert len(published) == 2

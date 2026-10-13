@@ -147,8 +147,14 @@ async def _identify_request(request, call_next):
         observability.current_tenant_id.set(
             getattr(request.state, "tenant_id", "")
         )
-        route = getattr(request.scope.get("route"), "path", request.url.path)
-        logger.info(
+        # The route template groups lines; an unmatched path is whatever a
+        # scanner typed, so it is not one.
+        route = getattr(request.scope.get("route"), "path", "<unmatched>")
+        # Every open tab polls the status every few seconds; at INFO that
+        # would be most of the retained log. Failures still show.
+        quiet = route == "/api/system/status" and status == 200
+        logger.log(
+            logging.DEBUG if quiet else logging.INFO,
             "request",
             extra={
                 "method": request.method,

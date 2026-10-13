@@ -209,3 +209,21 @@ class TestTheRequestLine:
         assert response.status_code == 500
         assert crash and crash[0].request_id == response.headers["x-request-id"]
         assert line.status == 500
+
+
+class TestTheRequestLineStaysReadable:
+    def test_the_status_poll_is_not_an_info_line(self, client, caplog):
+        """Every open tab polls /api/system/status every 5 s: as INFO that
+        would be most of a 7-day log window."""
+        with caplog.at_level("INFO", logger="invoice_processing.api.service"):
+            client.get("/api/system/status")
+        assert not [r for r in caplog.records if r.getMessage() == "request"]
+        with caplog.at_level("DEBUG", logger="invoice_processing.api.service"):
+            client.get("/api/system/status")
+        assert [r for r in caplog.records if r.getMessage() == "request"]
+
+    def test_an_unmatched_path_does_not_become_a_route(self, client, caplog):
+        with caplog.at_level("INFO", logger="invoice_processing.api.service"):
+            client.get("/wp-admin/../../etc/passwd")
+        [line] = [r for r in caplog.records if r.getMessage() == "request"]
+        assert line.route == "<unmatched>" and line.status == 404

@@ -120,7 +120,7 @@ class TestConfigure:
         logging.getLogger("invoice_processing.t").info("local")
         out = capsys.readouterr().out.strip().splitlines()
         assert json.loads(out[0])["msg"] == "deployed"
-        assert out[1].endswith("INFO invoice_processing.t local")
+        assert out[1].endswith("INFO invoice_processing.t [] local")
 
     def test_log_format_overrides_the_environment(self, monkeypatch, capsys):
         monkeypatch.setenv("ENV", "local")
@@ -221,3 +221,45 @@ class TestSentry:
         hint = {"exc_info": (LlmUnavailable, LlmUnavailable("503"), None)}
         event = obs.scrub({"tags": {}}, hint)
         assert event["fingerprint"] == ["llm-unavailable"]
+
+
+class TestReviewFixes:
+    def test_extra_cannot_reuse_the_stamped_names(self):
+        """The ids are on every record from birth, so the stdlib refuses an
+        `extra=` that names them. Pinned so the first person to try finds
+        out here, not in production."""
+        with pytest.raises(KeyError, match="request_id"):
+            # warning, not info: an unconfigured root is at WARNING and a
+            # disabled level returns before the record is ever made.
+            logging.getLogger("invoice_processing.t").warning(
+                "x", extra={"request_id": "abc"}
+            )
+
+    def test_uvicorns_colour_copy_stays_out_of_the_line(self):
+        line = _line(_record("Uvicorn running", color_message="\x1b[1mhi"))
+        assert "color_message" not in line
+
+    def test_a_bad_log_level_falls_back_to_info(self, monkeypatch, capsys):
+        monkeypatch.setenv("LOG_LEVEL", "VERBOSE")
+        monkeypatch.setenv("LOG_FORMAT", "json")
+        obs.configure("api")
+        logging.getLogger("invoice_processing.t").info("still here")
+        out = capsys.readouterr().out
+        assert "still here" in out and "LOG_LEVEL" in out
+
+    def test_the_text_format_shows_the_request_id(self, monkeypatch, capsys):
+        monkeypatch.setenv("LOG_FORMAT", "text")
+        obs.configure("api")
+        token = auth.current_request_id.set("req-text")
+        try:
+            logging.getLogger("invoice_processing.t").info("hi")
+        finally:
+            auth.current_request_id.reset(token)
+        assert "req-text" in capsys.readouterr().out
+
+    def test_scrub_handles_headers_as_pairs(self):
+        event = obs.scrub(
+            {"request": {"headers": [["Authorization", "x"], ["Accept", "y"]]}},
+            {},
+        )
+        assert event["request"]["headers"] == [["Accept", "y"]]
