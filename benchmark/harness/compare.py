@@ -108,6 +108,32 @@ def flips(before: dict, after: dict) -> list[dict]:
     )
 
 
+COUNT_ROWS = (
+    ("correctly auto-approved", "correctly_auto_approved"),
+    ("incorrectly auto-approved", "incorrectly_auto_approved"),
+    ("correctly rejected", "correctly_rejected"),
+    ("incorrectly rejected", "incorrectly_rejected"),
+    ("correctly routed to a clerk", "correctly_routed"),
+    ("wrongly routed to a clerk", "incorrectly_routed"),
+    ("rejection reason exact", "reason_strict"),
+    ("rejection reason another real fault", "reason_family"),
+    ("rejection reason wrong", "reason_wrong"),
+    ("errors / no decision", "errors_or_no_decision"),
+    ("posted untouched", "posted_untouched"),
+    ("posted untouched wrongly", "posted_untouched_wrongly"),
+)
+
+
+def count_rows(before: dict, after: dict) -> list[str]:
+    """One table row per decision count; .get, since a count never hit is
+    absent from the scorer's Counter."""
+    rows = []
+    for label, key in COUNT_ROWS:
+        b_v, a_v = before["counts"].get(key, 0), after["counts"].get(key, 0)
+        rows.append(f"| {label} | {b_v} | {a_v} | {a_v - b_v:+d} |")
+    return rows
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("before")
@@ -192,20 +218,7 @@ def main(argv=None) -> int:
         lines.append(
             f"| {label} | {_pct(bd.get(key))} | {_pct(ad.get(key))} | {_delta(bd.get(key), ad.get(key))} |"
         )
-    for label, key in (
-        ("correctly auto-approved", "correctly_auto_approved"),
-        ("incorrectly auto-approved", "incorrectly_auto_approved"),
-        ("correctly rejected", "correctly_rejected"),
-        ("incorrectly rejected", "incorrectly_rejected"),
-        ("rejection reason exact", "reason_strict"),
-        ("rejection reason another real fault", "reason_family"),
-        ("rejection reason wrong", "reason_wrong"),
-        ("errors / no decision", "errors_or_no_decision"),
-        ("posted untouched", "posted_untouched"),
-        ("posted untouched wrongly", "posted_untouched_wrongly"),
-    ):
-        b_v, a_v = bd["counts"].get(key, 0), ad["counts"].get(key, 0)
-        lines.append(f"| {label} | {b_v} | {a_v} | {a_v - b_v:+d} |")
+    lines += count_rows(bd, ad)
 
     lines += [
         "",

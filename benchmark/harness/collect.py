@@ -50,6 +50,10 @@ def record(
     final = decision.get("final_decision")
     if ingest_duplicate:
         final = "REJECT"
+    elif not final and artifacts.get("supporting_extraction") is not None:
+        # A lone PO or receipt the worker routed to a clerk to confirm
+        # (worker/runner.process_supporting): decided, just not an invoice.
+        final = "SUPPORTING"
     elif not final:
         final = (
             "ERROR" if (attempts.get("last_error") or error_text) else "NONE"

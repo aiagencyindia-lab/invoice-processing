@@ -18,7 +18,6 @@ from .case_loader import CaseData
 from .config import (
     RULES_BOOK_PATH,
     get_llm_call_delay,
-    get_llm_location,
     get_llm_model,
     get_llm_project_id,
 )
@@ -56,25 +55,21 @@ class ProposedRule:
 
 
 class _LLMClient:
-    """Lazy-initialized Vertex AI Gemini Pro client."""
+    """Lazy-initialized Gemini Pro client."""
 
     _model = None
 
     @classmethod
     def get_model(cls):
         if cls._model is None:
-            from google.cloud import aiplatform  # noqa: PLC0415
-            from vertexai.generative_models import (  # noqa: PLC0415
-                GenerativeModel,
-            )
+            from .. import gemini  # noqa: PLC0415 -- only when drafting a rule
 
             project_id = get_llm_project_id()
             if not project_id:
                 raise ValueError(
                     "PROJECT_ID not set. Export it or add to .env file."
                 )
-            aiplatform.init(project=project_id, location=get_llm_location())
-            cls._model = GenerativeModel(get_llm_model())
+            cls._model = gemini.Model(get_llm_model())
             logger.info(f"Initialized {get_llm_model()} (project={project_id})")
         return cls._model
 

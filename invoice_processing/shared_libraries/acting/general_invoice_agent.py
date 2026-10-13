@@ -48,18 +48,10 @@ from typing import Any, ClassVar
 try:
     import pdfplumber
     from dotenv import load_dotenv
-    from google.cloud import aiplatform
     from pydantic import BaseModel
-    from vertexai.generative_models import (
-        GenerationConfig,
-        GenerativeModel,
-        Part,
-    )
 except ImportError:
     print("Error: Missing required package. Install with:")
-    print(
-        "pip install google-cloud-aiplatform pydantic pdfplumber python-dotenv"
-    )
+    print("pip install google-genai pydantic pdfplumber python-dotenv")
     sys.exit(1)
 
 logger = logging.getLogger(__name__)
@@ -74,6 +66,7 @@ try:
         confidence,
         duplicates,
         extraction_cleanup,
+        gemini,
         po_book,
         po_matching,
         tax_ids,
@@ -108,6 +101,7 @@ except ImportError:  # executed as a script: no parent package context
         confidence,
         duplicates,
         extraction_cleanup,
+        gemini,
         po_book,
         po_matching,
         tax_ids,
@@ -155,19 +149,12 @@ _ABN_EXPECTED_LENGTH = 11
 _GENERATION_SEED = int(os.getenv("GENERATION_SEED", "42"))
 
 
-def _generation_config(**overrides) -> "GenerationConfig":
-    """Build a deterministic GenerationConfig. Use this instead of constructing
-    GenerationConfig directly, so every call site stays reproducible."""
-    params: dict[str, Any] = {"temperature": 0, "seed": _GENERATION_SEED}
-    params.update(overrides)
-    return GenerationConfig(**params)
-
-
-# How long one Vertex call may take before the caller stops waiting. The SDK
-# offers no timeout of its own, so without this a stalled request holds the
-# worker until its queue lease expires, gets redelivered, stalls again, and
-# after three attempts dead-letters an invoice nobody ever rejected. 180s is
-# roughly three times the slowest healthy extraction observed.
+# How long one Vertex call may take before the caller stops waiting. The
+# guard enforces it; gemini.Model also gives the SDK a deadline a little
+# later, so an abandoned call is cut too. Without it a stalled request holds
+# the worker until its queue lease expires, gets redelivered, stalls again,
+# and after three attempts dead-letters an invoice nobody ever rejected. 180s
+# is roughly three times the slowest healthy extraction observed.
 VERTEX_TIMEOUT_SECONDS = float(os.getenv("VERTEX_TIMEOUT_SECONDS", "180"))
 
 
@@ -410,7 +397,7 @@ def _components_consistent(invoice: dict) -> str:
 
 
 @lru_cache(maxsize=32)
-def _model_for(model_name: str, temperature: float) -> "GenerativeModel":
+def _model_for(model_name: str, temperature: float) -> "gemini.Model":
     """One model object per (name, temperature).
 
     The object is stateless and the configuration is not, so the pair is the
@@ -422,9 +409,8 @@ def _model_for(model_name: str, temperature: float) -> "GenerativeModel":
     `lru_cache` rather than a dict: the eviction is the point, so a process
     that sees many model names cannot grow a cache forever.
     """
-    return GenerativeModel(
-        model_name,
-        generation_config=_generation_config(temperature=temperature),
+    return gemini.Model(
+        model_name, temperature=temperature, seed=_GENERATION_SEED
     )
 
 
@@ -449,9 +435,11 @@ _gcp_config = _GCPConfig(
 
 
 def _ensure_gcp_initialized():
-    """Lazy-initialize GCP/Vertex AI on first use (not at import time).
+    """Resolve the GCP settings on first use (not at import time).
 
-    Agent Engine sets env vars after module import, so we must defer."""
+    Agent Engine sets env vars after module import, so we must defer. The
+    model client itself (invoice_processing/gemini.py) reads the same
+    variables when it is first built."""
     if _gcp_config.initialized:
         return
     _gcp_config.PROJECT_ID = (
@@ -475,10 +463,6 @@ def _ensure_gcp_initialized():
     if not _gcp_config.PROJECT_ID:
         print("Warning: PROJECT_ID not found in environment")
         print("Set it in .env file or export PROJECT_ID=your-gcp-project-id")
-    else:
-        aiplatform.init(
-            project=_gcp_config.PROJECT_ID, location=_gcp_config.LOCATION
-        )
     _gcp_config.initialized = True
 
 
@@ -837,7 +821,7 @@ def extract_pdf_with_gemini(pdf_path: Path) -> str:
     with open(pdf_path, "rb") as f:
         pdf_data = f.read()
 
-    pdf_part = Part.from_data(mime_type="application/pdf", data=pdf_data)
+    pdf_part = gemini.pdf_part(pdf_data)
 
     prompt = """Extract ALL text content from this PDF document.
 Return the text exactly as it appears, preserving numbers, dates, amounts, and structure.
@@ -985,16 +969,16 @@ def call_gemini(
     latency_ms = (time.time() - start_time) * 1000
 
     # Update metrics
-    usage = response.usage_metadata
+    prompt_tokens, completion_tokens = gemini.token_counts(response)
     metrics["llm_calls"] += 1
-    metrics["total_tokens"]["prompt"] += usage.prompt_token_count
-    metrics["total_tokens"]["completion"] += usage.candidates_token_count
+    metrics["total_tokens"]["prompt"] += prompt_tokens
+    metrics["total_tokens"]["completion"] += completion_tokens
 
     pricing = MODEL_PRICING.get(
         model_name.split("/")[-1], MODEL_PRICING["gemini-2.5-flash"]
     )
-    cost = (usage.prompt_token_count / 1_000_000) * pricing["input"]
-    cost += (usage.candidates_token_count / 1_000_000) * pricing["output"]
+    cost = (prompt_tokens / 1_000_000) * pricing["input"]
+    cost += (completion_tokens / 1_000_000) * pricing["output"]
     metrics["total_cost_usd"] += cost
 
     if _gcp_config.API_CALL_DELAY_SECONDS > 0:
@@ -1021,23 +1005,23 @@ def call_gemini_with_pdf(
     with open(pdf_path, "rb") as f:
         pdf_data = f.read()
 
-    pdf_part = Part.from_data(mime_type="application/pdf", data=pdf_data)
+    pdf_part = gemini.pdf_part(pdf_data)
 
     start_time = time.time()
     response = _generate(model, [pdf_part, prompt])
     latency_ms = (time.time() - start_time) * 1000
 
     # Update metrics
-    usage = response.usage_metadata
+    prompt_tokens, completion_tokens = gemini.token_counts(response)
     metrics["llm_calls"] += 1
-    metrics["total_tokens"]["prompt"] += usage.prompt_token_count
-    metrics["total_tokens"]["completion"] += usage.candidates_token_count
+    metrics["total_tokens"]["prompt"] += prompt_tokens
+    metrics["total_tokens"]["completion"] += completion_tokens
 
     pricing = MODEL_PRICING.get(
         model_name.split("/")[-1], MODEL_PRICING["gemini-2.5-flash"]
     )
-    cost = (usage.prompt_token_count / 1_000_000) * pricing["input"]
-    cost += (usage.candidates_token_count / 1_000_000) * pricing["output"]
+    cost = (prompt_tokens / 1_000_000) * pricing["input"]
+    cost += (completion_tokens / 1_000_000) * pricing["output"]
     metrics["total_cost_usd"] += cost
 
     if _gcp_config.API_CALL_DELAY_SECONDS > 0:

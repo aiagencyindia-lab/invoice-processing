@@ -76,6 +76,14 @@ _INFRASTRUCTURE_ERROR_PATTERNS = (
     "DEADLINE_EXCEEDED",
     "429",
     "RESOURCE_EXHAUSTED",
+    # The google-genai SDK talks HTTP through httpx, whose transport failures
+    # arrive under their class names (matched via the "Class: message" form),
+    # often with an empty or OS-specific message. Under gRPC all of these were
+    # "503 failed to connect to all addresses".
+    "ConnectError",
+    "RemoteProtocolError",
+    "ReadError",
+    "WriteError",
 )
 # The account, not the request: retrying cannot help and no document caused it.
 _ACCOUNT_ERROR_PATTERNS = (
@@ -146,7 +154,11 @@ def guarded_generate(model, prompt, budget: CallBudget | None = None):
             print(f"      LLM call timed out after {timeout:.0f}s")
         except Exception as exc:  # classified below, not swallowed
             last_error = exc
-            message = str(exc)
+            # httpx transport failures (ReadTimeout, ConnectError, ...) often
+            # carry an empty or OS-specific message; the class name says what
+            # the text does not. (With mTLS the SDK uses requests instead,
+            # whose "Read timed out" matches on its text.)
+            message = f"{type(exc).__name__}: {exc}"
             if _matches(message, _ACCOUNT_ERROR_PATTERNS):
                 raise LlmUnavailable(
                     f"Model service refused the call: {message[:300]}"

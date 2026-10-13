@@ -39,14 +39,14 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-# Optional LLM imports — only needed when --skip-llm is NOT set
+# Optional LLM import -- only needed when --skip-llm is NOT set. The model
+# client itself (invoice_processing.gemini) is imported in _init_llm, so a
+# deterministic-only run never loads the application package.
 _LLM_AVAILABLE = False
 try:
     from dotenv import load_dotenv
-    from google.cloud import aiplatform
-    from vertexai.generative_models import GenerativeModel
 
     _LLM_AVAILABLE = True
 except ImportError:
@@ -70,7 +70,7 @@ DEFAULT_TOLERANCE = 0.02
 
 
 # LLM configuration (only used when LLM evaluation is enabled)
-def _init_llm() -> Optional["GenerativeModel"]:
+def _init_llm() -> Any | None:
     """Initialize LLM model. Returns None if unavailable."""
     if not _LLM_AVAILABLE:
         return None
@@ -85,14 +85,17 @@ def _init_llm() -> Optional["GenerativeModel"]:
         load_dotenv()
 
     project_id = os.getenv("PROJECT_ID")
-    location = os.getenv("LOCATION", "us-central1")
     model_name = os.getenv("GEMINI_FLASH_MODEL", "gemini-2.5-flash")
 
     if not project_id:
         return None
 
-    aiplatform.init(project=project_id, location=location)
-    return GenerativeModel(model_name)
+    sys.path.insert(0, str(AGENT_DIR))
+    try:
+        from invoice_processing import gemini  # noqa: PLC0415
+    except ImportError:
+        return None
+    return gemini.Model(model_name)
 
 
 # Hardcoded fallback — used only when no master data is provided
@@ -635,7 +638,7 @@ Respond with ONLY valid JSON, no markdown:
 
 
 def llm_evaluate(
-    model: "GenerativeModel",
+    model: Any,
     ground_truth: dict,
     agent_output: dict,
     mismatches: list[str],
@@ -1605,9 +1608,7 @@ def main():
                 "\n  Warning: LLM unavailable (missing packages or PROJECT_ID). "
                 "Running deterministic only."
             )
-            print(
-                "  Install: pip install google-cloud-aiplatform python-dotenv"
-            )
+            print("  Install: pip install google-genai python-dotenv")
 
     domain_name = master.display_name if master else "Invoice Processing"
     print("=" * 70)

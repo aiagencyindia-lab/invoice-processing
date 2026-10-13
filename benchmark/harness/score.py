@@ -336,6 +336,10 @@ def check_metrics(
     return out
 
 
+# Document types the product routes to a person instead of deciding.
+ROUTED_TYPES = frozenset({"PURCHASE_ORDER"})
+
+
 def decision_metrics(records: dict[str, dict]) -> dict:
     master = dataset.master()
     reason_map = app_reason_map()
@@ -388,6 +392,15 @@ def decision_metrics(records: dict[str, dict]) -> dict:
                     c["reason_wrong"] += 1
             else:
                 c["incorrectly_rejected"] += 1
+        elif actual == "SUPPORTING":
+            # Routed to a clerk to confirm, not decided as an invoice. Right
+            # for a purchase order (the dataset's only such type), whose
+            # "expected REJECT" predates the routing; wrong for anything else.
+            c[
+                "correctly_routed"
+                if master[invoice_id]["document_type"] in ROUTED_TYPES
+                else "incorrectly_routed"
+            ] += 1
         else:
             c["errors_or_no_decision"] += 1
         first_failing[
@@ -405,7 +418,10 @@ def decision_metrics(records: dict[str, dict]) -> dict:
             c["correctly_auto_approved"], c["auto_approved"]
         ),
         "decision_accuracy": _rate(
-            c["correctly_auto_approved"] + c["correctly_rejected"], total
+            c["correctly_auto_approved"]
+            + c["correctly_rejected"]
+            + c["correctly_routed"],
+            total,
         ),
         "accepted_but_routed_to_review": review,
         # Of the invoices that should be paid, the share paid with no human.
@@ -667,6 +683,8 @@ def report_md(
         "correctly_rejected",
         "incorrectly_rejected",
         "errors_or_no_decision",
+        "correctly_routed",
+        "incorrectly_routed",
         "reason_strict",
         "reason_family",
         "reason_wrong",

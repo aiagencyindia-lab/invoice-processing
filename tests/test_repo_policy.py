@@ -56,7 +56,11 @@ def test_the_agent_stack_is_on_its_second_major():
         for dep in project["project"]["dependencies"]
     }
     assert _floor(by_name["google-adk"]).split(".")[0] == "2"
-    assert _floor(by_name["google-cloud-aiplatform"]).split(".")[0] == "2"
+    assert _floor(by_name["google-genai"]).split(".")[0] == "2"
+    # The deprecated vertexai.generative_models shim is gone; the client
+    # module is the only SDK user, and it uses google-genai.
+    assert "vertexai" not in by_name
+    assert "google-cloud-aiplatform" not in by_name
     # Starlette 1.x imports `python_multipart`, a module name older releases
     # do not have; it only falls back to the legacy `multipart` package.
     multipart = tuple(

@@ -169,25 +169,23 @@ class TestTheModelFactoryIsShared:
         built = []
 
         class _Model:
-            def __init__(self, name, generation_config=None):
-                built.append((name, generation_config))
+            def __init__(
+                self, name, temperature=0, seed=None, response_mime_type=None
+            ):
+                built.append((name, temperature, seed))
 
-        monkeypatch.setattr(gia, "GenerativeModel", _Model)
+        monkeypatch.setattr(gia.gemini, "Model", _Model)
         gia._model_for.cache_clear()
 
         first = gia._model_for("gemini-2.5-flash", 0)
         second = gia._model_for("gemini-2.5-flash", 0)
 
         assert first is second
-        assert len(built) == 1
+        assert built == [("gemini-2.5-flash", 0, gia._GENERATION_SEED)]
 
     def test_a_different_temperature_is_a_different_model(self, monkeypatch):
         """The object is stateless; the configuration is not."""
-        monkeypatch.setattr(
-            gia,
-            "GenerativeModel",
-            lambda name, generation_config=None: object(),
-        )
+        monkeypatch.setattr(gia.gemini, "Model", lambda name, **kw: object())
         gia._model_for.cache_clear()
 
         assert gia._model_for("gemini-2.5-flash", 0) is not gia._model_for(

@@ -53,6 +53,7 @@ from typing import Any, ClassVar
 logger = logging.getLogger("ALF")
 
 try:
+    from .. import gemini
     from ..context import promote_convenience_fields
     from ..paths import (
         AGENT_ROOT,
@@ -72,6 +73,7 @@ except ImportError:  # executed as a script: no parent package context
         if (p / "invoice_processing").is_dir()
     )
     _sys.path.insert(0, str(_repo_root))
+    from invoice_processing import gemini
     from invoice_processing.context import promote_convenience_fields
     from invoice_processing.paths import (
         AGENT_ROOT,
@@ -962,39 +964,21 @@ class LLMActionExecutor:
     5. Logs the full prompt/response for auditability
     """
 
-    _model = None  # Lazy-initialized Vertex AI model
+    _model = None  # Lazy-initialized model client
 
     @classmethod
     def _get_model(cls):
-        """Lazy-initialize the Vertex AI GenerativeModel."""
+        """Lazy-initialize the Gemini model (temperature 0, as before)."""
         if cls._model is None:
-            try:
-                from google.cloud import aiplatform  # noqa: PLC0415
-                from vertexai.generative_models import (  # noqa: PLC0415
-                    GenerationConfig,
-                    GenerativeModel,
+            if not _get_llm_project_id():
+                raise ValueError(
+                    "PROJECT_ID not set. Export it or add to .env file."
                 )
-
-                if not _get_llm_project_id():
-                    raise ValueError(
-                        "PROJECT_ID not set. Export it or add to .env file."
-                    )
-                aiplatform.init(
-                    project=_get_llm_project_id(), location=_get_llm_location()
-                )
-                cls._model = GenerativeModel(
-                    _get_llm_model(),
-                    generation_config=GenerationConfig(temperature=0),
-                )
-                logger.info(
-                    f"[LLM] Initialized {_get_llm_model()} "
-                    f"(project={_get_llm_project_id()}, location={_get_llm_location()})"
-                )
-            except ImportError:
-                raise ImportError(
-                    "Vertex AI SDK required for LLM actions. Install with: "
-                    "pip install google-cloud-aiplatform"
-                ) from None
+            cls._model = gemini.Model(_get_llm_model(), temperature=0)
+            logger.info(
+                f"[LLM] Initialized {_get_llm_model()} "
+                f"(project={_get_llm_project_id()}, location={_get_llm_location()})"
+            )
         return cls._model
 
     @staticmethod

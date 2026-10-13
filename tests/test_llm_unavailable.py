@@ -15,7 +15,9 @@ import shutil
 import time
 from pathlib import Path
 
+import httpx
 import pytest
+from google.genai import errors
 
 from benchmark.harness import run
 from invoice_processing.llm_guard import (
@@ -74,6 +76,56 @@ class TestTheGuard:
         with pytest.raises(ValueError):
             guarded_generate(Model(ValueError("bad schema")), "p", CallBudget())
 
+    def test_a_genai_server_error_is_retried_then_unavailable(self):
+        """google-genai formats errors as '<code> <status>. <details>'."""
+        exc = errors.ServerError(
+            503,
+            {
+                "error": {
+                    "code": 503,
+                    "message": "overloaded",
+                    "status": "UNAVAILABLE",
+                }
+            },
+        )
+        model = Model(exc)
+        with pytest.raises(LlmUnavailable):
+            guarded_generate(model, "p", CallBudget(deadline_seconds=30))
+        assert model.calls == 3
+
+    def test_an_httpx_timeout_is_infrastructure(self):
+        """The SDK's own per-request timeout fires as httpx.ReadTimeout, whose
+        message is empty. It is still an outage."""
+        model = Model(httpx.ReadTimeout(""))
+        with pytest.raises(LlmUnavailable):
+            guarded_generate(model, "p", CallBudget(deadline_seconds=30))
+        assert model.calls == 3
+
+
+# The httpx transport's own failures. Under gRPC every one of these surfaced
+# as "503 failed to connect to all addresses"; over httpx they arrive under
+# their own names, several with no useful message.
+TRANSPORT_FAILURES = [
+    httpx.ConnectError(
+        "[Errno 8] nodename nor servname provided, or not known"
+    ),
+    httpx.RemoteProtocolError(
+        "Server disconnected without sending a response."
+    ),
+    httpx.ReadError(""),
+    httpx.WriteError(""),
+]
+
+
+@pytest.mark.parametrize(
+    "exc", TRANSPORT_FAILURES, ids=lambda e: type(e).__name__
+)
+def test_a_transport_failure_is_an_outage(exc):
+    model = Model(exc)
+    with pytest.raises(LlmUnavailable):
+        guarded_generate(model, "p", CallBudget(deadline_seconds=30))
+    assert model.calls == 3
+
 
 def test_the_pipeline_returns_error_not_a_rejection(monkeypatch, tmp_path):
     model = Model(RuntimeError(BILLING_403))
@@ -89,6 +141,27 @@ def test_the_pipeline_returns_error_not_a_rejection(monkeypatch, tmp_path):
     assert result["decision"] == "ERROR", result
     assert "billing" in result["error"]
     assert model.calls == 1, "stopped at the first refusal"
+    assert not (tmp_path / "out" / "case_001" / "08_decision.json").exists()
+
+
+def test_a_dropped_connection_is_an_error_not_a_rejection(
+    monkeypatch, tmp_path
+):
+    """The 2026-09-24 shape: the model unreachable must not become a keyword
+    decision sent to a supplier."""
+    model = Model(
+        httpx.ConnectError("[Errno 8] nodename nor servname provided")
+    )
+    monkeypatch.setattr(gia, "_model_for", lambda *_a: model)
+    monkeypatch.setattr(gia, "OUTPUT_BASE_DIR", tmp_path / "out")
+    monkeypatch.setattr(gia._gcp_config, "initialized", True)
+    monkeypatch.setattr(gia._gcp_config, "PROJECT_ID", "project-x")
+    monkeypatch.setattr(gia._gcp_config, "API_CALL_DELAY_SECONDS", 0.0)
+    source = shutil.copytree(CASE, tmp_path / "case_001")
+
+    result = gia.process_invoice(source)
+
+    assert result["decision"] == "ERROR", result
     assert not (tmp_path / "out" / "case_001" / "08_decision.json").exists()
 
 
