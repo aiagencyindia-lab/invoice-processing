@@ -48,15 +48,10 @@ from typing import Any, ClassVar
 # Third-party imports
 try:
     from dotenv import load_dotenv
-    from google.cloud import aiplatform
     from pydantic import BaseModel, Field
-    from vertexai.preview.generative_models import (
-        GenerationConfig,
-        GenerativeModel,
-    )
 except ImportError:
     print("Error: Missing required package. Install with:")
-    print("pip install google-cloud-aiplatform pydantic python-dotenv")
+    print("pip install google-genai pydantic python-dotenv")
     sys.exit(1)
 
 try:
@@ -175,7 +170,7 @@ GEMINI_PRO_MODEL = _gcp_config["GEMINI_PRO_MODEL"]
 
 
 def _ensure_gcp_initialized():
-    """Lazy-initialize GCP/Vertex AI on first use (not at import time).
+    """Resolve the GCP settings on first use (not at import time).
 
     Agent Engine sets env vars after module import, so we must defer."""
     if _gcp_config["initialized"]:
@@ -197,27 +192,21 @@ def _ensure_gcp_initialized():
             "PROJECT_ID not found in environment. "
             "Set it in .env file or export PROJECT_ID=your-gcp-project-id"
         )
-    aiplatform.init(
-        project=_gcp_config["PROJECT_ID"], location=_gcp_config["LOCATION"]
-    )
     _gcp_config["initialized"] = True
 
 
-def _build_model(model_name: str, **generation_kwargs) -> "GenerativeModel":
-    """Construct a Vertex model, initialising Vertex first.
+def _build_model(model_name: str, **generation_kwargs) -> "gemini.Model":
+    """Construct a model, resolving the project first.
 
-    `_ensure_gcp_initialized` existed and nothing called it. Every
-    `GenerativeModel(...)` below therefore relied on the SDK resolving a
-    project on its own -- which works on a developer machine with gcloud
+    `_ensure_gcp_initialized` once existed and nothing called it, so every
+    model this module built relied on the SDK resolving a project on its
+    own -- which works on a developer machine with gcloud
     configured and on Cloud Run with a metadata server, and fails everywhere
     else with an auth error rather than the clear "PROJECT_ID not found"
     message this module already wrote for that case.
     """
     _ensure_gcp_initialized()
-    return GenerativeModel(
-        model_name,
-        generation_config=GenerationConfig(**generation_kwargs),
-    )
+    return gemini.Model(model_name, **generation_kwargs)
 
 
 # ============================================================================
@@ -372,21 +361,23 @@ else:
 # as a script there is no parent package, and a bare relative import fails
 # before argparse is reached (tests/test_dual_import_modes.py).
 try:
-    from ...llm_guard import (  # noqa: I001 -- re-export
-        CallBudget,
+    from ... import gemini
+    from ...llm_guard import (
         DEFAULT_CASE_DEADLINE_SECONDS,
         DEFAULT_LLM_TIMEOUT_SECONDS,
         DEFAULT_MAX_LLM_CALLS,
+        CallBudget,
         LlmBudgetExceeded,
         LlmCallTimeout,
         guarded_generate,
     )
 except ImportError:  # executed as a script
-    from invoice_processing.llm_guard import (  # noqa: I001, F401
-        CallBudget,
+    from invoice_processing import gemini
+    from invoice_processing.llm_guard import (  # noqa: F401
         DEFAULT_CASE_DEADLINE_SECONDS,
         DEFAULT_LLM_TIMEOUT_SECONDS,
         DEFAULT_MAX_LLM_CALLS,
+        CallBudget,
         LlmBudgetExceeded,
         LlmCallTimeout,
         guarded_generate,
