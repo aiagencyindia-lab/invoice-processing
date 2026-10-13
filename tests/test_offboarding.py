@@ -22,6 +22,7 @@ from sqlalchemy import (
     func,
     insert,
     select,
+    update,
 )
 
 from invoice_processing import offboarding
@@ -30,6 +31,7 @@ from invoice_processing.admin.provision import Provisioner
 from invoice_processing.db.models import TENANT_TABLES, Base, Tenant
 from invoice_processing.db.repositories import PgAuditSink
 from invoice_processing.db.session import create_all, get_engine, tenant_session
+from tests.pg_roles import bootstrapped_database, pg_only
 
 NOW = datetime(2026, 10, 13, 9, 0, tzinfo=timezone.utc)
 
@@ -259,6 +261,17 @@ def seed_every_tenant_table(url, tenant_id):
             ids[table.name] = row.get("id", result.inserted_primary_key[0])
 
 
+def _finish_jobs(url, tenant_id):
+    """The seeded claim defaults to running; a purge waits for those."""
+    claims = Base.metadata.tables["document_claims"]
+    with tenant_session(tenant_id, url) as session:
+        session.execute(
+            update(claims)
+            .where(claims.c.tenant_id == tenant_id)
+            .values(state="done")
+        )
+
+
 def _count(url, tenant_id, table):
     model = Base.metadata.tables[table]
     with tenant_session(tenant_id, url) as session:
@@ -290,6 +303,7 @@ def two_tenants(url, stores):
     globex = p.create_tenant("globex", "Globex")["id"]
     for tenant_id in (acme, globex):
         seed_every_tenant_table(url, tenant_id)
+        _finish_jobs(url, tenant_id)
         stores(tenant_id).put("documents/a.pdf", b"%PDF a")
         stores(tenant_id).put("cases/c1/page-1.png", b"png")
     offboarding.suspend(
@@ -410,10 +424,106 @@ class TestPurge:
         with pytest.raises(offboarding.OffboardingError, match="active"):
             _purge(url, stores)
 
-    def test_refuses_a_purged_tenant(self, url, stores, two_tenants):
-        _purge(url, stores)
-        with pytest.raises(offboarding.OffboardingError, match="purged"):
+    def test_a_purged_tenant_can_be_purged_again(
+        self, url, stores, two_tenants
+    ):
+        """What a late write or a restore leaves under a purged tenant has
+        to be removable, and the first purge's record has to survive it."""
+        acme, _ = two_tenants
+        first = _purge(url, stores)
+        with tenant_session(acme, url) as session:
+            session.execute(
+                insert(Base.metadata.tables["users"]).values(
+                    id=str(uuid.uuid4()),
+                    tenant_id=acme,
+                    email="late@acme.test",
+                    role="clerk",
+                    is_active=True,
+                )
+            )
+        stores(acme).put("documents/late.pdf", b"%PDF late")
+        later = NOW + timedelta(days=40)
+        again = _purge(url, stores, now=later, reason="re-purge after restore")
+        assert _count(url, acme, "users") == 0
+        assert stores(acme).list_keys() == []
+        assert again["purged_at"] == first["purged_at"]
+        assert again["repurges"] == [
+            {
+                "at": later.isoformat(),
+                "by": "vineet",
+                "reason": "re-purge after restore",
+                "rows_deleted": {
+                    **dict.fromkeys(TENANT_TABLES, 0),
+                    "users": 1,
+                },
+                "blobs_deleted": 1,
+            }
+        ]
+        assert _tenant(url, acme).status == "purged"
+
+    def test_refuses_while_a_job_is_in_flight(self, url, stores, two_tenants):
+        """A job the worker is still running would write its rows after the
+        purge committed. Refused before anything is deleted."""
+        acme, _ = two_tenants
+        claims = Base.metadata.tables["document_claims"]
+        with tenant_session(acme, url) as session:
+            session.execute(
+                update(claims)
+                .where(claims.c.tenant_id == acme)
+                .values(state="running")
+            )
+        with pytest.raises(offboarding.OffboardingError, match="in flight"):
             _purge(url, stores)
+        assert _tenant(url, acme).status == "suspended"
+        assert len(stores(acme).list_keys()) == 2
+
+    def test_a_reactivation_during_the_purge_stops_it(
+        self, url, stores, two_tenants
+    ):
+        """The status is checked again inside the transaction that deletes:
+        a tenant reactivated while its documents were going keeps its rows."""
+        acme, _ = two_tenants
+
+        class Reactivating:
+            def __init__(self, store):
+                self.store, self.done = store, False
+
+            def list_keys(self):
+                return self.store.list_keys()
+
+            def delete(self, key):
+                if not self.done:
+                    self.done = True
+                    offboarding.reactivate("acme", operator="ops", url=url)
+                self.store.delete(key)
+
+        with pytest.raises(offboarding.OffboardingError, match="active"):
+            offboarding.purge(
+                "acme",
+                operator="vineet",
+                confirm="acme",
+                blobs_for=lambda tid: Reactivating(stores(tid)),
+                url=url,
+                now=NOW + timedelta(days=31),
+            )
+        assert _tenant(url, acme).status == "active"
+        assert _count(url, acme, "invoices") == 1
+
+    def test_a_suspension_with_no_record_is_refused(
+        self, url, stores, two_tenants
+    ):
+        """Set to suspended by hand, not by the CLI: no date to count from."""
+        _, globex = two_tenants
+        with tenant_session("", url) as session:
+            session.get(Tenant, globex).status = "suspended"
+        with pytest.raises(offboarding.OffboardingError, match="no suspension"):
+            offboarding.purge(
+                "globex",
+                operator="vineet",
+                confirm="globex",
+                blobs_for=stores,
+                url=url,
+            )
 
     def test_a_failure_after_the_documents_reruns_to_completion(
         self, url, stores, two_tenants, monkeypatch
@@ -431,7 +541,8 @@ class TestPurge:
         assert stores(acme).list_keys() == []
         monkeypatch.setattr(offboarding, "_delete_rows", real)
         record = _purge(url, stores)
-        assert record["blobs_deleted"] == 0
+        # The first run deleted them; the record still says so.
+        assert record["blobs_deleted"] == 2
         assert _count(url, acme, "invoices") == 0
 
     def test_rows_that_survive_the_deletes_abort_the_purge(
@@ -510,3 +621,37 @@ class TestPurgeCli:
         record = json.loads(line)
         assert record["tenant_id"] == acme
         assert record["slug"] == "acme"
+
+
+@pg_only
+class TestPurgeAsTheOwnerRole:
+    def test_purges_one_tenant_under_forced_rls(self, tmp_path):
+        """CI's own user is a superuser and bypasses RLS, so the purge is
+        proven here as the NOBYPASSRLS owner production runs it as."""
+        with bootstrapped_database() as db:
+            su = db.url.render_as_string(hide_password=False)
+            owner = db.owner_url.render_as_string(hide_password=False)
+            p = Provisioner(url=su)
+            acme = p.create_tenant("acme", "Acme")["id"]
+            globex = p.create_tenant("globex", "Globex")["id"]
+            for tenant_id in (acme, globex):
+                seed_every_tenant_table(su, tenant_id)
+                _finish_jobs(su, tenant_id)
+            offboarding.suspend(
+                "acme", operator="v", reason="r", url=su, now=NOW
+            )
+            record = offboarding.purge(
+                "acme",
+                operator="v",
+                confirm="acme",
+                blobs_for=lambda tid: LocalBlobStore(tmp_path / tid),
+                url=owner,
+                now=NOW + timedelta(days=31),
+            )
+            assert record["rows_deleted"]["audit_events"] == 2
+            for table in TENANT_TABLES:
+                assert _count(su, acme, table) == 0, table
+                assert _count(su, globex, table) >= 1, table
+            assert _tenant(su, acme).status == "purged"
+            get_engine(su).dispose()
+            get_engine(owner).dispose()

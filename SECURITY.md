@@ -71,9 +71,12 @@ For 30 days it can be reactivated. After that, or at once on the
 customer's written request, the operator purges it: every row in every
 tenant table, every document, and the tenant's audit trail. The tenants row
 stays as the record (id, slug, name, region, who suspended and purged it,
-when, and how many rows and documents went), and the slug stays reserved.
+when, and how many rows and documents went), and the slug stays reserved
+so the tenant's old inbound email address can never route invoices to a
+new tenant.
 The purge runs as the database owner role; the service's own role cannot
-delete an audit row. Steps: [deployment/OFFBOARDING.md](deployment/OFFBOARDING.md).
+delete an audit row. The worker is stopped for the purge, and the purge
+refuses while any of the tenant's jobs is running. Steps: [deployment/OFFBOARDING.md](deployment/OFFBOARDING.md).
 
 **What outlives a purge, and for how long.** Database backups and
 point-in-time logs: up to 7 days. Deleted documents in Cloud Storage soft

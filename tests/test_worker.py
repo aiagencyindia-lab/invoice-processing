@@ -1750,6 +1750,9 @@ class TestClosedTenants:
         queue.publish(work_message())
         assert worker.handle(queue.pull()[0]) == "dead-lettered:tenant-closed"
         assert audit.events == []
+        # Not "suspended": nobody should try to replay it after a
+        # reactivation that cannot happen.
+        assert queue.dead_letters()[0]["dead_letter_reason"] == "tenant purged"
 
     def test_a_suspended_tenants_rematch_is_dead_lettered(
         self, queue, claims, audit

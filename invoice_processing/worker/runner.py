@@ -914,7 +914,7 @@ class Worker:
         tenant_id = str(message.payload.get("tenant_id") or "")
         if self.tenant_status is None or not tenant_id:
             return None
-        from ..sso import OPEN  # noqa: PLC0415 - sso imports the API stack
+        from ..offboarding import OPEN  # noqa: PLC0415 - loads the db layer
 
         try:
             status = self.tenant_status(tenant_id)
@@ -926,7 +926,7 @@ class Worker:
             return None
         self._dead_letter(
             message,
-            "tenant suspended",
+            f"tenant {status}",
             event=(
                 "rematch_dead_lettered"
                 if message.payload.get("type") == REMATCH

@@ -27,6 +27,9 @@ from .ports import RunContext
 # so customers export before their subscription ends (SECURITY.md).
 GRACE_DAYS = 30
 ACTIVE, SUSPENDED, PURGED = "active", "suspended", "purged"
+# Statuses every request path lets through. None: no tenants row at all,
+# which no write can reach (the foreign key).
+OPEN = (None, ACTIVE)
 
 
 class OffboardingError(RuntimeError):
@@ -189,12 +192,39 @@ def _remaining_rows(session, tenant_id: str) -> dict[str, int]:
     return {name: n for name, n in counts.items() if n}
 
 
-def leftovers(tenant_id: str, blobs, url: str | None = None) -> dict[str, int]:
-    """What of a tenant is still here: rows per table, and documents."""
+def _running_jobs(session, tenant_id: str) -> int:
+    claims = Base.metadata.tables["document_claims"]
+    return session.scalar(
+        select(func.count())
+        .select_from(claims)
+        .where(claims.c.tenant_id == tenant_id, claims.c.state == "running")
+    )
+
+
+def _refuse_running_jobs(slug: str, running: int) -> None:
+    # ponytail: a job that passed the worker's status check but has not yet
+    # claimed is not counted; the runbook stops the worker for the purge.
+    if running:
+        raise OffboardingError(
+            f"{slug} has {running} job(s) in flight, which would write rows "
+            "after the purge. Stop the worker or let them finish, then run "
+            "the purge again."
+        )
+
+
+def _note_blobs_deleted(tenant_id: str, count: int, url: str | None) -> None:
+    """Keep the documents' count before the rows go, so a run that fails
+    after deleting them still reports them on the re-run."""
     with tenant_session(tenant_id, url) as session:
-        left = _remaining_rows(session, tenant_id)
-    documents = len(blobs.list_keys())
-    return {**left, **({"documents": documents} if documents else {})}
+        tenant = session.scalar(
+            select(Tenant).where(Tenant.id == tenant_id).with_for_update()
+        )
+        settings = dict(tenant.settings or {})
+        record = dict(settings.get("offboarding") or {})
+        record["pending_blobs_deleted"] = (
+            record.get("pending_blobs_deleted", 0) + count
+        )
+        tenant.settings = {**settings, "offboarding": record}
 
 
 def purge(
@@ -210,10 +240,15 @@ def purge(
 ) -> dict:
     """Delete every row and document of a suspended tenant.
 
+    `url` must be the owner role's (`require_owner_role`): as the app role
+    the audit rows are not deleted, and the re-count refuses the purge.
+
     Documents first, then the rows in one transaction that also marks the
-    tenant purged. A crash at any point leaves it `suspended`, so the record
+    tenant purged. A crash at any point leaves it as it was, so the record
     never claims a purge over data that is still there, and a re-run picks
-    up where it stopped.
+    up where it stopped. A purged tenant can be purged again, for what a
+    restore or a late write left under it; the first purge's record stays
+    and the re-run is added to `repurges`.
     """
     operator = _required(operator, "An operator")
     if confirm != slug:
@@ -226,17 +261,26 @@ def purge(
         tenant = session.get(Tenant, tenant_id)
         status = tenant.status
         record = dict((tenant.settings or {}).get("offboarding") or {})
-    if status != SUSPENDED:
+        running = _running_jobs(session, tenant_id)
+    if status not in (SUSPENDED, PURGED):
         raise OffboardingError(
             f"{slug} is {status}; only a suspended tenant can be purged."
         )
-    waited = now - datetime.fromisoformat(record["suspended_at"])
-    if not skip_grace and waited < timedelta(days=GRACE_DAYS):
-        raise OffboardingError(
-            f"{slug} was suspended {waited.days} days ago; the recovery "
-            f"window is {GRACE_DAYS} days. Wait, or pass --skip-grace with "
-            "the customer's written request as --reason."
-        )
+    if status == SUSPENDED:
+        if not record.get("suspended_at"):
+            raise OffboardingError(
+                f"{slug} has no suspension record, so there is no date to "
+                "count the recovery window from. Reactivate it and suspend "
+                "it with suspend-tenant."
+            )
+        waited = now - datetime.fromisoformat(record["suspended_at"])
+        if not skip_grace and waited < timedelta(days=GRACE_DAYS):
+            raise OffboardingError(
+                f"{slug} was suspended {waited.days} days ago; the recovery "
+                f"window is {GRACE_DAYS} days. Wait, or pass --skip-grace "
+                "with the customer's written request as --reason."
+            )
+    _refuse_running_jobs(slug, running)
 
     blobs = blobs_for(tenant_id)
     documents = blobs.list_keys()
@@ -244,8 +288,22 @@ def purge(
         blobs.delete(key)
     if blobs.list_keys():
         raise OffboardingError(f"{slug}'s documents could not all be deleted.")
+    if documents:
+        _note_blobs_deleted(tenant_id, len(documents), url)
 
     with tenant_session(tenant_id, url) as session:
+        tenant = session.scalar(
+            select(Tenant).where(Tenant.id == tenant_id).with_for_update()
+        )
+        # Again, under the lock: a reactivation while the documents were
+        # going must keep the rows.
+        if tenant.status != status:
+            raise OffboardingError(
+                f"{slug} became {tenant.status} during the purge; no rows "
+                "were deleted."
+            )
+        _refuse_running_jobs(slug, _running_jobs(session, tenant_id))
+        record = dict((tenant.settings or {}).get("offboarding") or {})
         if is_postgres(session.get_bind()):
             # The only setting `audit_events_purge` answers to; the app role
             # cannot use it, having no DELETE on the table at all.
@@ -260,14 +318,27 @@ def purge(
                 f"{slug} still holds rows after the deletes: {left}. "
                 "Nothing was committed."
             )
-        record.update(
-            purged_at=now.isoformat(),
-            purged_by=operator,
-            skip_grace=skip_grace,
-            skip_reason=reason if skip_grace else None,
-            rows_deleted=rows,
-            blobs_deleted=len(documents),
-        )
+        blobs_deleted = record.pop("pending_blobs_deleted", 0)
+        if status == PURGED:
+            record["repurges"] = [
+                *record.get("repurges", []),
+                {
+                    "at": now.isoformat(),
+                    "by": operator,
+                    "reason": reason,
+                    "rows_deleted": rows,
+                    "blobs_deleted": blobs_deleted,
+                },
+            ]
+        else:
+            record.update(
+                purged_at=now.isoformat(),
+                purged_by=operator,
+                skip_grace=skip_grace,
+                skip_reason=reason if skip_grace else None,
+                rows_deleted=rows,
+                blobs_deleted=blobs_deleted,
+            )
         session.execute(
             update(Tenant)
             .where(Tenant.id == tenant_id)

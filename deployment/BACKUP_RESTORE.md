@@ -33,7 +33,8 @@ and after any production restore.
    restore point, run `purge-tenant --tenant <slug> --operator <you>
    --confirm <slug> --skip-grace --reason "re-purge after restore"`
    (deployment/OFFBOARDING.md). Backups last 7 days, so the exposure is
-   at most 7 days old.
+   at most 7 days old. A tenant listed as `purged` that still shows rows
+   in the counts is purged again the same way (no `--skip-grace` needed).
 5. Point `DATABASE_URL` and `MIGRATE_DATABASE_URL` (Railway, both
    services) at the new instance and redeploy.
 

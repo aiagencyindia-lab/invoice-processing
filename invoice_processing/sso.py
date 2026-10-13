@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple
 
 from .api.auth import AuthError, Principal, principal_from_claims
+from .offboarding import OPEN
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +75,6 @@ def _unavailable(exc: Exception) -> AuthError:
 SUSPENDED = (
     "This organisation's account is suspended. Contact support to restore it."
 )
-# None: no tenants row at all, which no write can reach (the foreign key).
-OPEN = (None, "active")
 
 
 def _record_refusal(services: SsoServices, ctx, payload: dict) -> None:
