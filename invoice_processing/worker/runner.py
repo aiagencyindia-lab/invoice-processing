@@ -847,8 +847,11 @@ class Worker:
         max_attempts: int = MAX_ATTEMPTS,
         attempts: AttemptLog | None = None,
         clock: Callable[[], float] = time.monotonic,
+        tenant_status: Callable[[str], str | None] | None = None,
     ):
         self.clock = clock
+        # None without a database: no tenants rows, nothing to close.
+        self.tenant_status = tenant_status
         self._last_scan: float | None = None
         self.queue = queue
         self.claims = claims
@@ -902,6 +905,37 @@ class Worker:
             observability.current_tenant_id.reset(tokens[1])
             observability.current_document_id.reset(tokens[2])
 
+    def _refuse_closed_tenant(self, message: Message) -> str | None:
+        """Dead-letter a suspended or purged tenant's job; None to go on.
+
+        Dead-lettered rather than dropped, so a tenant reactivated by mistake
+        loses nothing. A purged tenant gets no audit row: its trail is gone.
+        """
+        tenant_id = str(message.payload.get("tenant_id") or "")
+        if self.tenant_status is None or not tenant_id:
+            return None
+        from ..sso import OPEN  # noqa: PLC0415 - sso imports the API stack
+
+        try:
+            status = self.tenant_status(tenant_id)
+        except Exception:
+            logger.exception("Tenant status lookup failed; retrying the job.")
+            self.queue.nack(message)
+            return "retry"
+        if status in OPEN:
+            return None
+        self._dead_letter(
+            message,
+            "tenant suspended",
+            event=(
+                "rematch_dead_lettered"
+                if message.payload.get("type") == REMATCH
+                else "document_dead_lettered"
+            ),
+            record=status != "purged",
+        )
+        return "dead-lettered:tenant-closed"
+
     def _handle(self, message: Message) -> str:
         """Process one message. Returns what happened, for the caller to log.
 
@@ -909,6 +943,9 @@ class Worker:
         ended in none of them would leave the message to be redelivered on lease
         expiry, which looks like a hang.
         """
+        refused = self._refuse_closed_tenant(message)
+        if refused is not None:
+            return refused
         if message.payload.get("type") == REMATCH:
             # No document and no claim: re-matching twice is idempotent.
             return self._handle_rematch(message)
@@ -1164,12 +1201,15 @@ class Worker:
         message: Message,
         reason: str,
         event: str = "document_dead_lettered",
+        record: bool = True,
     ) -> None:
         dead_letter = getattr(self.queue, "dead_letter", None)
         if dead_letter is not None:
             dead_letter(message, reason)
         else:  # pragma: no cover - every queue here implements it
             self.queue.ack(message)
+        if not record:
+            return
         self._emit(
             str(message.payload.get("tenant_id") or ""),
             str(

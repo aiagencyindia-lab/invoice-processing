@@ -14,6 +14,7 @@ import sys
 
 from .. import observability
 from ..api import service
+from ..db.repositories import PgUserDirectory
 from ..gcp_credentials import materialise_credentials
 from .queue import LocalQueue, get_queue
 from .runner import AttemptLog, Worker, _worker_id
@@ -77,6 +78,12 @@ def main(argv: list[str] | None = None) -> int:
         # Pub/Sub reports every redelivery as attempt 1 unless the
         # subscription has a dead-letter policy, and this one does not.
         attempts=AttemptLog(service.get_cases()),
+        # Only with a database: there are no tenants rows to close without one.
+        tenant_status=(
+            PgUserDirectory().tenant_status
+            if service._database_configured()
+            else None
+        ),
     )
     if args.once:
         for outcome in worker.run_once():

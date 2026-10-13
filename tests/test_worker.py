@@ -1711,3 +1711,88 @@ class TestTheDuplicateCorpusIsInvoicesOnly:
         )()
 
         assert [key.case_id for key in corpus] == ["inv"]
+
+
+class TestClosedTenants:
+    def _worker(self, queue, claims, audit, statuses, handler=None):
+        def lookup(tenant_id):
+            status = statuses.get(tenant_id, "active")
+            if isinstance(status, Exception):
+                raise status
+            return status
+
+        return Worker(
+            queue=queue,
+            claims=claims,
+            handler=handler or Handler(),
+            audit=audit,
+            tenant_status=lookup,
+        )
+
+    def test_a_suspended_tenants_document_is_dead_lettered_not_run(
+        self, queue, claims, audit
+    ):
+        handler = Handler()
+        worker = self._worker(
+            queue, claims, audit, {"tenant-acme": "suspended"}, handler
+        )
+        queue.publish(work_message())
+        assert worker.handle(queue.pull()[0]) == "dead-lettered:tenant-closed"
+        assert handler.calls == 0
+        dead = queue.dead_letters()
+        assert dead[0]["dead_letter_reason"] == "tenant suspended"
+        assert [e[1] for e in audit.events] == ["document_dead_lettered"]
+
+    def test_a_purged_tenants_document_writes_no_audit_row(
+        self, queue, claims, audit
+    ):
+        worker = self._worker(queue, claims, audit, {"tenant-acme": "purged"})
+        queue.publish(work_message())
+        assert worker.handle(queue.pull()[0]) == "dead-lettered:tenant-closed"
+        assert audit.events == []
+
+    def test_a_suspended_tenants_rematch_is_dead_lettered(
+        self, queue, claims, audit
+    ):
+        worker = self._worker(
+            queue, claims, audit, {"tenant-acme": "suspended"}
+        )
+        queue.publish(
+            {
+                "type": runner.REMATCH,
+                "tenant_id": "tenant-acme",
+                "case_id": "c1",
+            }
+        )
+        assert worker.handle(queue.pull()[0]) == "dead-lettered:tenant-closed"
+        assert [e[1] for e in audit.events] == ["rematch_dead_lettered"]
+
+    def test_a_failed_status_lookup_retries(self, queue, claims, audit):
+        worker = self._worker(
+            queue, claims, audit, {"tenant-acme": RuntimeError("db down")}
+        )
+        queue.publish(work_message())
+        assert worker.handle(queue.pull()[0]) == "retry"
+        assert queue.depth() == 1
+
+    def test_no_lookup_means_no_check(self, queue, claims, audit):
+        """A worker without a database has no tenants to close."""
+        worker = Worker(queue=queue, claims=claims, handler=Handler())
+        queue.publish(work_message())
+        assert worker.handle(queue.pull()[0]) == "done"
+
+
+class TestEscalationSweepSkipsClosedTenants:
+    def test_only_active_tenants_are_swept(self, scratch_db):
+        url = scratch_db("sweep.db")
+        engine = get_engine(url)
+        models.Base.metadata.drop_all(engine)
+        create_all(url)
+        with tenant_session("", url) as session:
+            session.add(models.Tenant(id="t-open", slug="open", name="Open"))
+            session.add(
+                models.Tenant(
+                    id="t-shut", slug="shut", name="Shut", status="suspended"
+                )
+            )
+        assert PgApprovalRepository(url).tenant_ids() == ["t-open"]

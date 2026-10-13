@@ -1758,11 +1758,16 @@ class PgApprovalRepository:
             return self._step_dict(step)
 
     def tenant_ids(self) -> list[str]:
-        """Every tenant id. The one deliberately cross-tenant read here, like
-        `PgDocumentRepository.tenant_id_for_slug`: the SLA sweep has to visit
-        each tenant to find its overdue steps, and `tenants` has no RLS."""
+        """Every active tenant id. The one deliberately cross-tenant read
+        here, like `PgDocumentRepository.tenant_id_for_slug`: the SLA sweep
+        has to visit each tenant to find its overdue steps, and `tenants` has
+        no RLS. A suspended tenant's approvals stop escalating."""
         with tenant_session("", self.url) as session:
-            return list(session.scalars(select(Tenant.id)))
+            return list(
+                session.scalars(
+                    select(Tenant.id).where(Tenant.status == "active")
+                )
+            )
 
     def manager_of(self, tenant_id: str, email: str) -> str | None:
         with tenant_session(tenant_id, self.url) as session:
