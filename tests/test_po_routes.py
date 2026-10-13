@@ -519,6 +519,8 @@ def test_grn_import_queues_a_rematch_per_held_case(env, tmp_path, monkeypatch):
         "tenant_id": TENANT,
         "case_id": "held",
         "po_number": "PO9001",  # as the receipt store reports it, normalised
+        # The upload's own request, so the re-match's lines join it.
+        "request_id": r.headers["x-request-id"],
     }
 
 

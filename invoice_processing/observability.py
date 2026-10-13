@@ -21,8 +21,6 @@ from datetime import datetime, timezone
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
 
-from .api import preflight
-
 HANDLER_NAME = "ledgerly"
 TEXT_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 _DROP_HEADERS = {"authorization", "cookie", "x-dev-principal"}
@@ -32,14 +30,15 @@ _STANDARD = set(vars(logging.LogRecord("", 0, "", 0, "", (), None))) | {
     "asctime",
 }
 
+# The request id is set by the API middleware and by the worker per job;
+# api.auth re-exports this same object, which the audit context reads.
+current_request_id: ContextVar[str] = ContextVar("request_id", default="")
 current_tenant_id: ContextVar[str] = ContextVar("tenant_id", default="")
 current_document_id: ContextVar[str] = ContextVar("document_id", default="")
 
 
 def _request_id() -> str:
-    from .api import auth  # noqa: PLC0415 -- auth must not import this module
-
-    return auth.current_request_id.get("")
+    return current_request_id.get("")
 
 
 def _stamp(record: logging.LogRecord) -> None:
@@ -106,6 +105,10 @@ def _json_wanted() -> bool:
     chosen = os.getenv("LOG_FORMAT", "").lower()
     if chosen:
         return chosen == "json"
+    # Here, not at module level: importing the api package loads the app,
+    # and this module must stay importable from anywhere without that.
+    from .api import preflight  # noqa: PLC0415
+
     return preflight.is_deployed()
 
 

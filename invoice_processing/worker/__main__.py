@@ -12,6 +12,7 @@ import json
 import logging
 import sys
 
+from .. import observability
 from ..api import service
 from ..gcp_credentials import materialise_credentials
 from .queue import LocalQueue, get_queue
@@ -34,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--poll-seconds", type=float, default=5.0)
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    observability.configure("worker")
     queue = get_queue()
 
     if args.dead:

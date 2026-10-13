@@ -37,6 +37,7 @@ from typing import Annotated, Any, Protocol, runtime_checkable
 
 from fastapi import Depends, HTTPException, Request
 
+from .. import observability
 from ..ports import RunContext
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,9 @@ class Principal:
 # Set once per request by the middleware in `service`, read here so a
 # RunContext carries them without every endpoint having to pass the Request
 # around. Both were columns the audit trail declared and never populated.
-current_request_id: ContextVar[str] = ContextVar("request_id", default="")
+# The request id lives in observability so the worker and the log formatter
+# can read it without importing the API; this is the same object.
+current_request_id = observability.current_request_id
 current_client_ip: ContextVar[str] = ContextVar("client_ip", default="")
 
 
