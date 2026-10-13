@@ -58,6 +58,35 @@ account numbers, and no line names an email address on purpose. Exception text i
 logged as raised, so a database error can repeat a value it was given (a
 duplicate address, say); that is the one way such a value reaches a log.
 
+## Data lifecycle
+
+**Retention.** Customer data is kept for the life of the account. The
+customer is the record-keeper under its own tax law (five years in
+Australia, six to eight under India GST), so we do not delete by age.
+
+**Offboarding.** Customers export what they need before their subscription
+ends. Then an operator suspends the tenant: sign-in, the API, email intake,
+the worker and approval escalations all refuse it from the next request.
+For 30 days it can be reactivated. After that, or at once on the
+customer's written request, the operator purges it: every row in every
+tenant table, every document, and the tenant's audit trail. The tenants row
+stays as the record (id, slug, name, region, who suspended and purged it,
+when, and how many rows and documents went), and the slug stays reserved.
+The purge runs as the database owner role; the service's own role cannot
+delete an audit row. Steps: [deployment/OFFBOARDING.md](deployment/OFFBOARDING.md).
+
+**What outlives a purge, and for how long.** Database backups and
+point-in-time logs: up to 7 days. Deleted documents in Cloud Storage soft
+delete: up to 7 days. Application logs on Railway: 7 days (30 on Pro).
+Sentry events: 90 days. Logs and Sentry carry ids, never invoice content,
+and no line names an email address on purpose.
+
+**Backup and restore.** Cloud SQL daily backups (7 kept) and
+point-in-time recovery. Targets: data loss of minutes (RPO), service back
+within 4 hours (RTO). A restore drill runs every 6 months and after any
+production restore, checked by `python -m invoice_processing.db.restore_check`.
+Steps and the drill log: [deployment/BACKUP_RESTORE.md](deployment/BACKUP_RESTORE.md).
+
 ## Known gap
 
 These rules are followed and evidenced but not enforced by GitHub: branch

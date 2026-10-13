@@ -240,3 +240,23 @@ Customer self-service offboarding in the app; an export bundle; age-based or
 per-tenant retention; automatic Identity Platform account deletion; a real
 Cloud SQL restore drill (waits for production); an offsite copy of the audit
 trail.
+
+## Changes made while planning (2026-10-13)
+
+- The purge policy is not in `rls.enable_rls_statements` (migrations replay
+  it as history, so the initial migration would create it and the new one
+  would then fail); `rls.audit_purge_policy_statements()` serves the new
+  migration only.
+- The restore check is `invoice_processing/db/restore_check.py`
+  (`python -m invoice_processing.db.restore_check`), not a script, so it
+  ships in the image and reuses `TENANT_TABLES` and `rls`.
+- A tenant status of `None` (no tenants row at all) keeps today's
+  behaviour; every other value but `active` is refused. On the joined
+  `find` path `None` cannot happen.
+- A tenant-claim token with no users row is now refused for a suspended or
+  purged tenant (`PgUserDirectory.tenant_status`); before, it was admitted
+  with its claim role and could have written into a purged tenant.
+- The escalation sweep (`PgApprovalRepository.tenant_ids`) visits active
+  tenants only.
+- Nothing writes an audit row into a purged tenant: sign-in refusals and
+  worker dead letters for one are unrecorded.

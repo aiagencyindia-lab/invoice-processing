@@ -174,10 +174,13 @@ jobs:
                         tests/test_supporting_routes.py \
                         tests/test_tenant_isolation_api.py \
                         tests/test_signup_api.py \
+                        tests/test_offboarding.py \
+                        tests/test_restore_check.py \
                         "tests/test_gcs_and_migrations.py::TestMigration::test_new_tenant_tables_have_forced_isolation_policies_after_upgrade" \
                         "tests/test_gcs_and_migrations.py::TestMigration::test_decided_at_backfill_sees_rows_under_forced_rls" \
                         "tests/test_gcs_and_migrations.py::TestMigration::test_sso_lookup_sentinel_reads_domains_and_nothing_else" \
-                        "tests/test_gcs_and_migrations.py::TestMigration::test_app_role_cannot_rewrite_the_audit_trail" -q
+                        "tests/test_gcs_and_migrations.py::TestMigration::test_app_role_cannot_rewrite_the_audit_trail" \
+                        "tests/test_gcs_and_migrations.py::TestMigration::test_only_the_owner_can_purge_and_only_the_named_tenant" -q
 
   # A separate toolchain, so a separate job: a broken npm install must not
   # hide a green Python suite, or the other way round.
