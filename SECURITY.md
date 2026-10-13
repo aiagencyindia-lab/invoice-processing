@@ -31,6 +31,31 @@ updates" turned on in the repository's Code security settings.
 The merge history is the record: every change since the first pull request
 is a merge commit naming its pull request, with its CI run attached.
 
+## Logs and monitoring
+
+The API and the worker write one JSON line per event to standard output
+when deployed (`LOG_FORMAT=json`, the default under `ENV=production` or
+`staging`). Every line carries `request_id`, `tenant_id` and `document_id`;
+the API writes one line per request (method, route, status, duration, ip)
+and the worker one per job (outcome, attempt, duration) and per pipeline
+step. The request id is also returned to the caller as `X-Request-Id`, shown
+to a user on a server error, carried on the queue message to the worker, and
+stored on every audit event, so one id joins a user's report, the log line,
+the worker's lines and the audit trail.
+
+Logs are kept by the hosting platform for its retention window (Railway:
+7 days on Hobby, 30 on Pro). The append-only audit trail in Postgres
+(`audit_events`, which the application role can only insert into and read)
+is the long-retention security record; an admin exports it as CSV from the
+Activity page or `GET /api/audit/export`.
+
+Errors are reported to Sentry when `SENTRY_DSN` is set: unhandled request
+errors, jobs that exhaust their retries, and anything logged at ERROR. PII
+collection is off, request bodies are never sent, and `Authorization`,
+`Cookie` and `X-Dev-Principal` headers are removed before an event leaves
+the process. Lines never carry bearer tokens, request bodies, bank account
+numbers or email addresses; exception text is logged as raised.
+
 ## Known gap
 
 These rules are followed and evidenced but not enforced by GitHub: branch

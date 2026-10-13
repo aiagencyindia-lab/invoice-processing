@@ -32,6 +32,11 @@ Railway service variables:
 | `DATABASE_URL` | the app role's connection (API and worker) |
 | `MIGRATE_DATABASE_URL` | the owner role's connection (release step only) |
 | `RUN_MIGRATIONS` | `0` on BOTH the API and the worker service: each migrates at startup otherwise (`invoice_processing/worker/__main__.py` too), and as the app role that fails |
+| `LOG_LEVEL` | `INFO`; `WARNING` to quieten |
+| `LOG_FORMAT` | unset: JSON when `ENV` is production or staging, text otherwise |
+| `SENTRY_DSN` | the Sentry project's DSN, on both services; unset means no reporting |
+
+`RAILWAY_GIT_COMMIT_SHA`, which Railway sets, becomes the Sentry release.
 
 Pre-deploy command: `python -m invoice_processing.db.migrate`
 
