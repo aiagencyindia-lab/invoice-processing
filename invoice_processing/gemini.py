@@ -22,6 +22,9 @@ from google import genai
 from google.genai import types
 
 DEFAULT_TIMEOUT_SECONDS = 180.0
+# The SDK's deadline is a backstop for a call the guard has already given up
+# on, so it lands after the guard's: see timeout_ms.
+SDK_TIMEOUT_MARGIN_SECONDS = 15
 
 
 class GeminiEmptyResponse(RuntimeError):
@@ -52,11 +55,18 @@ def location() -> str:
 
 
 def timeout_ms() -> int:
-    """VERTEX_TIMEOUT_SECONDS, in the milliseconds the SDK wants."""
+    """The request deadline, in the milliseconds the SDK wants.
+
+    The SDK also sends it to Vertex, which aborts the call with 504
+    DEADLINE_EXCEEDED when it passes. The guard waits VERTEX_TIMEOUT_SECONDS
+    and treats its own timeout as the document's problem (the fallback
+    stays); a 504 would read as an outage instead. So the SDK's deadline
+    comes a margin later and only ever ends a call nobody is waiting for.
+    """
     seconds = float(
         os.getenv("VERTEX_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
     )
-    return int(seconds * 1000)
+    return int((seconds + SDK_TIMEOUT_MARGIN_SECONDS) * 1000)
 
 
 # ponytail: one process-wide client; per-tenant credentials would key the cache.

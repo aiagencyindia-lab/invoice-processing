@@ -16,7 +16,7 @@ import os
 import pytest
 from dotenv import load_dotenv
 
-from benchmark.harness import collect, dataset, run, score, stack_main
+from benchmark.harness import collect, compare, dataset, run, score, stack_main
 from invoice_processing import po_matching
 
 
@@ -278,6 +278,22 @@ class TestAPurchaseOrderGoesToAPerson:
         counts = self._metrics()["counts"]
         assert counts["incorrectly_routed"] == 1
         assert counts["errors_or_no_decision"] == 1  # only the NONE
+
+
+class TestAComparisonShowsRouting:
+    """A routing that lowers accuracy must show up as a moved count, or a
+    before/after table reads as "nothing moved, accuracy dropped"."""
+
+    def test_both_routing_counts_are_rows(self):
+        before = score.decision_metrics(
+            {"TECH-INV-084": {"final_decision": "REJECT"}}
+        )
+        after = score.decision_metrics(
+            {"TECH-INV-084": {"final_decision": "SUPPORTING"}}
+        )
+        rows = compare.count_rows(before, after)
+        assert "| correctly routed to a clerk | 0 | 1 | +1 |" in rows
+        assert "| wrongly routed to a clerk | 0 | 0 | +0 |" in rows
 
 
 class TestTheMatrixIsIntact:

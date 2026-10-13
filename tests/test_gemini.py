@@ -86,10 +86,24 @@ def test_the_settings_reach_the_request(monkeypatch):
     assert contents == "hello"
     assert (config.temperature, config.seed) == (0, 42)
     assert config.response_mime_type == "application/json"
-    assert config.http_options.timeout == 42_000  # milliseconds
+    # milliseconds, and later than the guard's own 42 s: see the next test
+    assert (
+        config.http_options.timeout
+        == (42 + gemini.SDK_TIMEOUT_MARGIN_SECONDS) * 1000
+    )
 
 
-def test_unset_settings_are_not_sent(monkeypatch):
+def test_the_guard_gives_up_before_vertex_does(monkeypatch):
+    """The SDK also sends its timeout to Vertex, which then aborts the call
+    itself with 504 DEADLINE_EXCEEDED. If that won the race, a slow document
+    would read as an outage (retried, then ERROR) instead of the guard's
+    timeout (which keeps the document's fallback). The SDK's deadline is the
+    backstop for an abandoned call, so it must come after the guard's."""
+    monkeypatch.setenv("VERTEX_TIMEOUT_SECONDS", "180")
+    assert gemini.timeout_ms() > 180 * 1000
+
+
+def test_unset_settings_are_left_to_the_sdk(monkeypatch):
     rec = Recorder()
     _use(monkeypatch, rec)
     gemini.Model("gemini-2.5-pro").generate_content("p")
