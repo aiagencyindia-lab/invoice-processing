@@ -246,11 +246,8 @@ class TestClaimedTokens:
     def test_no_row_is_logged_so_the_gap_is_visible(self, caplog):
         with caplog.at_level("WARNING", logger="invoice_processing.sso"):
             sso.resolve_principal(claimed(), services(), now=NOW)
-        assert (
-            "claimed token for pat@acme.com has no users row in"
-            in (caplog.text)
-            and "claim role clerk stands" in caplog.text
-        )
+        assert "has no users row in" in caplog.text
+        assert "claim role clerk stands" in caplog.text
 
     def test_a_deactivated_user_is_refused_on_every_request(self):
         off = dict(ROW, is_active=False)
@@ -491,3 +488,17 @@ class TestEnforceActive:
             sso.enforce_active(p, services(directory=FakeDirectory([row]))).role
             == "admin"
         )
+
+
+def test_sso_never_logs_an_email_address(caplog):
+    """A log line is read by more people than the audit trail; the uid and
+    tenant identify the account without naming the person."""
+    d = FakeDirectory(
+        [dict(ROW, email="new@acme.com", uid="fb-old", role="clerk")],
+        domains=[BOUND],
+    )
+    with caplog.at_level("WARNING", logger="invoice_processing.sso"):
+        sso.resolve_principal(claimed(), services(), now=NOW)
+        sso.resolve_principal(unclaimed(), services(directory=d), now=NOW)
+    assert caplog.records, "both paths log a warning"
+    assert "@" not in caplog.text

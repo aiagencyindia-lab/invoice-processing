@@ -109,7 +109,10 @@ def _touch(services: SsoServices, row: dict, now: datetime) -> None:
             services.directory.touch_login(row["tenant_id"], row["id"], now)
         except Exception as exc:  # a lost timestamp must not cost a request
             logger.warning(
-                "last_login_at not updated for %s: %s", row.get("email"), exc
+                "last_login_at not updated for uid %s in %s: %s",
+                row.get("uid"),
+                row.get("tenant_id"),
+                exc,
             )
 
 
@@ -145,8 +148,8 @@ def resolve_principal(
         if row is None:
             # Deactivation cannot reach a person with no row; say so.
             logger.warning(
-                "claimed token for %s has no users row in %s; claim role %s stands",
-                base.email,
+                "claimed token for uid %s has no users row in %s; claim role %s stands",
+                base.user_id,
                 base.tenant_id,
                 base.role,
             )
@@ -221,8 +224,8 @@ def resolve_principal(
                     # The verified address is the identity; the account
                     # behind it changed (deleted and re-created, say).
                     logger.warning(
-                        "Relinking %s from uid %s to %s",
-                        email,
+                        "Relinking a user in %s from uid %s to %s",
+                        tenant_id,
                         row["uid"],
                         uid,
                     )
@@ -242,7 +245,7 @@ def resolve_principal(
             )
         except Exception as exc:
             # The row is the authority now; the next request writes the claim.
-            logger.warning("Claims not written for %s: %s", email, exc)
+            logger.warning("Claims not written for uid %s: %s", uid, exc)
     if not created:  # provision already stamped last_login_at
         _touch(services, {**row, "tenant_id": tenant_id}, now)
     return principal

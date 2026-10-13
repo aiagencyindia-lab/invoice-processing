@@ -40,3 +40,4 @@ invoice_processing/data/item_code_cache.json
 # Benchmark: the 300 PDFs (33 MB, symlinked from the dataset drop) and run state
 benchmark/dataset/documents
 benchmark/runs/
+api.log
