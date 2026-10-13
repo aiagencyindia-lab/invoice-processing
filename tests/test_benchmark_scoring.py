@@ -10,12 +10,13 @@ dataset is edited -- which it must not be.
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
 from dotenv import load_dotenv
 
-from benchmark.harness import dataset, score, stack_main
+from benchmark.harness import dataset, run, score, stack_main
 from invoice_processing import po_matching
 
 
@@ -307,3 +308,23 @@ class TestALocalRunStaysLocal:
         stack_main.configure_environment(tmp_path)
         load_dotenv(dataset.REPO / ".env")
         assert not os.getenv("GCS_BUCKET")
+
+
+class TestACleanRunExitsCleanly:
+    """The scorer counts with a Counter, and a Counter writes no key it never
+    incremented: a run where every invoice was decided has no
+    errors_or_no_decision at all. That is a clean run, not a broken one."""
+
+    def _write(self, tmp_path, counts):
+        (tmp_path / "results.json").write_text(
+            json.dumps({"decision": {"counts": counts}})
+        )
+        return tmp_path
+
+    def test_no_undecided_key_means_none_undecided(self, tmp_path):
+        out = self._write(tmp_path, {"total": 14, "rejected": 10})
+        assert run.undecided(out) == 0
+
+    def test_undecided_invoices_are_still_counted(self, tmp_path):
+        out = self._write(tmp_path, {"total": 14, "errors_or_no_decision": 2})
+        assert run.undecided(out) == 2

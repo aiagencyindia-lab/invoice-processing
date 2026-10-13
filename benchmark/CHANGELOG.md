@@ -1493,6 +1493,63 @@ REJECT -> SUPPORTING change. The harness was not changed.
 **Regression status.** Full suite 2287 passed, 1 skipped; ruff check and
 format clean.
 
+## 2026-10-13 — google-adk 2.x: no benchmark decision moves
+
+**The change.** `uv.lock` moves to google-adk 2.11.0, google-cloud-aiplatform
+2.4.0, Starlette 1.7.0 and FastAPI 0.141.1, so the five Starlette advisories
+no longer need a waiver. No product code changed: every Gemini call still goes
+through `vertexai.generative_models`, whose implementation is byte-identical
+between aiplatform 1.148.0 and 2.4.0 apart from one comment, and
+`GenerationConfig` still carries `temperature=0, seed=42`.
+
+**Control, not the recording.** Each measurement was taken twice on the same
+day: once on the branch, once on `main` (`ea11ab1`) with the old lock
+(google-adk 1.30.0, Starlette 0.52.1) in a scratch worktree, both Python
+3.12.12. The question is whether the libraries change anything, and the old
+recording cannot answer it: code merged since and the model itself have both
+moved.
+
+**Replay (no model calls), 300 records of `after-9f8c923`.** `replay-adk2`
+and the old-lock replay agree on all 300 records (decision, first failing
+step, rejection template, work-authorization verdict). Both score **98.3%**
+decision accuracy, as has every replay over `9f8c923` since `bca701a`
+(`replay-head-on-9f8c923`, `replay-tokens-on-9f8c923` and others). The
+spec's expected 98.0% was the figure for replays over a different recording,
+`ecb9bbd` (`replay-three-way-final`, `replay-scanned-docs`); the two
+recordings differ in what the model read, so their replays differ on ten
+records and neither figure says anything about the other. (A first draft of
+this entry blamed the ten on code merged since; that was wrong.)
+
+**Live smoke, the 14 in `smoke.txt`, project `rasayan`.** `smoke-adk2` and
+the old-lock smoke agree on all 14 decisions and first failing steps; both
+score 85.7%. Their extracted fields differ on 8 of 14 even at seed 42; no
+decision moves. Against the 2026-10-07 recording, 6 of 14 differ on both locks:
+
+- TECH-INV-072, MFG-INV-073 (REJECT -> ACCEPT): planted duplicates of
+  TECH-INV-043 and MFG-INV-015, which are not in `smoke.txt`. Step 3.1 has
+  nothing to match in a subset; it caught both in the full run. A subset
+  limitation, not a regression.
+- MFG-INV-064 (REJECT -> ACCEPT, now correct), SVC-INV-074, SVC-INV-059,
+  TECH-INV-065: the model reads the vendor GSTIN differently than on
+  2026-10-07, on both locks. Decisions are unchanged except 064; first
+  failing steps move.
+
+**Harness findings, not fixed here.** `run.py`'s `undecided()` raises
+`KeyError: 'errors_or_no_decision'` on a run with no undecided invoices
+(the scorer's `Counter` never stores a zero), so a clean live run exits 1
+after writing its report. `replay` given a run directory that does not exist
+replays nothing and exits 0.
+
+**Side effects measured.** Cold `import invoice_processing.api.service`,
+which every API and worker process pays, takes 2.5 s on the new lock against
+7.5 s on the old (aiplatform alone 1.0 s against 4.2 s). google-auth 2.62
+now warns once per process that grpcio below 1.83 lacks post-quantum TLS
+and will be refused from April 2027; the next grpcio bump clears it.
+
+**Regression status.** Full suite 2679 passed, 4 skipped; all nine gates in
+`gates.sh` pass (`benchmark/runs/gates-adk2`); the CI Postgres list 825
+passed; `scripts/audit_gate.py` passes with an empty allowlist.
+
 ## 2026-10-13 — Replay: the checksum verdict follows the cleaned tax ID
 
 **Problem.** Replays over the run at `9f8c923` rejected `MFG-INV-064`, a clean

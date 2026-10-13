@@ -496,8 +496,9 @@ test("a clerk corrects a scanned receipt and it clears the held invoice", async 
   // The scan itself is served beside what was read from it.
   // A blob: URL, fetched with the bearer token: the API refuses to be
   // framed (X-Frame-Options: DENY), and a bare src carries no token anyway.
-  const scan = await drawer.locator("iframe").getAttribute("src");
-  expect(scan).toMatch(/^blob:/);
+  const frame = drawer.locator("iframe");
+  await expect(frame).toHaveAttribute("src", /^blob:/);
+  const scan = await frame.getAttribute("src");
   expect(
     await page.evaluate(async (url) => (await fetch(url)).headers.get("content-type"), scan!),
   ).toBe("application/pdf");

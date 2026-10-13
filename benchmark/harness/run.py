@@ -47,7 +47,8 @@ def preflight() -> str | None:
 def undecided(out) -> int:
     """Invoices the pipeline finished without deciding (ERROR or NONE)."""
     results = json.loads((out / "results.json").read_text(encoding="utf-8"))
-    return results["decision"]["counts"]["errors_or_no_decision"]
+    # The scorer's Counter writes no key it never incremented, so absent is 0.
+    return results["decision"]["counts"].get("errors_or_no_decision", 0)
 
 
 def main(argv=None) -> int:
