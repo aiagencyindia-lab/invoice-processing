@@ -1593,3 +1593,69 @@ decisions move and accuracy stays **98.3%**:
 
 **Regression status.** Full suite 2682 passed, 4 skipped; ruff check and
 format clean.
+
+## 2026-10-13 — google-genai client: no decision moves
+
+**The change.** Every Gemini call now goes through `invoice_processing/gemini.py`
+on the `google-genai` SDK (2.29.0) instead of the deprecated
+`vertexai.generative_models`; `google-cloud-aiplatform` and the `vertexai` shim
+left the runtime dependencies. Each caller keeps its settings (the pipeline's
+temperature 0 and seed 42, the critic's JSON output). The one behaviour change:
+every request carries `VERTEX_TIMEOUT_SECONDS` as its deadline, which the SDK
+also sends to Vertex, and the guard classifies by exception class as well as
+text so the SDK's own `httpx.ReadTimeout` counts as an outage.
+
+**Same-day A/B, the 14 in `smoke.txt`.** `main` (`d20e3bb`, old client) in a
+scratch worktree and the branch, within the hour, both on google-adk 2.11 and
+Python 3.12.12:
+
+| | old client | genai |
+|---|---|---|
+| Decisions and first failing steps | 14 | identical, 14 of 14 |
+| Decision accuracy | 85.7% | 85.7% |
+| Extractions differing | | 6 of 14, labels only |
+| LLM calls per invoice | 2.86 | 2.86 |
+| Cost per invoice | $0.0157 | $0.0155 |
+| Mean processing | 62.1 s | 56.9 s |
+
+The six extraction differences are a line's `tax_code` (`GST` against blank),
+line breaks inside descriptions, an `other_charges` description and one
+`tax_breakdown` present against empty; every amount, quantity and rate is the
+same. Two same-day runs on the old client differed on 8 of 14 earlier today.
+(Both score 85.7% because the subset holds two planted duplicates whose
+originals it does not contain.)
+
+**Full live run, 300 invoices (`after-genai`, `84e56fb`), against `after-9f8c923`.**
+
+| | `after-9f8c923` (10-07) | `after-genai` |
+|---|---|---|
+| Decision accuracy | 98.0% | **98.3%** |
+| Wrong accepts / wrong rejects | 3 / 3 | 3 / 2 |
+| Routed to a clerk (purchase orders) | — | 6, all correct |
+| Rejection reason exact / family / wrong | 218 / 24 / 10 | 222 / 21 / 3 |
+| Posted untouched (of 45 clean) | 4 | 39 |
+| Extraction: header / totals / lines / tax | 97.5 / 99.3 / 91.6 / 99.8% | 97.8 / 99.2 / 91.6 / 99.8% |
+| Cost | $3.96 | $3.99 |
+| Median / p95 processing | 50.0 s / 98.5 s | 51.5 s / 109.5 s |
+| LLM calls | 680 | 670 |
+
+Nine decisions differ from 10-07, none from the client: the six purchase
+orders now go to a clerk (PR #11, after 10-07); `MFG-INV-064` is accepted
+(GSTIN read correctly) and `MFG-INV-020` with it, past 3.2 to the 4.2
+line-discount gap it carries (see the replay entry above); `TECH-INV-025` is
+rejected at 2.1 (the MV-018 lump-sum fix). Posted-untouched moved with the
+routing work since 10-07. One call (TECH-INV-061) met a Vertex 504
+`DEADLINE_EXCEEDED` at the 180 s deadline; the guard retried it and it
+succeeded.
+
+**Harness fix found by the run.** The run first scored **96.3%** with six
+"undecided" invoices and `run.py` called it invalid: the six purchase orders,
+which the harness recorded as `NONE` because a routed document leaves no
+decision artifact. The same six on `main`'s old client, same day, came back
+`NONE` too. `collect.record` now records `SUPPORTING` when the worker stored a
+supporting extraction, and `score.py` counts it correct for a
+`PURCHASE_ORDER` document and wrong for anything else
+(`tests/test_benchmark_scoring.py::TestAPurchaseOrderGoesToAPerson`). The six
+already-written records were corrected from each stack's
+`supporting_documents` table (4 in A, 2 in C, all `purchase_order`) and the
+run re-scored; the originals are in `after-genai/before-supporting/`.
