@@ -150,12 +150,11 @@ _GENERATION_SEED = int(os.getenv("GENERATION_SEED", "42"))
 
 
 # How long one Vertex call may take before the caller stops waiting. The
-# guard enforces it, and gemini.Model also hands it to the SDK as the request
-# timeout, so a stalled socket is cut at both layers. Without it a stalled
-# request holds the worker until its queue lease expires, gets redelivered,
-# stalls again, and
-# after three attempts dead-letters an invoice nobody ever rejected. 180s is
-# roughly three times the slowest healthy extraction observed.
+# guard enforces it; gemini.Model also gives the SDK a deadline a little
+# later, so an abandoned call is cut too. Without it a stalled request holds
+# the worker until its queue lease expires, gets redelivered, stalls again,
+# and after three attempts dead-letters an invoice nobody ever rejected. 180s
+# is roughly three times the slowest healthy extraction observed.
 VERTEX_TIMEOUT_SECONDS = float(os.getenv("VERTEX_TIMEOUT_SECONDS", "180"))
 
 

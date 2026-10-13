@@ -1600,10 +1600,17 @@ format clean.
 on the `google-genai` SDK (2.29.0) instead of the deprecated
 `vertexai.generative_models`; `google-cloud-aiplatform` and the `vertexai` shim
 left the runtime dependencies. Each caller keeps its settings (the pipeline's
-temperature 0 and seed 42, the critic's JSON output). The one behaviour change:
-every request carries `VERTEX_TIMEOUT_SECONDS` as its deadline, which the SDK
-also sends to Vertex, and the guard classifies by exception class as well as
-text so the SDK's own `httpx.ReadTimeout` counts as an outage.
+temperature 0 and seed 42, the critic's JSON output). Two behaviour changes.
+Every request now carries a deadline of `VERTEX_TIMEOUT_SECONDS` plus 15 s,
+which the SDK also sends to Vertex: the guard's own timeout still fires first
+(keeping a slow document's fallback), and ALF, rule drafting and eval, which
+call the model without the guard, can no longer hang at all. And the guard
+classifies by exception class as well as text, because httpx's transport
+failures (`ReadTimeout`, `ConnectError`, `RemoteProtocolError`, `ReadError`,
+`WriteError`) often carry no useful message; under gRPC they all read "503
+failed to connect to all addresses". The review caught the connection
+failures falling through to the keyword fallback before merge; the live
+runs below used the 180 s deadline without the margin.
 
 **Same-day A/B, the 14 in `smoke.txt`.** `main` (`d20e3bb`, old client) in a
 scratch worktree and the branch, within the hour, both on google-adk 2.11 and
