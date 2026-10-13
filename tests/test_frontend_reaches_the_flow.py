@@ -176,6 +176,25 @@ class TestSignIn:
             encoding="utf-8"
         )
 
+    def test_a_final_refusal_is_shown_not_sent_to_sign_up(self):
+        """A deactivated person and a suspended organisation are both
+        refused for good; the shell must show the server's sentence and a
+        sign-out link rather than send them to "Create your account". It
+        recognises them by pattern, so the pattern and the server's two
+        sentences are tied together here."""
+        import re  # noqa: PLC0415
+
+        from invoice_processing import sso  # noqa: PLC0415
+
+        found = re.search(r"const FINAL_REFUSAL = /(.+?)/;", self.shell())
+        assert found, "AppShell.tsx has no FINAL_REFUSAL pattern"
+        final = re.compile(found.group(1))
+        assert final.search(sso.SUSPENDED)
+        assert final.search("This account has been deactivated. Ask an admin")
+        assert not final.search(
+            "This account is not attached to an organisation."
+        )
+
     def test_a_sign_in_screen_exists(self):
         assert (FRONTEND / "components" / "SignIn.tsx").exists()
 
