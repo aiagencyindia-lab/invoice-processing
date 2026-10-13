@@ -15,7 +15,9 @@ import shutil
 import time
 from pathlib import Path
 
+import httpx
 import pytest
+from google.genai import errors
 
 from benchmark.harness import run
 from invoice_processing.llm_guard import (
@@ -73,6 +75,31 @@ class TestTheGuard:
     def test_a_document_error_is_still_raised_as_itself(self):
         with pytest.raises(ValueError):
             guarded_generate(Model(ValueError("bad schema")), "p", CallBudget())
+
+    def test_a_genai_server_error_is_retried_then_unavailable(self):
+        """google-genai formats errors as '<code> <status>. <details>'."""
+        exc = errors.ServerError(
+            503,
+            {
+                "error": {
+                    "code": 503,
+                    "message": "overloaded",
+                    "status": "UNAVAILABLE",
+                }
+            },
+        )
+        model = Model(exc)
+        with pytest.raises(LlmUnavailable):
+            guarded_generate(model, "p", CallBudget(deadline_seconds=30))
+        assert model.calls == 3
+
+    def test_an_httpx_timeout_is_infrastructure(self):
+        """The SDK's own per-request timeout fires as httpx.ReadTimeout, whose
+        message is empty. It is still an outage."""
+        model = Model(httpx.ReadTimeout(""))
+        with pytest.raises(LlmUnavailable):
+            guarded_generate(model, "p", CallBudget(deadline_seconds=30))
+        assert model.calls == 3
 
 
 def test_the_pipeline_returns_error_not_a_rejection(monkeypatch, tmp_path):

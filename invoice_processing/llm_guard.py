@@ -146,7 +146,9 @@ def guarded_generate(model, prompt, budget: CallBudget | None = None):
             print(f"      LLM call timed out after {timeout:.0f}s")
         except Exception as exc:  # classified below, not swallowed
             last_error = exc
-            message = str(exc)
+            # The SDK's own timeout arrives as httpx.ReadTimeout with an
+            # empty message; the class name says what the text does not.
+            message = f"{type(exc).__name__}: {exc}"
             if _matches(message, _ACCOUNT_ERROR_PATTERNS):
                 raise LlmUnavailable(
                     f"Model service refused the call: {message[:300]}"
