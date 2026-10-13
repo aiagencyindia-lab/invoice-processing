@@ -16,7 +16,7 @@ import os
 import pytest
 from dotenv import load_dotenv
 
-from benchmark.harness import dataset, run, score, stack_main
+from benchmark.harness import collect, dataset, run, score, stack_main
 from invoice_processing import po_matching
 
 
@@ -237,6 +237,47 @@ class TestPostedUntouched:
 
     def test_a_faulty_invoice_posted_untouched_is_counted_apart(self):
         assert self._metrics()["counts"]["posted_untouched_wrongly"] == 1
+
+
+class TestAPurchaseOrderGoesToAPerson:
+    """Since 2026-10-09 a lone PO is routed to a clerk to confirm instead of
+    being rejected as "not a tax invoice". That is a decision, and the right
+    one for a purchase order; it is neither an error nor "no decision"."""
+
+    def test_the_record_says_supporting(self):
+        sub = next(
+            s
+            for s in dataset.submissions("A")
+            if s.invoice_id == "TECH-INV-084"
+        )
+        rec = collect.record(
+            sub,
+            "doc-1",
+            {"supporting_extraction": {"po_number": "PO-1"}},
+            ingest_duplicate=False,
+            wall_seconds=1.0,
+            outcome="done",
+        )
+        assert rec["final_decision"] == "SUPPORTING"
+
+    def _metrics(self):
+        return score.decision_metrics(
+            {
+                "TECH-INV-084": {"final_decision": "SUPPORTING"},  # a PO
+                "TECH-INV-049": {"final_decision": "SUPPORTING"},  # an invoice
+                "TECH-INV-061": {"final_decision": "NONE"},
+            }
+        )
+
+    def test_a_purchase_order_routed_to_a_person_is_correct(self):
+        metrics = self._metrics()
+        assert metrics["counts"]["correctly_routed"] == 1
+        assert abs(metrics["decision_accuracy"] - 1 / 3) < 0.001
+
+    def test_an_invoice_routed_to_a_person_is_wrong_not_missing(self):
+        counts = self._metrics()["counts"]
+        assert counts["incorrectly_routed"] == 1
+        assert counts["errors_or_no_decision"] == 1  # only the NONE
 
 
 class TestTheMatrixIsIntact:
