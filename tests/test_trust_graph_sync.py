@@ -1,0 +1,193 @@
+"""v1 rows and imported history become one graph; engines read one shape."""
+
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+
+import pytest
+
+from invoice_processing.db import models
+from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.ports import RunContext
+from invoice_processing.trust.decide import FakeDecider
+from invoice_processing.trust.graph.links import LinkStore
+from invoice_processing.trust.graph.store import GraphStore
+from invoice_processing.trust.graph.sync import sync_tenant
+from invoice_processing.trust.graph.transactions import transactions
+from invoice_processing.trust.history.importer import HistoryImporter
+
+T = "tenant-acme"
+CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="sync")
+NOW = datetime(2026, 10, 14, tzinfo=timezone.utc)
+GSTIN = "27AAPFU0939F1ZV"
+
+
+@pytest.fixture
+def env(scratch_db):
+    url = scratch_db("sync.db")
+    models.Base.metadata.drop_all(get_engine(url))
+    create_all(url)
+    with tenant_session(T, url) as s:
+        s.add(models.Tenant(id=T, name="Acme", slug="acme", status="active"))
+        s.flush()
+        s.add(
+            models.Document(
+                tenant_id=T,
+                id="doc-1",
+                sha256="a" * 64,
+                storage_key="documents/a.pdf",
+                filename="a.pdf",
+            )
+        )
+        s.add(
+            models.Vendor(
+                tenant_id=T,
+                id="ven-1",
+                name="Acme Steel Pvt Ltd",
+                normalized_name="acme steel",
+                tax_id=GSTIN,
+            )
+        )
+        s.add(
+            models.PurchaseOrder(
+                tenant_id=T,
+                id="po-1",
+                po_number="PO1",
+                po_number_display="PO-1",
+                vendor_name="Acme Steel Pvt Ltd",
+                total_amount=Decimal("1000"),
+                currency="INR",
+                status="open",
+                uploaded_by="clerk@x.test",
+            )
+        )
+        s.flush()
+        s.add(
+            models.PoLine(
+                tenant_id=T,
+                id="pol-1",
+                purchase_order_id="po-1",
+                line_number=1,
+                description="bolts",
+                qty_ordered=Decimal("10"),
+                unit_price=Decimal("100"),
+            )
+        )
+        s.add(
+            models.GoodsReceipt(
+                tenant_id=T,
+                id="grn-1",
+                grn_number="GRN1",
+                purchase_order_id="po-1",
+                received_on="2026-01-04",
+                recorded_by="clerk@x.test",
+            )
+        )
+        s.flush()
+        s.add(
+            models.GrnLine(
+                tenant_id=T,
+                id="grnl-1",
+                goods_receipt_id="grn-1",
+                po_line_id="pol-1",
+                qty_received=Decimal("10"),
+            )
+        )
+        s.add(
+            models.Invoice(
+                tenant_id=T,
+                id="inv-1",
+                document_id="doc-1",
+                case_id="case-1",
+                invoice_number="INV-7",
+                invoice_date="2026-01-05",
+                po_number="PO-1",
+                currency="INR",
+                vendor_name="ACME STEEL",
+                vendor_tax_id=GSTIN,
+                total_inc_tax=Decimal("1000"),
+                status="done",
+            )
+        )
+    return url, GraphStore(url), LinkStore(url)
+
+
+def sync(env, **kw):
+    url, graph, links = env
+    kw.setdefault("decider", FakeDecider({}))
+    return sync_tenant(CTX, graph, links, url=url, **kw)
+
+
+def test_sync_twice_creates_no_new_rows(env):
+    _, graph, _ = env
+    first = sync(env)
+    assert first["invoice"] == 1 and first["vendor"] == 1
+    assert first["po_line"] == 1 and first["grn"] == 1
+    before = (len(graph.nodes(T)), len(graph.edges(T)))
+    sync(env)
+    assert (len(graph.nodes(T)), len(graph.edges(T))) == before
+
+
+def test_invoice_links_to_vendor_po_and_grn(env):
+    _, graph, _ = env
+    sync(env)
+    inv = graph.nodes_by_ref(T, "invoices", ["inv-1"])["inv-1"]
+    ven = graph.nodes_by_ref(T, "vendors", ["ven-1"])["ven-1"]
+    po = graph.nodes_by_ref(T, "purchase_orders", ["po-1"])["po-1"]
+    grn = graph.nodes_by_ref(T, "goods_receipts", ["grn-1"])["grn-1"]
+    assert [e["dst"] for e in graph.edges(T, src=inv, kind="issued_by")] == [
+        ven
+    ]
+    assert [e["dst"] for e in graph.edges(T, src=inv, kind="references")] == [
+        po
+    ]
+    assert [e["dst"] for e in graph.edges(T, src=grn, kind="fulfils")] == [po]
+    issued = graph.edges(T, src=inv, kind="issued_by")[0]
+    assert issued["provenance"] == "system_record"
+
+
+def test_history_and_live_invoices_share_one_transaction_shape(env):
+    url, graph, _ = env
+    csv = b"Bill No,Supplier,Amount,Date\nINV-OLD,Acme Steel Pvt Ltd,500,2025-03-01\n"
+    HistoryImporter(url).import_file(
+        CTX,
+        kind="ap_invoice",
+        source_name="tally",
+        filename="a.csv",
+        data=csv,
+        mapping={
+            "Bill No": "doc_number",
+            "Supplier": "vendor_key",
+            "Amount": "amount",
+            "Date": "record_date",
+        },
+    )
+    sync(env)
+    txns = sorted(transactions(T, graph=graph), key=lambda t: t.doc_number)
+    assert [(t.doc_number, t.source, t.amount, t.date) for t in txns] == [
+        ("INV-7", "live", Decimal("1000.0000"), date(2026, 1, 5)),
+        ("INV-OLD", "history", Decimal("500.0000"), date(2025, 3, 1)),
+    ]
+    # The same vendor, by name, through resolution.
+    assert txns[0].vendor_key == txns[1].vendor_key
+    sources = {e["source_system"] for e in graph.edges(T, kind="issued_by")}
+    assert sources == {"v1", "history:tally"}
+
+
+def test_incremental_sync_touches_only_that_invoice(env):
+    _, graph, _ = env
+    out = sync(env, document_id="doc-1")
+    assert out["invoice"] == 1 and out.get("po", 0) == 0
+    assert graph.nodes_by_ref(T, "purchase_orders", ["po-1"]) == {}
+
+
+def test_as_of_excludes_rows_closed_before_date(env):
+    url, graph, _ = env
+    sync(env, at=NOW)
+    later = NOW + timedelta(days=1)
+    with tenant_session(T, url) as s:
+        s.get(models.Invoice, "inv-1").total_inc_tax = Decimal("1200")
+    sync(env, at=later)
+    assert transactions(T, graph=graph)[0].amount == Decimal("1200.0000")
+    assert transactions(T, graph=graph, as_of=NOW)[0].amount == Decimal(
+        "1000.0000"
+    )
