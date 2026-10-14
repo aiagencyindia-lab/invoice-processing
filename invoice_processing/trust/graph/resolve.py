@@ -7,12 +7,14 @@ ABNs) are a contradiction and score zero whatever the name says.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import defaultdict
 from typing import Literal
 
+from ...llm_guard import CallBudget
 from ...ports import RunContext
-from ..decide import Question, decide
+from ..decide import GeminiDecider, Question, decide
 
 _SUFFIXES = {
     "pvt",
@@ -36,6 +38,9 @@ _KEY_SCORE = {
     "email_domain": 0.75,
 }
 _HARD = ("gstin", "abn")
+# One sync job may ask the model about this many doubtful vendor pairs; the
+# rest are proposed with "model says: unknown" and wait for a human.
+MAX_MODEL_CALLS_PER_RUN = 25
 
 
 def normalize_name(s: str) -> str:
@@ -71,7 +76,10 @@ def natural_keys(attrs: dict) -> dict:
     )
     code = (attrs.get("bank_code") or "").strip().upper()
     if acct and not acct.startswith("…"):
-        out["bank_account"] = f"{acct}|{code}"
+        # A digest: equal accounts still match, and the number itself never
+        # leaves its protected source row (spec §4.2).
+        raw = f"{acct}|{code}".encode()
+        out["bank_account"] = hashlib.sha256(raw).hexdigest()[:16]
     name = normalize_name(
         attrs.get("name")
         or attrs.get("vendor_name")
@@ -140,10 +148,13 @@ def run(
     ctx: RunContext, graph, links, *, kind: str = "vendor", decider=None
 ) -> dict:
     counts = {"auto": 0, "proposed": 0}
-    existing = {
-        (link["node_a"], link["node_b"])
-        for link in links.open_links(ctx.tenant_id)
-    }
+    if decider is None:
+        decider = GeminiDecider(
+            budget=CallBudget(max_calls=MAX_MODEL_CALLS_PER_RUN)
+        )
+    # Every pair ever judged, reversed and rejected ones included: a human's
+    # "no" must not be undone by the next run re-scoring the same pair.
+    existing = links.pairs(ctx.tenant_id)
     for x, y in candidates(graph.nodes(ctx.tenant_id, kind=kind)):
         if (x["id"], y["id"]) in existing:
             continue

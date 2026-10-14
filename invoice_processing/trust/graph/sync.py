@@ -70,12 +70,24 @@ class _Vendors:
     def __init__(self, ctx, graph, links):
         self.ctx, self.graph, self.links = ctx, graph, links
         self.by_key: dict[tuple[str, str], str] = {}
+        self.keys_of: dict[str, dict] = {}
+        # One query per run instead of one component walk per record.
+        self.canonical = links.canonical_map(ctx.tenant_id)
         for n in graph.nodes(ctx.tenant_id, kind="vendor"):
             self.remember(n["id"], n.get("natural_keys") or {})
 
     def remember(self, node_id: str, keys: dict) -> None:
+        self.keys_of[node_id] = keys
         for k, v in keys.items():
             self.by_key.setdefault((k, v), node_id)
+
+    def _conflicts(self, node_id: str, keys: dict) -> bool:
+        """A name match is void when a statutory id says otherwise."""
+        known = self.keys_of.get(node_id, {})
+        return any(
+            keys.get(k) and known.get(k) and keys[k] != known[k]
+            for k in ("gstin", "abn")
+        )
 
     def node_for(
         self, *, name: str | None, tax_id: str | None, source: str, at
@@ -83,10 +95,10 @@ class _Vendors:
         keys = resolve.natural_keys({"name": name, "gstin": tax_id})
         for k in ("gstin", "pan", "name"):
             if k in keys and (k, keys[k]) in self.by_key:
-                node = self.links.resolved_id(
-                    self.ctx.tenant_id, self.by_key[(k, keys[k])]
-                )
-                return node, 1.0 if k != "name" else 0.9
+                hit = self.by_key[(k, keys[k])]
+                if k == "name" and self._conflicts(hit, keys):
+                    continue
+                return self.canonical.get(hit, hit), 1.0 if k != "name" else 0.9
         # Unknown vendor: a node from the record itself, so the edge exists.
         label = keys.get("gstin") or keys.get("name") or name
         nid = self.graph.upsert_node(
@@ -467,10 +479,13 @@ def sync_tenant(
         if document_id is None:
             po_nodes = _sync_v1_masters(ctx, s, graph, vendors, at, bump)
         else:
-            po_nodes = {
-                n["attrs"].get("po_number"): n["id"]
-                for n in graph.nodes(ctx.tenant_id, kind="po")
-            }
+            po_nodes = {}
+            for n in graph.nodes(ctx.tenant_id, kind="po"):
+                number = n["attrs"].get("doc_number") or n["attrs"].get(
+                    "po_number"
+                )
+                if number:
+                    po_nodes[po_matching.normalize_po_number(number)] = n["id"]
         _sync_v1_invoices(
             ctx, s, graph, vendors, po_nodes, at, bump, document_id
         )

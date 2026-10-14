@@ -191,3 +191,68 @@ def test_as_of_excludes_rows_closed_before_date(env):
     assert transactions(T, graph=graph, as_of=NOW)[0].amount == Decimal(
         "1000.0000"
     )
+
+
+def test_invoice_with_a_conflicting_gstin_does_not_match_the_master_by_name(
+    env,
+):
+    url, graph, _ = env
+    with tenant_session(T, url) as s:
+        s.add(
+            models.Invoice(
+                tenant_id=T,
+                id="inv-2",
+                document_id="doc-1",
+                case_id="case-2",
+                invoice_number="INV-8",
+                currency="INR",
+                vendor_name="Acme Steel Pvt Ltd",
+                vendor_tax_id="29AABCU9603R1ZX",
+                total_inc_tax=Decimal("10"),
+                status="done",
+            )
+        )
+    sync(env)
+    inv = graph.nodes_by_ref(T, "invoices", ["inv-2"])["inv-2"]
+    master = graph.nodes_by_ref(T, "vendors", ["ven-1"])["ven-1"]
+    [edge] = graph.edges(T, src=inv, kind="issued_by")
+    assert edge["dst"] != master
+    assert graph.node(T, edge["dst"])["ref_table"] is None  # synthesised
+
+
+def test_reversioning_a_node_closes_its_stale_edges(env):
+    url, graph, _ = env
+    sync(env, at=NOW)
+    with tenant_session(T, url) as s:
+        s.get(models.Invoice, "inv-1").total_inc_tax = Decimal("1200")
+    sync(env, at=NOW + timedelta(days=1))
+    inv = graph.nodes_by_ref(T, "invoices", ["inv-1"])["inv-1"]
+    open_issued = [
+        e for e in graph.edges(T, kind="issued_by") if e["src"] != inv
+    ]
+    live_invoice_edges = [
+        e
+        for e in open_issued
+        if graph.node(T, e["src"])["ref_table"] == "invoices"
+    ]
+    assert live_invoice_edges == []
+    assert len(graph.edges(T, src=inv, kind="issued_by")) == 1
+
+
+def test_incremental_sync_references_a_po_known_only_from_history(env):
+    url, graph, _ = env
+    HistoryImporter(url).import_file(
+        CTX,
+        kind="po",
+        source_name="tally",
+        filename="po.csv",
+        data=b"PO,Supplier\nPO-77,Acme Steel Pvt Ltd\n",
+        mapping={"PO": "doc_number", "Supplier": "vendor_key"},
+    )
+    sync(env)
+    with tenant_session(T, url) as s:
+        s.get(models.Invoice, "inv-1").po_number = "PO-77"
+    sync(env, document_id="doc-1")
+    inv = graph.nodes_by_ref(T, "invoices", ["inv-1"])["inv-1"]
+    [ref] = graph.edges(T, src=inv, kind="references")
+    assert graph.node(T, ref["dst"])["attrs"]["doc_number"] == "PO-77"

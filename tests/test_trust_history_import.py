@@ -157,3 +157,42 @@ def test_saved_mapping_comes_from_the_last_import(importer):
     assert (
         importer.saved_mapping("tenant-globex", "tally", "ap_invoice") is None
     )
+
+
+def test_a_file_whose_rows_all_fail_is_not_stored_and_can_be_retried(importer):
+    bad = {
+        "Bill No": "doc_number",
+        "Supplier": "amount",
+        "Amount": "vendor_key",
+    }
+    with pytest.raises(ValueError, match="row 2: amount"):
+        load(importer, mapping=bad)
+    with tenant_session(T, importer.url) as s:
+        assert s.query(models.TrustHistoryImport).count() == 0
+    assert load(importer).rows_ok == 2  # same bytes, corrected mapping
+
+
+def test_blank_amount_is_null_where_amount_is_optional(importer):
+    csv = b"PO,Supplier,Amount\nPO-1,Acme,\n"
+    out = importer.import_file(
+        CTX,
+        kind="po",
+        source_name="t",
+        filename="po.csv",
+        data=csv,
+        mapping={
+            "PO": "doc_number",
+            "Supplier": "vendor_key",
+            "Amount": "amount",
+        },
+    )
+    assert out.rows_ok == 1
+    with tenant_session(T, importer.url) as s:
+        assert s.query(models.HistoryRecord).one().amount is None
+
+
+def test_parse_amount_refuses_exponents_and_accepts_rupee_prefixes():
+    assert parse_amount("Rs. 1,000") == Decimal("1000")
+    assert parse_amount("INR 2,50,000.00") == Decimal("250000.00")
+    with pytest.raises(ValueError):
+        parse_amount("1e5")

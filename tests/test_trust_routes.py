@@ -144,3 +144,36 @@ def test_import_without_database_is_503(env, monkeypatch):
         mapping=json.dumps(MAP),
     )
     assert r.status_code == 503 and "needs a database" in r.json()["detail"]
+
+
+def test_oversized_and_non_multipart_uploads_are_refused(env):
+    big = b"a,b\n" + b"x,y\n" * (6 * 1024 * 1024 // 4)
+    r = _post(
+        env("clerk"),
+        "/api/trust/history/import",
+        big,
+        kind="ap_invoice",
+        source_name="t",
+        mapping="{}",
+    )
+    assert r.status_code == 413
+    r = env("clerk").post(
+        "/api/trust/history/import", json={"kind": "ap_invoice"}
+    )
+    assert r.status_code == 400 and "multipart" in r.json()["detail"]
+
+
+def test_one_audit_row_per_import_and_lean_listing(env, tmp_path):
+    _post(
+        env("clerk"),
+        "/api/trust/history/import",
+        CSV,
+        kind="ap_invoice",
+        source_name="tally",
+        mapping=json.dumps(MAP),
+    )
+    with tenant_session(TENANT) as s:  # DATABASE_URL from the fixture
+        rows = s.query(models.AuditEvent).all()
+    assert sum("trust_history" in r.action for r in rows) == 1
+    [listed] = env("viewer").get("/api/trust/history/imports").json()
+    assert listed["rows_bad"] == 1 and "errors" not in listed

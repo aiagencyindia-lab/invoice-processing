@@ -4,7 +4,8 @@ import logging
 
 import pytest
 
-from invoice_processing.llm_guard import LlmUnavailable
+from invoice_processing.llm_guard import CallBudget, LlmUnavailable
+from invoice_processing.trust import decide as mod
 from invoice_processing.trust.decide import (
     Answer,
     FakeDecider,
@@ -66,3 +67,34 @@ def test_log_line_names_ids_not_state(caplog):
 def test_fake_fail_raises_the_outage_type_internally():
     with pytest.raises(LlmUnavailable):
         FakeDecider({}, fail=True)("prompt")
+
+
+def test_any_decider_exception_falls_back_and_logs_the_type(caplog):
+    def broken(prompt):
+        raise RuntimeError("DefaultCredentialsError: no project")
+
+    with caplog.at_level(
+        logging.WARNING, logger="invoice_processing.trust.decide"
+    ):
+        answers = decide({"secret": "x"}, Q, broken)
+    assert all(a.fallback for a in answers)
+    rec = next(
+        r for r in caplog.records if r.getMessage() == "trust_decide_error"
+    )
+    assert rec.error == "RuntimeError" and "no project" not in caplog.text
+
+
+def test_gemini_decider_hands_its_budget_to_the_guarded_call(monkeypatch):
+    seen = {}
+
+    class Reply:
+        text = '{"answers": []}'
+
+    def fake_guarded(model, prompt, budget=None):
+        seen["budget"] = budget
+        return Reply()
+
+    monkeypatch.setattr(mod, "guarded_generate", fake_guarded)
+    budget = CallBudget(max_calls=3)
+    _text, version = mod.GeminiDecider("m", budget=budget)("p")
+    assert seen["budget"] is budget and version == "m"

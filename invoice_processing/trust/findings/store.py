@@ -69,6 +69,10 @@ class FindingStore:
         self.url = url
 
     def upsert(self, ctx: RunContext, spec: FindingSpec) -> tuple[str, str]:
+        """Create or refresh by dedupe_key. A refresh updates the money,
+        confidence, versions and citations in place and writes no event: the
+        ledger records status changes (spec §4.4), and the audit of a
+        changed amount is the engine's own run log."""
         if not spec.citations:
             raise ValueError("A finding needs at least one citation.")
         with tenant_session(ctx.tenant_id, self.url) as s:

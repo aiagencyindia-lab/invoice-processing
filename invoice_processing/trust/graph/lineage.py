@@ -93,6 +93,19 @@ def lineage(
                 Link("po", "found", po_id, "Purchase order referenced.")
             )
 
+    def quantity(node_id: str, line_kind: str, attr: str) -> Decimal | None:
+        """Sum of the lines' attr; the node's own attr when it has no lines."""
+        lines = [graph.node(tenant_id, n) for n in into("part_of", node_id)]
+        values = [
+            _dec(n["attrs"].get(attr))
+            for n in lines
+            if n and n["kind"] == line_kind
+        ]
+        values = [v for v in values if v is not None]
+        if values:
+            return sum(values, Decimal(0))
+        return _dec(graph.node(tenant_id, node_id)["attrs"].get(attr))
+
     grns = into("fulfils", po_id) if po_id else []
     if not grns:
         result.append(
@@ -105,13 +118,10 @@ def lineage(
         )
     else:
         received = sum(
-            (
-                _dec(graph.node(tenant_id, g)["attrs"].get("qty_received"))
-                or Decimal(0)
-            )
+            (quantity(g, "grn_line", "qty_received") or Decimal(0))
             for g in grns
         )
-        wanted = _dec(inv["attrs"].get("quantity"))
+        wanted = quantity(node_id, "invoice_line", "quantity")
         if wanted is not None and received < wanted:
             result.append(
                 Link(

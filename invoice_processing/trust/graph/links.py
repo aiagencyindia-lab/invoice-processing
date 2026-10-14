@@ -157,24 +157,37 @@ class LinkStore:
                 _dict(r) for r in s.scalars(q.order_by(EntityLink.created_at))
             ]
 
-    def resolved_id(self, tenant_id: str, node_id: str) -> str:
-        """The canonical node: the smallest id in the component joined by
-        auto/accepted links.
+    def pairs(self, tenant_id: str) -> set[tuple[str, str]]:
+        """Every pair ever linked, proposed, rejected or reversed."""
+        with tenant_session(tenant_id, self.url) as s:
+            rows = s.execute(
+                select(EntityLink.node_a, EntityLink.node_b).where(
+                    EntityLink.tenant_id == tenant_id
+                )
+            )
+            return {(a, b) for a, b in rows}
 
-        # ponytail: full scan per lookup; cache components per sync if a
-        # tenant exceeds ~10k links.
-        """
-        joined = [
-            (link["node_a"], link["node_b"])
-            for link in self.open_links(tenant_id)
-            if link["status"] in (EntityLink.AUTO, EntityLink.ACCEPTED)
-        ]
-        component, frontier = {node_id}, [node_id]
-        while frontier:
-            cur = frontier.pop()
-            for a, b in joined:
-                other = b if a == cur else a if b == cur else None
-                if other and other not in component:
-                    component.add(other)
-                    frontier.append(other)
-        return min(component)
+    def canonical_map(self, tenant_id: str) -> dict[str, str]:
+        """node id -> the smallest id in its component of auto/accepted
+        links, for every node that has one. One query, then union-find; a
+        sync looks up thousands of nodes against it."""
+        parent: dict[str, str] = {}
+
+        def find(x: str) -> str:
+            while parent.get(x, x) != x:
+                parent[x] = parent.get(parent[x], parent[x])
+                x = parent[x]
+            return x
+
+        for link in self.open_links(tenant_id):
+            if link["status"] not in (EntityLink.AUTO, EntityLink.ACCEPTED):
+                continue
+            ra, rb = find(link["node_a"]), find(link["node_b"])
+            if ra != rb:
+                lo, hi = sorted((ra, rb))
+                parent[hi] = lo
+        return {node: find(node) for node in list(parent)}
+
+    def resolved_id(self, tenant_id: str, node_id: str) -> str:
+        """The canonical node for one id (see canonical_map)."""
+        return self.canonical_map(tenant_id).get(node_id, node_id)

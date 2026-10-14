@@ -40,12 +40,6 @@ def _importer():
     return importer
 
 
-def _audit():
-    from . import service  # noqa: PLC0415
-
-    return service.get_audit()
-
-
 async def _read(request: Request) -> tuple[bytes, str, dict]:
     declared = request.headers.get("content-length", "")
     if declared.isdigit() and int(declared) > MAX_IMPORT_BYTES + 64 * 1024:
@@ -122,12 +116,8 @@ async def import_history(
     if out.duplicate_of:
         return JSONResponse(body, status_code=200)
     if out.rows_ok == 0:
-        raise HTTPException(
-            400,
-            "; ".join(f"row {e['row']}: {e['reason']}" for e in out.errors)
-            or "The file has no rows.",
-        )
-    _audit().emit(principal.context(), "trust_history_import_accepted", body)
+        raise HTTPException(400, "The file has no rows.")
+    # The importer wrote the audit row in the same transaction as the rows.
     _queue_sync(principal.tenant_id, principal.context().run_id)
     return body
 

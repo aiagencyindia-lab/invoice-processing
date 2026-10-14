@@ -43,11 +43,19 @@ class ImportResult:
         return asdict(self)
 
 
+_CURRENCY_PREFIX = re.compile(
+    r"^(rs\.?|inr|₹|\$|aud|usd|eur)\s*", re.IGNORECASE
+)
+
+
 def parse_amount(text: str) -> Decimal:
     raw = str(text).strip()
+    body = _CURRENCY_PREFIX.sub("", raw)
+    if re.search(r"[A-Za-z]", body):  # "1e5", "ten": refuse, never guess
+        raise ValueError(f"{raw!r} is not a number")
     negative = raw.startswith("(") and raw.endswith(")")
     # Drops currency symbols and grouping commas, Indian or Western.
-    cleaned = re.sub(r"[^\d.\-]", "", raw)
+    cleaned = re.sub(r"[^\d.\-]", "", body)
     if not _NUMBER.match(cleaned):
         raise ValueError(f"{raw!r} is not a number")
     try:
@@ -74,7 +82,7 @@ def parse_date(text: str) -> date:
 def _normalise(fields: dict[str, str]) -> dict:
     """Typed columns from the mapped fields; raises ValueError naming the field."""
     out: dict = {}
-    if "amount" in fields:
+    if (fields.get("amount") or "").strip():  # blank is "not given"
         try:
             out["amount"] = parse_amount(fields["amount"])
         except ValueError as exc:
@@ -178,6 +186,12 @@ class HistoryImporter:
                     )
                 )
                 ok += 1
+            if rows and ok == 0:
+                # Nothing usable: refuse the whole file so the same bytes
+                # can be re-imported with a corrected mapping.
+                raise ValueError(
+                    "; ".join(f"row {e['row']}: {e['reason']}" for e in errors)
+                )
             run.rows_ok, run.rows_bad, run.errors = ok, len(errors), errors
             run.status = "partial" if errors else "complete"
             s.add(
@@ -226,7 +240,6 @@ class HistoryImporter:
                     "status": r.status,
                     "rows_ok": r.rows_ok,
                     "rows_bad": r.rows_bad,
-                    "errors": list(r.errors or []),
                     "created_at": r.created_at.isoformat()
                     if r.created_at
                     else None,

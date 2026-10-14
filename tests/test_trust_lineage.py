@@ -109,3 +109,21 @@ def test_short_receipt_contradicts(graph):
 def test_unknown_node_is_an_error(graph):
     with pytest.raises(KeyError):
         lineage(T, "nope", graph=graph)
+
+
+def test_quantities_come_from_lines_on_a_synced_graph(graph):
+    inv = build(graph, grn=False)
+    po = next(e["dst"] for e in graph.edges(T, src=inv, kind="references"))
+    line = graph.upsert_node(
+        CTX, kind="invoice_line", natural_key="il", attrs={"quantity": "10"}
+    )
+    edge(graph, line, inv, "part_of")
+    g = graph.upsert_node(CTX, kind="grn", natural_key="g")
+    edge(graph, g, po, "fulfils")
+    gl = graph.upsert_node(
+        CTX, kind="grn_line", natural_key="gl", attrs={"qty_received": "4"}
+    )
+    edge(graph, gl, g, "part_of")
+    out = lineage(T, inv, graph=graph)
+    grn = next(link for link in out if link.stage == "grn")
+    assert grn.status == "contradicts" and "4" in grn.note and "10" in grn.note

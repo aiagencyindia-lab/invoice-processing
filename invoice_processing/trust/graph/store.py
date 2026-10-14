@@ -11,10 +11,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 
 from ... import masking
-from ...db.models import GraphEdge, GraphNode
+from ...db.models import EntityLink, GraphEdge, GraphNode
 from ...db.session import tenant_session
 from ...ports import RunContext
 
@@ -120,7 +120,35 @@ class GraphStore:
             )
             s.add(row)
             s.flush()
+            if open_row is not None:
+                self._retire(s, ctx.tenant_id, open_row.id, row.id, at)
             return row.id
+
+    @staticmethod
+    def _retire(
+        s, tenant_id: str, old_id: str, new_id: str, at: datetime
+    ) -> None:
+        """A closed node takes its open edges with it (the next sync rebuilds
+        them against the new row) and hands its entity links to the new row,
+        so a human's accepted or reversed link survives a re-version."""
+        s.execute(
+            update(GraphEdge)
+            .where(
+                GraphEdge.tenant_id == tenant_id,
+                GraphEdge.valid_to.is_(None),
+                or_(GraphEdge.src == old_id, GraphEdge.dst == old_id),
+            )
+            .values(valid_to=at)
+        )
+        for link in s.scalars(
+            select(EntityLink).where(
+                EntityLink.tenant_id == tenant_id,
+                or_(EntityLink.node_a == old_id, EntityLink.node_b == old_id),
+            )
+        ):
+            other = link.node_b if link.node_a == old_id else link.node_a
+            link.node_a, link.node_b = sorted((new_id, other))
+        s.flush()
 
     def node(self, tenant_id: str, node_id: str) -> dict | None:
         with tenant_session(tenant_id, self.url) as s:

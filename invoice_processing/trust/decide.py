@@ -104,10 +104,11 @@ def _valid(q: Question, value: Any) -> bool:
 class GeminiDecider:
     """Gemini structured output through the existing guarded call."""
 
-    def __init__(self, model_name: str | None = None):
+    def __init__(self, model_name: str | None = None, budget=None):
         self.model_name = model_name or os.getenv(
             "GEMINI_FLASH_MODEL", "gemini-2.5-flash"
         )
+        self.budget = budget
 
     def __call__(self, prompt: str) -> tuple[str, str]:
         model = gemini.Model(
@@ -116,7 +117,7 @@ class GeminiDecider:
             seed=42,
             response_mime_type="application/json",
         )
-        response = guarded_generate(model, prompt)
+        response = guarded_generate(model, prompt, self.budget)
         return response.text, self.model_name
 
 
@@ -164,6 +165,12 @@ def decide(
         ValueError,
         gemini.GeminiEmptyResponse,
     ):
+        replies = {}
+    except Exception as exc:  # the contract is "never raises"
+        # The type, never the message: an SDK error can quote the prompt.
+        logger.warning(
+            "trust_decide_error", extra={"error": type(exc).__name__}
+        )
         replies = {}
 
     answers = []

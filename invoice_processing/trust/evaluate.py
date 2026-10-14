@@ -31,6 +31,9 @@ def evaluate(
         ).first()
     if has_invoice is None:
         return {"skipped": "no invoice"}
+    # ponytail: an incremental sync still loads every vendor and PO node to
+    # match against; index those by key in the graph if a tenant's masters
+    # pass ~50k rows.
     counts = sync_tenant(ctx, graph, links, url=url, document_id=document_id)
     modes = {
         name: engine_mode(ctx.tenant_id, name, settings_store)

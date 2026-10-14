@@ -13,6 +13,8 @@ from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust.decide import FakeDecider
+from invoice_processing.trust.findings.model import Citation, FindingSpec
+from invoice_processing.trust.findings.store import FindingStore
 from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
 from invoice_processing.trust.graph.sync import sync_tenant
@@ -80,12 +82,33 @@ def run(url: str, data_dir: Path, tenant_id: str = "bench-history") -> dict:
     }
     fulfilled = {e["dst"] for e in graph.edges(tenant_id, kind="fulfils")}
 
-    invoices = po_backed = inv_linked = po_linked = 0
+    findings = FindingStore(url)
+    invoices = po_backed = inv_linked = po_linked = unlinked = 0
     for link in manifest["expected_links"]:
         inv_node = node_of.get(by_ext.get(("ap_invoice", link["invoice"])))
         invoices += 1
         if inv_node in issued:
             inv_linked += 1
+        elif inv_node:
+            # The harness is the first engine: every miss is a cited finding,
+            # which also drives FindingStore end to end on every run.
+            unlinked += 1
+            findings.upsert(
+                ctx,
+                FindingSpec(
+                    type="BENCH-IMPORT",
+                    transaction_node=inv_node,
+                    dedupe_key=f"BENCH-IMPORT:{link['invoice']}",
+                    impact=None,
+                    currency=None,
+                    confidence=1.0,
+                    engine_version="bench-0",
+                    rule_version="AC-19",
+                    model_version="none",
+                    summary="Invoice not linked to a master vendor",
+                    citations=(Citation(inv_node, link["invoice"]),),
+                ),
+            )
         if link["po"]:
             po_backed += 1
             po_node = references.get(inv_node)
@@ -97,6 +120,7 @@ def run(url: str, data_dir: Path, tenant_id: str = "bench-history") -> dict:
         "contract_clause_coverage": None,
         "not_measurable_until": {"contract_clause_coverage": "wave1"},
         "counts": manifest["counts"],
+        "unlinked": unlinked,
     }
     out["gates"] = {name: out[name] >= floor for name, floor in GATES.items()}
     out["passed"] = all(out["gates"].values())

@@ -108,3 +108,52 @@ def test_reversal_keeps_both_nodes_and_is_audited(env):
             .count()
         )
         assert count == 1
+
+
+def test_bank_account_key_is_a_digest_not_the_number():
+    a = keys(bank_account_number="123456789012", bank_code="HDFC0001")
+    b = keys(bank_account_number="1234 5678 9012", bank_code="hdfc0001")
+    assert a["bank_account"] == b["bank_account"]
+    assert "1234" not in a["bank_account"] and len(a["bank_account"]) == 16
+
+
+def test_a_reversed_link_is_not_recreated_by_the_next_run(env):
+    graph, links = env
+    a = vendor(graph, "v:a", gstin="27AAPFU0939F1ZV")
+    b = vendor(graph, "v:b", gstin="27AAPFU0939F1ZV")
+    resolve.run(CTX, graph, links, decider=FakeDecider({}))
+    [link] = links.open_links(T)
+    links.reverse(CTX, link["id"], actor="controller@x.test", reason="branches")
+    assert resolve.run(CTX, graph, links, decider=FakeDecider({})) == {
+        "auto": 0,
+        "proposed": 0,
+    }
+    assert links.resolved_id(T, a) == a and links.resolved_id(T, b) == b
+
+
+def test_canonical_map_matches_resolved_id(env):
+    graph, links = env
+    a = vendor(graph, "v:a", gstin="27AAPFU0939F1ZV")
+    b = vendor(graph, "v:b", gstin="27AAPFU0939F1ZV")
+    c = vendor(graph, "v:c", name="unrelated")
+    resolve.run(CTX, graph, links, decider=FakeDecider({}))
+    canon = links.canonical_map(T)
+    assert canon.get(a, a) == canon.get(b, b) == links.resolved_id(T, b)
+    assert canon.get(c, c) == c
+
+
+def test_run_without_a_decider_caps_model_calls(env, monkeypatch):
+    graph, links = env
+    seen = {}
+
+    class Recorder:
+        def __init__(self, model_name=None, budget=None):
+            seen["budget"] = budget
+
+        def __call__(self, prompt):
+            raise RuntimeError("not reached: no proposals")
+
+    monkeypatch.setattr(resolve, "GeminiDecider", Recorder)
+    resolve.run(CTX, graph, links)
+    assert seen["budget"] is not None
+    assert seen["budget"].max_calls == resolve.MAX_MODEL_CALLS_PER_RUN

@@ -6,6 +6,7 @@ import pytest
 
 from benchmark.history import eval as history_eval
 from benchmark.history import generate
+from invoice_processing.trust.findings.store import FindingStore
 
 
 def test_generator_is_deterministic_for_a_seed(tmp_path):
@@ -69,3 +70,15 @@ def test_cli_exits_nonzero_on_a_failed_gate(tmp_path, scratch_db):
         )
     assert stop.value.code == 1
     assert list((tmp_path / "runs").glob("*.json"))
+
+
+def test_unlinked_records_become_bench_import_findings(tmp_path, scratch_db):
+    data = tmp_path / "data"
+    generate.generate(7, data)
+    (data / "vendor.csv").write_text("external_id,vendor_key,gstin\n")
+    url = scratch_db("bench4.db")
+    out = history_eval.run(url, data)
+    findings = FindingStore(url).list("bench-history", type="BENCH-IMPORT")
+    assert len(findings) == out["counts"]["ap_invoice"] == out["unlinked"]
+    first = FindingStore(url).get("bench-history", findings[0]["id"])
+    assert first["citations"] and first["status"] == "detected"

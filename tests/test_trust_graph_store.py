@@ -7,6 +7,7 @@ import pytest
 from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import RunContext
+from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
 
 T = "tenant-acme"
@@ -107,3 +108,21 @@ def test_edges_are_idempotent_and_filterable(store):
 def test_other_tenant_sees_nothing(store):
     store.upsert_node(CTX, kind="vendor", natural_key="v1")
     assert store.nodes("tenant-globex", kind="vendor") == []
+
+
+def test_reversioning_a_node_repoints_its_entity_links(store):
+    links = LinkStore(store.url)
+    a = store.upsert_node(
+        CTX, kind="vendor", natural_key="va", attrs={"name": "A"}, at=T0
+    )
+    b = store.upsert_node(
+        CTX, kind="vendor", natural_key="vb", attrs={"name": "B"}, at=T0
+    )
+    links.propose_or_link(CTX, a, b, 1.0, "gstin")
+    a2 = store.upsert_node(
+        CTX, kind="vendor", natural_key="va", attrs={"name": "A Ltd"}, at=T1
+    )
+    assert a2 != a
+    [link] = links.open_links(T)
+    assert {link["node_a"], link["node_b"]} == {a2, b}
+    assert links.resolved_id(T, b) == min(a2, b)
