@@ -239,6 +239,8 @@ _approvals = None
 _gl_rules = None
 _purchase_orders = None
 _supporting_documents = None
+_graph_store = None
+_history_importer = None
 _rules = None
 _tenant_settings = None
 _claims_writer = None
@@ -544,6 +546,36 @@ def _sso_services():
 
 
 auth.set_sso_services(_sso_services)
+
+
+def get_graph_store():
+    """The v2 Evidence Graph. `None` without a database."""
+    global _graph_store
+    if (
+        _graph_store is None
+        and _database_configured()
+        and _table_exists("graph_nodes", "Evidence graph", raise_on_error=True)
+    ):
+        from ..trust.graph.store import GraphStore  # noqa: PLC0415
+
+        _graph_store = GraphStore()
+    return _graph_store
+
+
+def get_history_importer():
+    """History file imports (v2). `None` without a database."""
+    global _history_importer
+    if (
+        _history_importer is None
+        and _database_configured()
+        and _table_exists(
+            "trust_history_imports", "History imports", raise_on_error=True
+        )
+    ):
+        from ..trust.history.importer import HistoryImporter  # noqa: PLC0415
+
+        _history_importer = HistoryImporter()
+    return _history_importer
 
 
 def get_purchase_orders():
@@ -2018,6 +2050,7 @@ from .sheet import router as sheet_router  # noqa: E402
 from .signup import router as signup_router  # noqa: E402
 from .supporting_routes import router as supporting_router  # noqa: E402
 from .system import router as system_router  # noqa: E402
+from .trust_routes import router as trust_router  # noqa: E402
 from .vendor_routes import router as vendor_router  # noqa: E402
 
 app.include_router(ingest_router)
@@ -2032,6 +2065,7 @@ app.include_router(approval_router)
 app.include_router(gl_router)
 app.include_router(kpi_router)
 app.include_router(po_router)
+app.include_router(trust_router)
 app.include_router(supporting_router)
 
 
