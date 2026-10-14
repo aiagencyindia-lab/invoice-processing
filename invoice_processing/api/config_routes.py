@@ -320,7 +320,7 @@ def replace_purchase_orders(
     safe = "".join(
         c if c.isalnum() or c in "-_" else "_" for c in principal.tenant_id
     )
-    path = paths.PURCHASE_ORDER_DIR / f"{safe or 'default'}.json"
+    path = paths.purchase_order_dir() / f"{safe or 'default'}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(

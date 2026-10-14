@@ -23,11 +23,14 @@ tracked files (rules book, master data).
 ## Variables
 
 "You" means the operator sets it by hand: it is a secret, and nobody else
-creates, reads or pastes it.
+creates, reads or pastes it. Mark those variables **sealed** in Railway, so
+no one can read them back from the dashboard after they are set.
 
 | Service | Variable | Value | Who |
 |---|---|---|---|
 | ledgerly | `ENV` | `production` | operator |
+| ledgerly | `PORT` | `8000` (so `${{ledgerly.PORT}}` below resolves; the start script listens on it) | operator |
+| ledgerly | `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` | `60`: the grace a redeploy gives before SIGKILL (Railway's default is 0, which kills an in-flight extraction) | operator |
 | ledgerly | `STATE_DIR` | `/data` | operator |
 | ledgerly | `RUN_MIGRATIONS` | `0` (the pre-deploy step migrates, as the owner) | operator |
 | ledgerly | `GOOGLE_CLOUD_PROJECT`, `PROJECT_ID` | `rasayan` | operator |
@@ -39,7 +42,7 @@ creates, reads or pastes it.
 | ledgerly | `DATABASE_URL` | app role: `postgresql+pg8000://ledgerly_app:<pw>@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/railway` | **you** |
 | ledgerly | `MIGRATE_DATABASE_URL` | owner role, same host | **you** |
 | ledgerly | `SENTRY_DSN` | the Sentry project's DSN | **you** |
-| app | `API_ORIGIN` | `http://${{ledgerly.RAILWAY_PRIVATE_DOMAIN}}:${{ledgerly.PORT}}` (read at build time) | operator |
+| app | `API_ORIGIN` | `http://${{ledgerly.RAILWAY_PRIVATE_DOMAIN}}:${{ledgerly.PORT}}` (read at build time; needs `PORT` set on `ledgerly`) | operator |
 | app | `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` (`rasayan.firebaseapp.com`), `NEXT_PUBLIC_FIREBASE_PROJECT_ID` (`rasayan`) | Identity Platform's public web values (build time) | operator |
 
 `LOG_FORMAT` unset gives JSON under `ENV=production`. Railway sets
@@ -82,11 +85,15 @@ privileges, so a recreated `audit_events` (or `alembic_version`) would be
 writable by the app again until §2 revokes it.
 
 Order on Railway: §1 → set the secret variables → first deploy (pre-deploy
-migrates as the owner) → §2 → read VERIFY. Re-run §2 after every deploy
-that migrates, not just the first: a migration that creates or recreates a
-table gets the app's grants through §1's default privileges, so a recreated
-`audit_events` (or `alembic_version`) would be writable by the app again
-until §2 revokes it.
+migrates as the owner) → §2 → read VERIFY.
+
+## Health
+
+There is no unauthenticated health route. A deploy is gated by the start
+script instead: preflight refusing the configuration, or either process
+exiting, stops the container, and Railway marks the deploy failed rather
+than routing traffic to it. Check the `ledgerly` deploy logs for
+"Refusing to start" after any variable change.
 
 ## Smoke test
 

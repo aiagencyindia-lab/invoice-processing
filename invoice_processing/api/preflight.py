@@ -62,7 +62,12 @@ def check_configuration(env: str | None = None) -> list[str]:
     if state:
         # A mounted volume stands in for a bucket (Railway); a missing or
         # read-only one would lose every document on the next restart.
-        if not Path(state).is_dir():
+        if Path(state).exists() and not Path(state).is_dir():
+            problems.append(
+                f"STATE_DIR={state} is not a directory: point it at the "
+                "volume's mount path."
+            )
+        elif not Path(state).is_dir():
             problems.append(
                 f"STATE_DIR={state} does not exist: is the volume mounted? "
                 "Documents and the job queue would be lost on restart."

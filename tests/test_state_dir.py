@@ -35,3 +35,24 @@ def test_set_moves_documents_queue_and_heartbeat(monkeypatch, tmp_path):
 def test_tracked_files_stay_in_the_image(monkeypatch, tmp_path):
     monkeypatch.setenv("STATE_DIR", str(tmp_path / "volume"))
     assert paths.RULES_BOOK_PATH.parent == paths.DATA_DIR
+
+
+def test_reference_data_files_follow_state_dir(monkeypatch, tmp_path):
+    """Work authorizations, the vendor master and purchase-order files are
+    written at run time with no database branch for work authorizations;
+    in the image they vanished on every deploy (review finding)."""
+    state = tmp_path / "volume"
+    monkeypatch.setenv("STATE_DIR", str(state))
+    assert paths.work_authorization_file("t1") == (
+        state / "work_authorizations" / "t1.json"
+    )
+    assert paths.vendor_master_file("t1") == state / "vendors" / "t1.json"
+    assert paths.purchase_order_file("t1") == (
+        state / "purchase_orders" / "t1.json"
+    )
+
+
+def test_reference_data_files_stay_put_without_state_dir(monkeypatch, tmp_path):
+    monkeypatch.delenv("STATE_DIR", raising=False)
+    monkeypatch.setattr(paths, "WORK_AUTHORIZATION_DIR", tmp_path / "wa")
+    assert paths.work_authorization_file("t1") == tmp_path / "wa" / "t1.json"

@@ -181,7 +181,7 @@ class TestStateDir:
         target.write_text("x")
         monkeypatch.setenv("STATE_DIR", str(target))
         [problem] = check_configuration()
-        assert "does not exist" in problem
+        assert "is not a directory" in problem
 
     def test_a_read_only_volume_is_named(self, monkeypatch, tmp_path):
         self._rest(monkeypatch)

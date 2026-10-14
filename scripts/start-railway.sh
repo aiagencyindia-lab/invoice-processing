@@ -12,7 +12,8 @@
 set -u
 
 WORKER_CMD="${WORKER_CMD:-python -m invoice_processing.worker}"
-API_CMD="${API_CMD:-uvicorn invoice_processing.api.service:app --host 0.0.0.0 --port ${PORT:-8000}}"
+# A bound on shutdown: uvicorn otherwise waits for every open connection.
+API_CMD="${API_CMD:-uvicorn invoice_processing.api.service:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-graceful-shutdown 20}"
 
 sh -c "$WORKER_CMD" &
 worker=$!

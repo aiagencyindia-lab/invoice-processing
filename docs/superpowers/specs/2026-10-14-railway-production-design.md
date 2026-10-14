@@ -128,3 +128,14 @@ TDD; each new test proved failing first.
 The S3 adapter, a Postgres or Pub/Sub queue, a separate worker service, a
 custom domain, migrating old data, and the Microsoft live test (its own
 branch).
+
+## Changes after the review (2026-10-14)
+
+- Railway Postgres does offer point-in-time recovery (WAL to a Railway
+  bucket); it is enabled at setup. Database RPO minutes, documents up to
+  24 hours.
+- `PORT=8000` and `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=60` on `ledgerly`.
+- Work authorizations, the vendor master and purchase-order files follow
+  `STATE_DIR` too (they are written at run time).
+- Offboarding stops the worker with `WORKER_CMD=sleep infinity` instead of
+  scaling the shared service to zero.

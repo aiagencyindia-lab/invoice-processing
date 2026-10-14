@@ -1,29 +1,36 @@
 # Backup and restore
 
-Targets (SECURITY.md): RPO up to 24 hours, RTO 4 hours, a drill every 6
-months and after any production restore.
+Targets (SECURITY.md): database RPO minutes (point-in-time recovery),
+documents RPO up to 24 hours (daily volume backups), RTO 4 hours, a drill
+every 6 months and after any production restore.
 
 ## What is backed up
 
-Production runs on Railway (deployment/README.md). Railway has no
-point-in-time recovery; both stores are backed up as **volume backups**:
+Production runs on Railway (deployment/README.md).
 
-- **Postgres volume** (the database): a daily backup schedule, plus a
+- **Postgres point-in-time recovery** (the database): enable it during
+  setup (Railway → `Postgres` → Backups → Point-in-time recovery). It
+  archives the write-ahead log to a Railway bucket (storage is billed) and
+  restores to any moment in its window into a new Postgres service.
+- **Postgres volume backups**: a daily schedule as a second line, plus a
   manual backup before any risky change (a migration, a purge, a bulk
   import). Check: Railway → `Postgres` → Volume → Backups.
 - **`ledgerly` `/data` volume** (uploaded documents and the local job
   queue): the same daily schedule. Documents are written once and never
   modified, so a backup up to a day old loses at most that day's uploads.
 
-Record the retention Railway shows for the schedule in SECURITY.md ("What
-outlives a purge").
+Retention at the time of writing (check when configuring): daily backups
+6 days, weekly 27, monthly 89; point-in-time recovery about four weeks.
 
 ## Restoring the database
 
 1. **Before anything else, take a manual backup** of the current volume, so
    the restore itself can be undone.
-2. Railway → `Postgres` → Volume → Backups → choose the backup → Restore.
-   Railway redeploys the service onto the restored volume.
+2. Point in time: Railway → `Postgres` → Backups → restore to the moment
+   before the incident, into a new Postgres service, then point
+   `DATABASE_URL` and `MIGRATE_DATABASE_URL` at it. Or a volume backup:
+   `Postgres` → Volume → Backups → Restore (Railway redeploys the service
+   onto the restored volume).
 3. Run `db/bootstrap.sql` §2 as `postgres` (the command is in
    deployment/README.md). A restore carries the tables; re-running §2 is
    what guarantees the app role's grants and the audit REVOKE.
@@ -43,6 +50,15 @@ outlives a purge").
    (deployment/OFFBOARDING.md). A tenant listed as `purged` that still
    shows rows in the counts is purged again the same way.
 6. Redeploy `ledgerly` so it reconnects.
+
+## Restoring both
+
+The database and the documents are backed up separately. Restore the
+database first, run `restore_check`, and use its "newest audit event" as
+the point to reconcile against; then restore the `/data` backup closest to
+it. Documents newer than the database have no rows (re-upload them);
+queued jobs for documents the database already processed are skipped by
+the worker's claims.
 
 ## Restoring documents
 

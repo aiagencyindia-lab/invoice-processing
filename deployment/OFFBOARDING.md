@@ -17,13 +17,15 @@ repo (or a release container) with the production environment.
    suspended") can then be replayed.
 3. **Wait 30 days**, or skip the wait only with the customer's written
    request for immediate deletion (`--skip-grace --reason "<the request>"`).
-4. **Stop the worker** (scale it to zero) for the purge. A job already
-   running for the tenant would write its rows after the purge commits;
-   the purge refuses while any of the tenant's jobs is in flight, and
-   stopping the worker closes the moment before a job claims.
-   **Purge as the owner role.** `MIGRATE_DATABASE_URL` (or
-   `MIGRATE_CLOUD_SQL_USER`) must be set, as for the release step; the
-   command refuses the app role.
+4. **Stop the worker** for the purge, without stopping the API: on
+   Railway the two share the `ledgerly` service, so set
+   `WORKER_CMD=sleep infinity` on it and redeploy (the API keeps serving;
+   remove the variable and redeploy afterwards). A job already running for
+   the tenant would write its rows after the purge commits; the purge
+   refuses while any of the tenant's jobs is in flight, and stopping the
+   worker closes the moment before a job claims.
+   **Purge as the owner role.** `MIGRATE_DATABASE_URL` must be set, as for
+   the release step; the command refuses the app role.
 
        python -m invoice_processing.admin.provision purge-tenant \
            --tenant <slug> --operator <you> --confirm <slug>
