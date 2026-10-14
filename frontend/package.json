@@ -11,7 +11,7 @@
     "pretest:e2e": "API_ORIGIN=http://127.0.0.1:${E2E_API_PORT:-8100} next build"
   },
   "dependencies": {
-    "firebase": "^12.18.0",
+    "firebase": "^13.0.0",
     "next": "16.4.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
