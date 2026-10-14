@@ -90,12 +90,14 @@ def _normalise(fields: dict[str, str]) -> dict:
     return out
 
 
-def _check_required(kind: str, typed: dict) -> None:
+def _check_required(kind: str, typed: dict, mapped: dict[str, str]) -> None:
+    """Typed columns are checked after parsing; the rest (po_number, ...)
+    only need to be present in the row."""
     for field in mp.REQUIRED[kind]:
         if field == "amount":
             if "amount" not in typed:
                 raise ValueError("amount: missing")
-        elif not typed.get(field):
+        elif not (typed.get(field) or (mapped.get(field) or "").strip()):
             raise ValueError(f"{field}: missing")
 
 
@@ -156,7 +158,7 @@ class HistoryImporter:
                 }
                 try:
                     typed = _normalise(mapped)
-                    _check_required(kind, typed)
+                    _check_required(kind, typed, mapped)
                 except ValueError as exc:
                     errors.append({"row": index, "reason": str(exc)})
                     continue

@@ -164,8 +164,14 @@ def _norm(header: str) -> str:
 
 def _by_synonym(kind: str, header: str) -> str:
     h = _norm(header).replace("_", " ")
+    # A header that *is* a field name wins before any synonym: "po_number"
+    # must not land on doc_number just because "po number" is one of its
+    # synonyms elsewhere.
     for field in FIELDS[kind]:
-        if h == field.replace("_", " ") or h in _SYNONYMS.get(field, ()):
+        if h == field.replace("_", " "):
+            return field
+    for field in FIELDS[kind]:
+        if h in _SYNONYMS.get(field, ()):
             return field
     return ""
 
