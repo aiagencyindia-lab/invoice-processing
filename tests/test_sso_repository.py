@@ -337,3 +337,34 @@ class TestTenantStatus:
         assert directory.domain("closed.test")["tenant_status"] == "suspended"
         assert directory.tenant_status(tid) == "suspended"
         assert directory.tenant_status("no-such-tenant") is None
+
+
+class TestMicrosoftBinding:
+    def test_the_provider_id_round_trips(self, db):
+        repo = PgSsoDomainRepository(db)
+        added = repo.add(
+            ACME,
+            domain="Acme.com",
+            provider="microsoft",
+            default_role="clerk",
+            created_by="operator:vineet",
+            idp_provider_id="oidc.acme",
+            idp_tenant_id="11111111-2222-3333-4444-555555555555",
+        )
+        assert added["idp_provider_id"] == "oidc.acme"
+        assert repo.list(ACME)[0]["idp_tenant_id"].startswith("1111")
+        bound = PgUserDirectory(db).domain("acme.com")
+        assert (bound["provider"], bound["idp_provider_id"]) == (
+            "microsoft",
+            "oidc.acme",
+        )
+
+    def test_a_google_binding_has_no_provider_id(self, db):
+        PgSsoDomainRepository(db).add(
+            ACME,
+            domain="acme.com",
+            provider="google",
+            default_role="viewer",
+            created_by="pat@acme.com",
+        )
+        assert PgUserDirectory(db).domain("acme.com")["idp_provider_id"] is None

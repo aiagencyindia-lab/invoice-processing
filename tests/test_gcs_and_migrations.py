@@ -474,6 +474,7 @@ class TestMigration:
             ("b8c4d1e2f3a5", 0),
             ("c9d5e2f3a4b6", 1),
             ("d1a2b3c4e5f6", 0),
+            ("a8d4e6f1b2c3", 0),
         ],
     )
     def test_migration_protects_exactly_the_tables_it_creates(

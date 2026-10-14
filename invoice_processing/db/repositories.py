@@ -3248,6 +3248,7 @@ class PgUserDirectory:
                 "domain": row.domain,
                 "provider": row.provider,
                 "default_role": row.default_role,
+                "idp_provider_id": row.idp_provider_id,
             }
 
 
@@ -3264,6 +3265,8 @@ class PgSsoDomainRepository:
             "domain": d.domain,
             "provider": d.provider,
             "default_role": d.default_role,
+            "idp_provider_id": d.idp_provider_id,
+            "idp_tenant_id": d.idp_tenant_id,
             "created_by": d.created_by,
             "created_at": _iso(d.created_at),
         }
@@ -3285,6 +3288,8 @@ class PgSsoDomainRepository:
         provider: str,
         default_role: str,
         created_by: str,
+        idp_provider_id: str | None = None,
+        idp_tenant_id: str | None = None,
     ) -> dict:
         try:
             with tenant_session(tenant_id, self.url) as session:
@@ -3294,6 +3299,8 @@ class PgSsoDomainRepository:
                     provider=provider,
                     default_role=default_role,
                     created_by=created_by,
+                    idp_provider_id=idp_provider_id,
+                    idp_tenant_id=idp_tenant_id,
                 )
                 session.add(row)
                 session.flush()
