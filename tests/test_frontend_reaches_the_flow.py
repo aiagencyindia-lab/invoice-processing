@@ -368,6 +368,16 @@ class TestLoginAndSignUp:
         claims -- and is refused by the system that just granted it access."""
         assert "refreshToken" in self.page("signup")
 
+    def test_sign_up_refreshes_a_stale_token_only_once(self):
+        """The page re-checks on every token change, and a forced refresh is
+        a token change: refreshing unconditionally there looped forever on
+        production (/api/me twice a second, stuck on the organisation step).
+        Refresh only while the token itself still says unverified."""
+        signup = self.page("signup")
+        assert "tokenSaysVerified" in signup
+        auth = (FRONTEND / "lib" / "auth.ts").read_text(encoding="utf-8")
+        assert "claims.email_verified" in auth
+
     def test_passwords_are_offered_as_well_as_google(self):
         for route in ("login", "signup"):
             assert "PasswordForm" in self.page(route), route

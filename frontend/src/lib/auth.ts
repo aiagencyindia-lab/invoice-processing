@@ -245,6 +245,17 @@ export async function refreshToken(): Promise<void> {
   if (auth.currentUser) await auth.currentUser.getIdToken(true);
 }
 
+/** Whether the cached ID token already says the email is verified. reload()
+ *  updates the user, not the token, so the two can disagree right after a
+ *  verification link is clicked. */
+export async function tokenSaysVerified(): Promise<boolean> {
+  if (!firebaseConfigured()) return true;
+  const { auth } = await client();
+  if (!auth.currentUser) return true;
+  const result = await auth.currentUser.getIdTokenResult();
+  return result.claims.email_verified === true;
+}
+
 /** Whether the signed-in token already carries a tenant claim. True when
  *  Firebase is not configured, so the dev bypass never triggers a refresh. */
 export async function tokenHasTenant(): Promise<boolean> {
