@@ -1,0 +1,111 @@
+"""Every gap in Contract -> PO -> GRN -> Invoice -> Approval -> Payment -> GL is named."""
+
+from datetime import datetime, timezone
+
+import pytest
+
+from invoice_processing.db import models
+from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.ports import RunContext
+from invoice_processing.trust.graph.lineage import CHAIN, lineage
+from invoice_processing.trust.graph.store import GraphStore
+
+T = "tenant-acme"
+CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="t")
+AT = datetime(2026, 10, 14, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def graph(scratch_db):
+    url = scratch_db("lineage.db")
+    models.Base.metadata.drop_all(get_engine(url))
+    create_all(url)
+    with tenant_session(T, url) as s:
+        s.add(models.Tenant(id=T, name="Acme", slug="acme", status="active"))
+    return GraphStore(url)
+
+
+def edge(graph, src, dst, kind, confidence=1.0):
+    graph.upsert_edge(
+        CTX,
+        src=src,
+        dst=dst,
+        kind=kind,
+        source_system="v1",
+        provenance="system_record",
+        confidence=confidence,
+        observed_at=AT,
+    )
+
+
+def build(graph, *, grn=True, same_vendor=True, grn_qty="10"):
+    v1 = graph.upsert_node(CTX, kind="vendor", natural_key="v1")
+    v2 = graph.upsert_node(CTX, kind="vendor", natural_key="v2")
+    po = graph.upsert_node(
+        CTX, kind="po", natural_key="po", attrs={"amount": "1000.0000"}
+    )
+    inv = graph.upsert_node(
+        CTX,
+        kind="invoice",
+        natural_key="inv",
+        attrs={"amount": "1000.0000", "quantity": "10"},
+    )
+    edge(graph, po, v1, "issued_by")
+    edge(graph, inv, v1 if same_vendor else v2, "issued_by")
+    edge(graph, inv, po, "references")
+    if grn:
+        g = graph.upsert_node(
+            CTX, kind="grn", natural_key="grn", attrs={"qty_received": grn_qty}
+        )
+        edge(graph, g, po, "fulfils")
+    ap = graph.upsert_node(
+        CTX, kind="approval", natural_key="ap", attrs={"status": "approved"}
+    )
+    edge(graph, ap, inv, "approves")
+    pay = graph.upsert_node(
+        CTX, kind="payment", natural_key="pay", attrs={"amount": "1000.0000"}
+    )
+    edge(graph, pay, inv, "settles")
+    return inv
+
+
+def by_stage(links):
+    return {link.stage: link.status for link in links}
+
+
+def test_full_chain_is_found_except_contract_and_gl_in_wave0(graph):
+    out = lineage(T, build(graph), graph=graph)
+    assert [link.stage for link in out] == list(CHAIN)
+    assert by_stage(out) == {
+        "contract": "no_evidence",
+        "po": "found",
+        "grn": "found",
+        "invoice": "found",
+        "approval": "found",
+        "payment": "found",
+        "gl": "no_evidence",
+    }
+    contract = next(link for link in out if link.stage == "contract")
+    assert "Wave 1" in contract.note
+
+
+def test_missing_grn_is_no_evidence(graph):
+    out = lineage(T, build(graph, grn=False), graph=graph)
+    assert by_stage(out)["grn"] == "no_evidence"
+
+
+def test_po_for_other_vendor_contradicts(graph):
+    out = lineage(T, build(graph, same_vendor=False), graph=graph)
+    po = next(link for link in out if link.stage == "po")
+    assert po.status == "contradicts" and "vendor" in po.note
+
+
+def test_short_receipt_contradicts(graph):
+    out = lineage(T, build(graph, grn_qty="4"), graph=graph)
+    grn = next(link for link in out if link.stage == "grn")
+    assert grn.status == "contradicts" and "4" in grn.note
+
+
+def test_unknown_node_is_an_error(graph):
+    with pytest.raises(KeyError):
+        lineage(T, "nope", graph=graph)
