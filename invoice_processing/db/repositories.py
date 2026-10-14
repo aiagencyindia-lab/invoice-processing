@@ -766,6 +766,7 @@ _ENTITY_TYPES = {
     "audit": "audit_trail",
     # v2 trust layer: trust_history_imported, trust_finding_*, trust_dead_lettered.
     "trust": "trust",
+    "entity": "entity_link",
 }
 
 
