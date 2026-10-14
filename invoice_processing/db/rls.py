@@ -149,3 +149,39 @@ def drop_audit_purge_policy_statements() -> list[str]:
 def set_tenant_statement() -> str:
     """Parameterised statement to scope a session to one tenant."""
     return f"SELECT set_config('{TENANT_SETTING}', :tenant_id, true)"
+
+
+def trust_citation_trigger_statements() -> list[str]:
+    """A finding without a citation cannot be committed (PRD FR-24.2).
+
+    Deferred to commit so the finding and its citations land in one
+    transaction. Not part of `enable_rls_statements`: migrations replay that
+    as history. Postgres only; SQLite relies on the Python writer.
+    """
+    return [
+        """
+        CREATE OR REPLACE FUNCTION trust_finding_needs_citation()
+        RETURNS trigger AS $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM trust_finding_citations c
+                WHERE c.finding_id = NEW.id
+            ) THEN
+                RAISE EXCEPTION 'trust_findings row % has no citation', NEW.id;
+            END IF;
+            RETURN NULL;
+        END $$ LANGUAGE plpgsql;
+        """,
+        """
+        CREATE CONSTRAINT TRIGGER trust_finding_citation_check
+        AFTER INSERT ON trust_findings DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION trust_finding_needs_citation();
+        """,
+    ]
+
+
+def drop_trust_citation_trigger_statements() -> list[str]:
+    return [
+        "DROP TRIGGER IF EXISTS trust_finding_citation_check ON trust_findings;",
+        "DROP FUNCTION IF EXISTS trust_finding_needs_citation();",
+    ]

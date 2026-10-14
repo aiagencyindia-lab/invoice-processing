@@ -474,6 +474,7 @@ class TestMigration:
             ("b8c4d1e2f3a5", 0),
             ("c9d5e2f3a4b6", 1),
             ("d1a2b3c4e5f6", 0),
+            ("e2f3a4b5c6d7", 8),
         ],
     )
     def test_migration_protects_exactly_the_tables_it_creates(
@@ -549,6 +550,14 @@ class TestMigration:
                 "grn_lines",
                 "supporting_documents",
                 "sso_domains",
+                "graph_nodes",
+                "graph_edges",
+                "entity_links",
+                "trust_history_imports",
+                "history_records",
+                "trust_findings",
+                "trust_finding_citations",
+                "trust_finding_events",
             ]
             with engine.connect() as c:
                 policies = {
