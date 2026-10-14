@@ -393,3 +393,12 @@ class TestNoEndpointTakesATenant:
 
     def test_the_app_never_sends_a_tenant_id(self):
         assert "tenant_id=" not in source()
+
+
+def test_the_content_security_policy_is_enforced():
+    """Report-only until Google sign-in had run against a live Identity
+    Platform project (2026-10-14, rasayan): sign-in, sign-up and the main
+    pages raised no report on a production build, so it now blocks."""
+    config = (FRONTEND.parent / "next.config.ts").read_text(encoding="utf-8")
+    assert '{ key: "Content-Security-Policy", value: CSP }' in config
+    assert "Report-Only" not in config
