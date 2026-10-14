@@ -352,4 +352,4 @@ def get_queue(root: Path | str | None = None) -> Queue:
         return PubSubQueue()
     from .. import paths  # noqa: PLC0415
 
-    return LocalQueue(root or paths.DATA_DIR / "queue")
+    return LocalQueue(root or paths.state_dir() / "queue")

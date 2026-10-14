@@ -502,6 +502,10 @@ See [`deployment/README.md`](deployment/README.md) for details.
 
 ## Production: GCS Integration
 
+> Production now runs on Railway with documents on a volume, not GCS:
+> see [deployment/README.md](deployment/README.md). GCS remains supported
+> when `GCS_BUCKET` is set.
+
 In local development, all data lives inside the agent package (`invoice_processing/data/` and `invoice_processing/exemplary_data/`). For production deployment, these directories should be replaced with Google Cloud Storage (GCS) buckets so that:
 
 - **Incoming invoice cases** are read from a bucket where upstream systems or users upload PDFs
