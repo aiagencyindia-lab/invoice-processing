@@ -430,7 +430,8 @@ class TestBindMicrosoft:
         bound = PgUserDirectory(url).domain("acme.com")
         assert bound["tenant_id"] == tenant_id
         events = PgAuditSink(url).query(tenant_id)
-        assert [e.action for e in events] == ["sso_domain_bound"]
+        # The same name as an admin's Google binding, so one filter finds both.
+        assert [e.action for e in events] == ["sso_domain_added"]
         assert events[0].after["idp_provider_id"] == "oidc.acme"
         assert events[0].after["operator"] == "vineet"
 
@@ -488,3 +489,55 @@ class TestBindMicrosoft:
         )
         assert code == 0
         assert "oidc.acme" in capsys.readouterr().out
+
+
+class TestBindMicrosoftGuards:
+    TID = "11111111-2222-3333-4444-555555555555"
+
+    def _bind(self, provisioner, **kw):
+        args = {
+            "tenant_slug": "acme",
+            "domain": "acme.com",
+            "provider_id": "oidc.acme",
+            "entra_tenant": self.TID,
+            "role": "clerk",
+            "operator": "vineet",
+        }
+        args.update(kw)
+        return provisioner.bind_microsoft(**args)
+
+    def test_refuses_a_provider_another_tenant_already_trusts(
+        self, provisioner
+    ):
+        """One provider per customer: a copy-pasted provider id would let
+        the first customer's Entra admin give users the second's domain."""
+        provisioner.create_tenant("acme", "Acme")
+        provisioner.create_tenant("globex", "Globex")
+        self._bind(provisioner)
+        with pytest.raises(ProvisioningError, match="another tenant"):
+            self._bind(provisioner, tenant_slug="globex", domain="globex.com")
+
+    def test_one_customer_may_bind_two_domains_to_its_provider(
+        self, provisioner
+    ):
+        provisioner.create_tenant("acme", "Acme")
+        self._bind(provisioner)
+        record = self._bind(provisioner, domain="acme.co.uk")
+        assert record["idp_provider_id"] == "oidc.acme"
+
+    @pytest.mark.parametrize(
+        "entra_tenant",
+        ["acme", "1111-2222", "11111111-2222-3333-4444-55555555555Z", "x" * 70],
+    )
+    def test_refuses_an_entra_tenant_that_is_not_a_guid(
+        self, provisioner, entra_tenant
+    ):
+        provisioner.create_tenant("acme", "Acme")
+        with pytest.raises(ProvisioningError, match="Entra tenant"):
+            self._bind(provisioner, entra_tenant=entra_tenant)
+
+    def test_the_entra_tenant_is_stored_lower_case(self, provisioner):
+        provisioner.create_tenant("acme", "Acme")
+        tid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        record = self._bind(provisioner, entra_tenant=tid.upper())
+        assert record["idp_tenant_id"] == tid

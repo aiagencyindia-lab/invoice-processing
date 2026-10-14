@@ -24,7 +24,7 @@ import re
 import unicodedata
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel
 
 from .auth import verified_claims
@@ -80,18 +80,20 @@ MICROSOFT_NOT_SET_UP = (
 )
 
 
-@router.get("/api/sso/microsoft")
-def microsoft_provider(email: str = Query(max_length=320)) -> dict:
+@router.post("/api/sso/microsoft")
+def microsoft_provider(email: str = Body("", embed=True)) -> dict:
     """Which OIDC provider a work address signs in through.
 
     Public, before sign-in: the login page needs it to open the right
     customer's Microsoft provider. It reveals only whether a domain uses
     Ledgerly through Microsoft (SECURITY.md); a Google binding, an unbound
-    or public-mailbox domain and a malformed address all answer the same.
+    or public-mailbox domain and a malformed, missing or over-long address
+    all answer the same. POST, so the address is not in a URL a proxy logs.
     """
     from .. import sso  # noqa: PLC0415
     from . import auth  # noqa: PLC0415
 
+    email = email if isinstance(email, str) and len(email) <= 320 else ""
     raw = sso.domain_of(email) if "@" in email else ""
     not_set_up = HTTPException(
         status_code=404,

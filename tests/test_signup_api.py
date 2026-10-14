@@ -392,9 +392,8 @@ class TestMicrosoftLookup:
         )
 
     def _get(self, email):
-        return TestClient(app).get(
-            "/api/sso/microsoft", params={"email": email}
-        )
+        # POST, so the address never sits in a URL that proxies log.
+        return TestClient(app).post("/api/sso/microsoft", json={"email": email})
 
     @pytest.mark.parametrize(
         "email", ["pat@acme.com", "Pat@ACME.com", "pat+ap@acme.com"]
@@ -411,6 +410,7 @@ class TestMicrosoftLookup:
             ("pat@unbound.com", "unbound.com"),
             ("pat@outlook.com", "outlook.com"),
             ("not-an-address", "that address"),
+            ("pat@" + "a" * 330 + ".com", "that address"),
         ],
     )
     def test_anything_else_is_not_set_up(self, env, email, domain):
@@ -424,3 +424,12 @@ class TestMicrosoftLookup:
     def test_a_google_binding_is_not_set_up_for_microsoft(self, env):
         self._bind(env, provider="google")
         assert self._get("pat@acme.com").status_code == 404
+
+
+def test_a_lookup_with_no_address_answers_like_any_other(env):
+    """One response shape for every miss: no pydantic list on screen."""
+    response = TestClient(app).post("/api/sso/microsoft", json={})
+    assert response.status_code == 404
+    assert response.json()["detail"] == signup.MICROSOFT_NOT_SET_UP.format(
+        domain="that address"
+    )

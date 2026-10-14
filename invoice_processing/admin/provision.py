@@ -70,6 +70,10 @@ SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 # An Identity Platform OIDC provider id. Microsoft customers each get one,
 # whose issuer is their own Entra tenant.
 PROVIDER_ID = re.compile(r"^oidc\.[a-z0-9-]{1,40}$")
+# An Entra (Azure AD) tenant id: a GUID.
+ENTRA_TENANT = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 class ProvisioningError(RuntimeError):
@@ -502,22 +506,34 @@ class Provisioner:
             )
         if role not in ("viewer", "clerk"):
             raise ProvisioningError("The default role is viewer or clerk.")
-        if not (entra_tenant or "").strip():
-            raise ProvisioningError("The Entra tenant id is required.")
+        entra_tenant = (entra_tenant or "").strip().lower()
+        if not ENTRA_TENANT.match(entra_tenant):
+            raise ProvisioningError(
+                "The Entra tenant id is a GUID (Entra -> Overview -> Tenant ID)."
+            )
         try:
             domain = sso.normalize_domain(domain)
         except ValueError as exc:
             raise ProvisioningError(str(exc)) from exc
         tenant = self._tenant_by_slug(tenant_slug)
+        repo = PgSsoDomainRepository(self.url)
+        # One provider per customer: a provider id copied from another
+        # customer would let that customer's Entra admin give its users this
+        # domain and land them here.
+        if repo.tenants_trusting(provider_id) - {tenant.id}:
+            raise ProvisioningError(
+                f"{provider_id} already admits another tenant's users; each "
+                "customer has its own provider."
+            )
         try:
-            record = PgSsoDomainRepository(self.url).add(
+            record = repo.add(
                 tenant.id,
                 domain=domain,
                 provider="microsoft",
                 default_role=role,
                 created_by=f"operator:{operator}",
                 idp_provider_id=provider_id,
-                idp_tenant_id=entra_tenant.strip(),
+                idp_tenant_id=entra_tenant,
             )
         except DomainTaken as exc:
             raise ProvisioningError(f"{domain} is already bound.") from exc
@@ -525,12 +541,14 @@ class Provisioner:
         # Google binding; a crash between the two loses only the event.
         PgAuditSink(self.url).emit(
             RunContext(tenant_id=tenant.id, actor=operator),
-            "sso_domain_bound",
+            # The admin route's name for a Google binding, so one filter on
+            # the Activity page or export finds every binding.
+            "sso_domain_added",
             {
                 "domain": domain,
                 "provider": "microsoft",
                 "idp_provider_id": provider_id,
-                "idp_tenant_id": entra_tenant.strip(),
+                "idp_tenant_id": entra_tenant,
                 "default_role": role,
                 "operator": operator,
             },

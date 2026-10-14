@@ -3315,6 +3315,20 @@ class PgSsoDomainRepository:
                 raise DomainTaken(domain) from exc
             raise
 
+    def tenants_trusting(self, provider_id: str) -> set[str]:
+        """Every tenant with a binding to this OIDC provider. Cross-tenant
+        by nature, so under the lookup sentinel; see rls.SSO_LOOKUP_TENANT."""
+        from .rls import SSO_LOOKUP_TENANT  # noqa: PLC0415
+
+        with tenant_session(SSO_LOOKUP_TENANT, self.url) as session:
+            return set(
+                session.scalars(
+                    select(SsoDomain.tenant_id).where(
+                        SsoDomain.idp_provider_id == provider_id
+                    )
+                )
+            )
+
     def remove(self, tenant_id: str, domain_id: str) -> bool:
         with tenant_session(tenant_id, self.url) as session:
             row = session.scalar(

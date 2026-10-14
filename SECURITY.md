@@ -74,9 +74,15 @@ tenant yet joins one only through a domain binding:
   (`provision bind-microsoft`; deployment/MICROSOFT_SIGN_IN.md). The generic
   `microsoft.com` provider admits nobody.
 
-The login page asks `GET /api/sso/microsoft?email=` which provider a work
-address uses. It answers before sign-in, so it reveals whether a domain uses
-Ledgerly through Microsoft; it is not rate limited (a known gap).
+The login page asks `POST /api/sso/microsoft` (the address in the body,
+never in a URL) which provider a work address uses. It answers before
+sign-in, so it reveals whether a domain uses Ledgerly through Microsoft; it
+is not rate limited (a known gap). A provider admits only one tenant's
+users: `bind-microsoft` refuses a provider another tenant already trusts.
+
+Entra sends no `email_verified`, so for OIDC providers Ledgerly does not
+require it, on the first sign-in or after; every other provider must assert
+a verified address.
 
 ## Data lifecycle
 

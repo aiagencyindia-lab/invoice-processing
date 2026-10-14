@@ -796,3 +796,35 @@ class TestMicrosoftThroughOidc:
             sso.resolve_principal(
                 unclaimed(email_verified=False), services(directory=d)
             )
+
+
+class TestClaimedOidcTokens:
+    """After the first sign-in writes claims, every later token carries a
+    tenant; Entra still sends no email_verified. Review finding: these were
+    refused for ever with "Email address is not verified."."""
+
+    def test_a_claimed_oidc_token_is_admitted_by_its_users_row(self):
+        d = FakeDirectory(users=[dict(ROW, email="new@acme.com", uid="fb-9")])
+        p = sso.resolve_principal(
+            from_entra(tenant_id=ACME, role="clerk"),
+            sso.SsoServices(d, FakeClaims()),
+            now=NOW,
+        )
+        assert (p.tenant_id, p.role) == (ACME, ROW["role"])
+
+    def test_a_claimed_oidc_token_of_a_deactivated_user_is_refused(self):
+        d = FakeDirectory(
+            users=[dict(ROW, email="new@acme.com", uid="fb-9", is_active=False)]
+        )
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                from_entra(tenant_id=ACME, role="clerk"), services(directory=d)
+            )
+        assert "deactivated" in exc.value.detail
+
+    def test_a_claimed_google_token_still_needs_a_verified_email(self):
+        d = FakeDirectory(users=[ROW])
+        with pytest.raises(AuthError, match="not verified"):
+            sso.resolve_principal(
+                claimed(email_verified=False), services(directory=d)
+            )

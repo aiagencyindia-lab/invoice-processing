@@ -64,8 +64,10 @@ export function SignIn({
     setBusy(true);
     setProblem(null);
     try {
+      // A POST body, so the address is not in a URL that proxies log.
       const { provider_id } = await api<{ provider_id: string }>(
-        `/api/sso/microsoft?email=${encodeURIComponent(msEmail)}`,
+        "/api/sso/microsoft",
+        { method: "POST", body: JSON.stringify({ email: msEmail }) },
       );
       await signInWithMicrosoft(provider_id, msEmail);
       onSignedIn();

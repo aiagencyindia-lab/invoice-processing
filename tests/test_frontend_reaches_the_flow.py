@@ -411,6 +411,8 @@ class TestMicrosoftSignIn:
         )
         auth = (FRONTEND / "lib" / "auth.ts").read_text(encoding="utf-8")
         assert "/api/sso/microsoft" in sign_in
+        # A POST body: the address is kept out of URLs that proxies log.
+        assert 'method: "POST"' in sign_in
         assert "signInWithMicrosoft" in sign_in
         assert "new mod.OAuthProvider(providerId)" in auth
         assert "login_hint" in auth
