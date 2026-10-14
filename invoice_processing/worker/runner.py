@@ -595,7 +595,7 @@ HEARTBEAT_STALE_SECONDS = 30
 def heartbeat_path() -> Path:
     from .. import paths  # noqa: PLC0415
 
-    return paths.DATA_DIR / "worker_heartbeat.json"
+    return paths.state_dir() / "worker_heartbeat.json"
 
 
 def _worker_id() -> str:

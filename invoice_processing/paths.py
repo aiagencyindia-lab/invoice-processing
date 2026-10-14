@@ -39,6 +39,21 @@ EXEMPLARY_DIR = AGENT_PKG_DIR / "exemplary_data"
 # the rule base), so a relocated tree must be seeded from this one rather than
 # created empty.
 DATA_DIR = Path(os.getenv("INVOICE_DATA_DIR") or (AGENT_PKG_DIR / "data"))
+
+
+def state_dir() -> Path:
+    """Where durable runtime state lives: uploaded documents, the local job
+    queue and the worker heartbeat.
+
+    `STATE_DIR` -- a mounted volume in production (Railway: `/data`) -- when
+    set; otherwise `DATA_DIR`, as before. Tracked files (the rules book, the
+    rule base) stay under `DATA_DIR`, in the image, so a fresh volume does
+    not hide them. Read at call time, like the callers' `DATA_DIR`.
+    """
+    raw = os.getenv("STATE_DIR", "").strip()
+    return Path(raw) if raw else DATA_DIR
+
+
 AGENTIC_FLOW_OUT = DATA_DIR / "agent_output"
 ALF_OUT_DIR = DATA_DIR / "alf_output"
 INVESTIGATION_OUT_DIR = DATA_DIR / "investigation_output"

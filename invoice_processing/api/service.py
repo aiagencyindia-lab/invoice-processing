@@ -783,7 +783,7 @@ def get_blobs(tenant_id: str):
         from ..gcs import GcsBlobStore  # noqa: PLC0415
 
         return GcsBlobStore(tenant_id=tenant_id)
-    return LocalBlobStore(paths.DATA_DIR / "blobs" / tenant_id)
+    return LocalBlobStore(paths.state_dir() / "blobs" / tenant_id)
 
 
 # ---------------------------------------------------------------------------
