@@ -55,10 +55,18 @@ DOCUMENT_INGESTED = "document.ingested"
 # A goods receipt arrived for a PO a held case quotes; see rematch.py.
 REMATCH = "case.rematch"
 REMATCH_ATTEMPTS = "rematch_attempts"
+# v2 trust layer: graph projection after an import, evaluation after a job.
+TRUST_GRAPH_SYNC = "trust.graph.sync"
+TRUST_EVALUATE = "trust.evaluate"
+TRUST_ATTEMPTS = "trust_attempts"
 
 
 class ProcessingFailed(RuntimeError):
     """The work failed. Retriable unless attempts are exhausted."""
+
+
+class _NoDatabase(RuntimeError):
+    """A trust job on a deployment without a database: nothing to retry into."""
 
 
 class PermanentFailure(ProcessingFailed):
@@ -861,6 +869,12 @@ class Worker:
         # Without one, attempt counting falls back to whatever the queue
         # reports -- correct locally, and permanently 1 on Pub/Sub.
         self.attempts = attempts
+        # Jobs that carry no document and hold no claim, by payload type.
+        self._typed = {
+            REMATCH: self._handle_rematch,
+            TRUST_GRAPH_SYNC: self._handle_trust_sync,
+            TRUST_EVALUATE: self._handle_trust_evaluate,
+        }
 
     # -- one message -------------------------------------------------------
 
@@ -927,11 +941,7 @@ class Worker:
         self._dead_letter(
             message,
             f"tenant {status}",
-            event=(
-                "rematch_dead_lettered"
-                if message.payload.get("type") == REMATCH
-                else "document_dead_lettered"
-            ),
+            event=_dead_letter_event(message),
             record=status != "purged",
         )
         return "dead-lettered:tenant-closed"
@@ -946,9 +956,10 @@ class Worker:
         refused = self._refuse_closed_tenant(message)
         if refused is not None:
             return refused
-        if message.payload.get("type") == REMATCH:
-            # No document and no claim: re-matching twice is idempotent.
-            return self._handle_rematch(message)
+        typed = self._typed.get(str(message.payload.get("type") or ""))
+        if typed is not None:
+            # No document and no claim: each of these is idempotent.
+            return typed(message)
 
         tenant_id = str(message.payload.get("tenant_id") or "")
         document_id = str(message.payload.get("document_id") or "")
@@ -1001,6 +1012,21 @@ class Worker:
         # Ack last: until this point a crash means redelivery, which is correct.
         self.queue.ack(message)
         self._emit(tenant_id, document_id, "document_processed", result or {})
+        # v2: evaluate what we now know about this document, where the
+        # trust tables exist. Best effort, like the audit row: a queue
+        # hiccup must not undo a finished job.
+        try:
+            from ..api import service  # noqa: PLC0415
+
+            if service.get_graph_store() is not None:
+                enqueue_trust_evaluate(
+                    self.queue,
+                    tenant_id,
+                    document_id,
+                    observability.current_request_id.get("") or message.id,
+                )
+        except Exception:
+            logger.warning("trust.evaluate could not be queued", exc_info=True)
         return "done"
 
     def _handle_rematch(self, message: Message) -> str:
@@ -1066,6 +1092,110 @@ class Worker:
         return "rematched"
 
     # -- loop --------------------------------------------------------------
+
+    def _run_claimless(
+        self, message: Message, *, key: str, fn, event: str, done: str
+    ) -> str:
+        """Retry-and-dead-letter shell shared by the trust jobs."""
+        tenant_id = str(message.payload.get("tenant_id") or "")
+        log = (
+            AttemptLog(self.attempts.cases, key=TRUST_ATTEMPTS)
+            if self.attempts is not None
+            else None
+        )
+        try:
+            fn()
+        except _NoDatabase as exc:
+            self._dead_letter(message, str(exc), event=event)
+            return "dead-lettered:no-database"
+        except Exception as exc:
+            attempt = self._count_failure(tenant_id, key, message, exc, log=log)
+            logger.exception(
+                "%s attempt %s/%s failed for %s",
+                message.payload.get("type"),
+                attempt,
+                self.max_attempts,
+                key,
+            )
+            if attempt >= self.max_attempts:
+                sentry_sdk.capture_exception(exc)
+                self._dead_letter(message, _brief(exc), event=event)
+                return "dead-lettered:exhausted"
+            self.queue.nack(message)
+            return "retry"
+        self._clear_failures(tenant_id, key, log=log)
+        self.queue.ack(message)
+        return done
+
+    def _trust_context(self, message: Message, case_id: str) -> RunContext:
+        return RunContext(
+            tenant_id=str(message.payload.get("tenant_id") or ""),
+            case_id=case_id,
+            run_id=observability.current_request_id.get("") or message.id,
+            actor="worker",
+        )
+
+    def _handle_trust_sync(self, message: Message) -> str:
+        tenant_id = str(message.payload.get("tenant_id") or "")
+        if not tenant_id:
+            self._dead_letter(
+                message,
+                "Graph sync message is missing tenant_id",
+                event="trust_dead_lettered",
+            )
+            return "dead-lettered:malformed"
+
+        def run():
+            from ..api import service  # noqa: PLC0415
+            from ..trust.graph.links import LinkStore  # noqa: PLC0415
+            from ..trust.graph.sync import sync_tenant  # noqa: PLC0415
+
+            graph = service.get_graph_store()
+            if graph is None:
+                raise _NoDatabase("Graph sync needs a database.")
+            sync_tenant(self._trust_context(message, ""), graph, LinkStore())
+
+        return self._run_claimless(
+            message,
+            key=f"sync:{tenant_id}",
+            fn=run,
+            event="trust_dead_lettered",
+            done="trust-synced",
+        )
+
+    def _handle_trust_evaluate(self, message: Message) -> str:
+        tenant_id = str(message.payload.get("tenant_id") or "")
+        document_id = str(message.payload.get("document_id") or "")
+        if not tenant_id or not document_id:
+            self._dead_letter(
+                message,
+                "Evaluate message is missing tenant_id or document_id",
+                event="trust_dead_lettered",
+            )
+            return "dead-lettered:malformed"
+
+        def run():
+            from ..api import service  # noqa: PLC0415
+            from ..trust.evaluate import evaluate  # noqa: PLC0415
+            from ..trust.graph.links import LinkStore  # noqa: PLC0415
+
+            graph = service.get_graph_store()
+            if graph is None:
+                raise _NoDatabase("Trust evaluation needs a database.")
+            evaluate(
+                self._trust_context(message, document_id),
+                document_id,
+                graph=graph,
+                links=LinkStore(),
+            )
+
+        return self._run_claimless(
+            message,
+            key=f"evaluate:{document_id}",
+            fn=run,
+            event="trust_dead_lettered",
+            done="trust-evaluated",
+        )
 
     def run_once(self, max_messages: int = 10) -> list[str]:
         return [
@@ -1298,6 +1428,42 @@ def enqueue_document(
     if force_invoice:
         payload["force_invoice"] = True
     return queue.publish(payload, tenant_id=ctx.tenant_id)
+
+
+def _dead_letter_event(message: Message) -> str:
+    kind = message.payload.get("type")
+    if kind == REMATCH:
+        return "rematch_dead_lettered"
+    if kind in (TRUST_GRAPH_SYNC, TRUST_EVALUATE):
+        return "trust_dead_lettered"
+    return "document_dead_lettered"
+
+
+def enqueue_trust_graph_sync(
+    queue: Queue, tenant_id: str, request_id: str = ""
+) -> str:
+    return queue.publish(
+        {
+            "type": TRUST_GRAPH_SYNC,
+            "tenant_id": tenant_id,
+            "request_id": request_id,
+        },
+        tenant_id=tenant_id,
+    )
+
+
+def enqueue_trust_evaluate(
+    queue: Queue, tenant_id: str, document_id: str, request_id: str = ""
+) -> str:
+    return queue.publish(
+        {
+            "type": TRUST_EVALUATE,
+            "tenant_id": tenant_id,
+            "document_id": document_id,
+            "request_id": request_id,
+        },
+        tenant_id=tenant_id,
+    )
 
 
 def enqueue_rematch(
