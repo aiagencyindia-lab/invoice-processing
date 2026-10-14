@@ -14,12 +14,19 @@ Project `ledgerly` (`b2683d9c-cc99-44fc-a2c4-d271487f1181`) on the
 and sign-in (service account `ledgerly-prod`).
 
 Paused 2026-10-14 with `railway down` on all three services. The volumes
-(database and documents) are kept.
+(database and documents) are kept. The GitHub source is **disconnected**
+from `ledgerly` and `app` while paused: every push to `main` auto-deploys
+them, which silently un-paused production once (after #50).
 
-- [ ] **Resume**, in this order: `Postgres` → Redeploy; `ledgerly` →
-      "Deploy latest commit"; `app` → "Deploy latest commit". Not
-      `railway redeploy` on `ledgerly`: its last listed deployment is an old
-      failed build.
+- [ ] **Resume**, in this order: `Postgres` → Redeploy, wait until active;
+      then reconnect the repo, which deploys `main`:
+      ```bash
+      railway service source connect --repo aiagencyindia-lab/invoice-processing --branch main -p b2683d9c-cc99-44fc-a2c4-d271487f1181 -e production -s ledgerly
+      railway service source connect --repo aiagencyindia-lab/invoice-processing --branch main -p b2683d9c-cc99-44fc-a2c4-d271487f1181 -e production -s app
+      ```
+      Check `app` still builds from root directory `frontend` (Settings →
+      Source). Not `railway redeploy` on `ledgerly`: its last listed
+      deployment is an old failed build.
 - [ ] **Restore check** against live production, *before* sealing (sealed
       variables are not given to `railway run`). Expect PASS:
       ```bash
