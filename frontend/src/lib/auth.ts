@@ -104,9 +104,11 @@ const POPUP_UNAVAILABLE = new Set([
   "auth/web-storage-unsupported",
 ]);
 
-export async function signInWithGoogle(): Promise<void> {
+async function signInWith(
+  make: (mod: FirebaseAuth) => import("firebase/auth").AuthProvider,
+): Promise<void> {
   const { mod, auth } = await client();
-  const provider = new mod.GoogleAuthProvider();
+  const provider = make(mod);
   try {
     await mod.signInWithPopup(auth, provider);
   } catch (caught) {
@@ -118,6 +120,23 @@ export async function signInWithGoogle(): Promise<void> {
     // third-party storage can drop the result on the way back.
     await mod.signInWithRedirect(auth, provider);
   }
+}
+
+export async function signInWithGoogle(): Promise<void> {
+  await signInWith((mod) => new mod.GoogleAuthProvider());
+}
+
+/** Through the OIDC provider created for this customer's Entra tenant;
+ *  the hint saves the person retyping their address at Microsoft. */
+export async function signInWithMicrosoft(
+  providerId: string,
+  email: string,
+): Promise<void> {
+  await signInWith((mod) => {
+    const provider = new mod.OAuthProvider(providerId);
+    provider.setCustomParameters({ login_hint: email });
+    return provider;
+  });
 }
 
 /** Report a redirect sign-in that came back and failed.

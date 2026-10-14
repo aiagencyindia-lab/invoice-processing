@@ -583,6 +583,8 @@ export type SsoDomain = {
   domain: string;
   provider: "google" | "microsoft";
   default_role: "viewer" | "clerk";
+  /** Set on Microsoft bindings only, by the operator. */
+  idp_provider_id?: string | null;
   created_by: string;
   created_at: string | null;
 };

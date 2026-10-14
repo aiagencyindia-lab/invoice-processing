@@ -27,7 +27,6 @@ export default function AdminPage() {
     reload: reloadDomains,
   } = usePoll<SsoDomainList>("/api/admin/sso-domains");
   const [newDomain, setNewDomain] = useState("");
-  const [newProvider, setNewProvider] = useState<"google" | "microsoft">("google");
   const [newRole, setNewRole] = useState<"viewer" | "clerk">("viewer");
 
   const [email, setEmail] = useState("");
@@ -88,7 +87,8 @@ export default function AdminPage() {
         method: "POST",
         body: JSON.stringify({
           domain: newDomain.trim(),
-          provider: newProvider,
+          // Microsoft bindings are made by Ledgerly support, not here.
+          provider: "google",
           default_role: newRole,
         }),
       });
@@ -286,7 +286,11 @@ export default function AdminPage() {
               {domains.domains.map((d) => (
                 <tr key={d.id}>
                   <td>{d.domain}</td>
-                  <td>{d.provider}</td>
+                  <td>
+                    {d.provider === "microsoft"
+                      ? "Microsoft 365 — set up by Ledgerly support"
+                      : "Google Workspace"}
+                  </td>
                   <td><span className="badge">{d.default_role}</span></td>
                   <td>
                     <button type="button" className="btn-chip" aria-label={`Disconnect ${d.domain}`}
@@ -309,10 +313,8 @@ export default function AdminPage() {
           </label>
           <label style={{ fontSize: 12 }}>
             Provider
-            <select className="input-field" aria-label="Provider" value={newProvider}
-                    onChange={(e) => setNewProvider(e.target.value as "google" | "microsoft")}>
+            <select className="input-field" aria-label="Provider" value="google" disabled>
               <option value="google">Google Workspace</option>
-              <option value="microsoft">Microsoft 365 — admits nobody until Microsoft sign-in is enabled</option>
             </select>
           </label>
           <label style={{ fontSize: 12 }}>
