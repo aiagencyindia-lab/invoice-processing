@@ -12,6 +12,7 @@ import {
   refreshToken,
   resendVerification,
   signOut,
+  tokenSaysVerified,
   watchUser,
   type SignedInUser,
 } from "@/lib/auth";
@@ -38,7 +39,11 @@ export default function SignUpPage() {
       // says email_verified=false and the server would refuse signup.
       // A failed refresh must not strand the page on "Checking…"; if the
       // token really is stale, the server's 403 says so in words.
-      await refreshToken().catch(() => undefined);
+      // Only while the token is stale: a refresh is itself a token change,
+      // which runs settle again, so refreshing unconditionally never stops.
+      if (!(await tokenSaysVerified().catch(() => true))) {
+        await refreshToken().catch(() => undefined);
+      }
       setStep("organisation");
     } else {
       setStep("verify");
