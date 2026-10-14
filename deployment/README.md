@@ -1,14 +1,70 @@
-# Release (Railway + Postgres)
+# Production (Railway + Google project `rasayan`)
 
-The API and worker connect as a least-privilege app role that owns nothing and
-cannot run DDL. Migrations run in a release step as the owner role.
+Ledgerly runs on Railway; Gemini (Vertex AI) and sign-in (Identity
+Platform) run on the Google project `rasayan`, which is shared with the
+Rasayan web app. Design: docs/superpowers/specs/2026-10-14-railway-production-design.md.
+
+## Layout
+
+Railway project `ledgerly`:
+
+| Service | Source | Settings |
+|---|---|---|
+| `ledgerly` (API + worker) | repo root, `Dockerfile` | start command `sh scripts/start-railway.sh`; pre-deploy `python -m invoice_processing.db.migrate`; volume mounted at `/data` |
+| `app` (frontend) | `frontend/`, `frontend/Dockerfile` | public domain; proxies `/api` to `ledgerly` over the private network |
+| `Postgres` | Railway template | its own volume |
+
+`scripts/start-railway.sh` runs the worker and the API together and exits
+when either stops, so Railway restarts the container; one container is the
+ceiling (scale up, not out). Documents, the local job queue and the worker
+heartbeat live on the `/data` volume (`STATE_DIR`); the image keeps the
+tracked files (rules book, master data).
+
+## Variables
+
+"You" means the operator sets it by hand: it is a secret, and nobody else
+creates, reads or pastes it.
+
+| Service | Variable | Value | Who |
+|---|---|---|---|
+| ledgerly | `ENV` | `production` | operator |
+| ledgerly | `STATE_DIR` | `/data` | operator |
+| ledgerly | `RUN_MIGRATIONS` | `0` (the pre-deploy step migrates, as the owner) | operator |
+| ledgerly | `GOOGLE_CLOUD_PROJECT`, `PROJECT_ID` | `rasayan` | operator |
+| ledgerly | `GOOGLE_GENAI_USE_VERTEXAI` | `TRUE` | operator |
+| ledgerly | `APPLY_IDENTITY_CLAIMS` | `1` | operator |
+| ledgerly | `ALLOW_SELF_SIGNUP` | `1`, or unset to close sign-up | operator |
+| ledgerly | `LOG_LEVEL` | `INFO`; `WARNING` to quieten | operator |
+| ledgerly | `GOOGLE_CREDENTIALS_JSON` | the `ledgerly-prod@rasayan` key (JSON) | **you** |
+| ledgerly | `DATABASE_URL` | app role: `postgresql+pg8000://ledgerly_app:<pw>@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/railway` | **you** |
+| ledgerly | `MIGRATE_DATABASE_URL` | owner role, same host | **you** |
+| ledgerly | `SENTRY_DSN` | the Sentry project's DSN | **you** |
+| app | `API_ORIGIN` | `http://${{ledgerly.RAILWAY_PRIVATE_DOMAIN}}:${{ledgerly.PORT}}` (read at build time) | operator |
+| app | `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` (`rasayan.firebaseapp.com`), `NEXT_PUBLIC_FIREBASE_PROJECT_ID` (`rasayan`) | Identity Platform's public web values (build time) | operator |
+
+`LOG_FORMAT` unset gives JSON under `ENV=production`. Railway sets
+`RAILWAY_GIT_COMMIT_SHA`, which becomes the Sentry release.
+
+## Google side (`rasayan`)
+
+- Service account `ledgerly-prod@rasayan.iam.gserviceaccount.com` with
+  `roles/aiplatform.user` and `roles/firebaseauth.admin`, nothing else.
+  **You** create its JSON key and paste it into `GOOGLE_CREDENTIALS_JSON`.
+- Identity Platform → Settings → Authorized domains: add the `app`
+  service's Railway domain (keep the existing ones).
+
+## Database bootstrap
+
+The API and worker connect as a least-privilege app role that owns nothing
+and cannot run DDL. Migrations run in the pre-deploy step as the owner role.
 `invoice_processing/db/bootstrap.sql` has two sections: §1 before the first
 migrate (roles, schema rights, default privileges), §2 after (grants on the
-migrated tables, append-only audit trail, VERIFY). Run each section on its own;
-`sed` cuts the file at the `-- §2` marker line.
+migrated tables, append-only audit trail, VERIFY). Run each section on its
+own; `sed` cuts the file at the `-- §2` marker line.
 
-`$ADMIN_URL` is the `postgres` user's connection to the application database
-(not the `postgres` database): the grants and default privileges are
+`$ADMIN_URL` is the `postgres` user's connection to the application
+database (Railway: the database `railway`, through the service's public TCP
+proxy, from a trusted machine): the grants and default privileges are
 per-database, so run elsewhere they protect nothing.
 
 1. Roles, as `postgres` (§1):
@@ -25,23 +81,24 @@ creates or recreates a table gets the app's grants through §1's default
 privileges, so a recreated `audit_events` (or `alembic_version`) would be
 writable by the app again until §2 revokes it.
 
-Railway service variables:
+Order on Railway: §1 → set the secret variables → first deploy (pre-deploy
+migrates as the owner) → §2 → read VERIFY. Re-run §2 after every deploy
+that migrates, not just the first: a migration that creates or recreates a
+table gets the app's grants through §1's default privileges, so a recreated
+`audit_events` (or `alembic_version`) would be writable by the app again
+until §2 revokes it.
 
-| Variable | Value |
-| --- | --- |
-| `DATABASE_URL` | the app role's connection (API and worker) |
-| `MIGRATE_DATABASE_URL` | the owner role's connection (release step only) |
-| `RUN_MIGRATIONS` | `0` on BOTH the API and the worker service: each migrates at startup otherwise (`invoice_processing/worker/__main__.py` too), and as the app role that fails |
-| `LOG_LEVEL` | `INFO`; `WARNING` to quieten |
-| `LOG_FORMAT` | unset: JSON when `ENV` is production or staging, text otherwise |
-| `SENTRY_DSN` | the Sentry project's DSN, on both services; unset means no reporting |
+## Smoke test
 
-`RAILWAY_GIT_COMMIT_SHA`, which Railway sets, becomes the Sentry release.
+1. Open the `app` domain → Continue with Google → sign up an organisation.
+2. Upload one PDF; the worker banner is green and the invoice is processed.
+3. `python -m invoice_processing.db.restore_check --restored <owner url>` →
+   `PASS`.
+4. The `ledgerly` logs show preflight passing and the worker starting.
 
-Pre-deploy command: `python -m invoice_processing.db.migrate`
-
-The Dockerfile pins uv 0.5.11; `uv.lock` is written by uv 0.9.28. Check that
-`uv sync --frozen` builds the image before the next deploy.
+The Dockerfile pins uv 0.5.11 and `uv.lock` is written by uv 0.9.28; uv
+0.5.11 passes `uv lock --check` on it (2026-10-14). If a build fails on the
+lock, pin the uv image to the lock's writer.
 
 ---
 

@@ -78,14 +78,17 @@ The purge runs as the database owner role; the service's own role cannot
 delete an audit row. The worker is stopped for the purge, and the purge
 refuses while any of the tenant's jobs is running. Steps: [deployment/OFFBOARDING.md](deployment/OFFBOARDING.md).
 
-**What outlives a purge, and for how long.** Database backups and
-point-in-time logs: up to 7 days. Deleted documents in Cloud Storage soft
-delete: up to 7 days. Application logs on Railway: 7 days (30 on Pro).
-Sentry events: 90 days. Logs and Sentry carry ids, never invoice content,
-and no line names an email address on purpose.
+**What outlives a purge, and for how long.** Railway volume backups of
+the database and the documents: as long as the backup schedule keeps them
+(deployment/BACKUP_RESTORE.md; a restore from before a purge is re-purged).
+Application logs on Railway: 7 days (30 on Pro). Sentry events: 90 days.
+Logs and Sentry carry ids, never invoice content, and no line names an
+email address on purpose.
 
-**Backup and restore.** Cloud SQL daily backups (7 kept) and
-point-in-time recovery. Targets: data loss of minutes (RPO), service back
+**Hosting and backup.** Production runs on Railway (the API and worker,
+the frontend, Postgres, and a volume for documents); Gemini and sign-in run
+on the Google project `rasayan`. Railway volume backups, daily, with no
+point-in-time recovery: data loss of up to 24 hours (RPO), service back
 within 4 hours (RTO). A restore drill runs every 6 months and after any
 production restore, checked by `python -m invoice_processing.db.restore_check`.
 Steps and the drill log: [deployment/BACKUP_RESTORE.md](deployment/BACKUP_RESTORE.md).
