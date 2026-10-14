@@ -1666,3 +1666,40 @@ supporting extraction, and `score.py` counts it correct for a
 already-written records were corrected from each stack's
 `supporting_documents` table (4 in A, 2 in C, all `purchase_order`) and the
 run re-scored; the originals are in `after-genai/before-supporting/`.
+
+---
+
+## 2026-10-14 — MFG-INV-020: the fault is in the dataset, not the document
+
+**Problem.** `MFG-INV-020` is accepted; the dataset expects REJECT at 4.2 for
+`LINESUM_LINE_DISCOUNT_WRONG` ("Line 2 discount changed; line total not
+updated", 0.00 → 500.00). The 2026-10-13 entries read this as a 4.2 gap.
+
+**Root cause.** The generator injects the fault where the renderer never
+looks. `gen_core.py:365-366` changes a line's absolute `line_discount` and
+leaves `line_total` alone; `gen_render.py:137` prints the discount column
+from `discount_pct`, which the fault does not touch. So the PDF carries no
+trace of it. `MFG-INV-020` line 2 prints "46 hour 777.00 - 35,742.00":
+46 × 777 = 35,742, no discount, and the two lines sum to the 57,498.00
+subtotal. `MFG-INV-039` is the same fault on a line with a real discount:
+line 2 prints 19,683.00 at 5% → 18,698.85, exactly the correct 984.15
+discount, while the dataset's injected 1,184.15 appears nowhere.
+
+All 15 `LINESUM_LINE_DISCOUNT_WRONG` faults are invisible this way. 13 are
+rejected for other real faults at earlier steps (TECH-INV-004, -007, -017,
+-050, -073, -082; MFG-INV-050, -051, -075; SVC-INV-019, -025, -034, -052),
+so they score correctly. The two whose only REJECT fault is this one,
+`MFG-INV-020` and `MFG-INV-039`, are accepted, which is the right decision
+for the document as printed.
+
+**Fix.** None. Rejecting either would reject an invoice whose every figure
+reconciles; that is tuning toward the answer key. Both are recorded as
+dataset errors alongside `SVC-INV-019`; `MFG-INV-039` was already listed.
+The 2026-10-13 "existing miss at 4.2" for `MFG-INV-020` is withdrawn.
+
+**Files.** This entry only.
+
+**Result.** No decision changes. The two accepted invoices account for
+2 of the 5 misses in the `after-genai` run (98.3%, 295/300).
+
+**Regression.** None; no code changed.
