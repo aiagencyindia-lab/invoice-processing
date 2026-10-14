@@ -75,7 +75,9 @@ target-version = "py310"
 # The dataset generator is vendored evidence of how the benchmark corpus was
 # produced. It is never imported and never edited, so formatting it would only
 # make it harder to compare against the original drop.
-extend-exclude = ["benchmark/dataset/generator"]
+# Markdown too: ruff 0.17 formats Python blocks inside .md files, and the
+# specs and plans under docs/ are a dated record, not code to restyle.
+extend-exclude = ["benchmark/dataset/generator", "*.md"]
 
 [tool.ruff.lint]
 select = [
