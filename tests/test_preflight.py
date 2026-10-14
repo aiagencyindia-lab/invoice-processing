@@ -12,7 +12,7 @@ and it fails a deployed environment while merely warning locally.
 import pytest
 
 from invoice_processing import paths
-from invoice_processing.api import auth
+from invoice_processing.api import auth, preflight
 from invoice_processing.api.preflight import (
     ConfigurationError,
     check_configuration,
@@ -30,6 +30,7 @@ def clean_env(monkeypatch):
         "GOOGLE_CLOUD_PROJECT",
         "AUTH_DISABLED",
         "ENV",
+        "STATE_DIR",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -154,3 +155,58 @@ class TestStartupHook:
         source = (paths.AGENT_PKG_DIR / "api" / "service.py").read_text()
         assert "preflight" in source
         assert "lifespan_context" in source, "preflight is not wired to startup"
+
+
+class TestStateDir:
+    """A Railway volume stands in for a bucket; a missing one must not."""
+
+    def _rest(self, monkeypatch):
+        monkeypatch.setenv("CLOUD_SQL_INSTANCE", "p:r:i")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj")
+
+    def test_a_writable_volume_satisfies_storage(self, monkeypatch, tmp_path):
+        self._rest(monkeypatch)
+        monkeypatch.setenv("STATE_DIR", str(tmp_path))
+        assert check_configuration() == []
+
+    def test_a_missing_volume_is_named(self, monkeypatch, tmp_path):
+        self._rest(monkeypatch)
+        monkeypatch.setenv("STATE_DIR", str(tmp_path / "nope"))
+        [problem] = check_configuration()
+        assert "does not exist" in problem and "volume" in problem
+
+    def test_a_file_is_not_a_volume(self, monkeypatch, tmp_path):
+        self._rest(monkeypatch)
+        target = tmp_path / "f"
+        target.write_text("x")
+        monkeypatch.setenv("STATE_DIR", str(target))
+        [problem] = check_configuration()
+        assert "does not exist" in problem
+
+    def test_a_read_only_volume_is_named(self, monkeypatch, tmp_path):
+        self._rest(monkeypatch)
+        monkeypatch.setenv("STATE_DIR", str(tmp_path))
+        monkeypatch.setattr(preflight.os, "access", lambda path, mode: False)
+        [problem] = check_configuration()
+        assert "not writable" in problem
+
+    def test_neither_still_names_both_ways_out(self, monkeypatch):
+        self._rest(monkeypatch)
+        [problem] = check_configuration()
+        assert "GCS_BUCKET" in problem and "STATE_DIR" in problem
+
+    def test_a_deployed_service_refuses_a_missing_volume(
+        self, monkeypatch, tmp_path
+    ):
+        self._rest(monkeypatch)
+        monkeypatch.setenv("ENV", "production")
+        monkeypatch.setenv("STATE_DIR", str(tmp_path / "nope"))
+        with pytest.raises(ConfigurationError, match="volume"):
+            enforce()
+
+    def test_local_development_only_warns(self, monkeypatch, tmp_path, caplog):
+        self._rest(monkeypatch)
+        monkeypatch.setenv("STATE_DIR", str(tmp_path / "nope"))
+        with caplog.at_level("WARNING"):
+            enforce()
+        assert "does not exist" in caplog.text
