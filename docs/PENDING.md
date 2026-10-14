@@ -80,6 +80,23 @@ Branch `phase3/microsoft-sign-in` (no PR): built and reviewed; spec
       `https://rasayan.firebaseapp.com/__/auth/handler`).
 - [ ] PR, review, merge.
 
+## v2 Trust layer
+
+Spec: `docs/superpowers/specs/2026-10-14-v2-trust-layer-design.md`.
+Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
+
+- [x] Wave 0 foundation: history import, Evidence Graph, findings v2,
+      `decide()`, provider adapters, benchmark v2 harness (branch
+      `v2/wave0-foundation`).
+- [ ] AC-19 contract-clause coverage (≥ 60% of top-50-vendor invoices):
+      not measurable until Wave 1's clause extraction; the harness records
+      it as `null`.
+- [ ] Wave 1 (parallel worktrees): Leakage · Payment Trust · Provenance v1
+      · GST/ITC v1 — one short spec each against the spec's §3.1 contracts.
+- [ ] Waves 2–4 per the spec §2.
+- [ ] Remove the Postgres TCP proxy before the trust routes go live (it was
+      added for bootstrap only).
+
 ## Known gaps
 
 - One container on Railway (scale up, not out); documents on one volume.

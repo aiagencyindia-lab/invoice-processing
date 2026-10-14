@@ -935,7 +935,7 @@ class TestMigration:
                     ).scalars()
                     assert list(left) == [b]
 
-                down = db.alembic("downgrade -1")
+                down = db.alembic("downgrade c9d5e2f3a4b6")
                 assert down.returncode == 0, down.stderr[-2000:]
                 with su.connect() as c:
                     names = c.execute(

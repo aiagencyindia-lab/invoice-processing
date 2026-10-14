@@ -1,8 +1,11 @@
 """Findings v2: cited, versioned, deduplicated, with a money ledger of every step."""
 
+import os
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import DatabaseError
 
 from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
@@ -15,6 +18,7 @@ from invoice_processing.trust.findings.model import (
 )
 from invoice_processing.trust.findings.store import FindingStore
 from invoice_processing.trust.graph.store import GraphStore
+from tests.pg_roles import bootstrapped_database
 
 T = "tenant-acme"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="engine")
@@ -136,3 +140,38 @@ def test_list_filters_by_status_and_type(env):
     listed = store.list(T, status="detected", type="BENCH-IMPORT")
     assert [f["type"] for f in listed] == ["BENCH-IMPORT"]
     assert store.list("tenant-globex") == []
+
+
+pg_only = pytest.mark.skipif(
+    not (os.getenv("TEST_DATABASE_URL") or "").startswith("postgresql"),
+    reason="the citation trigger exists only on Postgres",
+)
+
+
+@pg_only
+def test_db_refuses_a_finding_without_a_citation():
+    """The Python writer refuses; so does the database, for any other writer."""
+    # The refusal lands at commit, which tenant_session performs on exit.
+    with (
+        pytest.raises(DatabaseError, match="no citation"),
+        bootstrapped_database() as db,
+        tenant_session(T, db.owner_url) as s,
+    ):
+        s.add(models.Tenant(id=T, name="Acme", slug="acme", status="active"))
+        s.flush()
+        s.execute(
+            text(
+                "insert into graph_nodes (id, tenant_id, kind, natural_key, "
+                "valid_from, created_at, updated_at) values "
+                "('n1', :t, 'invoice', 'i1', now(), now(), now())"
+            ),
+            {"t": T},
+        )
+        s.execute(
+            text(
+                "insert into trust_findings (id, tenant_id, type, "
+                "transaction_node, status, dedupe_key, created_at, updated_at) "
+                "values ('f1', :t, 'X', 'n1', 'detected', 'k', now(), now())"
+            ),
+            {"t": T},
+        )
