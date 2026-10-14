@@ -398,3 +398,93 @@ class TestIdentityToolkitClaimsQuotaProject:
 
         sent = self._post(monkeypatch, ServiceAccount())
         assert "x-goog-user-project" not in sent["headers"]
+
+
+class TestBindMicrosoft:
+    TID = "11111111-2222-3333-4444-555555555555"
+
+    def _bind(self, provisioner, **kw):
+        args = {
+            "tenant_slug": "acme",
+            "domain": "acme.com",
+            "provider_id": "oidc.acme",
+            "entra_tenant": self.TID,
+            "role": "clerk",
+            "operator": "vineet",
+        }
+        args.update(kw)
+        return provisioner.bind_microsoft(**args)
+
+    def test_binds_and_records_it(self, provisioner, url):
+        from invoice_processing.db.repositories import (  # noqa: PLC0415
+            PgAuditSink,
+            PgUserDirectory,
+        )
+
+        tenant_id = provisioner.create_tenant("acme", "Acme")["id"]
+        record = self._bind(provisioner, domain="Acme.COM")
+        assert (record["provider"], record["idp_provider_id"]) == (
+            "microsoft",
+            "oidc.acme",
+        )
+        bound = PgUserDirectory(url).domain("acme.com")
+        assert bound["tenant_id"] == tenant_id
+        events = PgAuditSink(url).query(tenant_id)
+        assert [e.action for e in events] == ["sso_domain_bound"]
+        assert events[0].after["idp_provider_id"] == "oidc.acme"
+        assert events[0].after["operator"] == "vineet"
+
+    @pytest.mark.parametrize(
+        "provider_id", ["microsoft.com", "oidc.", "oidc.Acme", "saml.acme"]
+    )
+    def test_refuses_a_malformed_provider_id(self, provisioner, provider_id):
+        provisioner.create_tenant("acme", "Acme")
+        with pytest.raises(ProvisioningError, match="provider"):
+            self._bind(provisioner, provider_id=provider_id)
+
+    def test_refuses_a_public_mailbox_domain(self, provisioner):
+        provisioner.create_tenant("acme", "Acme")
+        with pytest.raises(ProvisioningError, match="public"):
+            self._bind(provisioner, domain="outlook.com")
+
+    def test_refuses_a_domain_already_bound(self, provisioner):
+        provisioner.create_tenant("acme", "Acme")
+        provisioner.create_tenant("globex", "Globex")
+        self._bind(provisioner)
+        with pytest.raises(ProvisioningError, match="already"):
+            self._bind(provisioner, tenant_slug="globex")
+
+    def test_refuses_a_closed_tenant(self, provisioner, url):
+        from invoice_processing.db.models import Tenant  # noqa: PLC0415
+        from invoice_processing.db.session import (  # noqa: PLC0415
+            tenant_session,
+        )
+
+        tenant_id = provisioner.create_tenant("acme", "Acme")["id"]
+        with tenant_session("", url) as session:
+            session.get(Tenant, tenant_id).status = "suspended"
+        with pytest.raises(ProvisioningError, match="suspended"):
+            self._bind(provisioner)
+
+    def test_the_command_line(self, provisioner, url, monkeypatch, capsys):
+        provisioner.create_tenant("acme", "Acme")
+        monkeypatch.setenv("DATABASE_URL", url)
+        code = provision.main(
+            [
+                "bind-microsoft",
+                "--tenant",
+                "acme",
+                "--domain",
+                "acme.com",
+                "--provider",
+                "oidc.acme",
+                "--entra-tenant",
+                self.TID,
+                "--role",
+                "clerk",
+                "--operator",
+                "vineet",
+            ]
+        )
+        assert code == 0
+        assert "oidc.acme" in capsys.readouterr().out

@@ -39,6 +39,9 @@ credentials. `IdentityToolkitClaims` is the real one.
         --tenant acme --operator <you>
     python -m invoice_processing.admin.provision purge-tenant \\
         --tenant acme --operator <you> --confirm acme
+    python -m invoice_processing.admin.provision bind-microsoft \\
+        --tenant acme --domain acme.com --provider oidc.acme \\
+        --entra-tenant <tid> --role clerk --operator <you>
 """
 
 from __future__ import annotations
@@ -64,6 +67,9 @@ logger = logging.getLogger(__name__)
 # Lowercase alphanumerics and hyphens. Deliberately narrower than the database
 # column: this string becomes an email local part and a storage path segment.
 SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
+# An Identity Platform OIDC provider id. Microsoft customers each get one,
+# whose issuer is their own Entra tenant.
+PROVIDER_ID = re.compile(r"^oidc\.[a-z0-9-]{1,40}$")
 
 
 class ProvisioningError(RuntimeError):
@@ -467,6 +473,70 @@ class Provisioner:
         self.claims.set_claims(uid, claims)
         return {"email": email, "uid": uid, "claims": claims}
 
+    def bind_microsoft(
+        self,
+        tenant_slug: str,
+        domain: str,
+        provider_id: str,
+        entra_tenant: str,
+        role: str,
+        operator: str,
+    ) -> dict:
+        """Let a customer's Microsoft 365 users sign in to their tenant.
+
+        Operator-only: the provider was created by the operator for this
+        customer's Entra tenant, so only the operator may point a binding at
+        it. A tenant admin choosing it could reach another customer's users.
+        """
+        from .. import sso  # noqa: PLC0415 - sso imports the API stack
+        from ..db.repositories import (  # noqa: PLC0415
+            DomainTaken,
+            PgAuditSink,
+            PgSsoDomainRepository,
+        )
+        from ..ports import RunContext  # noqa: PLC0415
+
+        if not PROVIDER_ID.match(provider_id or ""):
+            raise ProvisioningError(
+                f"{provider_id!r} is not an OIDC provider id (oidc.<name>)."
+            )
+        if role not in ("viewer", "clerk"):
+            raise ProvisioningError("The default role is viewer or clerk.")
+        if not (entra_tenant or "").strip():
+            raise ProvisioningError("The Entra tenant id is required.")
+        try:
+            domain = sso.normalize_domain(domain)
+        except ValueError as exc:
+            raise ProvisioningError(str(exc)) from exc
+        tenant = self._tenant_by_slug(tenant_slug)
+        try:
+            record = PgSsoDomainRepository(self.url).add(
+                tenant.id,
+                domain=domain,
+                provider="microsoft",
+                default_role=role,
+                created_by=f"operator:{operator}",
+                idp_provider_id=provider_id,
+                idp_tenant_id=entra_tenant.strip(),
+            )
+        except DomainTaken as exc:
+            raise ProvisioningError(f"{domain} is already bound.") from exc
+        # ponytail: emitted after the binding commits, like the admin route's
+        # Google binding; a crash between the two loses only the event.
+        PgAuditSink(self.url).emit(
+            RunContext(tenant_id=tenant.id, actor=operator),
+            "sso_domain_bound",
+            {
+                "domain": domain,
+                "provider": "microsoft",
+                "idp_provider_id": provider_id,
+                "idp_tenant_id": entra_tenant.strip(),
+                "default_role": role,
+                "operator": operator,
+            },
+        )
+        return record
+
     def provision_signup(
         self, slug: str, name: str, email: str, uid: str
     ) -> dict:
@@ -601,6 +671,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     purge.add_argument("--reason")
 
+    bind = subparsers.add_parser("bind-microsoft")
+    bind.add_argument("--tenant", required=True)
+    bind.add_argument("--domain", required=True)
+    bind.add_argument("--provider", required=True, help="oidc.<name>")
+    bind.add_argument("--entra-tenant", required=True)
+    bind.add_argument("--role", default="viewer", choices=["viewer", "clerk"])
+    bind.add_argument("--operator", required=True)
+
     subparsers.add_parser("list")
     return parser
 
@@ -685,6 +763,20 @@ def main(argv: list[str] | None = None) -> int:
             # One line: the operator files it in the offboarding register,
             # the copy that survives a restore from before this purge.
             print(json.dumps(record, sort_keys=True))
+        elif args.command == "bind-microsoft":
+            print(
+                json.dumps(
+                    provisioner.bind_microsoft(
+                        args.tenant,
+                        args.domain,
+                        args.provider,
+                        args.entra_tenant,
+                        args.role,
+                        args.operator,
+                    ),
+                    indent=2,
+                )
+            )
         elif args.command == "list":
             print(json.dumps(provisioner.list_tenants(), indent=2))
     except (ProvisioningError, offboarding.OffboardingError) as exc:
