@@ -49,6 +49,7 @@ import logging
 import os
 import re
 import sys
+import uuid
 from typing import Any, Protocol, runtime_checkable
 
 from sqlalchemy import select
@@ -71,6 +72,10 @@ class ProvisioningError(RuntimeError):
 
 class UidTaken(ProvisioningError):
     """The Identity Platform account is already linked to another user row."""
+
+
+class ClaimsRefused(ProvisioningError):
+    """The claims could not be written; nothing was kept."""
 
 
 # ---------------------------------------------------------------------------
@@ -157,9 +162,20 @@ class IdentityToolkitClaims:
         )
         credentials.refresh(Request())
 
+        headers = {"Authorization": f"Bearer {credentials.token}"}
+        from google.oauth2.credentials import (  # noqa: PLC0415
+            Credentials as PersonalLogin,
+        )
+
+        if isinstance(credentials, PersonalLogin):
+            # A person's gcloud login otherwise bills the call to gcloud's own
+            # client project, where Identity Platform is off, and is refused.
+            # A service account bills its own project; naming one would ask it
+            # for a billing permission it may not have.
+            headers["x-goog-user-project"] = self.project_id
         response = requests.post(
             self.ENDPOINT.format(project=self.project_id),
-            headers={"Authorization": f"Bearer {credentials.token}"},
+            headers=headers,
             json={
                 "localId": uid,
                 # The API takes the claims as a JSON *string*, not an object.
@@ -450,6 +466,74 @@ class Provisioner:
         claims = {"tenant_id": tenant.id, "role": role}
         self.claims.set_claims(uid, claims)
         return {"email": email, "uid": uid, "claims": claims}
+
+    def provision_signup(
+        self, slug: str, name: str, email: str, uid: str
+    ) -> dict:
+        """A self-service sign-up, all or nothing.
+
+        The organisation, its admin row and the record of how it arrived go
+        in one transaction, and the claims are written inside it: a refused
+        claim update rolls the rows back, so a retry starts clean instead of
+        making a second organisation. If the commit fails after the claims
+        were written, the claims are cleared again, so the token never names
+        an organisation that was not stored.
+        """
+        from ..db.repositories import audit_event_row  # noqa: PLC0415
+        from ..ports import RunContext  # noqa: PLC0415
+
+        validate_slug(slug)
+        email = validate_email(email)
+        if not name.strip():
+            raise ProvisioningError("A tenant name is required.")
+        tenant_id = str(uuid.uuid4())
+        claims = {"tenant_id": tenant_id, "role": "admin"}
+        written = False
+        try:
+            with tenant_session(tenant_id, self.url) as session:
+                if session.scalar(select(Tenant).where(Tenant.slug == slug)):
+                    raise ProvisioningError(f"Tenant {slug!r} already exists.")
+                session.add(Tenant(id=tenant_id, slug=slug, name=name.strip()))
+                session.flush()
+                session.add(
+                    User(
+                        tenant_id=tenant_id, email=email, role="admin", uid=uid
+                    )
+                )
+                session.add(
+                    audit_event_row(
+                        RunContext(tenant_id=tenant_id, actor=email),
+                        "tenant_self_provisioned",
+                        {"slug": slug, "email": email},
+                    )
+                )
+                session.flush()
+                try:
+                    self.claims.set_claims(uid, claims)
+                except Exception as exc:
+                    raise ClaimsRefused(str(exc)) from exc
+                written = True
+        except Exception:
+            if written:
+                try:
+                    self.claims.set_claims(uid, {})
+                except Exception:
+                    logger.exception(
+                        "Sign-up for uid %s failed after its claims were "
+                        "written, and clearing them failed too",
+                        uid,
+                    )
+            raise
+        return {
+            "tenant": {
+                "id": tenant_id,
+                "slug": slug,
+                "name": name.strip(),
+                "region": "au",
+            },
+            "role": "admin",
+            "claims_written": True,
+        }
 
     def inbox_for(self, slug: str) -> str:
         """The address vendors send invoices to."""
