@@ -238,7 +238,9 @@ def extract(
     schema, prompt, qty_key = _KINDS[kind]
     if call is None:
         # ponytail: lazy, the agent module pulls in the whole ADK stack
-        from .shared_libraries.acting import general_invoice_agent as agent  # noqa: PLC0415, I001
+        from .shared_libraries.acting import (  # noqa: PLC0415
+            general_invoice_agent as agent,
+        )
 
         call = agent.call_gemini_with_pdf
     result, _ = call(pdf_path, prompt, None, schema)  # None: the Pro model
