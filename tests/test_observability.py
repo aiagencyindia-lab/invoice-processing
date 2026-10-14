@@ -185,6 +185,18 @@ class TestSentry:
         assert obs.init_sentry("api") is False
         assert calls == []
 
+    def test_a_malformed_dsn_runs_without_sentry(self, monkeypatch, caplog):
+        """A pasted DSN with quotes or a missing scheme crash-looped both
+        production processes at start-up. Monitoring is not a control: say so
+        and keep serving. The warning must not echo the value (it is a
+        credential)."""
+        monkeypatch.setenv("SENTRY_DSN", "key@o1.ingest.sentry.io/1")
+        with caplog.at_level(logging.WARNING):
+            assert obs.init_sentry("api") is False
+        assert not obs.sentry_sdk.get_client().is_active()
+        assert "SENTRY_DSN" in caplog.text
+        assert "ingest.sentry.io" not in caplog.text
+
     def test_on_with_a_dsn_and_the_safe_options(self, monkeypatch):
         monkeypatch.setenv("SENTRY_DSN", "https://key@o1.ingest.sentry.io/1")
         monkeypatch.setenv("ENV", "staging")
