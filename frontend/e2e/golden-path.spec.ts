@@ -977,15 +977,16 @@ test("a failed export says what to do, and a new range clears it", async ({ page
   await expect(alert).toHaveCount(0);
 });
 
-test("every page carries security headers and a report-only CSP", async ({ page }) => {
+test("every page carries security headers and an enforced CSP", async ({ page }) => {
   const headers = (await page.request.get("/login")).headers();
   expect(headers["x-frame-options"]).toBe("DENY");
   expect(headers["x-content-type-options"]).toBe("nosniff");
   expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
-  expect(headers["content-security-policy-report-only"]).toContain("identitytoolkit.googleapis.com");
-  expect(headers["content-security-policy-report-only"]).toContain("frame-ancestors 'none'");
+  const csp = headers["content-security-policy"];
+  expect(csp).toContain("identitytoolkit.googleapis.com");
+  expect(csp).toContain("frame-ancestors 'none'");
   // The document panes frame blob: URLs; enforcing without it would blank them.
-  expect(headers["content-security-policy-report-only"]).toMatch(/frame-src[^;]*blob:/);
-  // Report-only now: Google sign-in cannot be exercised here, so nothing is blocked yet.
-  expect(headers["content-security-policy"]).toBeUndefined();
+  expect(csp).toMatch(/frame-src[^;]*blob:/);
+  // Enforced since Google sign-in ran live on 2026-10-14 without a report.
+  expect(headers["content-security-policy-report-only"]).toBeUndefined();
 });
