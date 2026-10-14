@@ -844,3 +844,17 @@ class TestNullStateIsRefused:
             "user_role_changed",
             "user_deactivated",
         } & set(names)
+
+
+def test_a_tenant_admin_cannot_create_a_microsoft_binding(env):
+    """Microsoft bindings name an operator-created provider; only the
+    operator makes them (provision bind-microsoft)."""
+    r = env["client"]("admin").post(
+        "/api/admin/sso-domains",
+        json={
+            "domain": "x.test",
+            "provider": "microsoft",
+            "default_role": "viewer",
+        },
+    )
+    assert r.status_code == 422

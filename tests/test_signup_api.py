@@ -371,3 +371,56 @@ class TestAllOrNothing:
             ).one()
         assert row.tenant_id == tenant_id
         assert row.after["slug"] == "acme"
+
+
+class TestMicrosoftLookup:
+    def _bind(self, env, provider="microsoft", provider_id="oidc.acme"):
+        from invoice_processing.db.repositories import (  # noqa: PLC0415
+            PgSsoDomainRepository,
+        )
+
+        tenant_id = "77777777-7777-7777-7777-777777777777"
+        with tenant_session(tenant_id, env["url"]) as session:
+            session.add(Tenant(id=tenant_id, slug="acme", name="Acme"))
+        PgSsoDomainRepository(env["url"]).add(
+            tenant_id,
+            domain="acme.com",
+            provider=provider,
+            default_role="clerk",
+            created_by="operator:v",
+            idp_provider_id=provider_id if provider == "microsoft" else None,
+        )
+
+    def _get(self, email):
+        return TestClient(app).get(
+            "/api/sso/microsoft", params={"email": email}
+        )
+
+    @pytest.mark.parametrize(
+        "email", ["pat@acme.com", "Pat@ACME.com", "pat+ap@acme.com"]
+    )
+    def test_a_microsoft_binding_names_its_provider(self, env, email):
+        self._bind(env)
+        response = self._get(email)
+        assert response.status_code == 200
+        assert response.json() == {"provider_id": "oidc.acme"}
+
+    @pytest.mark.parametrize(
+        ("email", "domain"),
+        [
+            ("pat@unbound.com", "unbound.com"),
+            ("pat@outlook.com", "outlook.com"),
+            ("not-an-address", "that address"),
+        ],
+    )
+    def test_anything_else_is_not_set_up(self, env, email, domain):
+        self._bind(env)
+        response = self._get(email)
+        assert response.status_code == 404
+        assert response.json()["detail"] == signup.MICROSOFT_NOT_SET_UP.format(
+            domain=domain
+        )
+
+    def test_a_google_binding_is_not_set_up_for_microsoft(self, env):
+        self._bind(env, provider="google")
+        assert self._get("pat@acme.com").status_code == 404

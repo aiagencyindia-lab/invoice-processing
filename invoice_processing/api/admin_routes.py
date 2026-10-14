@@ -77,7 +77,8 @@ class UserPatch(BaseModel):
 
 class SsoDomainCreate(BaseModel):
     domain: str = Field(max_length=253)
-    provider: Literal["google", "microsoft"]
+    # Microsoft bindings are operator-only (provision bind-microsoft).
+    provider: Literal["google"]
     default_role: Literal["viewer", "clerk"]
 
 
