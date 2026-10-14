@@ -1,5 +1,7 @@
 # v2.0 Transaction Trust Layer — program design and Wave 0
 
+Status: Wave 0 implemented in PR #52 (2026-10-15); Waves 1–4 pending.
+
 Date: 2026-10-14. Source: `PRD_v2.0_Transaction_Trust_Layer.md` (2.0-draft-1,
 12 Oct 2026; kept outside the repo). Classification: architectural, decomposed.
 
