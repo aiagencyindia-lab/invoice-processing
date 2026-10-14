@@ -12,10 +12,10 @@ from sqlalchemy.orm import Session
 
 from invoice_processing import sso
 from invoice_processing.adapters import JsonlAuditSink
-from invoice_processing.admin.provision import DryRunClaims
+from invoice_processing.admin.provision import DryRunClaims, ProvisioningError
 from invoice_processing.api import auth, service, signup
 from invoice_processing.api.service import app
-from invoice_processing.db.models import Base, Tenant
+from invoice_processing.db.models import AuditEvent, Base, Tenant, User
 from invoice_processing.db.repositories import PgSsoDomainRepository
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from tests.test_sso import FakeDirectory
@@ -118,8 +118,36 @@ def slugs(url):
 
 
 def audited(env):
-    path = env["tmp"] / "audit.jsonl"
-    return path.exists() and "tenant_self_provisioned" in path.read_text()
+    """Written in the sign-up's own transaction, so it is in the database."""
+    with Session(get_engine(env["url"])) as session:
+        return bool(
+            session.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.action == "tenant_self_provisioned"
+                )
+            ).first()
+        )
+
+
+def users(url):
+    with Session(get_engine(url)) as session:
+        return session.scalars(select(User)).all()
+
+
+class RefusingClaims:
+    """Identity Platform refusing the claim update, as it did live."""
+
+    def __init__(self, failures=1):
+        self.failures, self.written = failures, []
+
+    def set_claims(self, uid, claims):
+        if self.failures:
+            self.failures -= 1
+            raise ProvisioningError(
+                f"Identity Platform refused the claim update for {uid}: 403 "
+                "accessNotConfigured"
+            )
+        self.written.append((uid, claims))
 
 
 class TestItRefusesUnprovenIdentity:
@@ -266,3 +294,80 @@ def test_sign_up_logs_the_tenant_not_the_person(env, caplog):
     assert response.status_code in (200, 201), response.text
     assert "uid-1" in caplog.text
     assert "@" not in caplog.text
+
+
+class TestAllOrNothing:
+    """Organisation, admin row, audit row and claims land together or not at
+    all. Live, a refused claim update left an organisation with no record
+    and a person with no access, and a retry made a second one."""
+
+    def test_a_claims_failure_leaves_nothing_behind(self, env, monkeypatch):
+        monkeypatch.setattr(service, "get_claims_writer", RefusingClaims)
+        response = client("owner@acme.test|uid-1").post(
+            "/api/signup", json={"organisation": "Acme"}
+        )
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert detail == signup.CLAIMS_UNAVAILABLE
+        assert "Identity Platform" not in detail and "403" not in detail
+        assert slugs(env["url"]) == set()
+        assert users(env["url"]) == []
+        assert not audited(env)
+
+    def test_a_retry_after_a_claims_failure_makes_one_organisation(
+        self, env, monkeypatch
+    ):
+        writer = RefusingClaims(failures=1)
+        monkeypatch.setattr(service, "get_claims_writer", lambda: writer)
+        caller = client("owner@acme.test|uid-1")
+        assert (
+            caller.post("/api/signup", json={"organisation": "Acme"})
+        ).status_code == 503
+        retried = caller.post("/api/signup", json={"organisation": "Acme"})
+        assert retried.status_code in (200, 201), retried.text
+        assert slugs(env["url"]) == {"acme"}
+        tenant_id = retried.json()["tenant"]["id"]
+        assert writer.written == [
+            ("uid-1", {"tenant_id": tenant_id, "role": "admin"})
+        ]
+
+    def test_a_commit_that_fails_after_the_claims_clears_them(
+        self, env, monkeypatch
+    ):
+        """The other order of failure: the token must not be left pointing
+        at an organisation that was never stored."""
+        from sqlalchemy.orm import Session as OrmSession  # noqa: PLC0415
+
+        writer = RefusingClaims(failures=0)
+        monkeypatch.setattr(service, "get_claims_writer", lambda: writer)
+        real_commit = OrmSession.commit
+
+        def commit(session):
+            if writer.written:
+                raise RuntimeError("connection lost at commit")
+            return real_commit(session)
+
+        monkeypatch.setattr(OrmSession, "commit", commit)
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/api/signup",
+            json={"organisation": "Acme"},
+            headers={"Authorization": "Bearer owner@acme.test|uid-1"},
+        )
+        monkeypatch.setattr(OrmSession, "commit", real_commit)
+        assert response.status_code in (500, 503)
+        assert writer.written[-1] == ("uid-1", {})
+        assert slugs(env["url"]) == set()
+
+    def test_the_audit_row_commits_with_the_organisation(self, env):
+        response = client("owner@acme.test|uid-1").post(
+            "/api/signup", json={"organisation": "Acme"}
+        )
+        tenant_id = response.json()["tenant"]["id"]
+        with Session(get_engine(env["url"])) as session:
+            row = session.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.action == "tenant_self_provisioned"
+                )
+            ).one()
+        assert row.tenant_id == tenant_id
+        assert row.after["slug"] == "acme"

@@ -31,6 +31,12 @@ from .auth import verified_claims
 
 logger = logging.getLogger(__name__)
 
+# Nothing was kept, so trying again is safe and is the whole remedy.
+CLAIMS_UNAVAILABLE = (
+    "Your organisation could not be set up because sign-in access could not "
+    "be granted just now. Nothing was saved; try again in a moment."
+)
+
 router = APIRouter()
 
 
@@ -132,6 +138,7 @@ def sign_up(
         )
 
     from ..admin.provision import (  # noqa: PLC0415
+        ClaimsRefused,
         Provisioner,
         ProvisioningError,
     )
@@ -149,18 +156,19 @@ def sign_up(
         )
 
     try:
-        tenant = provisioner.create_tenant(slug, name)
         # admin: they are the only member, and nobody else can grant them
         # anything afterwards.
-        record = provisioner.add_user(slug, email, "admin", uid)
+        record = provisioner.provision_signup(slug, name, email, uid)
+    except ClaimsRefused as exc:
+        # Identity Platform's own text names projects and APIs; it is for
+        # the log, not for the person signing up.
+        logger.warning(
+            "Sign-up for uid %s could not write claims: %s", uid, exc
+        )
+        raise HTTPException(status_code=503, detail=CLAIMS_UNAVAILABLE) from exc
     except ProvisioningError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    service.get_audit().emit(
-        _context(tenant["id"], email),
-        "tenant_self_provisioned",
-        {"slug": slug, "email": email},
-    )
+    tenant = record["tenant"]
     # The uid, not the address: log lines are read by more people than the
     # audit trail, which keeps the address on its own row.
     logger.info("Self sign-up created tenant %s for uid %s", slug, uid)
@@ -170,9 +178,3 @@ def sign_up(
         "role": record["role"],
         "claims_written": record["claims_written"],
     }
-
-
-def _context(tenant_id: str, actor: str):
-    from ..ports import RunContext  # noqa: PLC0415
-
-    return RunContext(tenant_id=tenant_id, actor=actor)

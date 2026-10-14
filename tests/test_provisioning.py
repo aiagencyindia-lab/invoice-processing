@@ -347,3 +347,54 @@ class TestClosedTenants:
             provisioner.add_user("acme", "ap@acme.test", "clerk", "uid-1")
         with pytest.raises(ProvisioningError, match=status):
             provisioner.set_claims("acme", "ap@acme.test", "uid-1")
+
+
+class TestIdentityToolkitClaimsQuotaProject:
+    """A person's gcloud login bills calls to gcloud's own client project,
+    where Identity Platform is off, unless the request names a quota
+    project. A service account bills its own project and must not be made
+    to need a billing permission it may lack."""
+
+    def _post(self, monkeypatch, credentials):
+        import google.auth  # noqa: PLC0415
+        import requests  # noqa: PLC0415
+
+        sent = {}
+
+        class Ok:
+            status_code = 200
+            text = "{}"
+
+        def post(url, headers=None, json=None, timeout=None):
+            sent.update(url=url, headers=headers, json=json)
+            return Ok()
+
+        monkeypatch.setattr(
+            google.auth, "default", lambda scopes=None: (credentials, "x")
+        )
+        monkeypatch.setattr(requests, "post", post)
+        provision.IdentityToolkitClaims("rasayan").set_claims(
+            "uid-1", {"tenant_id": "t", "role": "admin"}
+        )
+        return sent
+
+    def test_a_persons_login_names_the_project_as_quota_project(
+        self, monkeypatch
+    ):
+        from google.oauth2.credentials import Credentials  # noqa: PLC0415
+
+        credentials = Credentials(token="tok")
+        monkeypatch.setattr(credentials, "refresh", lambda request: None)
+        sent = self._post(monkeypatch, credentials)
+        assert sent["headers"]["x-goog-user-project"] == "rasayan"
+        assert sent["headers"]["Authorization"] == "Bearer tok"
+
+    def test_a_service_account_sends_no_quota_project(self, monkeypatch):
+        class ServiceAccount:
+            token = "sa-tok"
+
+            def refresh(self, request):
+                pass
+
+        sent = self._post(monkeypatch, ServiceAccount())
+        assert "x-goog-user-project" not in sent["headers"]
