@@ -416,7 +416,7 @@ def _anomaly(ectx, world, inv, vendor_node, amount, currency):
         dates = [t.date for t in others if t.date]
         if when and dates:
             try:
-                ratio = sg.nearest_gap_ratio(date.fromisoformat(when), dates)
+                ratio = sg.previous_gap_ratio(date.fromisoformat(when), dates)
             except ValueError:
                 ratio = None
             if ratio is not None and ratio < ectx.threshold(

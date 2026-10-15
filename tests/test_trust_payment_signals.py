@@ -23,9 +23,13 @@ def test_robust_z_zero_mad():
 
 def test_cadence_gap_far_below_median_is_flagged():
     others = [date(2025, m, 1) for m in range(1, 8)]
-    assert sg.nearest_gap_ratio(date(2025, 7, 4), others) < 0.25
-    assert sg.nearest_gap_ratio(date(2025, 8, 1), others) >= 0.25
-    assert sg.nearest_gap_ratio(date(2025, 8, 1), [date(2025, 1, 1)]) is None
+    assert sg.previous_gap_ratio(date(2025, 7, 4), others) < 0.25
+    assert sg.previous_gap_ratio(date(2025, 8, 1), others) >= 0.25
+    assert sg.previous_gap_ratio(date(2025, 8, 1), [date(2025, 1, 1)]) is None
+    # Only the invoice before counts: the earliest one has no cadence yet,
+    # and one a day before the next is not "too soon after the last".
+    assert sg.previous_gap_ratio(date(2024, 12, 1), others) is None
+    assert sg.previous_gap_ratio(date(2025, 2, 28), others) > 0.25
 
 
 def test_lookalike_folds_confusables():

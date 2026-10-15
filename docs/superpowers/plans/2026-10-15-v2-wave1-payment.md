@@ -31,7 +31,7 @@ Branch `v2/w1-payment`, worktree `.worktrees/payment`. TDD, one commit per task.
 5. **Anomaly history** = the vendor's other transactions (same currency or
    none), all dates. `< min_history` → `first_time_vendor` signal only; z and
    cadence need `min_history`. MAD = 0 and amount > median → z = ∞.
-   Cadence = nearest other invoice date vs median consecutive gap.
+   Cadence = days since the previous invoice vs the median consecutive gap.
 6. **BEC signals.** From equal to the vendor domain or a subdomain of it is a
    match. Look-alike also counts as "From ≠ vendor domain" (two signals).
    Body account/IFSC counts only when the master has one and it differs.

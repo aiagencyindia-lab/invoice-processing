@@ -37,17 +37,18 @@ def robust_z(amount: Decimal, history: list[Decimal]) -> float:
     return float((amount - med) / (Decimal("1.4826") * mad))
 
 
-def nearest_gap_ratio(when: date, others: list[date]) -> float | None:
-    """Days to the nearest other invoice over the median gap between the
-    others; None when there is no cadence to compare with."""
+def previous_gap_ratio(when: date, others: list[date]) -> float | None:
+    """Days since the vendor's previous invoice over the median gap between
+    the others; None when there is no previous invoice or no cadence."""
     ordered = sorted(others)
     gaps = [(b - a).days for a, b in pairwise(ordered)]
-    if not gaps:
+    before = [d for d in ordered if d <= when]
+    if not gaps or not before:
         return None
     typical = median(gaps)
     if typical <= 0:
         return None
-    return min(abs((when - d).days) for d in ordered) / typical
+    return (when - before[-1]).days / typical
 
 
 # -- domains ---------------------------------------------------------------
