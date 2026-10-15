@@ -55,7 +55,9 @@ class Registry:
         except (
             Exception
         ) as exc:  # the provider's trouble is evidence, not a pass
-            data, status = {"error": str(exc)[:500]}, "unavailable"
+            # A verifier's error can echo the request, account and all.
+            data = {"error": masking.mask_text(str(exc))[:500]}
+            status = "unavailable"
             logger.warning(
                 "provider_unavailable",
                 extra={"capability": capability, "provider": name},
