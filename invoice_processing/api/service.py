@@ -1597,6 +1597,7 @@ def act(
             except (
                 approval_flow.AlreadyDecided,
                 approval_flow.OverBilled,
+                approval_flow.PaymentHold,
             ) as exc:
                 raise HTTPException(
                     status_code=409, detail=exc.detail
@@ -1647,6 +1648,14 @@ def act(
                     **artifacts,
                     "phase2": _store_three_way(ctx, outcome.three_way),
                 }
+        if repo is None and request.action == "approve":
+            # No approval chain on this deployment: this is the final
+            # approval, so the trust layer's hold is asked here instead.
+            held = approval_flow.payment_hold(ctx)
+            if held and not (
+                principal.can("admin") and request.override_reason
+            ):
+                raise HTTPException(status_code=409, detail=held)
         state = _record_workflow(
             ctx,
             decision=request.action,
@@ -1970,6 +1979,11 @@ def export_invoice(
                 "exporting earlier puts an unreviewed liability on the ledger."
             ),
         )
+    held = approval_flow.payment_hold(ctx)
+    if held:
+        # Raised after approval (a later evaluation): nothing is posted
+        # while a trust engine in enforcing mode holds the payment.
+        raise HTTPException(status_code=409, detail=held)
     invoice = _with_gl(
         ctx, (artifacts.get("extraction") or {}).get("invoice") or {}, artifacts
     )

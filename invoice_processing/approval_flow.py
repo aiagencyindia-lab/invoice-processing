@@ -187,6 +187,17 @@ class BookUnavailable(Refused):
     """The PO book could not be read to re-check the match (503)."""
 
 
+class PaymentHold(Refused):
+    """A trust engine in enforcing mode holds this payment (409)."""
+
+
+def payment_hold(ctx) -> str | None:
+    """Why the trust layer holds this payment, or None. See trust/gate.py."""
+    from .trust import gate  # noqa: PLC0415 - optional layer, loaded on use
+
+    return gate.payment_hold(ctx.tenant_id, ctx.case_id)
+
+
 def over_billed(ctx, artifacts: dict) -> tuple[str | None, dict | None]:
     """Why approving now would bill more than was received or ordered, and
     the step-2.3 entry to store if the approval goes through.
@@ -362,6 +373,10 @@ def decide(
         if over and not (principal.can("admin") and override_reason):
             raise OverBilled(over)
         overridden = overridden or bool(over and override_reason)
+        held = payment_hold(ctx)
+        if held and not (principal.can("admin") and override_reason):
+            raise PaymentHold(held)
+        overridden = overridden or bool(held and override_reason)
 
     acting_for = None
     if why and why.startswith("delegate for"):

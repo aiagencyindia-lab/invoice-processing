@@ -1482,3 +1482,27 @@ def test_an_unchecked_hold_refuses_on_any_live_hold_not_only_quantity(po_env):
     assert r.json()["detail"].startswith(
         "Purchase-order lines were not checked when this invoice was processed"
     )
+
+
+def test_final_approval_is_refused_while_payment_is_held(env, monkeypatch):
+    from invoice_processing.trust import gate  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
+    )
+    two_tier(env)
+    first = act(env, "approver:a")
+    assert first.status_code == 200 and first.json()["completed"] is False
+    second = act(env, "approver:b")
+    assert second.status_code == 409 and "PAY-X" in second.json()["detail"]
+    assert not (env["root"] / CASE / "workflow.json").exists()
+
+
+def test_admin_override_with_reason_passes_a_payment_hold(env, monkeypatch):
+    from invoice_processing.trust import gate  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
+    )
+    r = act(env, "admin:boss", override_reason="Called the vendor on file")
+    assert r.status_code == 200 and r.json()["completed"] is True

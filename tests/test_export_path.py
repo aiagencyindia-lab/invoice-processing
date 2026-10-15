@@ -516,3 +516,26 @@ def test_completion_of_a_chain_still_exports(client, scratch_db, monkeypatch):
         "/api/invoices/case_002/export", json={"target": "csv"}
     )
     assert exported.status_code == 200
+
+
+class TestPaymentHold:
+    def test_approval_without_a_chain_is_refused_while_held(
+        self, client, monkeypatch
+    ):
+        from invoice_processing.trust import gate  # noqa: PLC0415
+
+        monkeypatch.setattr(
+            gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
+        )
+        r = approve(client)
+        assert r.status_code == 409 and "PAY-X" in r.json()["detail"]
+
+    def test_export_is_409_while_held(self, client, monkeypatch):
+        from invoice_processing.trust import gate  # noqa: PLC0415
+
+        assert approve(client).status_code == 200
+        monkeypatch.setattr(
+            gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
+        )
+        r = client.post("/api/invoices/case_002/export", json={"target": "csv"})
+        assert r.status_code == 409 and "PAY-X" in r.json()["detail"]

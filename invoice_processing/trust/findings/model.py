@@ -96,3 +96,12 @@ register_type(
     "BENCH-IMPORT",
     "Benchmark harness: a record the import round-trip could not link",
 )
+# Registered here, not where it is written, so every process that asks the
+# payment gate knows it is a hold (the API server never imports evaluate).
+ENGINE_FAILED = "TRUST-ENGINE-FAILED"
+register_type(
+    ENGINE_FAILED,
+    "An engine that can hold payment failed in enforcing mode; held until it runs",
+    engine="trust",
+    hold=True,
+)

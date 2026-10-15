@@ -33,17 +33,10 @@ logger = logging.getLogger(__name__)
 
 # name -> run(ectx); filled lazily by discovery, injectable by tests.
 RUNNERS: dict[str, Callable[[EngineContext], list[FindingSpec]]] = {}
-ENGINE_FAILED = "TRUST-ENGINE-FAILED"
+ENGINE_FAILED = finding_model.ENGINE_FAILED
 # A sync job's model calls are capped by the decider; one evaluation of one
 # document gets the same budget for all four engines together.
 MAX_MODEL_CALLS_PER_EVALUATION = 25
-
-finding_model.register_type(
-    ENGINE_FAILED,
-    "An engine that can hold payment failed in enforcing mode; held until it runs",
-    engine="trust",
-    hold=True,
-)
 
 
 def _runner(name: str):
