@@ -118,9 +118,10 @@ def _release(ectx: EngineContext, f: dict, reason: str) -> None:
 
 
 def _release_cleared(ectx: EngineContext, name: str, emitted: set) -> None:
-    """After a clean per-document run: lift this engine's undecided holds on
-    the invoice that it no longer finds, and its engine-failed hold. A
-    finding a person has decided is theirs and is left alone."""
+    """After a clean per-document run of an engine that can hold: lift its
+    undecided findings on the invoice that it no longer finds (holds and the
+    insights priced from them, e.g. ITC at risk), and its engine-failed hold.
+    A finding a person has decided is theirs and is left alone."""
     node = ectx.invoice_node
     if node is None:
         return
@@ -131,7 +132,6 @@ def _release_cleared(ectx: EngineContext, name: str, emitted: set) -> None:
             _release(ectx, f, "The engine ran cleanly.")
         elif (
             f["details"].get("engine") == name
-            and f["details"].get("hold")
             and f["dedupe_key"] not in emitted
         ):
             _release(ectx, f, "No longer found by a clean run.")

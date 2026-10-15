@@ -177,3 +177,22 @@ def test_the_newest_invoice_row_of_a_case_decides(env):
         )
     add(store, node, "T-PAYHOLD")
     assert hold(url, {"payment": "enforcing"}) is not None
+
+
+def test_a_hold_survives_the_invoice_node_being_re_versioned(env):
+    """A sync that changes the invoice's attrs mints a new node id; the
+    finding must move with it or the gate stops seeing the hold."""
+    url, store, node = env
+    add(store, node, "T-PAYHOLD")
+    new = GraphStore(url).upsert_node(
+        CTX,
+        kind="invoice",
+        natural_key="invoices:inv-1",
+        ref_table="invoices",
+        ref_id="inv-1",
+        attrs={"decision": "approve"},
+    )
+    assert new != node
+    assert hold(url, {"payment": "enforcing"}) is not None
+    [f] = store.list(T, type="T-PAYHOLD")
+    assert f["transaction_node"] == new

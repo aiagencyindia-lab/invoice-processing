@@ -14,7 +14,7 @@ from decimal import Decimal
 from sqlalchemy import or_, select, update
 
 from ... import masking
-from ...db.models import EntityLink, GraphEdge, GraphNode
+from ...db.models import EntityLink, GraphEdge, GraphNode, TrustFinding
 from ...db.session import tenant_session
 from ...ports import RunContext
 
@@ -129,8 +129,10 @@ class GraphStore:
         s, tenant_id: str, old_id: str, new_id: str, at: datetime
     ) -> None:
         """A closed node takes its open edges with it (the next sync rebuilds
-        them against the new row) and hands its entity links to the new row,
-        so a human's accepted or reversed link survives a re-version."""
+        them against the new row) and hands its entity links and findings to
+        the new row, so a human's accepted or reversed link survives a
+        re-version and a hold stays where the gate looks for it. Citations
+        keep the old id: they record what the finding saw."""
         s.execute(
             update(GraphEdge)
             .where(
@@ -148,6 +150,14 @@ class GraphStore:
         ):
             other = link.node_b if link.node_a == old_id else link.node_a
             link.node_a, link.node_b = sorted((new_id, other))
+        s.execute(
+            update(TrustFinding)
+            .where(
+                TrustFinding.tenant_id == tenant_id,
+                TrustFinding.transaction_node == old_id,
+            )
+            .values(transaction_node=new_id)
+        )
         s.flush()
 
     def node(self, tenant_id: str, node_id: str) -> dict | None:
