@@ -13,6 +13,7 @@ from .clauses import scrub
 
 logger = logging.getLogger(__name__)
 SOURCE = "leakage"
+MATCH_WINDOW_DAYS = 365
 _KINDS = (
     "invoice",
     "invoice_line",
@@ -105,21 +106,36 @@ class View:
             ),
         )
 
-        self._paid: dict[tuple, list[dict]] = defaultdict(list)
+        # A payment matched by number alone goes to the latest invoice of
+        # that vendor and number dated on or before it, within a year:
+        # vendors reuse numbers across years.
+        by_number: dict[tuple, list[dict]] = defaultdict(list)
+        for inv in self.invoices:
+            number = normalize_number(inv["attrs"].get("invoice_number"))
+            if number:
+                by_number[(self.vendor(inv["id"]), number)].append(inv)
+        self._paid: dict[str, list[dict]] = defaultdict(list)
         for p in self.of_kind["payment"]:
             number = normalize_number(p["attrs"].get("doc_number"))
-            if number:
-                self._paid[(self.vendor(p["id"]), number)].append(p)
+            paid_on = day(p["attrs"].get("invoice_date"))
+            if not number or paid_on is None:
+                continue
+            prior = [
+                inv
+                for inv in by_number.get((self.vendor(p["id"]), number), [])
+                if (d := day(inv["attrs"].get("invoice_date"))) is not None
+                and 0 <= (paid_on - d).days <= MATCH_WINDOW_DAYS
+            ]
+            if prior:
+                self._paid[prior[-1]["id"]].append(p)
 
     def payments(self, inv: dict) -> list[dict]:
-        """What settled this invoice: `settles` edges, and payments of the
-        same vendor under the same normalised number (live invoices have no
+        """What settled this invoice: `settles` edges, and payments matched
+        to it by vendor and normalised number (live invoices have no
         `settles` edge)."""
-        number = normalize_number(inv["attrs"].get("invoice_number"))
         found = {p["id"]: p for p in self.settled_by.get(inv["id"], [])}
-        if number:
-            for p in self._paid.get((self.vendor(inv["id"]), number), []):
-                found.setdefault(p["id"], p)
+        for p in self._paid.get(inv["id"], []):
+            found.setdefault(p["id"], p)
         return list(found.values())
 
     def canon(self, node_id: str | None) -> str | None:

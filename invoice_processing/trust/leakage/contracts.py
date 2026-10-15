@@ -196,7 +196,7 @@ def _link(ectx, inv, contract: Contract, covered: bool, term) -> None:
 
 def _line_findings(ectx, inv, d, contract, lines, cum) -> list[FindingSpec]:
     """Rate, escalator and tier on each priced line of one invoice. `cum`
-    carries the contract-year quantity of contract items seen so far."""
+    carries the contract-year quantity seen so far per item (rate clause)."""
     tol = Decimal(str(ectx.threshold("leakage.rate_tolerance_pct"))) / 100
     match = ectx.threshold("leakage.desc_match")
     esc = contract.first("escalator")
@@ -219,10 +219,14 @@ def _line_findings(ectx, inv, d, contract, lines, cum) -> list[FindingSpec]:
         rate = money(rate_clause["attrs"]["params"].get("price"))
         if rate is None:
             continue
-        period = contract.period(d)
+        period = (rate_clause["id"], contract.period(d))
         cum[period] = cum.get(period, Decimal(0)) + qty
         key = line["natural_key"]
-        if tier is not None:
+        tier_named = tier is not None and (
+            overlap(a.get("description"), tier["attrs"].get("excerpt", ""))
+            >= match
+        )
+        if tier_named:
             tp = tier["attrs"]["params"]
             tier_qty, tier_price = money(tp.get("qty")), money(tp.get("price"))
             if (
@@ -319,6 +323,8 @@ def findings(ectx, view: View, in_scope) -> list[FindingSpec]:
         if in_scope(inv["id"]):
             _link(ectx, inv, contract, covered, term)
         if term is not None and not covered:
+            # Outside its term the contract sets no price: report the date
+            # and rate nothing against it.
             out.append(
                 _spec(
                     "LEAK-TERM",
@@ -332,6 +338,7 @@ def findings(ectx, view: View, in_scope) -> list[FindingSpec]:
                     "FR-20.term-1",
                 )
             )
+            continue
         out += _line_findings(
             ectx,
             inv,
@@ -369,7 +376,7 @@ def _discount(view, inv, by_vendor) -> list[FindingSpec]:
         p
         for p in view.payments(inv)
         if (pd := day(p["attrs"].get("invoice_date"))) is not None
-        and (pd - d).days <= days
+        and 0 <= (pd - d).days <= days
         and money(p["attrs"].get("amount")) is not None
     ]
     paid = sum((money(p["attrs"]["amount"]) for p in early), Decimal(0))

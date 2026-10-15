@@ -8,12 +8,13 @@ model can never put a rupee into a finding.
 from __future__ import annotations
 
 import hashlib
+import io
 import logging
 import re
-import tempfile
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
+
+import pdfplumber
 
 from ... import confidence, masking
 from ..decide import Question, decide
@@ -32,8 +33,16 @@ _DATE = re.compile(
     re.IGNORECASE,
 )
 _MONEY = re.compile(
-    r"(?:₹|\bINR\b|\bRs\b\.?)\s*(\d[\d,]*(?:\.\d+)?)", re.IGNORECASE
+    r"(?:₹|\bINR\b|\bRs\b\.?)\s*(\d[\d,]*(?:\.\d+)?)"
+    r"(?:\s*(lakhs?|lacs?|crores?|cr)\b)?",
+    re.IGNORECASE,
 )
+_SCALE = {
+    "lakh": 100_000,
+    "lac": 100_000,
+    "crore": 10_000_000,
+    "cr": 10_000_000,
+}
 _PCT = re.compile(r"(\d+(?:\.\d+)?)\s*(?:%|per\s*cent\b|percent\b)", re.I)
 _QTY = re.compile(r"(\d[\d,]*)\s*(?:units?|nos\.?|pieces|pcs)\b", re.I)
 _TERMS_SLASH = re.compile(
@@ -61,15 +70,30 @@ def scrub(text: str) -> str:
     return _LONG_DIGITS.sub(lambda m: masking.mask_bank(m.group()), text)
 
 
+def _segments(page_text: str) -> list[str]:
+    """A line that carries money is its own segment (a table row is one
+    item and one price); other lines run together as prose."""
+    out, prose = [], []
+    for line in (page_text or "").splitlines():
+        if _MONEY.search(line):
+            out += [" ".join(prose), line]
+            prose = []
+        else:
+            prose.append(line)
+    return [*out, " ".join(prose)]
+
+
 def candidates(page_text: str) -> list[str]:
-    """Sentences worth asking about: money, percentages, dates, keywords."""
-    flat = re.sub(r"\s+", " ", page_text or "").strip()
-    protected = _ABBREV.sub(lambda m: m.group(1) + "\x00", flat)
+    """Sentences worth asking about: money, percentages, dates, keywords.
+    Raw text: the caller reads params from it, then scrubs what it keeps."""
     out = []
-    for raw in _SENTENCE_END.split(protected):
-        sentence = raw.replace("\x00", ".").strip()
-        if sentence and _TRIGGER.search(sentence):
-            out.append(scrub(sentence)[:MAX_EXCERPT])
+    for segment in _segments(page_text):
+        flat = re.sub(r"\s+", " ", segment).strip()
+        protected = _ABBREV.sub(lambda m: m.group(1) + "\x00", flat)
+        for raw in _SENTENCE_END.split(protected):
+            sentence = raw.replace("\x00", ".").strip()
+            if sentence and _TRIGGER.search(sentence):
+                out.append(sentence[:MAX_EXCERPT])
     return out
 
 
@@ -117,10 +141,22 @@ def parse_terms(text: str) -> dict | None:
     return out if out["pct"] and Decimal(out["pct"]) > 0 else None
 
 
+def _amount(number: str, scale: str) -> str | None:
+    value = _number(number)
+    if value is None or not scale:
+        return value
+    mult = _SCALE[scale.lower().rstrip("s")]
+    return format((Decimal(value) * mult).normalize(), "f")
+
+
 def params(kind: str, excerpt: str) -> dict | None:
-    """The numbers a clause of this kind carries, or None if it carries none."""
-    money = [_number(m) for m in _MONEY.findall(excerpt)]
+    """The numbers a clause of this kind carries, or None if it carries none.
+    A rate or tier naming two different amounts is ambiguous (which item has
+    which price?) and carries none."""
+    money = [_amount(n, scale) for n, scale in _MONEY.findall(excerpt)]
     money = [m for m in money if m is not None]
+    if kind in ("rate", "tier") and len({Decimal(m) for m in money}) > 1:
+        return None
     pct = [_number(p) for p in _PCT.findall(excerpt)]
     pct = [p for p in pct if p is not None]
     if kind == "rate" and money:
@@ -151,11 +187,22 @@ logger = logging.getLogger(__name__)
 SOURCE = "leakage"
 
 
-def _pages(data: bytes) -> list[str]:
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "contract.pdf"
-        path.write_bytes(data)
-        return confidence.extract_page_text(path)
+MAX_CONTRACT_BYTES = 25 * 2**20
+
+
+def _pages(data: bytes, limit: int) -> list[str]:
+    """Text of the first `limit` pages only; nothing past the cap is read."""
+    if len(data) > MAX_CONTRACT_BYTES:
+        logger.info("leakage_contract_too_large", extra={"bytes": len(data)})
+        return []
+    try:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            return [page.extract_text() or "" for page in pdf.pages[:limit]]
+    except Exception as exc:
+        logger.info(
+            "leakage_contract_unparseable", extra={"error": type(exc).__name__}
+        )
+        return []
 
 
 def _questions(cands: list[str]) -> list[Question]:
@@ -194,16 +241,17 @@ def extract(ectx) -> list[str]:
     if contract is None:
         logger.info("leakage_contract_node_missing")
         return []
-    pages = _pages(ectx.blobs.get(doc["storage_key"]))
+    limit = int(ectx.threshold("leakage.max_pages"))
+    pages = _pages(ectx.blobs.get(doc["storage_key"]), limit)
     if not confidence.has_readable_text(pages):
         # Scanned contracts (OCR) are a Wave 1 non-goal.
         logger.info("leakage_contract_unreadable")
         return []
-    limit = int(ectx.threshold("leakage.max_pages"))
     ids: list[str] = []
     skipped = 0
-    for page, text in enumerate(pages[:limit], start=1):
-        cands = candidates(text)
+    for page, text in enumerate(pages, start=1):
+        raw = candidates(text)
+        cands = [scrub(c) for c in raw]
         if not cands:
             continue
         answers = {
@@ -222,7 +270,7 @@ def extract(ectx) -> list[str]:
             if kind.fallback or kind.value == "none":
                 skipped += kind.fallback
                 continue
-            found = params(kind.value, excerpt)
+            found = params(kind.value, raw[i])
             if found is None:
                 skipped += 1
                 continue

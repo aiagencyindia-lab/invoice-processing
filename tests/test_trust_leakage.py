@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import time
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,7 +20,8 @@ from invoice_processing.trust.findings import model as finding_model
 from invoice_processing.trust.findings.store import FindingStore
 from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
-from invoice_processing.trust.leakage import clauses
+from invoice_processing.trust.graph.transactions import Transaction
+from invoice_processing.trust.leakage import clauses, dups
 
 T = "tenant-leak"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="worker")
@@ -164,10 +167,10 @@ def test_candidates_pick_money_percent_and_keywords():
     ]
 
 
-def test_bank_numbers_are_masked_in_excerpts():
+def test_bank_numbers_are_masked_by_scrub():
     text = "Pay INR 500 to account 123456789012 at IFSC HDFC0001234."
-    [cand] = clauses.candidates(text)
-    assert "123456789012" not in cand and "…9012" in cand
+    masked = clauses.scrub(text)
+    assert "123456789012" not in masked and "…9012" in masked
 
 
 # -- Task 3: clause extraction -----------------------------------------------
@@ -560,7 +563,8 @@ def test_tier_price_after_cumulative_qty(env):
         cid,
         "tier",
         {"qty": "100", "price": "900"},
-        "Above 100 units in a contract year the price is INR 900.",
+        "Above 100 units of Steel Rod 12mm in a contract year the price is "
+        "INR 900.",
     )
     invoice(
         env, ven, "INV-1", "2025-02-01", 80000, [("Steel Rod 12mm", 80, 1000)]
@@ -1000,3 +1004,132 @@ def test_every_finding_cites_same_tenant_nodes_and_prefixed_dedupe(env):
             assert graph.node(T, c.node_id) is not None
         text = f"{s.summary} {s.details} {[c.excerpt for c in s.citations]}"
         assert "123456789012" not in text
+
+
+# -- Review fix pass ----------------------------------------------------------
+
+
+def test_multi_price_rate_excerpt_is_not_a_rate():
+    row = "Item A Rs 50 per unit Item B Rs 500 per unit"
+    assert clauses.params("rate", row) is None
+    assert (
+        clauses.params("tier", "Above 10 units INR 40, above 50 units INR 30")
+        is None
+    )
+    assert clauses.params("rate", "Rs 500 per unit, i.e. Rs 500 each") == {
+        "price": "500"
+    }
+    table = "Price schedule\nItem A Rs 50 per unit\nItem B Rs 500 per unit\n"
+    assert clauses.candidates(table) == [
+        "Item A Rs 50 per unit",
+        "Item B Rs 500 per unit",
+    ]
+
+
+def test_out_of_term_invoice_is_not_rated(env):
+    ven = vendor(env)
+    steel_contract(env, ven, end="2025-06-30")
+    invoice(
+        env, ven, "INV-1", "2025-08-01", 11000, [("Steel Rod 12mm", 10, 1100)]
+    )
+    assert len(found(env, "LEAK-TERM")) == 1
+    assert found(env, "LEAK-RATE") == []
+
+
+def test_reused_number_payment_attaches_to_latest_prior_invoice(env):
+    ven = vendor(env)
+    invoice(env, ven, "001", "2024-03-01", 20000, ref="a")
+    invoice(env, ven, "001", "2025-03-01", 20000, ref="b")
+    payment(env, ven, "001", "2024-03-20", 20000, ref="pa")
+    payment(env, ven, "001", "2025-03-20", 20000, ref="pb")
+    assert found(env, "STMT-DOUBLE-PAID") == []
+
+
+def test_payment_before_invoice_is_not_a_discount(env):
+    ven = vendor(env)
+    inv = invoice(env, ven, "INV-1", "2025-03-01", 50000, terms="2/10 net 30")
+    payment(env, ven, "INV-1", "2025-02-20", 50000, settles=inv)
+    assert found(env, "LEAK-DISCOUNT") == []
+
+
+def test_tier_needs_item_match_and_counts_per_item(env):
+    ven = vendor(env)
+    cid = steel_contract(env, ven)
+    clause(
+        env,
+        cid,
+        "rate",
+        {"price": "200"},
+        "The rate for Copper Wire is INR 200 per unit.",
+    )
+    clause(
+        env,
+        cid,
+        "tier",
+        {"qty": "100", "price": "900"},
+        "Above 100 units of Steel Rod 12mm the price is INR 900.",
+    )
+    invoice(env, ven, "INV-1", "2025-02-01", 30000, [("Copper Wire", 150, 200)])
+    invoice(
+        env, ven, "INV-2", "2025-03-01", 50000, [("Steel Rod 12mm", 50, 1000)]
+    )
+    assert found(env, "LEAK-TIER") == []
+
+
+def test_consecutive_numbers_same_amount_are_not_duplicates(env):
+    ven = vendor(env)
+    invoice(env, ven, "INV-1041", "2025-03-01", 5000)
+    invoice(env, ven, "INV-1042", "2025-03-03", 5000)
+    assert found(env, "DUP-NEAR") == []
+
+
+def test_dup_scan_is_linear_in_invoices():
+    txns = [
+        Transaction(
+            node_id=f"n{i}",
+            kind="invoice",
+            vendor_key="v",
+            doc_number=f"X{i * 37}",
+            amount=Decimal(1000 + i),
+            currency="INR",
+            date=date(2020, 1, 1) + timedelta(days=i // 3),
+            source="history",
+            ref=("history_records", f"r{i}"),
+        )
+        for i in range(5000)
+    ]
+    view = SimpleNamespace(
+        nodes={t.node_id: {"natural_key": t.node_id} for t in txns}
+    )
+    began = time.perf_counter()
+    assert dups._near_and_cross(view, txns, 7) == []
+    assert time.perf_counter() - began < 2
+
+
+def test_params_lakh_and_crore():
+    assert clauses.params("rate", "Price is ₹1.5 lakh per unit.") == {
+        "price": "150000"
+    }
+    assert clauses.params(
+        "rebate", "A rebate of 1% applies once spend exceeds INR 2 crore."
+    ) == {"threshold": "20000000", "pct": "1"}
+    assert clauses.params("rate", "Rs 3 lacs per unit") == {"price": "300000"}
+
+
+def test_pages_reads_only_limit_and_refuses_large_blobs(caplog):
+    assert len(clauses._pages(make_pdf([CONTRACT_PAGE] * 3), 2)) == 2
+    big = b"%PDF-1.4\n" + b"0" * (25 * 2**20)
+    with caplog.at_level("INFO"):
+        assert clauses._pages(big, 40) == []
+    assert "leakage_contract_too_large" in caplog.text
+
+
+def test_long_number_amount_survives_scrub(env):
+    _, graph, _ = env
+    contract_node(env)
+    page = [FILLER, "The rate for Steel Rod 12mm is INR 1000000000 per unit."]
+    _, decider = extract(env, [page], {"c0": "rate", "c0_score": 0.9})
+    [rate] = graph.nodes(T, kind="contract_clause")
+    assert rate["attrs"]["params"] == {"price": "1000000000"}
+    assert "1000000000" not in rate["attrs"]["excerpt"]
+    assert "1000000000" not in decider.prompts[0]

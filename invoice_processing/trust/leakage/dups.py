@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from decimal import Decimal
 
@@ -68,24 +69,57 @@ def findings(ectx, view: View) -> list[FindingSpec]:
     return out
 
 
+_CORE = re.compile(r"([A-Z]*)(\d+)([A-Z]*)")
+
+
+def _sequential(na: str, nb: str) -> bool:
+    """INV1041 and INV1042: the vendor's next invoice, not a duplicate."""
+    ma, mb = _CORE.fullmatch(na), _CORE.fullmatch(nb)
+    return bool(
+        ma
+        and mb
+        and ma.group(1) == mb.group(1)
+        and ma.group(3) == mb.group(3)
+        and abs(int(ma.group(2)) - int(mb.group(2))) <= 10
+    )
+
+
 def _near_and_cross(view, txns, window) -> list[FindingSpec]:
+    """`txns` is date-sorted: near matches walk back only through the
+    window; cross matches are a lookup by (number, amount).
+
+    ponytail: a vendor with thousands of invoices inside one window is still
+    quadratic in that window; bucket by number prefix if that ever happens.
+    """
     out = []
+    numbers = [normalize_number(t.doc_number) for t in txns]
+    seen: dict[tuple, list] = defaultdict(list)
     for j, b in enumerate(txns):
-        nb = normalize_number(b.doc_number)
+        nb = numbers[j]
         if not nb:
             continue
-        near, cross = [], []
-        for a in txns[:j]:
-            na = normalize_number(a.doc_number)
+        cross = [
+            a
+            for a in seen.get((nb, b.amount), [])
+            if a.vendor_key != b.vendor_key and not _same_record(a, b)
+        ]
+        if b.amount is not None:
+            seen[(nb, b.amount)].append(b)
+        near = []
+        i = j - 1
+        while not cross and i >= 0 and (b.date - txns[i].date).days <= window:
+            a, na = txns[i], numbers[i]
+            i -= 1
             if not na or _same_record(a, b):
                 continue
             same_amount = a.amount is not None and a.amount == b.amount
-            if a.vendor_key != b.vendor_key and na == nb and same_amount:
-                cross.append(a)
-            elif (b.date - a.date).days <= window and (
-                na == nb or (same_amount and edit_distance(na, nb) <= 2)
+            if na == nb or (
+                same_amount
+                and not _sequential(na, nb)
+                and edit_distance(na, nb) <= 2
             ):
                 near.append((a, na == nb))
+        near.reverse()
         if cross:
             out.append(
                 _spec(
