@@ -65,7 +65,7 @@ Branch `v2/w1-payment`, worktree `.worktrees/payment`. TDD, one commit per task.
 3. Replay harness AC-21 — `test_replay[clean]`, `[lookalike_domain]`,
    `[reply_to_swap]`, `[bank_change_urgency]`, `[unverified_first_payment]`,
    `[provider_down]`.
-4. Benchmark `faults/payment.py`: 5× outliers on open invoices, a first
+4. Benchmark `faults/payment.py`: 5× outliers (≤ 2 per vendor, only where 5× the median exceeds twice the vendor's largest invoice) on open invoices, a first
    payment to a new unverified vendor; base vendors get accounts the fake
    provider verifies. Gates `PAY-ANOMALY`, `PAY-UNVERIFIED`: precision ≥ 0.9,
    recall ≥ 0.8, impact_error ≤ 0.1.
