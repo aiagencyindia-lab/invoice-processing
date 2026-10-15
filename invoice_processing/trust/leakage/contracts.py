@@ -98,23 +98,23 @@ def _conf(c: dict) -> float:
     return float(c["attrs"].get("confidence") or 0)
 
 
-def contracts(view: View, ectx) -> dict[str, list[Contract]]:
+def _build(view: View, ectx, node: dict) -> Contract:
     floor = ectx.threshold("leakage.clause_min_confidence")
-    out: dict[str, list[Contract]] = {}
-    for ven, nodes in view.contracts_of.items():
-        for node in nodes:
-            c = Contract(node)
-            for cl in sorted(
-                view.clauses.get(node["id"], []), key=_conf, reverse=True
-            ):
-                a = cl["attrs"]
-                if not (a.get("reviewed") or _conf(cl) >= floor):
-                    continue
-                if not isinstance(a.get("params"), dict):
-                    continue
-                c.by_type.setdefault(a.get("type"), []).append(cl)
-            out.setdefault(ven, []).append(c)
-    return out
+    c = Contract(node)
+    for cl in sorted(view.clauses.get(node["id"], []), key=_conf, reverse=True):
+        a = cl["attrs"]
+        if not (a.get("reviewed") or _conf(cl) >= floor):
+            continue
+        if isinstance(a.get("params"), dict):
+            c.by_type.setdefault(a.get("type"), []).append(cl)
+    return c
+
+
+def contracts(view: View, ectx) -> dict[str, list[Contract]]:
+    return {
+        ven: [_build(view, ectx, node) for node in nodes]
+        for ven, nodes in view.contracts_of.items()
+    }
 
 
 def governing(options: list[Contract], d: date) -> tuple[Contract, bool]:
@@ -164,8 +164,8 @@ def _clause_details(used: list[dict], extra: dict) -> dict:
     }
 
 
-def _clause_conf(used: list[dict]) -> float:
-    out = RULE_CONFIDENCE
+def _clause_conf(used: list[dict], rule: float = RULE_CONFIDENCE) -> float:
+    out = rule
     for c in used:
         # A reviewed clause with no score is as sure as the reviewer.
         out *= _conf(c) or (1.0 if c["attrs"].get("reviewed") else 0.0)
@@ -454,3 +454,54 @@ def _rebate(ectx, view, inv, d, ven, contract, spend) -> list[FindingSpec]:
             "FR-20.rebate-1",
         )
     ]
+
+
+def radar(ectx, view: View) -> list[FindingSpec]:
+    """Renewals and escalations coming up inside the notice window; one
+    finding per contract per event month."""
+    today = ectx.now.date()
+    notice = int(ectx.threshold("leakage.renewal_notice_days"))
+    out = []
+    for node in view.of_kind["contract"]:
+        c = _build(view, ectx, node)
+        start, end = c.term
+        events = []
+        if end is not None:
+            events.append(("RADAR-RENEWAL", end, [c.first("term")], {}))
+        esc = c.first("escalator")
+        if esc is not None and start is not None:
+            nxt = add_years(start, max(years_between(start, today), 0) + 1)
+            if end is None or nxt <= end:
+                events.append(
+                    (
+                        "RADAR-ESCALATOR",
+                        nxt,
+                        [esc, c.first("term")],
+                        {
+                            "escalates_on": nxt.isoformat(),
+                            "pct": esc["attrs"]["params"].get("pct"),
+                        },
+                    )
+                )
+        for code, when, used, extra in events:
+            if not 0 <= (when - today).days <= notice:
+                continue
+            out.append(
+                _spec(
+                    code,
+                    node["id"],
+                    f"{node['natural_key']}:{when:%Y-%m}",
+                    None,
+                    _clause_conf(used, 1.0),
+                    "The contract term ends inside the notice window."
+                    if code == "RADAR-RENEWAL"
+                    else "A contract price escalation is coming up.",
+                    _clause_details(used, {"on": when.isoformat(), **extra}),
+                    [
+                        cite(node),
+                        *(cite(x, x["attrs"].get("excerpt")) for x in used),
+                    ],
+                    "FR-20.radar-1",
+                )
+            )
+    return out

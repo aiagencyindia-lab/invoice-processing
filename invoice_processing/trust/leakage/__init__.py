@@ -53,7 +53,7 @@ def _scope(ectx, view):
         for ven, nodes in view.contracts_of.items()
         if any(n["id"] == contract for n in nodes)
     }
-    return lambda node: view.vendor(node) in vendors
+    return lambda node: node == contract or view.vendor(node) in vendors
 
 
 def run(ectx) -> list[FindingSpec]:
@@ -67,6 +67,7 @@ def run(ectx) -> list[FindingSpec]:
         *contracts.findings(ectx, view, in_scope),
         *dups.findings(ectx, view),
         *statements.findings(ectx, view),
+        *contracts.radar(ectx, view),
     ]
     kept = [s for s in specs if in_scope(s.transaction_node)]
     logger.info(

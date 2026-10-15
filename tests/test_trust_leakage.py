@@ -852,3 +852,30 @@ def test_disputed_statement_line(env):
     sid = statement_line(env, ven, "INV-6", "2025-03-09", 8000)
     [f] = found(env, "STMT-DISPUTED")
     assert f.transaction_node == sid and f.impact is None
+
+
+# -- Task 8: radar ------------------------------------------------------------
+
+
+def test_radar_renewal_within_notice(env):
+    ven = vendor(env)
+    cid = steel_contract(env, ven, end="2025-10-15")
+    [f] = found(env, "RADAR-RENEWAL")  # NOW is 2025-09-01: 44 days out
+    assert f.transaction_node == cid and f.impact is None
+    assert f.dedupe_key.endswith(":2025-10")
+    assert (
+        found(
+            env, "RADAR-RENEWAL", now=datetime(2025, 6, 1, tzinfo=timezone.utc)
+        )
+        == []
+    )
+
+
+def test_radar_escalator_anniversary(env):
+    ven = vendor(env)
+    cid = steel_contract(env, ven, start="2024-10-01", end="2027-09-30")
+    clause(env, cid, "escalator", {"pct": "5"}, "Prices escalate by 5% yearly.")
+    [f] = found(env, "RADAR-ESCALATOR")
+    assert f.transaction_node == cid
+    assert f.details["escalates_on"] == "2025-10-01"
+    assert found(env, "RADAR-RENEWAL") == []
