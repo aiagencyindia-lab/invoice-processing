@@ -14,7 +14,14 @@ from invoice_processing.trust.findings.model import Citation, FindingSpec
 from invoice_processing.trust.findings.store import FindingStore
 
 
-def test_generator_is_deterministic_for_a_seed(tmp_path):
+@pytest.fixture
+def wave0_only(monkeypatch):
+    """The Wave 0 baseline, without whatever engine fault families are
+    installed: those add rows, faults and gates of their own."""
+    monkeypatch.setattr(faults, "modules", lambda: [])
+
+
+def test_generator_is_deterministic_for_a_seed(tmp_path, wave0_only):
     a = generate.generate(7, tmp_path / "a")
     b = generate.generate(7, tmp_path / "b")
     assert a == b
@@ -32,7 +39,9 @@ def test_generator_is_deterministic_for_a_seed(tmp_path):
     assert manifest["faults"] == []
 
 
-def test_round_trip_meets_wave0_gates_on_sqlite(tmp_path, scratch_db):
+def test_round_trip_meets_wave0_gates_on_sqlite(
+    tmp_path, scratch_db, wave0_only
+):
     data = tmp_path / "data"
     generate.generate(7, data)
     out = history_eval.run(scratch_db("bench.db"), data)
@@ -77,7 +86,9 @@ def test_cli_exits_nonzero_on_a_failed_gate(tmp_path, scratch_db):
     assert list((tmp_path / "runs").glob("*.json"))
 
 
-def test_unlinked_records_become_bench_import_findings(tmp_path, scratch_db):
+def test_unlinked_records_become_bench_import_findings(
+    tmp_path, scratch_db, wave0_only
+):
     data = tmp_path / "data"
     generate.generate(7, data)
     (data / "vendor.csv").write_text("external_id,vendor_key,gstin\n")
