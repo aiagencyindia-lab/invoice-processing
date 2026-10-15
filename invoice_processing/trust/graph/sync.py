@@ -15,6 +15,7 @@ from sqlalchemy import select
 from ... import po_matching
 from ...db.models import (
     ApprovalStep,
+    Document,
     GoodsReceipt,
     GrnLine,
     HistoryRecord,
@@ -33,7 +34,15 @@ from . import resolve
 
 SOURCE_V1 = "v1"
 # Parties and orders before the documents that point at them.
-_HISTORY_ORDER = {"vendor": 0, "po": 1, "grn": 2, "ap_invoice": 3, "payment": 4}
+_HISTORY_ORDER = {
+    "vendor": 0,
+    "po": 1,
+    "grn": 2,
+    "ap_invoice": 3,
+    "payment": 4,
+    "bank_line": 5,
+    "vendor_statement_line": 6,
+}
 _HISTORY_KIND = {"ap_invoice": "invoice"}
 
 
@@ -47,6 +56,77 @@ def _date(v) -> str | None:
     try:
         return parse_date(str(v)).isoformat()
     except ValueError:
+        return None
+
+
+def _utc_iso(value) -> str | None:
+    """The column is timezone-aware; SQLite returns it naive. One form for both."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
+
+
+def _extracted(inv) -> dict:
+    """The extraction the pipeline stored: GST components, HSN and discounts
+    live only there (the typed columns do not carry them)."""
+    return ((inv.fields or {}).get("extraction") or {}).get("invoice") or {}
+
+
+def _tax_amount(inv, extracted: dict) -> str | None:
+    if inv.tax_amount is not None:
+        return _money(inv.tax_amount)
+    parts = [
+        extracted.get(k) for k in ("cgst_amount", "sgst_amount", "igst_amount")
+    ]
+    known = [p for p in parts if p not in (None, "")]
+    if known:
+        try:
+            return _money(sum(Decimal(str(p)) for p in known))
+        except ArithmeticError:
+            pass
+    if inv.total_inc_tax is not None and inv.total_ex_tax is not None:
+        return _money(Decimal(inv.total_inc_tax) - Decimal(inv.total_ex_tax))
+    return None
+
+
+def _domain(address: str | None) -> str | None:
+    if not address or "@" not in address:
+        return None
+    return address.rsplit("@", 1)[1].strip(" >").lower() or None
+
+
+def _sync_contract_edges(ctx, graph, at) -> None:
+    """A contract uploaded before its vendor was synced gets its `governs`
+    edge here. The uploader named the vendor, so it stays a human assertion."""
+    for n in graph.nodes(ctx.tenant_id, kind="contract"):
+        vendor_id = n["attrs"].get("vendor_id")
+        if not vendor_id:
+            continue
+        ven = graph.nodes_by_ref(ctx.tenant_id, "vendors", [vendor_id]).get(
+            vendor_id
+        )
+        if ven:
+            graph.upsert_edge(
+                ctx,
+                src=n["id"],
+                dst=ven,
+                kind="governs",
+                source_system="upload",
+                provenance="human_assertion",
+                confidence=1.0,
+                observed_at=at,
+                at=at,
+            )
+
+
+def _maybe_money(value) -> str | None:
+    if value in (None, ""):
+        return None
+    try:
+        return _money(Decimal(str(value)))
+    except ArithmeticError:
         return None
 
 
@@ -122,6 +202,8 @@ def _sync_v1_masters(ctx, s, graph, vendors, at, bump) -> dict[str, str]:
             "email_domain": v.email_domain,
             "bank_account_number": v.bank_account_number,
             "bank_code": v.bank_code,
+            "bank_account_name": v.bank_account_name,
+            "bank_verified_at": _utc_iso(v.bank_verified_at),
         }
         nid = graph.upsert_node(
             ctx,
@@ -265,7 +347,24 @@ def _sync_v1_invoices(ctx, s, graph, vendors, po_nodes, at, bump, document_id):
     if document_id is not None:
         inv_q = inv_q.where(Invoice.document_id == document_id)
     for inv in s.scalars(inv_q):
+        doc = s.get(Document, inv.document_id) if inv.document_id else None
+        extracted = _extracted(inv)
         attrs = {
+            "document_id": inv.document_id,
+            "document_sha256": doc.sha256 if doc else None,
+            "document_source": doc.source if doc else None,
+            "document_source_ref": doc.source_ref if doc else None,
+            # Domains only: the graph keeps no personal email; Payment reads
+            # the addresses from the document itself.
+            "document_sender_domain": _domain(doc.sender if doc else None),
+            "document_reply_to_domain": _domain(doc.reply_to if doc else None),
+            "payment_terms": inv.payment_terms,
+            "due_date": _date(inv.due_date),
+            "total_ex_tax": _money(inv.total_ex_tax),
+            "tax_amount": _tax_amount(inv, extracted),
+            "place_of_supply": extracted.get("place_of_supply"),
+            "customer_tax_id": extracted.get("customer_tax_id"),
+            "discount": _maybe_money(extracted.get("discount")),
             "invoice_number": inv.invoice_number,
             "invoice_date": _date(inv.invoice_date),
             "po_number": inv.po_number,
@@ -302,9 +401,18 @@ def _sync_v1_invoices(ctx, s, graph, vendors, po_nodes, at, bump, document_id):
             _edge(
                 graph, ctx, iid, po_nodes[po_key], "references", SOURCE_V1, at
             )
+        extracted_lines = extracted.get("line_items") or []
         for line in s.scalars(
             select(InvoiceLine).where(InvoiceLine.invoice_id == inv.id)
         ):
+            # Lines are numbered from 1 in the order the extraction gave them.
+            idx = (line.line_number or 0) - 1
+            ext = (
+                extracted_lines[idx]
+                if 0 <= idx < len(extracted_lines)
+                and isinstance(extracted_lines[idx], dict)
+                else {}
+            )
             lid = graph.upsert_node(
                 ctx,
                 kind="invoice_line",
@@ -317,6 +425,8 @@ def _sync_v1_invoices(ctx, s, graph, vendors, po_nodes, at, bump, document_id):
                     "quantity": _money(line.quantity),
                     "unit_price": _money(line.unit_price),
                     "amount": _money(line.amount_ex_tax),
+                    "hsn_sac": ext.get("hsn_sac"),
+                    "line_discount": _maybe_money(ext.get("line_discount")),
                 },
                 at=at,
             )
@@ -346,14 +456,15 @@ def _sync_v1_invoices(ctx, s, graph, vendors, po_nodes, at, bump, document_id):
 
 
 def _sync_history(ctx, s, graph, vendors, po_nodes, at, bump):
-    sources = {
-        r.id: r.source_name
-        for r in s.scalars(
+    imports = list(
+        s.scalars(
             select(TrustHistoryImport).where(
                 TrustHistoryImport.tenant_id == ctx.tenant_id
             )
         )
-    }
+    )
+    sources = {r.id: r.source_name for r in imports}
+    sources_mapping = {r.id: dict(r.mapping or {}) for r in imports}
     records = sorted(
         s.scalars(
             select(HistoryRecord).where(
@@ -409,6 +520,16 @@ def _sync_history(ctx, s, graph, vendors, po_nodes, at, bump):
             "external_id": rec.external_id,
             "po_number": po_number,
         }
+        # Every other mapped field of this kind (counterparty, bank_reference,
+        # line_number, quantity, ...), by the column the mapping named.
+        mapped = {
+            field: rec.fields.get(header)
+            for header, field in (
+                sources_mapping.get(rec.import_id) or {}
+            ).items()
+            if field and field not in attrs and rec.fields
+        }
+        attrs.update({k: v for k, v in mapped.items() if v not in (None, "")})
         nid = graph.upsert_node(
             ctx,
             kind=kind,
@@ -491,6 +612,7 @@ def sync_tenant(
         )
         if document_id is None:
             _sync_history(ctx, s, graph, vendors, po_nodes, at, bump)
+            _sync_contract_edges(ctx, graph, at)
 
     if document_id is None:
         counts["links"] = resolve.run(ctx, graph, links, decider=decider)

@@ -17,9 +17,43 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-KINDS = ("vendor", "po", "grn", "ap_invoice", "payment")
+# Every history kind the importer accepts (trust/history/mapping.KINDS);
+# a kind with no rows writes no file.
+KINDS = (
+    "vendor",
+    "po",
+    "grn",
+    "ap_invoice",
+    "payment",
+    "bank_line",
+    "vendor_statement_line",
+)
 HEADERS = {
-    "vendor": ["external_id", "vendor_key", "gstin", "email_domain"],
+    "vendor": [
+        "external_id",
+        "vendor_key",
+        "gstin",
+        "email_domain",
+        "pan",
+        "bank_account",
+        "bank_code",
+    ],
+    "bank_line": [
+        "external_id",
+        "record_date",
+        "amount",
+        "currency",
+        "counterparty",
+        "bank_reference",
+    ],
+    "vendor_statement_line": [
+        "external_id",
+        "vendor_key",
+        "doc_number",
+        "amount",
+        "currency",
+        "record_date",
+    ],
     "po": [
         "external_id",
         "doc_number",
@@ -171,7 +205,18 @@ def generate(
                     }
                 )
 
+    faults: list[dict] = []
+    from . import faults as fault_families  # noqa: PLC0415 - plug-ins
+
+    for module in fault_families.modules():
+        # Each family draws from its own stream, so adding one never
+        # changes the rows another family or the base history produced.
+        family_rng = random.Random(f"{seed}:{module.__name__}")  # noqa: S311
+        module.inject(family_rng, rows, faults, start=start, months=months)
+
     for kind in KINDS:
+        if not rows[kind]:
+            continue
         with (out / f"{kind}.csv").open(
             "w", newline="", encoding="utf-8"
         ) as fh:
@@ -182,7 +227,7 @@ def generate(
         seed=seed,
         counts={k: len(v) for k, v in rows.items()},
         expected_links=links,
-        faults=[],
+        faults=faults,
     )
     (out / "manifest.json").write_text(
         json.dumps(manifest.as_dict(), indent=2), encoding="utf-8"

@@ -91,8 +91,20 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
 - [ ] AC-19 contract-clause coverage (≥ 60% of top-50-vendor invoices):
       not measurable until Wave 1's clause extraction; the harness records
       it as `null`.
-- [ ] Wave 1 (parallel worktrees): Leakage · Payment Trust · Provenance v1
-      · GST/ITC v1 — one short spec each against the spec's §3.1 contracts.
+- [ ] **Wave 1** — program plan `docs/superpowers/plans/2026-10-15-v2-wave1-program.md`;
+      specs `docs/superpowers/specs/2026-10-15-v2-wave1-*.md`.
+  - [x] Scaffold (branch `v2/w1-scaffold`): engine runtime, payment hold gate,
+        `trust_thresholds`, sync additions, contract upload, benchmark plug-ins.
+  - [ ] Leakage (`v2/w1-leakage`) · [ ] Payment Trust (`v2/w1-payment`) ·
+        [ ] Provenance v1 (`v2/w1-provenance`) · [ ] GST/ITC v1 (`v2/w1-gst_itc`).
+  - [ ] Known gap: an invoice approved before its asynchronous trust evaluation
+        ran is not held (the gate fails open on "not evaluated yet"); Wave 2
+        adds an evaluated-at marker.
+  - [ ] Operator note: an engine with hold types in `enforcing` mode, on the
+        fake providers, holds every invoice (no real verifier answers
+        "verified"). Keep modes `off` or `advisory` until a real provider is set.
+  - [ ] Partner gates: AC-19 clause coverage, AC-20 ≥ 0.5% of spend, AC-21 at a
+        design partner.
 - [ ] Waves 2–4 per the spec §2.
 - [ ] Remove the Postgres TCP proxy before the trust routes go live (it was
       added for bootstrap only).

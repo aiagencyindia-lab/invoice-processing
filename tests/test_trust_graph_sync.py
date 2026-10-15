@@ -9,6 +9,7 @@ from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust.decide import FakeDecider
+from invoice_processing.trust.graph import sync as sync_module
 from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
 from invoice_processing.trust.graph.sync import sync_tenant
@@ -256,3 +257,124 @@ def test_incremental_sync_references_a_po_known_only_from_history(env):
     inv = graph.nodes_by_ref(T, "invoices", ["inv-1"])["inv-1"]
     [ref] = graph.edges(T, src=inv, kind="references")
     assert graph.node(T, ref["dst"])["attrs"]["doc_number"] == "PO-77"
+
+
+def test_invoice_node_carries_document_and_tax_attrs(env):
+    url, graph, _ = env
+    with tenant_session(T, url) as s:
+        doc = s.get(models.Document, "doc-1")
+        doc.source, doc.source_ref = "email", "email/x.eml"
+        doc.sender, doc.reply_to = "billing@acme.in", "pay@acrne.in"
+        inv = s.get(models.Invoice, "inv-1")
+        inv.total_ex_tax, inv.tax_amount = Decimal("900"), None
+        inv.payment_terms, inv.due_date = "2/10 net 30", "04/02/2026"
+        inv.fields = {
+            "extraction": {
+                "invoice": {
+                    "cgst_amount": "45",
+                    "sgst_amount": 45.0,
+                    "place_of_supply": "27-Maharashtra",
+                    "customer_tax_id": "27AAPFU0939F1ZV",
+                    "discount": "5",
+                }
+            }
+        }
+    sync(env)
+    node = graph.node(T, graph.nodes_by_ref(T, "invoices", ["inv-1"])["inv-1"])
+    a = node["attrs"]
+    assert (a["document_id"], a["document_sha256"]) == ("doc-1", "a" * 64)
+    assert (a["document_source"], a["document_source_ref"]) == (
+        "email",
+        "email/x.eml",
+    )
+    # Domains, not addresses: the engines need the domain and the graph
+    # keeps no personal email.
+    assert (a["document_sender_domain"], a["document_reply_to_domain"]) == (
+        "acme.in",
+        "acrne.in",
+    )
+    assert "document_sender" not in a and "document_reply_to" not in a
+    assert (a["payment_terms"], a["due_date"]) == ("2/10 net 30", "2026-02-04")
+    assert (a["total_ex_tax"], a["tax_amount"]) == ("900.0000", "90.0000")
+    assert a["place_of_supply"] == "27-Maharashtra"
+    assert (
+        a["customer_tax_id"] == "27AAPFU0939F1ZV" and a["discount"] == "5.0000"
+    )
+
+
+def test_tax_amount_falls_back_to_the_totals(env):
+    url, graph, _ = env
+    with tenant_session(T, url) as s:
+        inv = s.get(models.Invoice, "inv-1")
+        inv.total_ex_tax, inv.tax_amount, inv.fields = Decimal("900"), None, {}
+    sync(env)
+    node = graph.node(T, graph.nodes_by_ref(T, "invoices", ["inv-1"])["inv-1"])
+    assert node["attrs"]["tax_amount"] == "100.0000"
+
+
+def test_lines_carry_hsn_and_discount(env):
+    url, graph, _ = env
+    with tenant_session(T, url) as s:
+        s.add(
+            models.InvoiceLine(
+                tenant_id=T,
+                id="il-1",
+                invoice_id="inv-1",
+                line_number=1,
+                quantity=Decimal("10"),
+                unit_price=Decimal("100"),
+            )
+        )
+        s.get(models.Invoice, "inv-1").fields = {
+            "extraction": {
+                "invoice": {
+                    "line_items": [{"hsn_sac": "7318", "line_discount": "2"}]
+                }
+            }
+        }
+    sync(env)
+    line = graph.node(
+        T, graph.nodes_by_ref(T, "invoice_lines", ["il-1"])["il-1"]
+    )
+    assert line["attrs"]["hsn_sac"] == "7318"
+    assert line["attrs"]["line_discount"] == "2.0000"
+
+
+def test_vendor_carries_bank_verification(env):
+    url, graph, _ = env
+    with tenant_session(T, url) as s:
+        v = s.get(models.Vendor, "ven-1")
+        v.bank_verified_at = NOW
+        v.bank_account_name = "Acme Steel Pvt Ltd"
+    sync(env)
+    node = graph.node(T, graph.nodes_by_ref(T, "vendors", ["ven-1"])["ven-1"])
+    assert node["attrs"]["bank_verified_at"] == NOW.isoformat()
+    assert node["attrs"]["bank_account_name"] == "Acme Steel Pvt Ltd"
+
+
+def test_history_nodes_carry_every_mapped_field(env):
+    url, graph, _ = env
+    HistoryImporter(url).import_file(
+        CTX,
+        kind="bank_line",
+        source_name="hdfc",
+        filename="bank.csv",
+        data=b"Date,Amount,Narration,UTR\n2026-01-09,-1000,ACME STEEL,UTR123\n",
+        mapping={
+            "Date": "record_date",
+            "Amount": "amount",
+            "Narration": "counterparty",
+            "UTR": "bank_reference",
+        },
+    )
+    sync(env)
+    [node] = graph.nodes(T, kind="bank_line")
+    assert node["attrs"]["counterparty"] == "ACME STEEL"
+    assert node["attrs"]["bank_reference"] == "UTR123"
+
+
+def test_statement_and_bank_lines_sync_after_payments():
+    order = sync_module._HISTORY_ORDER
+    assert (
+        order["payment"] < order["bank_line"] < order["vendor_statement_line"]
+    )

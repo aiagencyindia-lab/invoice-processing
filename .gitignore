@@ -41,3 +41,6 @@ invoice_processing/data/item_code_cache.json
 benchmark/dataset/documents
 benchmark/runs/
 api.log
+
+# Parallel engine branches (Wave 1)
+.worktrees/

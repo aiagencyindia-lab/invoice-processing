@@ -1316,6 +1316,59 @@ class TestTrustHistoryIsolation:
         assert probe.status_code == 200 and probe.json()["saved"] is None
 
 
+class TestTrustContractIsolation:
+    @pytest.fixture
+    def contract_db(self, scratch_db, monkeypatch, tmp_path):
+        from invoice_processing.adapters import LocalBlobStore  # noqa: PLC0415
+        from invoice_processing.db.models import Vendor  # noqa: PLC0415
+        from invoice_processing.db.repositories import (  # noqa: PLC0415
+            PgDocumentRepository,
+        )
+        from invoice_processing.trust.graph.store import GraphStore  # noqa: PLC0415
+
+        url = scratch_db("iso-contracts.db")
+        Base.metadata.drop_all(get_engine(url))
+        create_all(url)
+        for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
+            with db_session(tid, url) as session:
+                session.add(
+                    Tenant(id=tid, name=slug, slug=slug, status="active")
+                )
+        with db_session(ACME, url) as session:
+            session.add(
+                Vendor(
+                    tenant_id=ACME,
+                    id="ven-acme",
+                    name="Acme Steel",
+                    normalized_name="acme steel",
+                    tax_id="27AAPFU0939F1ZV",
+                )
+            )
+        monkeypatch.setattr(service, "_graph_store", GraphStore(url))
+        monkeypatch.setattr(service, "_documents", PgDocumentRepository(url))
+        blobs = LocalBlobStore(tmp_path / "blobs")
+        monkeypatch.setattr(service, "get_blobs", lambda tenant_id: blobs)
+        monkeypatch.setenv("DATABASE_URL", url)
+
+    def test_contracts_stay_with_their_tenant(self, clients, contract_db):
+        pdf = b"%PDF-1.4\n% msa\n"
+        r = clients("acme", "clerk").post(
+            "/api/trust/contracts",
+            files={"file": ("msa.pdf", pdf, "application/pdf")},
+            data={"vendor_id": "ven-acme"},
+        )
+        assert r.status_code == 201, r.text
+        assert clients("globex").get("/api/trust/contracts").json() == []
+        assert len(clients("acme").get("/api/trust/contracts").json()) == 1
+        # Another tenant's vendor id is unknown here, not borrowed.
+        probe = clients("globex", "clerk").post(
+            "/api/trust/contracts",
+            files={"file": ("x.pdf", pdf + b"x", "application/pdf")},
+            data={"vendor_id": "ven-acme"},
+        )
+        assert probe.status_code == 404
+
+
 class TestCoverage:
     # Routes that legitimately serve no tenant data, with the reason each is
     # exempt. Anything not listed must be probed above.
@@ -1402,6 +1455,7 @@ class TestCoverage:
         "/api/trust/history/mapping",
         "/api/trust/history/import",
         "/api/trust/history/imports",
+        "/api/trust/contracts",
     }
 
     def test_every_route_is_covered(self):
