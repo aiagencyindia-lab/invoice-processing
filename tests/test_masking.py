@@ -48,3 +48,12 @@ def test_a_structured_value_is_hidden_entirely():
     mask to a fragment of its repr."""
     assert mask_bank({"a": 1}) == "…"
     assert mask_bank(["901031925572"]) == "…"
+
+
+def test_mask_text_masks_long_numbers_and_ifsc_codes():
+    from invoice_processing.masking import mask_text  # noqa: PLC0415
+
+    out = mask_text(
+        "a/c 5010 0012 345678, IFSC HDFC0001234, ref 1234567, phone 98765"
+    )
+    assert out == "a/c …5678, IFSC …1234, ref 1234567, phone 98765"

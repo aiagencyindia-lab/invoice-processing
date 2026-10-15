@@ -137,16 +137,7 @@ _LONG_NUMBER = re.compile(r"\d(?:[ .-]?\d){7,}")
 MAX_SCAN = 1_000_000
 
 
-def mask_text(text: str) -> str:
-    """Every IFSC, and every number of eight digits or more, becomes its last
-    four."""
-
-    def one(m: re.Match) -> str:
-        digits = re.sub(r"\D", "", m.group())
-        return masking.mask_bank(digits) if len(digits) >= 8 else m.group()
-
-    text = _IFSC.sub(lambda m: masking.mask_bank(m.group()), text)
-    return _LONG_NUMBER.sub(one, text)
+mask_text = masking.mask_text
 
 
 def _excerpt(text: str, start: int, end: int) -> str:

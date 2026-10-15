@@ -9,6 +9,7 @@ from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust.decide import FakeDecider
+from invoice_processing.trust.graph import resolve
 from invoice_processing.trust.graph import sync as sync_module
 from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
@@ -378,3 +379,56 @@ def test_statement_and_bank_lines_sync_after_payments():
     assert (
         order["payment"] < order["bank_line"] < order["vendor_statement_line"]
     )
+
+
+def test_imported_vendor_carries_its_bank_account_as_a_key_not_a_number(env):
+    url, graph, _ = env
+    HistoryImporter(url).import_file(
+        CTX,
+        kind="vendor",
+        source_name="tally",
+        filename="v.csv",
+        data=b"Name,Account,IFSC\nNova Fab,50100012345678,HDFC0000001\n",
+        mapping={
+            "Name": "vendor_key",
+            "Account": "bank_account",
+            "IFSC": "bank_code",
+        },
+    )
+    sync(env)
+    [node] = [
+        n
+        for n in graph.nodes(T, kind="vendor")
+        if n["attrs"]["name"] == "Nova Fab"
+    ]
+    expected = resolve.natural_keys(
+        {"bank_account": "50100012345678", "bank_code": "HDFC0000001"}
+    )
+    assert node["natural_keys"]["bank_account"] == expected["bank_account"]
+    assert node["attrs"]["bank_account"] == "…5678"
+    assert "50100012345678" not in str(node)
+
+
+def test_imported_invoice_carries_its_tax_amount(env):
+    url, graph, _ = env
+    HistoryImporter(url).import_file(
+        CTX,
+        kind="ap_invoice",
+        source_name="tally",
+        filename="a.csv",
+        data=b"Bill No,Supplier,Amount,Tax,Date\nINV-T,Acme Steel,1180,180,2025-03-01\n",
+        mapping={
+            "Bill No": "doc_number",
+            "Supplier": "vendor_key",
+            "Amount": "amount",
+            "Tax": "tax_amount",
+            "Date": "record_date",
+        },
+    )
+    sync(env)
+    [node] = [
+        n
+        for n in graph.nodes(T, kind="invoice")
+        if n["attrs"].get("doc_number") == "INV-T"
+    ]
+    assert Decimal(node["attrs"]["tax_amount"]) == Decimal("180")

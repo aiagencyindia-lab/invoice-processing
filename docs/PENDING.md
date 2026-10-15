@@ -88,23 +88,29 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
 - [x] Wave 0 foundation: history import, Evidence Graph, findings v2,
       `decide()`, provider adapters, benchmark v2 harness (branch
       `v2/wave0-foundation`).
-- [ ] AC-19 contract-clause coverage (≥ 60% of top-50-vendor invoices):
-      not measurable until Wave 1's clause extraction; the harness records
-      it as `null`.
-- [ ] **Wave 1** — program plan `docs/superpowers/plans/2026-10-15-v2-wave1-program.md`;
-      specs `docs/superpowers/specs/2026-10-15-v2-wave1-*.md`.
-  - [x] Scaffold (branch `v2/w1-scaffold`): engine runtime, payment hold gate,
-        `trust_thresholds`, sync additions, contract upload, benchmark plug-ins.
-  - [ ] Leakage (`v2/w1-leakage`) · [ ] Payment Trust (`v2/w1-payment`) ·
-        [ ] Provenance v1 (`v2/w1-provenance`) · [ ] GST/ITC v1 (`v2/w1-gst_itc`).
-  - [ ] Known gap: an invoice approved before its asynchronous trust evaluation
-        ran is not held (the gate fails open on "not evaluated yet"); Wave 2
-        adds an evaluated-at marker.
+- [ ] AC-19 contract-clause coverage (≥ 60%): measured in CI by
+      `benchmark.history.eval` against a fixed contract corpus with a keyword
+      stand-in for the model (a pipeline regression gate). Measure the real
+      model with `--live-model`; the partner gate needs real top-50-vendor
+      contracts.
+- [x] **Wave 1** — program plan `docs/superpowers/plans/2026-10-15-v2-wave1-program.md`;
+      specs `docs/superpowers/specs/2026-10-15-v2-wave1-*.md`. Merged: scaffold
+      (#53), shared fixes (#54), Provenance (#55), GST/ITC (#56), Payment Trust
+      (#57), Leakage (#58), CI pool and timeouts (#59), follow-ups (this PR).
   - [ ] Operator note: an engine with hold types in `enforcing` mode, on the
         fake providers, holds every invoice (no real verifier answers
         "verified"). Keep modes `off` or `advisory` until a real provider is set.
-  - [ ] Partner gates: AC-19 clause coverage, AC-20 ≥ 0.5% of spend, AC-21 at a
-        design partner.
+        Also in `enforcing`, an invoice is held until its hold engines have
+        checked it, a few seconds after processing.
+  - [ ] Partner gates: AC-19 clause coverage on real contracts, AC-20 ≥ 0.5% of
+        spend, AC-21 at a design partner.
+  - [ ] Deferred review minors, per engine PR description (#55–#58).
+  - [ ] Per-document evaluations read the whole tenant graph (ponytail notes
+        name the ~50k ceiling); index by key before a tenant passes it.
+  - [ ] Leakage findings are never auto-released by a clean run (only engines
+        that can hold are); decide the policy for insight findings.
+  - [ ] A contract or invoice node re-version closes its `part_of` /
+        `evidences` edges until the next evaluation of that document.
 - [ ] Waves 2–4 per the spec §2.
 - [ ] Remove the Postgres TCP proxy before the trust routes go live (it was
       added for bootstrap only).

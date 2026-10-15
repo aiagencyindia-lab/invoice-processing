@@ -48,11 +48,12 @@ def test_round_trip_meets_wave0_gates_on_sqlite(
     assert out["gates"] == {
         "invoice_vendor_coverage": True,
         "po_backed_coverage": True,
+        "contract_clause_coverage": True,
     }
     assert out["invoice_vendor_coverage"] >= 0.95
     assert out["po_backed_coverage"] >= 0.80
-    assert out["contract_clause_coverage"] is None
-    assert out["not_measurable_until"]["contract_clause_coverage"] == "wave1"
+    assert out["contract_clause_coverage"] >= 0.60
+    assert out["contract_clauses"]["planted"] >= 30
     assert out["passed"] is True
 
 
@@ -183,6 +184,17 @@ def test_eval_runs_engines_and_scores_per_type(
     data = tmp_path / "d"
     generate.generate(7, data)
     monkeypatch.setattr(ev, "RUNNERS", {"leakage": bench_runner(data)})
+    # The fake engine stands in for Leakage, which also extracts clauses.
+    monkeypatch.setattr(
+        history_eval.clauses,
+        "coverage",
+        lambda *a, **k: {
+            "planted": 1,
+            "matched": 1,
+            "coverage": 1.0,
+            "precision": 1.0,
+        },
+    )
     out = history_eval.run(scratch_db("bench5.db"), data)
     assert out["types"]["T-BENCH"] == {
         "expected": 1,
@@ -219,5 +231,6 @@ def test_type_without_a_module_is_not_gated(tmp_path, scratch_db, monkeypatch):
     assert set(out["gates"]) == {
         "invoice_vendor_coverage",
         "po_backed_coverage",
+        "contract_clause_coverage",
     }
     assert out["types"] == {}

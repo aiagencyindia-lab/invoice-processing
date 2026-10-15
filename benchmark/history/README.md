@@ -13,10 +13,14 @@ Evidence Graph, and measures the AC-19 coverage against the manifest:
 |---|---|
 | `invoice_vendor_coverage` (invoices linked to a vendor) | 0.95 |
 | `po_backed_coverage` (PO-backed invoices linked to a PO with a receipt) | 0.80 |
+| `contract_clause_coverage` (planted contract clauses extracted with their type and numbers) | 0.60 |
 
-`contract_clause_coverage` is recorded as `null` with
-`not_measurable_until: wave1`, because clause extraction arrives with the
-Leakage engine.
+Clause coverage runs a fixed corpus of contract PDFs (`clauses.py`, key in
+`contract_clauses.json`) through `trust.evaluate`, the same path an uploaded
+contract takes. CI has no model, so a keyword classifier that sees only the
+candidate sentences stands in for Gemini: the gate catches regressions in
+candidate selection, the decide() round trip and number parsing. To measure
+the model itself, add `--live-model` (needs Vertex credentials).
 
 ```bash
 ./.venv/bin/python -m benchmark.history.eval --seed 7

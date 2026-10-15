@@ -109,3 +109,30 @@ def test_evidence_attrs_are_masked(registry):
     )
     node = registry.graph.node(T, out.evidence_node)
     assert node["attrs"]["data"]["bank_account_number"] == "…9012"
+
+
+def test_a_provider_error_echoing_an_account_is_stored_masked(registry):
+    registry.register(
+        "bank_verification",
+        "fake",
+        lambda: fakes.FakeProvider(
+            {
+                "50100012345678": RuntimeError(
+                    "400 for /verify?account=5010-0012-345678&ifsc=HDFC0001234"
+                )
+            }
+        ),
+    )
+    out = registry.call(
+        CTX,
+        "bank_verification",
+        "50100012345678",
+        "HDFC0001234",
+        "Acme",
+        settings_store=Store(),
+    )
+    stored = str(registry.graph.node(T, out.evidence_node)["attrs"])
+    assert "0012345678" not in stored and "5010-0012" not in stored
+    assert "HDFC0001234" not in stored
+    assert "…5678" in stored and "…1234" in stored
+    assert "50100012345678" not in str(out.data)

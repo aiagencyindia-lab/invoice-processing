@@ -137,6 +137,39 @@ def _release_cleared(ectx: EngineContext, name: str, emitted: set) -> None:
             _release(ectx, f, "No longer found by a clean run.")
 
 
+TENANT_RUN = "trust_evaluation:tenant"
+
+
+def evaluation_key(invoice_natural_key: str) -> str:
+    return f"trust_evaluation:{invoice_natural_key}"
+
+
+def _record_checked(ctx, graph, invoice_node, names, now) -> None:
+    """Which engines have checked this invoice (or, for a batch run, every
+    invoice that existed by then), so the payment gate can tell "nothing
+    found" from "not looked yet"."""
+    if not names:
+        return
+    if invoice_node is None:
+        key = TENANT_RUN
+    else:
+        key = evaluation_key(
+            graph.node(ctx.tenant_id, invoice_node)["natural_key"]
+        )
+    prior = graph.open_node(ctx.tenant_id, "trust_evaluation", key)
+    stamp = now.isoformat()
+    graph.upsert_node(
+        ctx,
+        kind="trust_evaluation",
+        natural_key=key,
+        attrs={
+            **((prior or {}).get("attrs") or {}),
+            **dict.fromkeys(names, stamp),
+        },
+        at=now,
+    )
+
+
 def _default_providers(graph):
     from .providers import fakes  # noqa: PLC0415
     from .providers.registry import Registry  # noqa: PLC0415
@@ -267,4 +300,13 @@ def evaluate(
         if _owns_holds(name):
             _release_cleared(ectx, name, {spec.dedupe_key for spec in specs})
         report[name] = {"mode": mode, "findings": len(specs)}
+    if document_id is None or invoice_node is not None:
+        # A contract's run checks no invoice; a batch run checks them all.
+        _record_checked(
+            ctx,
+            graph,
+            invoice_node,
+            sorted(n for n, r in report.items() if isinstance(r, dict)),
+            base.now,
+        )
     return {"synced": counts, "engines": report}
