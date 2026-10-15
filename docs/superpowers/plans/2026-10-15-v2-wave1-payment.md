@@ -15,12 +15,14 @@ Branch `v2/w1-payment`, worktree `.worktrees/payment`. TDD, one commit per task.
 
 ## Rulings (spec silent)
 
-1. **Targets.** Per-document: the document's invoice node only. Batch: every
-   invoice node with no incoming `settles` edge (an open invoice); a paid
-   historical invoice is not a payment about to happen.
+1. **Targets.** Per-document: the document's invoice node only. Batch: open
+   invoices only — a v1 invoice with no `approve`/`reject` decision (v1 never
+   draws `settles`), or a history invoice with no `settles` dated within 90
+   days of the book's latest invoice (capped at `ectx.now`).
 2. **Vendor master.** The invoice's `issued_by` vendor, widened to its
-   entity-link component; the `vendors` row (via `ref`) wins, else a history
-   vendor record's mapped `bank_account`/`bank_code`, else node attrs.
+   entity-link component; the `vendors` row (via `ref`) wins (a verified row
+   before an unverified one, then natural-key order), else a history vendor
+   record's mapped `bank_account`/`bank_code`, else node attrs.
 3. **Provider called only when `bank_verified_at` is None.** A master
    verified by two people is the evidence; name match is checked on the
    provider's answer only. Provider answer contract: `result` (`verified` is
@@ -33,14 +35,22 @@ Branch `v2/w1-payment`, worktree `.worktrees/payment`. TDD, one commit per task.
    cadence need `min_history`. MAD = 0 and amount > median → z = ∞.
    Cadence = days since the previous invoice vs the median consecutive gap.
 6. **BEC signals.** From equal to the vendor domain or a subdomain of it is a
-   match. Look-alike also counts as "From ≠ vendor domain" (two signals).
+   match. A look-alike From is ONE signal (`lookalike_domain` replaces
+   `sender_domain`), so a look-alike alone is `PAY-BEC-SIGNAL`.
+   An email that is stored but unreadable (or a missing blob) is the signal
+   `unreadable_email` (fail closed).
    Body account/IFSC counts only when the master has one and it differs.
-   Bank change window measured from the change row's latest of
-   `created_at`/`decided_at` (read via `ref`), against `ectx.now`.
+   Bank change window: the change row's latest of `created_at`/`decided_at`
+   (read via `ref`) at most `bank_change_recent_days` before the invoice
+   date, or any time after it (anchored on the invoice, so a re-run never
+   decays the signal); no invoice date → `ectx.now`.
    Batch runs use the node's domain attrs and its `document_source_ref` blob.
-7. **Impact.** UNVERIFIED, NAME-MISMATCH, BEC: invoice amount. ANOMALY:
+7. **Dedupe keys** are `<type>:<invoice natural_key>`, which survives node
+   re-versioning. Every scanned body is capped at 1 MB; excerpts mask IFSCs
+   and separated account numbers to their last four.
+8. **Impact.** UNVERIFIED, NAME-MISMATCH, BEC: invoice amount. ANOMALY:
    `amount − median` when positive. BEC-SIGNAL: None.
-8. Provider settings come from `ectx.settings` (a one-tenant store passed to
+9. Provider settings come from `ectx.settings` (a one-tenant store passed to
    `Registry.call`), never the process-global store.
 
 ## Tasks

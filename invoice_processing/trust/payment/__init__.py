@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 ENGINE_VERSION = "payment-1"
 ENGINE = "payment"
+# A history invoice without a payment is "open" only this long.
+OPEN_HISTORY_DAYS = 90
 
 UNVERIFIED = "PAY-UNVERIFIED"
 NAME_MISMATCH = "PAY-NAME-MISMATCH"
@@ -155,11 +157,14 @@ class _World:
                 "ref_id": None,
             }
         ]
-        # The v1 row (two-person bank changes) beats an imported record.
+        # The v1 row (two-person bank changes) beats an imported record; among
+        # linked v1 rows a verified one wins; then a stable order.
         group = sorted(
             group,
-            key=lambda n: {"vendors": 0, "history_records": 1}.get(
-                n.get("ref_table"), 2
+            key=lambda n: (
+                {"vendors": 0, "history_records": 1}.get(n.get("ref_table"), 2),
+                not (n.get("attrs") or {}).get("bank_verified_at"),
+                n.get("natural_key") or n["id"],
             ),
         )
         best = group[0]
@@ -226,10 +231,12 @@ class _World:
         )
 
     def recent_change(
-        self, vendor_node: str | None, days: float
+        self, vendor_node: str | None, days: float, anchor: datetime
     ) -> tuple | None:
-        """(bank_change node, days ago) of the latest pending or approved change
-        to this vendor's payee details within `days`."""
+        """(bank_change node, days before the anchor) of the latest pending or
+        approved change to this vendor's payee details made at most `days`
+        before the anchor (the invoice), or after it. Anchored on the invoice,
+        not the clock, so a re-run next month gives the same answer."""
         if vendor_node is None:
             return None
         nodes = self.changes.get(self._canon(vendor_node)) or []
@@ -255,9 +262,9 @@ class _World:
                 when = max(
                     t for t in (_utc(row.created_at), _utc(row.decided_at)) if t
                 )
-                ago = (self.ectx.now - when) / timedelta(days=1)
-                if -1 <= ago <= days and (best is None or ago < best[1]):
-                    best = (refs[row.id], max(ago, 0.0))
+                ago = (anchor - when) / timedelta(days=1)
+                if ago <= days and (best is None or ago < best[1]):
+                    best = (refs[row.id], ago)
         return best
 
     # -- provider ----------------------------------------------------------
@@ -283,7 +290,8 @@ def _spec(
     return FindingSpec(
         type=code,
         transaction_node=inv["id"],
-        dedupe_key=f"{code}:{inv['id']}",
+        # The natural key survives the node re-versioning; its id does not.
+        dedupe_key=f"{code}:{inv.get('natural_key') or inv['id']}",
         impact=impact,
         currency=currency if impact is not None else None,
         confidence=confidence,
@@ -462,7 +470,24 @@ def _mail(ectx, source, source_ref) -> sg.Mail | None:
         logger.warning(
             "payment_email_unreadable", extra={"error": type(exc).__name__}
         )
+        return sg.Mail(unreadable=True)
+
+
+def _day(value) -> date | None:
+    try:
+        return date.fromisoformat(str(value)[:10]) if value else None
+    except ValueError:
         return None
+
+
+def _anchor(ectx, attrs: dict) -> datetime:
+    """When the invoice happened: its date, else the run's clock."""
+    # ponytail: the document's received time is not in the graph or in
+    # ectx.document yet; take max(invoice date, received) once it is.
+    d = _day(attrs.get("invoice_date"))
+    if d is None:
+        return ectx.now
+    return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
 
 
 def _bec(ectx, world, inv, vendor_node, m, amount, currency):
@@ -490,14 +515,17 @@ def _bec(ectx, world, inv, vendor_node, m, amount, currency):
     found: dict[str, str] = {}
     extra_cites = []
     if vendor_domain and sender and not sg.same_domain(sender, vendor_domain):
-        found["sender_domain"] = (
-            f"From domain {sender} is not the vendor's {vendor_domain}"
-        )
+        # One signal either way: a look-alike is the sharper reading of the
+        # same mismatch, not a second one.
         if sg.lookalike(
             vendor_domain, sender, ectx.threshold("payment.lookalike_ratio")
         ):
             found["lookalike_domain"] = (
                 f"From domain {sender} looks like the vendor's {vendor_domain}"
+            )
+        else:
+            found["sender_domain"] = (
+                f"From domain {sender} is not the vendor's {vendor_domain}"
             )
     if (
         reply
@@ -509,6 +537,8 @@ def _bec(ectx, world, inv, vendor_node, m, amount, currency):
         found["reply_to_domain"] = (
             f"Reply-To domain {reply} differs from From domain {sender}"
         )
+    if mail.unreadable:
+        found["unreadable_email"] = "The stored email could not be read"
     text = f"{mail.subject}\n{mail.body}"
     urgent = sg.urgency(text)
     if urgent:
@@ -518,11 +548,16 @@ def _bec(ectx, world, inv, vendor_node, m, amount, currency):
         if differ:
             found["body_bank_details"] = differ
     change = world.recent_change(
-        vendor_node, ectx.threshold("payment.bank_change_recent_days")
+        vendor_node,
+        ectx.threshold("payment.bank_change_recent_days"),
+        _anchor(ectx, attrs),
     )
     if change:
+        ago = change[1]
         found["recent_bank_change"] = (
-            f"Payee bank details changed {change[1]:.0f} days ago"
+            f"Payee bank details changed {ago:.0f} days before the invoice"
+            if ago >= 0
+            else f"Payee bank details changed {-ago:.0f} days after the invoice"
         )
         extra_cites.append((change[0], found["recent_bank_change"]))
     if not found:
@@ -562,11 +597,30 @@ def _targets(ectx) -> list[dict]:
     # ponytail: a batch walks every open invoice; page by vendor if a tenant's
     # open book passes ~10k invoices.
     settled = {e["dst"] for e in ectx.graph.edges(tid, kind="settles")}
-    return [
+    nodes = [
         n
         for n in ectx.graph.nodes(tid, kind="invoice")
         if n["id"] not in settled
     ]
+    dates = [d for n in nodes if (d := _day(n["attrs"].get("invoice_date")))]
+    # The window ends at the book's latest invoice (capped at the clock), so
+    # a history imported months ago is judged as of its own end.
+    end = min(ectx.now.date(), max(dates)) if dates else ectx.now.date()
+    out = []
+    for n in nodes:
+        a = n["attrs"]
+        if n.get("ref_table") == "invoices":
+            # v1 never draws `settles`: a decided invoice is closed.
+            if a.get("decision") not in ("approve", "reject"):
+                out.append(n)
+            continue
+        # ponytail: an unsettled history invoice older than 90 days is taken
+        # as paid outside the import; a tenant with longer terms needs a
+        # threshold here.
+        d = _day(a.get("invoice_date"))
+        if d is not None and (end - d).days <= OPEN_HISTORY_DAYS:
+            out.append(n)
+    return out
 
 
 def run(ectx) -> list[FindingSpec]:

@@ -3,15 +3,15 @@ unverified accounts (BEC is proven by the replay harness, not the CSV).
 
 Every vendor already in the history gets a bank account the fake verifier
 confirms, as a tenant's verified masters would; the faults are then
-* an outlier: up to two open, non-PO invoices per chosen vendor billed at 5x
-  the vendor's median (its payment row removed, so it is still to be paid);
+* an outlier: up to two recent open invoices (non-PO first) per chosen
+  vendor billed at 5x the vendor's median (its payment row removed, so it is still to be paid);
 * a first payment: a new vendor whose one open invoice goes to an account
   the verifier does not know.
 """
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from statistics import median
 
@@ -19,6 +19,7 @@ from statistics import median
 OUTLIERS = 45
 PER_VENDOR = 2
 FIRST_PAYMENTS = 5
+RECENT_DAYS = 80
 # The verifier knows exactly these accounts: one per vendor row position.
 _VERIFIED_SLOTS = 1000
 
@@ -57,10 +58,21 @@ def inject(rng, rows, faults, *, start, months) -> None:
         and median(amounts := [Decimal(i["amount"]) for i in invs]) * 5
         > 2 * max(amounts)
     ]
+    # The engine treats an unpaid history invoice as open only within 90
+    # days of the book's end; plant outliers inside that window (with margin).
+    end = max(date.fromisoformat(i["record_date"]) for i in rows["ap_invoice"])
+    recent = {
+        id(i)
+        for i in rows["ap_invoice"]
+        if (end - date.fromisoformat(i["record_date"])).days <= RECENT_DAYS
+    }
     targets = []
     for vendor_key in rng.sample(chosen, min(OUTLIERS, len(chosen))):
         invs = by_vendor[vendor_key]
-        plain = [i for i in invs if not i["po_number"]] or invs
+        window = [i for i in invs if id(i) in recent]
+        if not window:
+            continue
+        plain = [i for i in window if not i["po_number"]] or window
         for target in rng.sample(plain, min(PER_VENDOR, len(plain))):
             # 5x the median of the vendor's untouched invoices.
             base = [Decimal(i["amount"]) for i in invs if i not in targets]

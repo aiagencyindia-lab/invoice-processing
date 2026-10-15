@@ -174,7 +174,9 @@ def build(world, vendor=None, invoice=None, eml=None):
     return graph, links
 
 
-def evaluate(world, graph, links, *, script=None, mode="advisory", doc="doc-1"):
+def evaluate(
+    world, graph, links, *, script=None, mode="advisory", doc="doc-1", now=NOW
+):
     url, blobs_dir = world
     registry = Registry(graph)
     fakes.install(registry)
@@ -190,7 +192,7 @@ def evaluate(world, graph, links, *, script=None, mode="advisory", doc="doc-1"):
         providers=registry,
         decider=NO_MODEL,
         blobs=LocalBlobStore(blobs_dir),
-        now=NOW,
+        now=now,
     )
     assert out["engines"]["payment"] not in ("failed", "missing"), out
     return FindingStore(url).list(T), provider
@@ -306,26 +308,164 @@ def test_first_time_vendor_is_an_anomaly(world):
     assert f["impact"] is None
 
 
-def test_batch_checks_only_open_invoices(world):
-    graph, links = build(world)
-    paid = graph.nodes_by_ref(T, "invoices", ["h-0"])["h-0"]
-    pay = graph.upsert_node(CTX, kind="payment", natural_key="pay-1")
+def _history_invoice(graph, vendor_node, key, when):
+    node = graph.upsert_node(
+        CTX,
+        kind="invoice",
+        natural_key=f"history_records:{key}",
+        ref_table="history_records",
+        ref_id=key,
+        attrs={"doc_number": key, "amount": "1000", "invoice_date": when},
+    )
+    _link(graph, node, vendor_node, "issued_by")
+    return node
+
+
+def _link(graph, src, dst, kind):
     graph.upsert_edge(
         CTX,
-        src=pay,
-        dst=paid,
-        kind="settles",
+        src=src,
+        dst=dst,
+        kind=kind,
         source_system="test",
         provenance="system_record",
         confidence=1.0,
         observed_at=NOW,
     )
+
+
+def test_batch_checks_only_open_invoices(world):
+    """Open = a v1 invoice nobody has decided, or a recent unsettled history
+    invoice; v1 never draws `settles`, so a decision is what closes it."""
+    url, _ = world
+    graph, links = build(world)
+    with tenant_session(T, url) as s:
+        for i in range(6):
+            s.get(models.Invoice, f"h-{i}").decision = "approve"
+    sync_tenant(CTX, graph, links, url=url, decider=NO_MODEL)
+    vendor = graph.nodes_by_ref(T, "vendors", ["ven-1"])["ven-1"]
+    recent = _history_invoice(graph, vendor, "r1", "2026-09-01")
+    old = _history_invoice(graph, vendor, "r2", "2026-03-01")
+    paid = _history_invoice(graph, vendor, "r3", "2026-09-20")
+    pay = graph.upsert_node(CTX, kind="payment", natural_key="pay-1")
+    _link(graph, pay, paid, "settles")
     findings, provider = evaluate(world, graph, links, doc=None)
     held = {
         f["transaction_node"] for f in findings if f["type"] == "PAY-UNVERIFIED"
     }
-    assert paid not in held and len(held) == 6  # inv-1 and h-1..h-5
+    inv = graph.nodes_by_ref(T, "invoices", ["inv-1"])["inv-1"]
+    assert held == {inv, recent}
+    assert old not in held and paid not in held
     assert len(provider.calls) == 1  # one vendor, one verification
+
+
+def test_dedupe_key_is_the_invoice_natural_key(world):
+    graph, links = build(world)
+    findings, _ = evaluate(world, graph, links)
+    f = by_type(findings)["PAY-UNVERIFIED"]
+    assert f["dedupe_key"] == "PAY-UNVERIFIED:invoices:inv-1"
+
+
+def test_bank_change_window_is_anchored_on_the_invoice(world):
+    # Changed 5 days before the invoice: still a signal on a re-run long
+    # after, so a hold does not decay and get released by the scaffold.
+    days = (NOW - datetime(2026, 10, 10, tzinfo=timezone.utc)).days + 5
+    graph, links = build(
+        world,
+        vendor={
+            "bank_verified_at": "2026-01-01T00:00:00",
+            "bank_change": {"days_ago": days},
+        },
+    )
+    later = NOW + timedelta(days=90)
+    findings, _ = evaluate(world, graph, links, now=later)
+    f = by_type(findings)["PAY-BEC-SIGNAL"]
+    assert f["details"]["signals"] == ["recent_bank_change"]
+
+
+def test_bank_change_long_before_the_invoice_is_not_recent(world):
+    graph, links = build(
+        world,
+        vendor={
+            "bank_verified_at": "2026-01-01T00:00:00",
+            "bank_change": {"days_ago": 60},
+        },
+    )
+    findings, _ = evaluate(world, graph, links)
+    assert "PAY-BEC-SIGNAL" not in by_type(findings)
+
+
+def test_unreadable_email_is_a_bec_signal(world, monkeypatch):
+    def boom(raw):
+        raise ValueError("broken mime")
+
+    monkeypatch.setattr(payment.signals, "_mime", boom)
+    graph, links = build(
+        world,
+        vendor={"bank_verified_at": "2026-01-01T00:00:00"},
+        invoice={"source": "email", "sender": "ap@acme-steel.in"},
+        eml=b"From: ap@acme-steel.in\r\n\r\nhello",
+    )
+    findings, _ = evaluate(world, graph, links)
+    f = by_type(findings)["PAY-BEC-SIGNAL"]
+    assert f["details"]["signals"] == ["unreadable_email"]
+
+
+def test_bogus_charset_email_still_checks_the_body(world):
+    graph, links = build(
+        world,
+        vendor={"bank_verified_at": "2026-01-01T00:00:00"},
+        invoice={"source": "email", "sender": "ap@acme-steel.in"},
+        eml=(
+            b"From: ap@acme-steel.in\r\n"
+            b"Content-Type: text/plain; charset=x-bogus\r\n\r\n"
+            b"Please pay urgently."
+        ),
+    )
+    findings, _ = evaluate(world, graph, links)
+    assert by_type(findings)["PAY-BEC-SIGNAL"]["details"]["signals"] == [
+        "urgency"
+    ]
+
+
+def test_lookalike_alone_is_one_signal(world):
+    graph, links = build(
+        world,
+        vendor={"bank_verified_at": "2026-01-01T00:00:00"},
+        invoice={"source": "email", "sender": "ap@acrne-steel.in"},
+    )
+    findings, _ = evaluate(world, graph, links)
+    f = by_type(findings)["PAY-BEC-SIGNAL"]
+    assert f["details"]["signals"] == ["lookalike_domain"]
+
+
+def test_master_prefers_the_verified_v1_row(world):
+    url, _ = world
+    graph, links = build(world)
+    with tenant_session(T, url) as s:
+        # A second v1 row for the same company (same GSTIN), verified, whose
+        # natural key sorts after the unverified one.
+        s.add(
+            models.Vendor(
+                tenant_id=T,
+                id="ven-2",
+                name="Acme Steel Pvt Ltd",
+                normalized_name="acme steel pvt ltd",
+                tax_id=VENDOR["tax_id"],
+                email_domain="acme-steel.in",
+                bank_account_number=ACCOUNT,
+                bank_code="HDFC0001234",
+                bank_verified_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            )
+        )
+    sync_tenant(CTX, graph, links, url=url, decider=NO_MODEL)
+    a = graph.nodes_by_ref(T, "vendors", ["ven-1"])["ven-1"]
+    b = graph.nodes_by_ref(T, "vendors", ["ven-2"])["ven-2"]
+    canon = links.canonical_map(T)
+    assert canon.get(a, a) == canon.get(b, b)  # linked by GSTIN
+    findings, provider = evaluate(world, graph, links)
+    assert "PAY-UNVERIFIED" not in by_type(findings)
+    assert provider.calls == []
 
 
 def test_contract_document_without_invoice_emits_nothing(world):

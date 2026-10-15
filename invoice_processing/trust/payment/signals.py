@@ -11,6 +11,7 @@ import difflib
 import email
 import html
 import json
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ from itertools import pairwise
 from statistics import median
 
 from ... import masking
+
+logger = logging.getLogger(__name__)
 
 # -- statistics ------------------------------------------------------------
 
@@ -125,19 +128,24 @@ _URGENT = re.compile(
     re.IGNORECASE,
 )
 _ACCOUNT = re.compile(
-    r"\b(?:a/c|acct|account)\b[^\d\n]{0,30}?(\d[\d -]{6,22}\d)", re.IGNORECASE
+    r"\b(?:a/c|acct|account)\b[^\d\n]{0,30}?(\d[\d .-]{6,26}\d)", re.IGNORECASE
 )
 _IFSC = re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b")
-_LONG_NUMBER = re.compile(r"\d[\d -]{6,}\d")
+# Digits with space, dot or dash separators, so 1234.5678.9012 is one number.
+_LONG_NUMBER = re.compile(r"\d(?:[ .-]?\d){7,}")
+# Every regex here runs on attacker-sent text: scan at most this much.
+MAX_SCAN = 1_000_000
 
 
 def mask_text(text: str) -> str:
-    """Every number of eight digits or more becomes its last four."""
+    """Every IFSC, and every number of eight digits or more, becomes its last
+    four."""
 
     def one(m: re.Match) -> str:
         digits = re.sub(r"\D", "", m.group())
         return masking.mask_bank(digits) if len(digits) >= 8 else m.group()
 
+    text = _IFSC.sub(lambda m: masking.mask_bank(m.group()), text)
     return _LONG_NUMBER.sub(one, text)
 
 
@@ -147,7 +155,8 @@ def _excerpt(text: str, start: int, end: int) -> str:
 
 
 def urgency(text: str) -> str | None:
-    m = _URGENT.search(text or "")
+    text = (text or "")[:MAX_SCAN]
+    m = _URGENT.search(text)
     return _excerpt(text, m.start(), m.end()) if m else None
 
 
@@ -156,7 +165,7 @@ def bank_details_differ(
 ) -> str | None:
     """A masked excerpt when the body names an account or IFSC that is not
     the vendor master's; None when it matches or the master has none."""
-    text = text or ""
+    text = (text or "")[:MAX_SCAN]
     own = re.sub(r"\D", "", account or "")
     if own:
         for m in _ACCOUNT.finditer(text):
@@ -180,6 +189,8 @@ class Mail:
     reply_to: str = ""
     subject: str = ""
     body: str = ""
+    # The stored message exists but could not be parsed (fails closed in BEC).
+    unreadable: bool = False
 
 
 def _bare(value) -> str:
@@ -192,7 +203,8 @@ def _bare(value) -> str:
 def _text(plain, markup) -> str:
     if plain and str(plain).strip():
         return str(plain)
-    return html.unescape(re.sub(r"<[^>]+>", " ", str(markup or "")))
+    # [^<>] keeps this linear on a body of unclosed "<" (quadratic otherwise).
+    return html.unescape(re.sub(r"<[^<>]*>", " ", str(markup or "")[:MAX_SCAN]))
 
 
 def _mime(raw: bytes) -> Mail:
@@ -200,7 +212,11 @@ def _mime(raw: bytes) -> Mail:
     part = msg.get_body(preferencelist=("plain", "html"))
     body = ""
     if part is not None:
-        content = part.get_content()
+        try:
+            content = part.get_content()
+        except (LookupError, UnicodeError):  # an unknown or lying charset
+            payload = part.get_payload(decode=True) or b""
+            content = payload.decode("utf-8", "replace")
         body = (
             _text(None, content)
             if part.get_content_subtype() == "html"
@@ -260,14 +276,21 @@ def _sendgrid(raw: bytes) -> Mail:
 
 
 def parse_email(raw: bytes) -> Mail:
-    """The stored message in any shape ingest keeps; empty when unreadable."""
+    """The stored message in any shape ingest keeps; `unreadable` when not."""
+    if not raw.strip():
+        return Mail()
     head = raw.lstrip()[:2]
     try:
         if head.startswith(b"{"):
             doc = json.loads(raw.decode("utf-8", "replace"))
-            return _postmark(doc) if isinstance(doc, dict) else Mail()
+            if isinstance(doc, dict):
+                return _postmark(doc)
+            raise ValueError("JSON mail is not an object")
         if head == b"--":
             return _sendgrid(raw.lstrip())
         return _mime(raw)
-    except Exception:  # hostile input reads as "no mail"
-        return Mail()
+    except Exception as exc:  # hostile input: unreadable, never a pass
+        logger.warning(
+            "payment_email_unparsed", extra={"error": type(exc).__name__}
+        )
+        return Mail(unreadable=True)

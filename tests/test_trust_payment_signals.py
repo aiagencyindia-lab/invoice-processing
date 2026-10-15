@@ -1,6 +1,7 @@
 """Payment Trust's pure signals: statistics, domains, mail bodies, stored mail."""
 
 import json
+import time
 from datetime import date
 from decimal import Decimal
 
@@ -134,3 +135,54 @@ def test_parse_garbage_is_empty():
     m = sg.parse_email(b"\x00\x01not mail")
     assert m.sender == "" and m.reply_to == ""
     assert sg.parse_email(b"").body == ""
+
+
+# -- review fix pass ---------------------------------------------------------
+
+
+def test_unclosed_angle_brackets_parse_in_linear_time():
+    raw = json.dumps({"HtmlBody": "<" * 200_000, "From": "a@b.in"}).encode()
+    t0 = time.monotonic()
+    sg.parse_email(raw)
+    assert time.monotonic() - t0 < 1.0
+
+
+def test_bogus_charset_still_yields_the_body():
+    raw = (
+        b"From: ap@acme.in\r\n"
+        b"Content-Type: text/plain; charset=x-bogus\r\n\r\n"
+        b"Please pay urgently.\r\n"
+    )
+    m = sg.parse_email(raw)
+    assert not m.unreadable and sg.urgency(m.body)
+
+
+def test_unparseable_mail_is_marked_unreadable(monkeypatch):
+    def boom(raw):
+        raise ValueError("broken")
+
+    monkeypatch.setattr(sg, "_mime", boom)
+    assert sg.parse_email(b"From: a@b.in\r\n\r\nx").unreadable
+    assert not sg.parse_email(b"").unreadable  # empty is just empty
+
+
+def test_mask_text_masks_ifsc_and_separated_accounts():
+    text = (
+        "IFSC HDFC0001234, a/c 1234.5678.9012, 1234-5678-9012 "
+        "and 1234 5678 9012"
+    )
+    out = sg.mask_text(text)
+    for raw in (
+        "HDFC0001234",
+        "1234.5678.9012",
+        "1234-5678-9012",
+        "1234 5678 9012",
+    ):
+        assert raw not in out
+    assert "…1234" in out and "…9012" in out
+
+
+def test_separated_body_account_differs_and_is_masked():
+    body = "Remit to account 5010.0234.5678.91 IFSC ICIC0004321"
+    out = sg.bank_details_differ(body, "11112222333344", "SBIN0000001")
+    assert out and "5010.0234.5678.91" not in out and "ICIC0004321" not in out
