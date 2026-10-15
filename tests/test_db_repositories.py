@@ -1100,3 +1100,17 @@ class TestDocumentGet:
         assert repo.get(ACME, doc_id)["source_ref"] == "up@x.test"
         assert repo.get(GLOBEX, doc_id) is None
         assert repo.get(ACME, "missing") is None
+
+
+def test_switching_databases_closes_the_previous_engines_pool(
+    tmp_path, monkeypatch
+):
+    """A replaced engine must release its connections; on Postgres a pool per
+    switch otherwise piles up until the server refuses new clients."""
+    from invoice_processing.db import session as db_session  # noqa: PLC0415
+
+    first = db_session.get_engine(f"sqlite:///{tmp_path / 'a.db'}")
+    disposed = []
+    monkeypatch.setattr(first, "dispose", lambda *a, **k: disposed.append(1))
+    db_session.get_engine(f"sqlite:///{tmp_path / 'b.db'}")
+    assert disposed == [1]
