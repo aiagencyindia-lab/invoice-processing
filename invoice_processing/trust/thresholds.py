@@ -1,0 +1,54 @@
+"""Every Wave 1 engine threshold, with its default.
+
+Declared once here so four engines built in parallel never edit the settings
+module; a tenant overrides any of them through the `trust_thresholds` setting.
+"""
+
+from __future__ import annotations
+
+DEFAULTS: dict[str, float] = {
+    # Leakage (FR-20)
+    "leakage.desc_match": 0.6,
+    "leakage.dup_window_days": 7,
+    "leakage.split_window_days": 3,
+    "leakage.rate_tolerance_pct": 0.5,
+    "leakage.clause_min_confidence": 0.7,
+    "leakage.renewal_notice_days": 60,
+    "leakage.max_pages": 40,
+    # Payment Trust (FR-21)
+    "payment.amount_zscore": 3.0,
+    "payment.min_history": 5,
+    "payment.cadence_ratio_min": 0.25,
+    "payment.name_match_min": 0.8,
+    "payment.bec_hold_signals": 2,
+    "payment.lookalike_ratio": 0.8,
+    # Provenance v1 (FR-22)
+    "provenance.suspect_below": 0.5,
+    "provenance.template_min_history": 3,
+    # GST/ITC v1 (FR-26)
+    "gst.nonfiler_missed_periods": 2,
+    "gst.new_vendor_days": 90,
+    "gst.first_invoice_multiple": 3,
+    "gst.risk_inactive": 1.0,
+    "gst.risk_nonfiler": 0.5,
+    "gst.risk_shared": 0.3,
+    "gst.risk_new": 0.2,
+}
+
+
+def merged(overrides: dict | None) -> dict[str, float]:
+    return {
+        **DEFAULTS,
+        **{k: v for k, v in (overrides or {}).items() if k in DEFAULTS},
+    }
+
+
+def value(tenant_id: str, name: str, store=None) -> float:
+    from .. import tenant_settings  # noqa: PLC0415 - avoids an import cycle
+
+    if name not in DEFAULTS:
+        raise ValueError(f"No such threshold: {name}")
+    setting = tenant_settings.effective(tenant_id, store).get(
+        "trust_thresholds"
+    )
+    return merged(setting)[name]

@@ -65,6 +65,9 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     # Which adapter answers each external capability; "fake" until a real
     # provider is configured (spec §4.6).
     "trust_providers": dict,
+    # Engine thresholds by name (see trust/thresholds.py); unset names keep
+    # their defaults.
+    "trust_thresholds": dict,
 }
 
 # Settings the validation engine knows nothing about, with their defaults.
@@ -78,6 +81,7 @@ NON_ENGINE_DEFAULTS: dict[str, Any] = {
     "approval_sla_days": 3,
     "trust_engine_modes": {},
     "trust_providers": {},
+    "trust_thresholds": {},
 }
 
 # Shown alongside each field in the UI so an administrator can tell what a
@@ -86,6 +90,10 @@ DESCRIPTIONS: dict[str, str] = {
     "trust_engine_modes": (
         "Per engine (leakage, payment, provenance, gst_itc): off, shadow, "
         "advisory or enforcing. Only enforcing places holds."
+    ),
+    "trust_thresholds": (
+        "Per threshold name (e.g. payment.amount_zscore): a number that "
+        "overrides the engine default; names not set keep their default."
     ),
     "trust_providers": (
         "Per capability (bank_verification, gstin, ...): the adapter name; "
@@ -243,6 +251,20 @@ def validate(payload: dict) -> dict:
                         f"{engine} mode must be one of {', '.join(MODES)}."
                     )
                 cleaned[key][engine] = mode
+        elif key == "trust_thresholds":
+            from .trust.thresholds import DEFAULTS  # noqa: PLC0415
+
+            cleaned[key] = {}
+            for name, number in value.items():
+                if name not in DEFAULTS:
+                    raise SettingsError(f"No such threshold: {name}.")
+                if (
+                    isinstance(number, bool)
+                    or not isinstance(number, (int, float))
+                    or not math.isfinite(number)
+                ):
+                    raise SettingsError(f"{name} must be a number.")
+                cleaned[key][name] = number
         elif key == "trust_providers":
             from .trust.modes import CAPABILITIES  # noqa: PLC0415
 
