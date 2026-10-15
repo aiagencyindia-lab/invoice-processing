@@ -13,11 +13,15 @@ business (no vendor address), 2A/2B reconciliation.
 from __future__ import annotations
 
 import logging
+import statistics
+from datetime import date
 from decimal import Decimal
+from functools import cached_property
 
-from ... import tax_ids
+from ... import masking, tax_ids
 from ..engine import EngineContext
 from ..findings.model import Citation, FindingSpec, register_type
+from ..graph import resolve
 
 logger = logging.getLogger(__name__)
 
@@ -44,21 +48,33 @@ for _code, (_text, _hold) in TYPES.items():
     register_type(_code, _text, engine=ENGINE, hold=_hold)
 
 _STATUSES = ("active", "cancelled", "suspended")
+# Keys that say "same business" without being a GSTIN (spec FR-26).
+_IDENTITY_KEYS = ("bank_account", "pan", "email_domain")
 
 
-def _spec(code, invoice, key, summary, citations, *, impact=None, **details):
+def _spec(
+    code,
+    invoice,
+    key,
+    summary,
+    citations,
+    *,
+    impact=None,
+    confidence=1.0,
+    **details,
+):
     return FindingSpec(
         type=code,
         transaction_node=invoice["id"],
         dedupe_key=f"{code}:{key}",
         impact=impact,
         currency=invoice["attrs"].get("currency") or "INR",
-        confidence=1.0,
+        confidence=confidence,
         engine_version=ENGINE_VERSION,
         rule_version=RULE_VERSION,
         model_version="none",
         summary=summary,
-        details=details,
+        details=masking.mask_row(details),
         citations=tuple(Citation(n) for n in dict.fromkeys(citations)),
     )
 
@@ -90,6 +106,50 @@ class _Run:
         self.tid = ectx.ctx.tenant_id
         self.lookups: dict[str, object] = {}
         self.no_tax = 0
+
+    @cached_property
+    def canonical(self) -> dict[str, str]:
+        return self.ectx.links.canonical_map(self.tid)
+
+    def canon(self, node_id: str) -> str:
+        return self.canonical.get(node_id, node_id)
+
+    @cached_property
+    def median(self) -> Decimal | None:
+        amounts = [t.amount for t in self.ectx.transactions() if t.amount]
+        return statistics.median(amounts) if amounts else None
+
+    @cached_property
+    def first_seen(self) -> dict[str, date]:
+        out: dict[str, date] = {}
+        for t in self.ectx.transactions():
+            if t.vendor_key and t.date:
+                v = self.canon(t.vendor_key)
+                out[v] = min(out.get(v, t.date), t.date)
+        return out
+
+    @cached_property
+    def shared_pairs(self) -> dict[str, list[tuple[dict, dict, list[str]]]]:
+        """Canonical vendor -> the other-GSTIN vendors it shares a key with."""
+        by_vendor: dict[str, list] = {}
+        nodes = self.ectx.graph.nodes(self.tid, kind="vendor")
+        for x, y in resolve.candidates(nodes):
+            kx, ky = x.get("natural_keys") or {}, y.get("natural_keys") or {}
+            if not (kx.get("gstin") and ky.get("gstin")):
+                continue
+            if kx["gstin"] == ky["gstin"] or self.canon(x["id"]) == self.canon(
+                y["id"]
+            ):
+                continue
+            shared = [
+                k
+                for k in _IDENTITY_KEYS
+                if kx.get(k) and kx.get(k) == ky.get(k)
+            ]
+            if shared:
+                for v in {self.canon(x["id"]), self.canon(y["id"])}:
+                    by_vendor.setdefault(v, []).append((x, y, shared))
+        return by_vendor
 
     def lookup(self, gstin: str):
         if gstin not in self.lookups:
@@ -169,6 +229,59 @@ class _Run:
             )
             factors.append(("risk_nonfiler", cites))
 
+    def new_large(self, invoice, vendor, out, factors) -> None:
+        a = invoice["attrs"]
+        if vendor is None or not a.get("amount") or not a.get("invoice_date"):
+            return
+        first = self.first_seen.get(self.canon(vendor["id"]))
+        if first is None or self.median is None:
+            return
+        age = (date.fromisoformat(a["invoice_date"]) - first).days
+        multiple = Decimal(
+            str(self.ectx.threshold("gst.first_invoice_multiple"))
+        )
+        amount = Decimal(a["amount"])
+        if age > self.ectx.threshold("gst.new_vendor_days"):
+            return
+        if amount <= multiple * self.median:
+            return
+        out.append(
+            _spec(
+                NEW_LARGE,
+                invoice,
+                invoice["id"],
+                f"A supplier first seen {age} days earlier invoiced more "
+                f"than {multiple} times the usual amount.",
+                [invoice["id"], vendor["id"]],
+                confidence=0.6,
+                median=str(self.median),
+                vendor_age_days=age,
+            )
+        )
+        factors.append(("risk_new", [vendor["id"]]))
+
+    def shared(self, invoice, vendor, out, factors) -> None:
+        if vendor is None:
+            return
+        for x, y, keys in self.shared_pairs.get(self.canon(vendor["id"]), []):
+            out.append(
+                _spec(
+                    SHARED,
+                    invoice,
+                    f"{invoice['id']}:{x['id']}:{y['id']}",
+                    "Two suppliers with different GSTINs share "
+                    + ", ".join(k.replace("_", " ") for k in keys)
+                    + ".",
+                    [invoice["id"], x["id"], y["id"]],
+                    confidence=0.8,
+                    shared=keys,
+                    gstins=sorted(
+                        {x["natural_keys"]["gstin"], y["natural_keys"]["gstin"]}
+                    ),
+                )
+            )
+            factors.append(("risk_shared", [x["id"], y["id"]]))
+
     def itc_risk(self, invoice, factors, out) -> None:
         if not factors:
             return
@@ -200,6 +313,8 @@ class _Run:
         out: list[FindingSpec] = []
         factors: list[tuple[str, list[str]]] = []
         self.standing(invoice, vendor, out, factors)
+        self.new_large(invoice, vendor, out, factors)
+        self.shared(invoice, vendor, out, factors)
         self.itc_risk(invoice, factors, out)
         return out
 

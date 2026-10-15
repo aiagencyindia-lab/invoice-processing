@@ -1,5 +1,6 @@
 """GST/ITC v1 (FR-26): vendor GST standing, shared identities, ITC at risk."""
 
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -9,13 +10,16 @@ from invoice_processing import tax_ids
 from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import RunContext
+from invoice_processing.trust import evaluate as ev
 from invoice_processing.trust import gst_itc
 from invoice_processing.trust.decide import FakeDecider
 from invoice_processing.trust.engine import EngineContext
 from invoice_processing.trust.findings import model as finding_model
+from invoice_processing.trust.findings.store import FindingStore
 from invoice_processing.trust.graph import resolve
 from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
+from invoice_processing.trust.graph.sync import sync_tenant
 from invoice_processing.trust.providers.fakes import FakeProvider
 from invoice_processing.trust.providers.registry import Registry
 
@@ -207,3 +211,202 @@ def test_nonfiler_at_threshold_is_advisory_with_half_factor(env):
     assert found["GST-ITC-RISK"][0].impact == Decimal("50.0")
     env.script[G1] = active(missed_periods=1)
     assert env.run(inv) == []
+
+
+# -- history signals --------------------------------------------------------
+
+
+def history(env, n=5, amount=1000):
+    """An established vendor: invoices through 2024 set the tenant median."""
+    env.script[G3] = active()
+    old = env.vendor("Old", G3)
+    for m in range(1, n + 1):
+        env.invoice(old, amount, day=f"2024-{m:02d}-10")
+    return old
+
+
+def test_new_vendor_large_first_invoice(env):
+    history(env)
+    env.script[G1] = active()
+    inv = env.invoice(env.vendor("New", G1), 10000, tax="1800")
+    found = by_type(env.run(inv))
+    assert set(found) == {"GST-NEW-LARGE-FIRST", "GST-ITC-RISK"}
+    [f] = found["GST-NEW-LARGE-FIRST"]
+    assert f.details["median"] == "1000"
+    assert found["GST-ITC-RISK"][0].impact == Decimal("360.0")
+
+
+def test_new_vendor_normal_invoice_is_quiet(env):
+    old = history(env)
+    env.script[G1] = active()
+    assert env.run(env.invoice(env.vendor("New", G1), 2000)) == []
+    # Large, but the vendor was first seen long before.
+    assert env.run(env.invoice(old, 10000, day="2025-06-01")) == []
+
+
+def test_shared_pan_across_gstins_is_flagged_once_per_invoice_and_pair(env):
+    env.script[G1] = env.script[G2] = active()
+    a, b = env.vendor("Alpha", G1), env.vendor("Beta", G2)
+    inv_a, inv_b = env.invoice(a, 1000, tax="100"), env.invoice(b, 1000)
+    pair = ":".join(sorted((a, b)))
+    found = by_type(env.run(inv_a))
+    [f] = found["GST-SHARED-IDENTITY"]
+    assert f.dedupe_key == f"GST-SHARED-IDENTITY:{inv_a}:{pair}"
+    assert {c.node_id for c in f.citations} == {inv_a, a, b}
+    assert f.details["shared"] == ["pan"]
+    assert found["GST-ITC-RISK"][0].impact == Decimal("30.0")
+    [g] = by_type(env.run(inv_b))["GST-SHARED-IDENTITY"]
+    assert g.dedupe_key == f"GST-SHARED-IDENTITY:{inv_b}:{pair}"
+
+
+def test_shared_bank_account_or_domain_counts_but_name_does_not(env):
+    env.script[G1] = env.script[G3] = active()
+    a = env.vendor("Alpha", G1, email_domain="alpha.in")
+    b = env.vendor("Gamma", G3, email_domain="alpha.in")
+    env.vendor("Alpha Ltd", gstin("19ZZZZZ9999Z1Z"))  # same name only
+    found = by_type(env.run(env.invoice(a, 1000)))
+    [f] = found["GST-SHARED-IDENTITY"]
+    assert f.details["shared"] == ["email_domain"]
+    assert b in {c.node_id for c in f.citations}
+
+
+def test_accepted_link_suppresses_shared_identity(env):
+    env.script[G1] = env.script[G2] = active()
+    a, b = env.vendor("Alpha", G1), env.vendor("Beta", G2)
+    env.links.propose_or_link(CTX, a, b, 0.99, "human")
+    assert env.run(env.invoice(a, 1000)) == []
+
+
+def test_itc_risk_uses_max_factor(env):
+    env.script[G1] = {"status": "cancelled", "missed_periods": 4}
+    env.script[G2] = active()
+    a = env.vendor("Alpha", G1)
+    env.vendor("Beta", G2)
+    found = by_type(env.run(env.invoice(a, 1000, tax="200")))
+    assert {"GST-INACTIVE", "GST-NONFILER", "GST-SHARED-IDENTITY"} <= set(found)
+    [risk] = found["GST-ITC-RISK"]
+    assert risk.impact == Decimal("200.0")
+    assert risk.details["signals"] == [
+        "risk_inactive",
+        "risk_nonfiler",
+        "risk_shared",
+    ]
+
+
+def test_unknown_tax_emits_no_itc_risk_and_logs_without_ids(env, caplog):
+    env.script[G1] = {"status": "cancelled"}
+    inv = env.invoice(env.vendor("Acme", G1), 1000, tax=None)
+    with caplog.at_level(logging.INFO, logger=gst_itc.__name__):
+        found = by_type(env.run(inv))
+    assert set(found) == {"GST-INACTIVE"}
+    [rec] = [r for r in caplog.records if r.msg == "gst_itc_tax_amount_unknown"]
+    assert rec.invoices == 1
+    assert inv not in str(rec.__dict__)
+
+
+def test_batch_run_covers_every_invoice(env):
+    env.script[G1] = {"status": "cancelled"}
+    ven = env.vendor("Acme", G1)
+    nodes = {env.invoice(ven, 1000), env.invoice(ven, 2000)}
+    specs = env.run()
+    assert {
+        s.transaction_node for s in specs if s.type == "GST-INACTIVE"
+    } == nodes
+    assert len(env.graph.nodes(T, kind="provider_evidence")) == 1  # cached
+
+
+def test_threshold_override_applies(env):
+    env.script[G1] = {"status": "cancelled", "missed_periods": 3}
+    inv = env.invoice(env.vendor("Acme", G1), 1000, tax="100")
+    found = by_type(
+        env.run(
+            inv,
+            thresholds={
+                "gst.nonfiler_missed_periods": 5,
+                "gst.risk_inactive": 0.9,
+            },
+        )
+    )
+    assert "GST-NONFILER" not in found
+    assert found["GST-ITC-RISK"][0].impact == Decimal("90.0")
+
+
+def test_contract_document_is_skipped(env):
+    ectx = env.ectx()
+    ectx.document = {"id": "c", "kind": "contract"}
+    assert gst_itc.run(ectx) == []
+
+
+# -- through evaluate -------------------------------------------------------
+
+
+class Store:
+    def __init__(self, settings):
+        self.settings = settings
+
+    def get(self, tenant_id):
+        return self.settings
+
+
+def test_evaluate_enforcing_holds_and_clean_rerun_releases(env):
+    with tenant_session(T, env.url) as s:
+        s.add(
+            models.Vendor(
+                tenant_id=T, name="Acme", normalized_name="acme", tax_id=G1
+            )
+        )
+        s.add(
+            models.Document(
+                tenant_id=T, id="doc-1", sha256="a" * 64, storage_key="k"
+            )
+        )
+        s.flush()
+        s.add(
+            models.Invoice(
+                tenant_id=T,
+                id="inv-1",
+                document_id="doc-1",
+                case_id="case-1",
+                invoice_number="INV-1",
+                vendor_name="Acme",
+                vendor_tax_id=G1,
+                total_inc_tax=Decimal("1180"),
+                tax_amount=Decimal("180"),
+                status="done",
+            )
+        )
+    sync_tenant(
+        CTX,
+        env.graph,
+        env.links,
+        url=env.url,
+        decider=FakeDecider({}, fail=True),
+    )
+    env.script[G1] = {"status": "cancelled"}
+
+    def evaluate():
+        return ev.evaluate(
+            CTX,
+            "doc-1",
+            graph=env.graph,
+            links=env.links,
+            url=env.url,
+            settings_store=Store(
+                {"trust_engine_modes": {"gst_itc": "enforcing"}}
+            ),
+            providers=env.ectx().providers,
+            decider=FakeDecider({}, fail=True),
+            blobs=object(),
+        )
+
+    out = evaluate()
+    assert out["engines"]["gst_itc"]["findings"] == 2
+    store = FindingStore(env.url)
+    [hold] = store.list(T, type="GST-INACTIVE")
+    assert hold["details"]["hold"] is True and hold["status"] == "detected"
+    [risk] = store.list(T, type="GST-ITC-RISK")
+    assert Decimal(risk["impact"]) == Decimal("180")
+    env.script[G1] = active()
+    evaluate()
+    [hold] = store.list(T, type="GST-INACTIVE")
+    assert hold["status"] == "rejected"
