@@ -77,6 +77,7 @@ HEADERS = {
         "currency",
         "record_date",
         "po_number",
+        "tax_amount",
     ],
     "payment": [
         "external_id",
@@ -88,6 +89,13 @@ HEADERS = {
         "bank_reference",
     ],
 }
+TAX_RATE = Decimal("0.18")
+
+
+def tax_of(amount) -> Decimal:
+    return (Decimal(str(amount)) * TAX_RATE).quantize(Decimal("0.01"))
+
+
 _FIRST = ("Acme", "Globex", "Initech", "Umbrella", "Stark", "Wayne")
 _TRADE = ("Steel", "Tools", "Logistics", "Services", "Foods")
 
@@ -213,6 +221,11 @@ def generate(
         # changes the rows another family or the base history produced.
         family_rng = random.Random(f"{seed}:{module.__name__}")  # noqa: S311
         module.inject(family_rng, rows, faults, start=start, months=months)
+
+    for inv in rows["ap_invoice"]:
+        # GST at 18% of the amount, unless a family set its own (after the
+        # families, so the invoices they add are taxed too).
+        inv.setdefault("tax_amount", str(tax_of(inv["amount"])))
 
     for kind in KINDS:
         if not rows[kind]:

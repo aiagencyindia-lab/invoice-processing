@@ -41,6 +41,7 @@ FIELDS: dict[str, tuple[str, ...]] = {
         "currency",
         "record_date",
         "po_number",
+        "tax_amount",
     ),
     "payment": (
         "external_id",
@@ -133,6 +134,7 @@ _SYNONYMS: dict[str, tuple[str, ...]] = {
         "credit",
     ),
     "currency": ("currency", "ccy", "cur"),
+    "tax_amount": ("tax", "tax amount", "gst", "gst amount", "total tax"),
     "record_date": (
         "date",
         "invoice date",

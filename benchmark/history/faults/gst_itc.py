@@ -1,17 +1,16 @@
 """GST/ITC fault family (FR-26): a cancelled registration, a non-filer, two
 GSTINs behind one PAN, and a new vendor whose first invoice is oversized.
 
-History CSVs carry no tax column, so `seed_graph` writes an 18% `tax_amount`
-onto this family's invoice nodes (and re-points their edges), and scripts the
-fake GSTIN registry from the vendor file — both read from `data_dir`, so a
-pre-generated `--data` directory scores the same as a fresh one.
+Invoices carry the generator's 18% `tax_amount` column. `seed_graph` scripts
+the fake GSTIN registry from the vendor file in `data_dir`, so a pre-generated
+`--data` directory scores the same as a fresh one.
 """
 
 from __future__ import annotations
 
 import csv
 import string
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -143,38 +142,3 @@ def seed_graph(ctx, graph, data_dir: Path) -> None:
             "missed_periods": 3 if role == "NONFILER" else 0,
             "registered_on": "2020-04-01",
         }
-    tax = {
-        r["doc_number"]: _tax(r["amount"])
-        for r in _rows(Path(data_dir) / "ap_invoice.csv")
-    }
-    tid = ctx.tenant_id
-    now = datetime.now(timezone.utc)
-    for n in graph.nodes(tid, kind="invoice"):
-        doc = n["attrs"].get("doc_number")
-        if doc not in tax:
-            continue
-        edges = graph.edges(tid, src=n["id"]) + graph.edges(tid, dst=n["id"])
-        new = graph.upsert_node(
-            ctx,
-            kind=n["kind"],
-            natural_key=n["natural_key"],
-            ref_table=n["ref_table"],
-            ref_id=n["ref_id"],
-            attrs={**n["attrs"], "tax_amount": str(tax[doc])},
-            natural_keys=n["natural_keys"],
-            at=now,
-        )
-        # A re-versioned node closes its edges; put them back on the new row.
-        for e in edges:
-            graph.upsert_edge(
-                ctx,
-                src=new if e["src"] == n["id"] else e["src"],
-                dst=new if e["dst"] == n["id"] else e["dst"],
-                kind=e["kind"],
-                source_system=e["source_system"],
-                provenance=e["provenance"],
-                confidence=e["confidence"],
-                observed_at=datetime.fromisoformat(e["observed_at"]),
-                attrs=e["attrs"],
-                at=now,
-            )

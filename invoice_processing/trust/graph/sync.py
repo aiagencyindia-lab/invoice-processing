@@ -12,7 +12,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from ... import po_matching
+from ... import masking, po_matching
 from ...db.models import (
     ApprovalStep,
     Document,
@@ -476,7 +476,16 @@ def _sync_history(ctx, s, graph, vendors, po_nodes, at, bump):
     hist_invoices: dict[str, str] = {}
     for rec in records:
         source = f"history:{sources.get(rec.import_id, '?')}"
-        f = rec.fields or {}
+        # Rows are stored by column header; read them by the field the
+        # confirmed mapping named ("GSTIN/UIN" -> gstin).
+        raw = rec.fields or {}
+        f = {
+            field: raw.get(header)
+            for header, field in (
+                sources_mapping.get(rec.import_id) or {}
+            ).items()
+            if field
+        }
         if rec.kind == "vendor":
             keys = resolve.natural_keys(
                 {
@@ -485,6 +494,8 @@ def _sync_history(ctx, s, graph, vendors, po_nodes, at, bump):
                     "pan": f.get("pan"),
                     "abn": f.get("abn"),
                     "email_domain": f.get("email_domain"),
+                    "bank_account": f.get("bank_account"),
+                    "bank_code": f.get("bank_code"),
                 }
             )
             nid = graph.upsert_node(
@@ -497,8 +508,17 @@ def _sync_history(ctx, s, graph, vendors, po_nodes, at, bump):
                     "name": rec.vendor_key,
                     **{
                         k: f.get(k)
-                        for k in ("gstin", "pan", "abn", "email_domain")
+                        for k in (
+                            "gstin",
+                            "pan",
+                            "abn",
+                            "email_domain",
+                            "bank_code",
+                        )
                     },
+                    # The number stays in its protected source row; the key
+                    # above is a digest, this is the last four for display.
+                    "bank_account": masking.mask_bank(f.get("bank_account")),
                 },
                 natural_keys=keys,
                 at=at,
@@ -522,14 +542,10 @@ def _sync_history(ctx, s, graph, vendors, po_nodes, at, bump):
         }
         # Every other mapped field of this kind (counterparty, bank_reference,
         # line_number, quantity, ...), by the column the mapping named.
-        mapped = {
-            field: rec.fields.get(header)
-            for header, field in (
-                sources_mapping.get(rec.import_id) or {}
-            ).items()
-            if field and field not in attrs and rec.fields
-        }
+        mapped = {k: v for k, v in f.items() if k not in attrs}
         attrs.update({k: v for k, v in mapped.items() if v not in (None, "")})
+        if "tax_amount" in attrs:
+            attrs["tax_amount"] = _maybe_money(attrs["tax_amount"])
         nid = graph.upsert_node(
             ctx,
             kind=kind,
