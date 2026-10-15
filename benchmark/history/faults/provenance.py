@@ -13,7 +13,6 @@ within a pair, so other engines' duplicate rules do not see the pairs.
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import random
@@ -86,27 +85,41 @@ def _plant(ctx, graph, vendor, number, role, *, sha, amount, approved, at):
 def seed_graph(ctx, graph, data_dir: Path) -> None:
     at = datetime.now(timezone.utc)
     manifest = json.loads((data_dir / "manifest.json").read_text())
-    vendor_of = {
-        n["attrs"].get("name"): n["id"]
-        for n in graph.nodes(ctx.tenant_id, kind="vendor")
-        if n["ref_table"] == "history_records"
-    }
+    vendor_of: dict[str, str] = {}
+    # Master-backed vendor nodes first; a run without a vendor file still
+    # has the nodes the sync synthesised from the invoices themselves.
+    for n in sorted(
+        graph.nodes(ctx.tenant_id, kind="vendor"),
+        key=lambda n: n["ref_table"] != "history_records",
+    ):
+        vendor_of.setdefault(n["attrs"].get("name"), n["id"])
+
+    def vendor(name: str) -> str:
+        if name not in vendor_of:
+            vendor_of[name] = graph.upsert_node(
+                ctx,
+                kind="vendor",
+                natural_key=f"bench:provenance:{name}",
+                attrs={"name": name},
+                at=at,
+            )
+        return vendor_of[name]
+
     for fault in manifest["faults"]:
         if fault["type"] != TYPE:
             continue
         number, amount = fault["doc_number"], Decimal(fault["expected_impact"])
-        vendor = vendor_of[fault["vendor_key"]]
+        ven = vendor(fault["vendor_key"])
         _plant(
-            ctx, graph, vendor, number, "orig",
+            ctx, graph, ven, number, "orig",
             sha=_sha(number, "orig"), amount=amount - 1, approved=True, at=at,
         )  # fmt: skip
         _plant(
-            ctx, graph, vendor, number, "resub",
+            ctx, graph, ven, number, "resub",
             sha=_sha(number, "resub"), amount=amount, approved=False, at=at,
         )  # fmt: skip
 
-    with (data_dir / "vendor.csv").open(encoding="utf-8") as fh:
-        names = sorted(r["vendor_key"] for r in csv.DictReader(fh))
+    names = sorted(n for n in vendor_of if n)
     rng = random.Random(f"{manifest['seed']}:provenance-decoys")  # noqa: S311
     for k in range(6):
         number = f"PRV-D{k:02d}"
@@ -114,12 +127,12 @@ def seed_graph(ctx, graph, data_dir: Path) -> None:
         amount = Decimal(rng.randint(5_000, 500_000))
         same_bytes, other_vendor = k < 2, 2 <= k < 4
         _plant(
-            ctx, graph, vendor_of[a], number, "orig",
+            ctx, graph, vendor(a), number, "orig",
             sha=_sha(number, "orig"), amount=amount - 1,
             approved=k < 4, at=at,
         )  # fmt: skip
         _plant(
-            ctx, graph, vendor_of[b if other_vendor else a], number, "resub",
+            ctx, graph, vendor(b if other_vendor else a), number, "resub",
             sha=_sha(number, "orig" if same_bytes else "resub"),
             amount=amount, approved=False, at=at,
         )  # fmt: skip
