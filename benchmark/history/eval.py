@@ -29,17 +29,31 @@ from invoice_processing.trust.modes import ENGINES
 from invoice_processing.trust.providers import fakes
 from invoice_processing.trust.providers.registry import Registry
 
+from . import clauses
 from . import faults as fault_families
 from .generate import KINDS, generate
 
-GATES = {"invoice_vendor_coverage": 0.95, "po_backed_coverage": 0.80}
+GATES = {
+    "invoice_vendor_coverage": 0.95,
+    "po_backed_coverage": 0.80,
+    "contract_clause_coverage": 0.60,
+}
+_BASELINE = object()
 
 
 def _ratio(num: int, den: int) -> float:
     return round(num / den, 4) if den else 0.0
 
 
-def run(url: str, data_dir: Path, tenant_id: str = "bench-history") -> dict:
+def run(
+    url: str,
+    data_dir: Path,
+    tenant_id: str = "bench-history",
+    *,
+    clause_decider=_BASELINE,
+) -> dict:
+    """`clause_decider=None` measures clause extraction with the production
+    (Gemini) decider; the default is the keyword baseline."""
     models.Base.metadata.drop_all(get_engine(url))
     create_all(url)
     with tenant_session(tenant_id, url) as s:
@@ -128,11 +142,20 @@ def run(url: str, data_dir: Path, tenant_id: str = "bench-history") -> dict:
     out = {
         "invoice_vendor_coverage": _ratio(inv_linked, invoices),
         "po_backed_coverage": _ratio(po_linked, po_backed),
-        "contract_clause_coverage": None,
-        "not_measurable_until": {"contract_clause_coverage": "wave1"},
         "counts": manifest["counts"],
         "unlinked": unlinked,
     }
+    with tempfile.TemporaryDirectory() as work:
+        # Its own database: coverage() starts from an empty schema.
+        extraction = clauses.coverage(
+            f"sqlite:///{Path(work) / 'clauses.db'}",
+            Path(work),
+            decider=clauses.KeywordDecider()
+            if clause_decider is _BASELINE
+            else clause_decider,
+        )
+    out["contract_clause_coverage"] = extraction["coverage"]
+    out["contract_clauses"] = extraction
     out["gates"] = {name: out[name] >= floor for name, floor in GATES.items()}
 
     modules = fault_families.modules()
@@ -252,20 +275,33 @@ def main(argv: list[str] | None = None) -> None:
         help="generated data dir; default: generate into a temp dir",
     )
     parser.add_argument("--out", default="benchmark/runs/history")
+    parser.add_argument(
+        "--live-model",
+        action="store_true",
+        help="measure clause extraction with Gemini, not the keyword baseline",
+    )
     args = parser.parse_args(argv)
     with tempfile.TemporaryDirectory() as tmp:
         data = Path(args.data) if args.data else Path(tmp) / "data"
         if not args.data:
             generate(args.seed, data)
         url = args.db or f"sqlite:///{Path(tmp) / 'bench.db'}"
-        result = run(url, data)
+        result = run(
+            url, data, clause_decider=None if args.live_model else _BASELINE
+        )
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     (out_dir / f"{stamp}.json").write_text(
         json.dumps(result, indent=2), encoding="utf-8"
     )
-    shown = ("invoice_vendor_coverage", "po_backed_coverage", "gates", "passed")
+    shown = (
+        "invoice_vendor_coverage",
+        "po_backed_coverage",
+        "contract_clause_coverage",
+        "gates",
+        "passed",
+    )
     print(json.dumps({k: result[k] for k in shown}))
     sys.exit(0 if result["passed"] else 1)
 
