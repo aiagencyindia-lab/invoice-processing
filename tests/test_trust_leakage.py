@@ -816,3 +816,39 @@ def test_same_invoice_live_and_history_is_not_a_duplicate(env):
     invoice(env, ven, "INV-9", "2025-03-01", 1000, ref="live-9")
     invoice(env, ven, "INV-9", "2025-03-01", 1000, live=False, ref="hist-9")
     assert found(env, "DUP-NEAR") == [] and found(env, "DUP-CROSS") == []
+
+
+# -- Task 7: supplier statements ----------------------------------------------
+
+
+def test_unapplied_credit(env):
+    ven = vendor(env)
+    sid = statement_line(env, ven, "CN-12", "2025-05-01", "-3500.50")
+    [f] = found(env, "STMT-UNAPPLIED-CREDIT")
+    assert f.transaction_node == sid and f.impact == Decimal("3500.50")
+
+
+def test_applied_credit_is_clean(env):
+    ven = vendor(env)
+    statement_line(env, ven, "CN-12", "2025-05-01", -3500)
+    payment(env, ven, "cn 12", "2025-05-03", 3500)
+    assert found(env, "STMT-UNAPPLIED-CREDIT") == []
+
+
+def test_double_paid(env):
+    ven = vendor(env)
+    inv = invoice(env, ven, "INV-5", "2025-03-01", 20000)
+    payment(env, ven, "INV-5", "2025-03-20", 20000, settles=inv, ref="p1")
+    payment(env, ven, "INV-5", "2025-04-02", 20000, settles=inv, ref="p2")
+    [f] = found(env, "STMT-DOUBLE-PAID")
+    assert f.transaction_node == inv and f.impact == Decimal("20000.00")
+    assert len(f.citations) == 3
+
+
+def test_disputed_statement_line(env):
+    ven = vendor(env)
+    invoice(env, ven, "INV-5", "2025-03-01", 20000)
+    statement_line(env, ven, "INV-005", "2025-03-01", 20000)
+    sid = statement_line(env, ven, "INV-6", "2025-03-09", 8000)
+    [f] = found(env, "STMT-DISPUTED")
+    assert f.transaction_node == sid and f.impact is None

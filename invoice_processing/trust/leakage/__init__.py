@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 
 from ..findings.model import FindingSpec, register_type
-from . import clauses, contracts, dups
+from . import clauses, contracts, dups, statements
 from .view import View
 
 ENGINE_VERSION = "leakage-1"
@@ -66,6 +66,7 @@ def run(ectx) -> list[FindingSpec]:
     specs = [
         *contracts.findings(ectx, view, in_scope),
         *dups.findings(ectx, view),
+        *statements.findings(ectx, view),
     ]
     kept = [s for s in specs if in_scope(s.transaction_node)]
     logger.info(
