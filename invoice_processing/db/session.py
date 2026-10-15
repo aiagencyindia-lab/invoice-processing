@@ -125,6 +125,11 @@ def get_engine(url: str | None = None, **kwargs) -> Engine:
 
     target = url or database_url()
     if _engine is None or str(_engine.url) != target:
+        if _engine is not None:
+            # Release the old pool now, not at garbage collection: on Postgres
+            # each switch otherwise holds connections until the server
+            # refuses new clients.
+            _engine.dispose()
         _engine = create_engine(target, future=True, **kwargs)
         _engine._target = target
         if _engine.dialect.name == "sqlite":
