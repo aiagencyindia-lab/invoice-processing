@@ -10,10 +10,12 @@ import pytest
 from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import RunContext
+from invoice_processing.trust import evaluate as ev
 from invoice_processing.trust import leakage
 from invoice_processing.trust.decide import FakeDecider
 from invoice_processing.trust.engine import EngineContext
 from invoice_processing.trust.findings import model as finding_model
+from invoice_processing.trust.findings.store import FindingStore
 from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
 from invoice_processing.trust.leakage import clauses
@@ -879,3 +881,122 @@ def test_radar_escalator_anniversary(env):
     assert f.transaction_node == cid
     assert f.details["escalates_on"] == "2025-10-01"
     assert found(env, "RADAR-RENEWAL") == []
+
+
+# -- Task 9: scope and runtime ------------------------------------------------
+
+
+def test_invoice_run_only_returns_its_findings(env):
+    _, graph, _ = env
+    ven = vendor(env)
+    steel_contract(env, ven)
+    one = invoice(
+        env, ven, "INV-1", "2025-03-01", 11000, [("Steel Rod 12mm", 10, 1100)]
+    )
+    invoice(
+        env, ven, "INV-2", "2025-04-01", 11000, [("Steel Rod 12mm", 10, 1100)]
+    )
+    specs = leakage.run(make_ectx(env, invoice_node=one))
+    assert [s.transaction_node for s in specs] == [one]
+    assert [e["src"] for e in graph.edges(T, kind="governed_by")] == [one]
+
+
+def test_non_contract_document_without_invoice_is_skipped(env):
+    ven = vendor(env)
+    steel_contract(env, ven)
+    invoice(
+        env, ven, "INV-1", "2025-03-01", 11000, [("Steel Rod 12mm", 10, 1100)]
+    )
+    doc = {"id": "doc-x", "kind": "supporting", "storage_key": "k"}
+    assert leakage.run(make_ectx(env, document=doc)) == []
+
+
+class Settings:
+    def get(self, tenant_id):
+        return {"trust_engine_modes": {"leakage": "advisory"}}
+
+
+def test_evaluate_contract_document_end_to_end(env, monkeypatch):
+    url, graph, links = env
+    with tenant_session(T, url) as s:
+        s.add(
+            models.Document(
+                tenant_id=T,
+                id="doc-c",
+                sha256="c" * 64,
+                storage_key="k/doc-c",
+                kind="contract",
+            )
+        )
+    ven = vendor(env)
+    cid = contract_node(env)
+    edge(env, cid, ven, "governs", "human_assertion")
+    inv = invoice(
+        env, ven, "INV-1", "2025-03-01", 11000, [("Steel Rod 12mm", 10, 1100)]
+    )
+    monkeypatch.setattr(ev, "RUNNERS", {})
+    out = ev.evaluate(
+        CTX,
+        "doc-c",
+        graph=graph,
+        links=links,
+        url=url,
+        settings_store=Settings(),
+        decider=FakeDecider(CONTRACT_ANSWERS),
+        blobs=Blobs({"k/doc-c": make_pdf([CONTRACT_PAGE])}),
+        now=NOW,
+    )
+    assert out["engines"]["leakage"]["mode"] == "advisory"
+    [listed] = FindingStore(url).list(T, type="LEAK-RATE")
+    f = FindingStore(url).get(T, listed["id"])
+    assert f["transaction_node"] == inv and f["impact"] == "1000.0000"
+    assert f["details"]["needs_review"] is True
+    assert f["details"]["mode"] == "advisory"
+    assert {c["node_id"] for c in f["citations"]} >= {inv, cid}
+    assert graph.edges(T, kind="governed_by", src=inv)
+
+
+def test_every_finding_cites_same_tenant_nodes_and_prefixed_dedupe(env):
+    _, graph, _ = env
+    ven = vendor(env)
+    cid = steel_contract(env, ven, end="2025-10-15")
+    clause(env, cid, "escalator", {"pct": "5"}, "Prices escalate by 5% yearly.")
+    clause(
+        env,
+        cid,
+        "rebate",
+        {"threshold": "10000", "pct": "2"},
+        "A rebate of 2% applies once spend exceeds INR 10,000.",
+    )
+    inv = invoice(
+        env,
+        ven,
+        "INV-1",
+        "2025-03-01",
+        11000,
+        [("Steel Rod 12mm", 10, 1100)],
+        terms="2/10 net 30",
+    )
+    payment(env, ven, "INV-1", "2025-03-02", 11000, settles=inv, ref="p1")
+    payment(env, ven, "INV-1", "2025-03-03", 11000, settles=inv, ref="p2")
+    invoice(env, ven, "INV-01", "2025-03-02", 11000)
+    statement_line(env, ven, "CN-123456789012", "2025-04-01", -50)
+    statement_line(env, ven, "INV-77", "2025-04-01", 50)
+    specs = leakage.run(make_ectx(env))
+    assert {s.type for s in specs} >= {
+        "LEAK-RATE",
+        "LEAK-REBATE",
+        "LEAK-DISCOUNT",
+        "DUP-NEAR",
+        "STMT-UNAPPLIED-CREDIT",
+        "STMT-DOUBLE-PAID",
+        "STMT-DISPUTED",
+        "RADAR-RENEWAL",
+    }
+    for s in specs:
+        assert s.dedupe_key.startswith(f"{s.type}:")
+        assert s.citations
+        for c in s.citations:
+            assert graph.node(T, c.node_id) is not None
+        text = f"{s.summary} {s.details} {[c.excerpt for c in s.citations]}"
+        assert "123456789012" not in text

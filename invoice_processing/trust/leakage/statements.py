@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from ...duplicates import normalize_number
 from ..findings.model import FindingSpec
+from .clauses import scrub
 from .contracts import ENGINE_VERSION
 from .view import View, cents, cite, money
 
@@ -63,7 +64,7 @@ def findings(ectx, view: View) -> list[FindingSpec]:
                     s,
                     -amount,
                     "The vendor's statement shows a credit we never applied.",
-                    {"doc_number": a.get("doc_number")},
+                    {"doc_number": scrub(str(a.get("doc_number")))},
                     [cite(s, excerpt)],
                 )
             )
@@ -74,7 +75,7 @@ def findings(ectx, view: View) -> list[FindingSpec]:
                     s,
                     None,
                     "The vendor's statement lists an invoice we have no record of.",
-                    {"doc_number": a.get("doc_number")},
+                    {"doc_number": scrub(str(a.get("doc_number")))},
                     [cite(s, excerpt)],
                 )
             )
