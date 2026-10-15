@@ -44,6 +44,7 @@ from invoice_processing.api import (
     service,
     supporting_routes,
     system,
+    trust_routes,
     vendor_routes,
 )
 from invoice_processing.api.service import app
@@ -1275,6 +1276,46 @@ class TestRuleIsolation:
         assert client_for("globex").get("/api/rules").json()["rules"] == []
 
 
+class TestTrustHistoryIsolation:
+    @pytest.fixture
+    def history_db(self, scratch_db, monkeypatch):
+        from invoice_processing.trust.history.importer import (  # noqa: PLC0415
+            HistoryImporter,
+        )
+
+        url = scratch_db("iso-history.db")
+        Base.metadata.drop_all(get_engine(url))
+        create_all(url)
+        for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
+            with db_session(tid, url) as session:
+                session.add(
+                    Tenant(id=tid, name=slug, slug=slug, status="active")
+                )
+        monkeypatch.setattr(service, "_history_importer", HistoryImporter(url))
+        monkeypatch.setenv("DATABASE_URL", url)
+
+    def test_imports_stay_with_their_tenant(self, clients, history_db):
+        csv = b"Bill No,Supplier,Amount\nINV-1,Acme,10\n"
+        mapping = (
+            '{"Bill No":"doc_number","Supplier":"vendor_key","Amount":"amount"}'
+        )
+        r = clients("acme", "clerk").post(
+            "/api/trust/history/import",
+            files={"file": ("a.csv", csv, "text/csv")},
+            data={"kind": "ap_invoice", "source_name": "t", "mapping": mapping},
+        )
+        assert r.status_code == 201
+        assert clients("globex").get("/api/trust/history/imports").json() == []
+        mine = clients("acme").get("/api/trust/history/imports").json()
+        assert mine[0]["rows_ok"] == 1
+        probe = clients("globex", "clerk").post(
+            "/api/trust/history/mapping",
+            files={"file": ("a.csv", csv, "text/csv")},
+            data={"kind": "ap_invoice", "source_name": "t"},
+        )
+        assert probe.status_code == 200 and probe.json()["saved"] is None
+
+
 class TestCoverage:
     # Routes that legitimately serve no tenant data, with the reason each is
     # exempt. Anything not listed must be probed above.
@@ -1358,6 +1399,9 @@ class TestCoverage:
         "/api/sheet/exports/{job_id}",
         "/api/sheet/exports/{job_id}/download",
         "/api/sheet/exports/{job_id}/retry",
+        "/api/trust/history/mapping",
+        "/api/trust/history/import",
+        "/api/trust/history/imports",
     }
 
     def test_every_route_is_covered(self):
@@ -1399,6 +1443,7 @@ class TestCoverage:
             po_routes,
             supporting_routes,
             system,
+            trust_routes,
             vendor_routes,
         ):
             source = pathlib.Path(module.__file__).read_text(encoding="utf-8")

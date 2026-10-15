@@ -71,6 +71,10 @@ jobs:
             --skip-llm \
             --require-baseline
 
+      # v2 trust layer: the generated history must import and link (AC-19).
+      - name: Trust history gate
+        run: uv run python -m benchmark.history.eval --seed 7 --out /tmp/history-gate
+
       # The acceptance sweep: exercises the wiring, which unit tests cannot.
       # Offline tier only -- the live tier needs Cloud SQL and GCS.
       - name: Phase 1 acceptance sweep
@@ -176,6 +180,17 @@ jobs:
                         tests/test_signup_api.py \
                         tests/test_offboarding.py \
                         tests/test_restore_check.py \
+                        tests/test_trust_schema.py \
+                        tests/test_trust_graph_store.py \
+                        tests/test_trust_history_import.py \
+                        tests/test_trust_routes.py \
+                        tests/test_trust_findings.py \
+                        tests/test_trust_entity_resolution.py \
+                        tests/test_trust_graph_sync.py \
+                        tests/test_trust_lineage.py \
+                        tests/test_trust_worker.py \
+                        tests/test_trust_providers.py \
+                        tests/test_benchmark_history.py \
                         "tests/test_gcs_and_migrations.py::TestMigration::test_new_tenant_tables_have_forced_isolation_policies_after_upgrade" \
                         "tests/test_gcs_and_migrations.py::TestMigration::test_decided_at_backfill_sees_rows_under_forced_rls" \
                         "tests/test_gcs_and_migrations.py::TestMigration::test_sso_lookup_sentinel_reads_domains_and_nothing_else" \

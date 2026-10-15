@@ -28,7 +28,7 @@ class TestCompare:
 
 
 def test_the_head_is_the_newest_migration():
-    assert restore_check.repo_head() == "d1a2b3c4e5f6"
+    assert restore_check.repo_head() == "e2f3a4b5c6d7"
 
 
 @pg_only

@@ -32,6 +32,7 @@ gate "verify_phase0"       $PY scripts/verify_phase0.py
 gate "verify_phase1"       $PY scripts/verify_phase1.py
 gate "eval gate"           $PY eval/eval.py --ground-truth invoice_processing/exemplary_data \
                              --agent-output tests/fixtures/eval/agent_output --skip-llm --require-baseline
+gate "trust history gate"  $PY -m benchmark.history.eval --seed 7 --out "$OUT/history"
 if [ "${SKIP_FRONTEND:-}" = "" ]; then
   gate "frontend lint"     bash -c 'cd frontend && npm run lint'
   gate "frontend tsc"      bash -c 'cd frontend && npx tsc --noEmit'

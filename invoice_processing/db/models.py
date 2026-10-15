@@ -902,6 +902,242 @@ class SupportingDocument(Base, TenantMixin, TimestampMixin):
     note: Mapped[str | None] = mapped_column(String(500))
 
 
+# ---------------------------------------------------------------------------
+# v2 Trust layer (Wave 0). Time-travel tables are never updated in place: a
+# change closes the current row (valid_to) and inserts a new one, so "what did
+# we know on date D" is a filter, not a reconstruction.
+# ---------------------------------------------------------------------------
+
+
+def _open(name: str, *cols: str, when: str = "valid_to IS NULL") -> Index:
+    """One open row per key; closed rows may repeat the key."""
+    return Index(
+        name,
+        *cols,
+        unique=True,
+        postgresql_where=text(when),
+        sqlite_where=text(when),
+    )
+
+
+class GraphNode(Base, TenantMixin, TimestampMixin):
+    """An artefact or party in the Evidence Graph (PRD FR-19.1)."""
+
+    __tablename__ = "graph_nodes"
+    __table_args__ = (
+        _open("uq_graph_nodes_open", "tenant_id", "kind", "natural_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    natural_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Backed by an existing row: nothing is copied, only pointed at.
+    ref_table: Mapped[str | None] = mapped_column(String(64))
+    ref_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    attrs: Mapped[dict] = mapped_column(JSONType, default=dict)
+    natural_keys: Mapped[dict] = mapped_column(JSONType, default=dict)
+    valid_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GraphEdge(Base, TenantMixin, TimestampMixin):
+    """A link between two nodes, with where it came from and how sure we are."""
+
+    __tablename__ = "graph_edges"
+    __table_args__ = (
+        _open(
+            "uq_graph_edges_open",
+            "tenant_id",
+            "src",
+            "dst",
+            "kind",
+            "source_system",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    src: Mapped[str] = mapped_column(
+        String(36), ForeignKey("graph_nodes.id"), nullable=False, index=True
+    )
+    dst: Mapped[str] = mapped_column(
+        String(36), ForeignKey("graph_nodes.id"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_system: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    # document | system_record | human_assertion | model_inference
+    provenance: Mapped[str] = mapped_column(String(16), nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    attrs: Mapped[dict] = mapped_column(JSONType, default=dict)
+    valid_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EntityLink(Base, TenantMixin, TimestampMixin):
+    """Two nodes judged to be one entity. Never deletes a node; reversible."""
+
+    __tablename__ = "entity_links"
+    __table_args__ = (
+        _open(
+            "uq_entity_links_open",
+            "tenant_id",
+            "node_a",
+            "node_b",
+            when="reversed_at IS NULL",
+        ),
+    )
+
+    AUTO, PROPOSED, ACCEPTED, REJECTED = (
+        "auto",
+        "proposed",
+        "accepted",
+        "rejected",
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    node_a: Mapped[str] = mapped_column(
+        String(36), ForeignKey("graph_nodes.id"), nullable=False, index=True
+    )
+    node_b: Mapped[str] = mapped_column(
+        String(36), ForeignKey("graph_nodes.id"), nullable=False, index=True
+    )
+    score: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    method: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=PROPOSED
+    )
+    decided_by: Mapped[str | None] = mapped_column(String(320))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reversed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    reason: Mapped[str | None] = mapped_column(String(500))
+
+
+class TrustHistoryImport(Base, TenantMixin, TimestampMixin):
+    """One uploaded history file. Re-uploading the same bytes is a no-op."""
+
+    __tablename__ = "trust_history_imports"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "file_sha256", name="uq_trust_history_imports_sha"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    source_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    file_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    filename: Mapped[str | None] = mapped_column(String(255))
+    mapping: Mapped[dict] = mapped_column(JSONType, default=dict)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="complete"
+    )
+    rows_ok: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rows_bad: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[list] = mapped_column(JSONType, default=list)
+    created_by: Mapped[str | None] = mapped_column(String(320))
+
+
+class HistoryRecord(Base, TenantMixin, TimestampMixin):
+    """One normalised row of imported history."""
+
+    __tablename__ = "history_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "import_id",
+            "row_number",
+            name="uq_history_records_row",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    import_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("trust_history_imports.id"),
+        nullable=False,
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    external_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    fields: Mapped[dict] = mapped_column(JSONType, default=dict)
+    amount: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    currency: Mapped[str | None] = mapped_column(String(8))
+    record_date: Mapped[date | None] = mapped_column(Date)
+    vendor_key: Mapped[str | None] = mapped_column(String(512), index=True)
+    doc_number: Mapped[str | None] = mapped_column(String(128), index=True)
+
+
+class TrustFinding(Base, TenantMixin, TimestampMixin):
+    """A quantified, cited claim that money is being lost (PRD FR-20.7)."""
+
+    __tablename__ = "trust_findings"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "dedupe_key", name="uq_trust_findings_dedupe"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    transaction_node: Mapped[str] = mapped_column(
+        String(36), ForeignKey("graph_nodes.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="detected", index=True
+    )
+    impact: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    currency: Mapped[str | None] = mapped_column(String(8))
+    confidence: Mapped[float | None] = mapped_column(Numeric(5, 4))
+    owner_id: Mapped[str | None] = mapped_column(String(320))
+    engine_version: Mapped[str | None] = mapped_column(String(32))
+    rule_version: Mapped[str | None] = mapped_column(String(32))
+    model_version: Mapped[str | None] = mapped_column(String(64))
+    dedupe_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+    details: Mapped[dict] = mapped_column(JSONType, default=dict)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TrustFindingCitation(Base, TenantMixin):
+    """Why we believe a finding: a graph node and an excerpt. At least one each."""
+
+    __tablename__ = "trust_finding_citations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_findings.id"), nullable=False, index=True
+    )
+    node_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("graph_nodes.id"), nullable=False, index=True
+    )
+    excerpt: Mapped[str | None] = mapped_column(Text)
+
+
+class TrustFindingEvent(Base, TenantMixin, TimestampMixin):
+    """Every status change with the money at that stage: the recovery ledger."""
+
+    __tablename__ = "trust_finding_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_findings.id"), nullable=False, index=True
+    )
+    from_status: Mapped[str | None] = mapped_column(String(32))
+    to_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    amount: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    actor: Mapped[str] = mapped_column(String(320), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(500))
+
+
 TENANT_TABLES = (
     "users",
     "record_locks",
@@ -929,4 +1165,12 @@ TENANT_TABLES = (
     "grn_lines",
     "supporting_documents",
     "sso_domains",
+    "graph_nodes",
+    "graph_edges",
+    "entity_links",
+    "trust_history_imports",
+    "history_records",
+    "trust_findings",
+    "trust_finding_citations",
+    "trust_finding_events",
 )
