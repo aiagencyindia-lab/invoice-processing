@@ -6,12 +6,16 @@ import argparse
 import json
 import sys
 import tempfile
+from collections import defaultdict
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
+from invoice_processing.adapters import LocalBlobStore
 from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import RunContext
+from invoice_processing.trust import evaluate as trust_evaluate
 from invoice_processing.trust.decide import FakeDecider
 from invoice_processing.trust.findings.model import Citation, FindingSpec
 from invoice_processing.trust.findings.store import FindingStore
@@ -21,7 +25,11 @@ from invoice_processing.trust.graph.sync import sync_tenant
 from invoice_processing.trust.history import mapping
 from invoice_processing.trust.history.importer import HistoryImporter
 from invoice_processing.trust.history.readers import read_table
+from invoice_processing.trust.modes import ENGINES
+from invoice_processing.trust.providers import fakes
+from invoice_processing.trust.providers.registry import Registry
 
+from . import faults as fault_families
 from .generate import KINDS, generate
 
 GATES = {"invoice_vendor_coverage": 0.95, "po_backed_coverage": 0.80}
@@ -46,7 +54,10 @@ def run(url: str, data_dir: Path, tenant_id: str = "bench-history") -> dict:
     importer = HistoryImporter(url)
     no_model = FakeDecider({}, fail=True)
     for kind in KINDS:
-        data = (data_dir / f"{kind}.csv").read_bytes()
+        path = data_dir / f"{kind}.csv"
+        if not path.exists():
+            continue
+        data = path.read_bytes()
         headers, _ = read_table(data, f"{kind}.csv")
         importer.import_file(
             ctx,
@@ -123,8 +134,108 @@ def run(url: str, data_dir: Path, tenant_id: str = "bench-history") -> dict:
         "unlinked": unlinked,
     }
     out["gates"] = {name: out[name] >= floor for name, floor in GATES.items()}
+
+    modules = fault_families.modules()
+    _run_engines(ctx, graph, links, url, data_dir, modules)
+    out["types"] = _score(tenant_id, graph, findings, manifest, modules)
+    for code, scores in out["types"].items():
+        for metric, floor in _gates_of(modules)[code].items():
+            ok = (
+                scores[metric] <= floor
+                if metric == "impact_error"
+                else scores[metric] >= floor
+            )
+            out["gates"][f"{code}.{metric}"] = ok
     out["passed"] = all(out["gates"].values())
     return out
+
+
+class _Advisory:
+    """Every engine on, nothing held: the benchmark measures, it never gates."""
+
+    def get(self, tenant_id):
+        return {"trust_engine_modes": dict.fromkeys(ENGINES, "advisory")}
+
+
+def _gates_of(modules) -> dict[str, dict]:
+    gates: dict[str, dict] = {}
+    for module in modules:
+        gates.update(getattr(module, "GATES", {}) or {})
+    return gates
+
+
+def _run_engines(ctx, graph, links, url, data_dir, modules) -> None:
+    registry = Registry(graph)
+    fakes.install(registry)
+    scripts: dict[str, dict] = defaultdict(dict)
+    for module in modules:
+        seed = getattr(module, "seed_graph", None)
+        if seed is not None:
+            seed(ctx, graph, data_dir)
+        for capability, script in (
+            getattr(module, "provider_scripts", {}) or {}
+        ).items():
+            scripts[capability].update(script)
+    for capability, script in scripts.items():
+        registry.register(
+            capability, "fake", lambda s=dict(script): fakes.FakeProvider(s)
+        )
+    trust_evaluate.evaluate(
+        ctx,
+        None,
+        graph=graph,
+        links=links,
+        url=url,
+        settings_store=_Advisory(),
+        findings=FindingStore(url),
+        providers=registry,
+        decider=FakeDecider({}, fail=True),
+        blobs=LocalBlobStore(data_dir / "blobs"),
+    )
+
+
+def _score(tenant_id, graph, findings, manifest, modules) -> dict:
+    """Per gated finding type: precision, recall and ₹ error against the
+    manifest, matched on the transaction's document number."""
+    expected: dict[str, dict] = defaultdict(dict)
+    for fault in manifest.get("faults", []):
+        expected[fault["type"]][fault["doc_number"]] = fault.get(
+            "expected_impact"
+        )
+    doc_of: dict[str, str | None] = {}
+
+    def doc(node_id: str) -> str | None:
+        if node_id not in doc_of:
+            node = graph.node(tenant_id, node_id) or {"attrs": {}}
+            a = node["attrs"]
+            doc_of[node_id] = a.get("doc_number") or a.get("invoice_number")
+        return doc_of[node_id]
+
+    types = {}
+    for code in _gates_of(modules):
+        found = {
+            doc(f["transaction_node"]): f["impact"]
+            for f in findings.list(tenant_id, type=code)
+        }
+        want = expected.get(code, {})
+        hit = want.keys() & found.keys()
+        precision = (
+            len(hit) / len(found) if found else (1.0 if not want else 0.0)
+        )
+        recall = len(hit) / len(want) if want else 1.0
+        priced = [d for d in hit if want[d] not in (None, "")]
+        num = sum(
+            abs(Decimal(found[d] or 0) - Decimal(str(want[d]))) for d in priced
+        )
+        den = sum(Decimal(str(want[d])) for d in priced)
+        types[code] = {
+            "expected": len(want),
+            "found": len(found),
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "impact_error": round(float(num / den), 4) if den else 0.0,
+        }
+    return types
 
 
 def main(argv: list[str] | None = None) -> None:

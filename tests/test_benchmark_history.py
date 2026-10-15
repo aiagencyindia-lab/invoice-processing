@@ -1,11 +1,16 @@
 """The round-trip gate: what the generator injected, the graph must link."""
 
 import json
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
 from benchmark.history import eval as history_eval
-from benchmark.history import generate
+from benchmark.history import faults, generate
+from invoice_processing.trust import evaluate as ev
+from invoice_processing.trust.findings import model as finding_model
+from invoice_processing.trust.findings.model import Citation, FindingSpec
 from invoice_processing.trust.findings.store import FindingStore
 
 
@@ -82,3 +87,126 @@ def test_unlinked_records_become_bench_import_findings(tmp_path, scratch_db):
     assert len(findings) == out["counts"]["ap_invoice"] == out["unlinked"]
     first = FindingStore(url).get("bench-history", findings[0]["id"])
     assert first["citations"] and first["status"] == "detected"
+
+
+def fake_module(impact_scale="1"):
+    def inject(rng, rows, faults, *, start, months):
+        inv = rows["ap_invoice"][0]
+        faults.append(
+            {
+                "type": "T-BENCH",
+                "doc_number": inv["doc_number"],
+                "vendor_key": inv["vendor_key"],
+                "expected_impact": inv["amount"],
+            }
+        )
+        rows["bank_line"].append(
+            {
+                "external_id": "B1",
+                "record_date": "2025-02-01",
+                "amount": "-10",
+                "currency": "INR",
+                "counterparty": "X",
+                "bank_reference": "UTR1",
+            }
+        )
+
+    return SimpleNamespace(
+        __name__="benchmark.history.faults.fake",
+        inject=inject,
+        GATES={
+            "T-BENCH": {"precision": 1.0, "recall": 1.0, "impact_error": 0.0}
+        },
+        seed_graph=None,
+        provider_scripts={},
+    )
+
+
+def bench_runner(data, scale="1"):
+    """A fake engine that knows the answers from the test, never from eval."""
+    manifest = json.loads((data / "manifest.json").read_text())
+    wanted = {f["doc_number"] for f in manifest["faults"]}
+
+    def run(ectx):
+        return [
+            FindingSpec(
+                type="T-BENCH",
+                transaction_node=t.node_id,
+                dedupe_key=f"T-BENCH:{t.node_id}",
+                impact=t.amount * Decimal(scale),
+                currency="INR",
+                confidence=1.0,
+                engine_version="t",
+                rule_version="r",
+                model_version="none",
+                summary="bench",
+                citations=(Citation(t.node_id),),
+            )
+            for t in ectx.transactions()
+            if t.doc_number in wanted
+        ]
+
+    return run
+
+
+def test_fault_modules_are_discovered_and_inject_rows(tmp_path, monkeypatch):
+    assert all(
+        m.__name__.startswith("benchmark.history.faults.")
+        for m in faults.modules()
+    )
+    monkeypatch.setattr(faults, "modules", lambda: [fake_module()])
+    manifest = generate.generate(7, tmp_path / "d")
+    [fault] = manifest.faults
+    assert fault["type"] == "T-BENCH"
+    lines = (tmp_path / "d" / "bank_line.csv").read_text().splitlines()
+    assert lines[0].startswith("external_id") and len(lines) == 2
+    vendor_header = (tmp_path / "d" / "vendor.csv").read_text().splitlines()[0]
+    assert {"pan", "bank_account", "bank_code"} <= set(vendor_header.split(","))
+
+
+def test_eval_runs_engines_and_scores_per_type(
+    tmp_path, scratch_db, monkeypatch
+):
+    monkeypatch.setattr(faults, "modules", lambda: [fake_module()])
+    finding_model.register_type("T-BENCH", "bench", engine="leakage")
+    data = tmp_path / "d"
+    generate.generate(7, data)
+    monkeypatch.setattr(ev, "RUNNERS", {"leakage": bench_runner(data)})
+    out = history_eval.run(scratch_db("bench5.db"), data)
+    assert out["types"]["T-BENCH"] == {
+        "expected": 1,
+        "found": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "impact_error": 0.0,
+    }
+    assert out["gates"]["T-BENCH.precision"] is True and out["passed"] is True
+
+
+def test_a_wrong_impact_fails_the_impact_gate(
+    tmp_path, scratch_db, monkeypatch
+):
+    monkeypatch.setattr(faults, "modules", lambda: [fake_module()])
+    finding_model.register_type("T-BENCH", "bench", engine="leakage")
+    data = tmp_path / "d"
+    generate.generate(7, data)
+    monkeypatch.setattr(
+        ev, "RUNNERS", {"leakage": bench_runner(data, scale="2")}
+    )
+    out = history_eval.run(scratch_db("bench6.db"), data)
+    assert out["types"]["T-BENCH"]["impact_error"] == 1.0
+    assert (
+        out["gates"]["T-BENCH.impact_error"] is False and out["passed"] is False
+    )
+
+
+def test_type_without_a_module_is_not_gated(tmp_path, scratch_db, monkeypatch):
+    monkeypatch.setattr(faults, "modules", lambda: [])
+    data = tmp_path / "d"
+    generate.generate(7, data)
+    out = history_eval.run(scratch_db("bench7.db"), data)
+    assert set(out["gates"]) == {
+        "invoice_vendor_coverage",
+        "po_backed_coverage",
+    }
+    assert out["types"] == {}
