@@ -1,6 +1,7 @@
 """Provenance v1: PDF facts, the ledger and score, and tamper after approval."""
 
 import logging
+import sys
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -138,6 +139,37 @@ def test_fingerprint_ignores_page_count_and_text_but_not_fonts_or_producer():
         assert pdfmeta.fingerprint(pdfmeta.facts(changed)) != (
             pdfmeta.fingerprint(base)
         )
+
+
+def test_oversize_bytes_are_skipped_without_parsing(monkeypatch, caplog):
+    class Exploding:
+        def __getattr__(self, name):
+            raise AssertionError("pdfplumber must not be touched")
+
+    monkeypatch.setitem(sys.modules, "pdfplumber", Exploding())
+    data = b"%PDF-1.4\n" + b"\0" * pdfmeta.MAX_BYTES
+    with caplog.at_level(logging.INFO):
+        assert pdfmeta.facts(data) is None
+    assert [
+        r.reason for r in caplog.records if r.msg == "provenance_skipped"
+    ] == ["too_large"]
+
+
+def test_only_the_first_max_pages_are_read(monkeypatch):
+    import pdfplumber.page  # noqa: PLC0415
+
+    reads = []
+    real = pdfplumber.page.Page.extract_text
+    monkeypatch.setattr(
+        pdfplumber.page.Page,
+        "extract_text",
+        lambda self, *a, **kw: (
+            reads.append(self.page_number) or real(self, *a, **kw)
+        ),
+    )
+    facts = pdfmeta.facts(make_pdf(pages=pdfmeta.MAX_PAGES + 3))
+    assert facts["page_count"] == pdfmeta.MAX_PAGES + 3
+    assert reads == list(range(1, pdfmeta.MAX_PAGES + 1))
 
 
 def test_non_pdf_bytes_give_none():
@@ -602,3 +634,21 @@ def test_tamper_still_checked_for_a_non_pdf_document(world):
     _, specs = world.ingest("new", number="INV-8", pdf=b"GIF89a image")
     assert [s.type for s in specs] == ["PROV-TAMPER"]
     assert world.version("new") is None
+
+
+def test_tamper_summary_for_a_changed_resubmission(world):
+    world.invoice("old", number="INV-8", decision="approve")
+    _, [spec] = world.ingest("new", number="INV-8")
+    assert "this copy may have been altered" in spec.summary
+
+
+def test_tamper_summary_is_symmetric_when_both_copies_are_approved(world):
+    world.invoice("a", number="INV-8", decision="approve")
+    _, [spec] = world.ingest("b", number="INV-8", decision="approve")
+    assert spec.summary == (
+        "Two approved copies of invoice INV-8 from this vendor have "
+        "different document bytes."
+    )
+    batch = provenance.run(world.ectx())
+    assert len(batch) == 2
+    assert all(s.summary.startswith("Two approved copies") for s in batch)

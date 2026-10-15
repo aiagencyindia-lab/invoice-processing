@@ -278,9 +278,12 @@ def _tamper(ectx, tenant, targets) -> list[FindingSpec]:
                 rule_version=RULE_VERSION,
                 model_version="none",
                 summary=(
-                    f"Invoice {a.get('invoice_number')} was "
-                    "approved earlier with a different document; this copy may "
-                    "have been altered."
+                    f"Two approved copies of invoice {a.get('invoice_number')} "
+                    "from this vendor have different document bytes."
+                    if x in tenant.approved
+                    else f"Invoice {a.get('invoice_number')} was approved "
+                    "earlier with a different document; this copy may have "
+                    "been altered."
                 ),
                 details={"approved_twins": len(twins)},
                 citations=tuple(cites),

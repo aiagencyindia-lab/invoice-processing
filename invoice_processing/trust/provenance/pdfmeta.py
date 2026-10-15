@@ -5,10 +5,17 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 
 from ... import confidence
+
+logger = logging.getLogger(__name__)
+# Parsing cost grows with bytes and pages; the ingest limit is 25 MB, and the
+# provenance facts are all on the first pages.
+MAX_BYTES = 25 * 2**20
+MAX_PAGES = 40
 
 _DATE = re.compile(
     r"(?:D:)?(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?"
@@ -58,13 +65,16 @@ def facts(data: bytes) -> dict | None:
     """The document's provenance facts, None when it is not a readable PDF."""
     if not data.startswith(b"%PDF"):
         return None
+    if len(data) > MAX_BYTES:
+        logger.info("provenance_skipped", extra={"reason": "too_large"})
+        return None
     try:
         import pdfplumber  # noqa: PLC0415 - heavy; only this engine needs it
 
         with pdfplumber.open(io.BytesIO(data)) as pdf:
             meta = pdf.metadata or {}
             sizes, fonts, texts = set(), set(), []
-            for page in pdf.pages:
+            for page in pdf.pages[:MAX_PAGES]:
                 sizes.add((round(float(page.width)), round(float(page.height))))
                 fonts.update(
                     _SUBSET.sub("", c.get("fontname") or "") for c in page.chars
