@@ -7,11 +7,16 @@ model can never put a rupee into a finding.
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import re
+import tempfile
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
-from ... import masking
+from ... import confidence, masking
+from ..decide import Question, decide
 
 TYPES = ("rate", "escalator", "tier", "rebate", "discount", "term", "none")
 
@@ -138,3 +143,132 @@ def params(kind: str, excerpt: str) -> dict | None:
                 "end": max(found).isoformat(),
             }
     return None
+
+
+# -- extraction ---------------------------------------------------------------
+
+logger = logging.getLogger(__name__)
+SOURCE = "leakage"
+
+
+def _pages(data: bytes) -> list[str]:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "contract.pdf"
+        path.write_bytes(data)
+        return confidence.extract_page_text(path)
+
+
+def _questions(cands: list[str]) -> list[Question]:
+    out = []
+    for i in range(len(cands)):
+        out.append(
+            Question(
+                f"c{i}",
+                "choice",
+                f"Which kind of contract clause is candidate c{i}? 'rate' is "
+                "a unit price, 'tier' a price after a quantity, 'rebate' a "
+                "credit after spend, 'discount' early-payment terms, 'term' "
+                "the contract's start and end, 'none' anything else.",
+                fallback="none",
+                options=TYPES,
+            )
+        )
+        out.append(
+            Question(
+                f"c{i}_score",
+                "score",
+                f"How sure are you of the kind of candidate c{i}?",
+                fallback=0.0,
+            )
+        )
+    return out
+
+
+def extract(ectx) -> list[str]:
+    """Clause nodes for the contract document in `ectx.document`."""
+    doc = ectx.document
+    tenant = ectx.ctx.tenant_id
+    contract = ectx.graph.nodes_by_ref(tenant, "documents", [doc["id"]]).get(
+        doc["id"]
+    )
+    if contract is None:
+        logger.info("leakage_contract_node_missing")
+        return []
+    pages = _pages(ectx.blobs.get(doc["storage_key"]))
+    if not confidence.has_readable_text(pages):
+        # Scanned contracts (OCR) are a Wave 1 non-goal.
+        logger.info("leakage_contract_unreadable")
+        return []
+    limit = int(ectx.threshold("leakage.max_pages"))
+    ids: list[str] = []
+    skipped = 0
+    for page, text in enumerate(pages[:limit], start=1):
+        cands = candidates(text)
+        if not cands:
+            continue
+        answers = {
+            a.id: a
+            for a in decide(
+                {
+                    "page": page,
+                    "candidates": {f"c{i}": c for i, c in enumerate(cands)},
+                },
+                _questions(cands),
+                ectx.decider,
+            )
+        }
+        for i, excerpt in enumerate(cands):
+            kind = answers[f"c{i}"]
+            if kind.fallback or kind.value == "none":
+                skipped += kind.fallback
+                continue
+            found = params(kind.value, excerpt)
+            if found is None:
+                skipped += 1
+                continue
+            score = answers[f"c{i}_score"]
+            conf = round(
+                float(kind.probability if score.fallback else score.value), 4
+            )
+            ids.append(
+                _write(ectx, contract, page, kind.value, found, excerpt, conf)
+            )
+    if skipped:
+        logger.info("leakage_clauses_skipped", extra={"count": skipped})
+    return ids
+
+
+def _write(ectx, contract, page, kind, found, excerpt, conf) -> str:
+    graph, tenant = ectx.graph, ectx.ctx.tenant_id
+    digest = hashlib.sha256(excerpt.encode()).hexdigest()[:12]
+    key = f"clause:{contract}:{page}:{digest}"
+    open_row = graph.open_node(tenant, "contract_clause", key)
+    if open_row and open_row["attrs"].get("reviewed"):
+        node = open_row["id"]  # a person's review outranks a re-read
+    else:
+        node = graph.upsert_node(
+            ectx.ctx,
+            kind="contract_clause",
+            natural_key=key,
+            attrs={
+                "type": kind,
+                "params": found,
+                "page": page,
+                "excerpt": excerpt,
+                "confidence": conf,
+                "reviewed": False,
+            },
+            at=ectx.now,
+        )
+    graph.upsert_edge(
+        ectx.ctx,
+        src=node,
+        dst=contract,
+        kind="part_of",
+        source_system=SOURCE,
+        provenance="model_inference",
+        confidence=conf,
+        observed_at=ectx.now,
+        at=ectx.now,
+    )
+    return node
