@@ -34,7 +34,7 @@ name)`.
 
 **Thresholds.** `payment.amount_zscore 3.0, min_history 5,
 cadence_ratio_min 0.25, name_match_min 0.8, bec_hold_signals 2,
-lookalike_ratio 0.8`.
+lookalike_ratio 0.8, bank_change_recent_days 30`.
 
 **Replay harness (AC-21).** `tests/fixtures/trust_payment/<scenario>/
 {vendor.json, invoice.json, email.eml, expected.json}`, parametrised in

@@ -36,10 +36,10 @@ branches edit the same file, so every shared change lands first, here.
 
 | Kind | Owner | Notes |
 |---|---|---|
-| node `contract` (ref `documents`) | scaffold route | `attrs`: filename, sha256, vendor node |
+| node `contract` (ref `documents`) | scaffold route | `attrs`: filename, sha256, vendor_id |
 | node `contract_clause` | leakage | `type, params, page, excerpt, confidence, reviewed` |
 | node `document_version` (ref `documents`) | provenance | the provenance ledger |
-| edge `governs` contract → vendor | scaffold route | `system_record` |
+| edge `governs` contract → vendor | scaffold route, else the next full sync | `human_assertion` (the uploader named the vendor) |
 | edge `part_of` clause → contract | leakage | `model_inference` |
 | edge `governed_by` invoice → contract | leakage | `model_inference` |
 | edge `evidences` document_version → invoice | provenance | `system_record` |
@@ -66,14 +66,15 @@ upserts them. `document` is `None` for a batch (tenant-wide) run.
 rate_tolerance_pct 0.5, clause_min_confidence 0.7, renewal_notice_days 60,
 max_pages 40` · `payment.amount_zscore 3.0, min_history 5,
 cadence_ratio_min 0.25, name_match_min 0.8, bec_hold_signals 2,
-lookalike_ratio 0.8` · `provenance.suspect_below 0.5, template_min_history 3`
+lookalike_ratio 0.8, bank_change_recent_days 30` · `provenance.suspect_below 0.5, template_min_history 3`
 · `gst.nonfiler_missed_periods 2, new_vendor_days 90, first_invoice_multiple 3,
 risk_inactive 1.0, risk_nonfiler 0.5, risk_shared 0.3, risk_new 0.2`.
 
 ## Sync additions (the only Wave 1 edit to the graph builder)
 
 Invoice attrs += `document_id, document_sha256, document_source,
-document_source_ref, document_sender, document_reply_to, payment_terms,
+document_source_ref, document_sender_domain, document_reply_to_domain (domains only;
+engines read full addresses from `ectx.document`), payment_terms,
 due_date, total_ex_tax, tax_amount, place_of_supply, customer_tax_id,
 discount`; line attrs += `hsn_sac, line_discount`; vendor attrs +=
 `bank_verified_at, bank_account_name`; history nodes carry every mapped field

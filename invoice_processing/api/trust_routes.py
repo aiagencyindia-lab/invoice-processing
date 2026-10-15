@@ -184,7 +184,7 @@ def _vendor_exists(tenant_id: str, vendor_id: str) -> bool:
 
 
 def _store_contract(
-    principal: Principal, data: bytes, filename: str, vendor_id: str
+    principal: Principal, graph, data: bytes, filename: str, vendor_id: str
 ):
     import hashlib  # noqa: PLC0415
     from datetime import datetime, timezone  # noqa: PLC0415
@@ -192,7 +192,6 @@ def _store_contract(
     from . import service  # noqa: PLC0415
     from .ingest import IngestionRefused, check_acceptable, storage_key_for  # noqa: PLC0415
 
-    graph = _graph()
     try:
         check_acceptable(data, filename)
     except IngestionRefused as exc:
@@ -211,6 +210,14 @@ def _store_contract(
                 409, "These bytes were already received as another document."
             )
         document_id = existing["id"]
+        prior_id = graph.nodes_by_ref(
+            tenant_id, "documents", [document_id]
+        ).get(document_id)
+        prior = graph.node(tenant_id, prior_id) if prior_id else None
+        if prior and prior["attrs"].get("vendor_id") not in (None, vendor_id):
+            raise HTTPException(
+                409, "This contract was already uploaded for another vendor."
+            )
     else:
         key = storage_key_for(sha256)
         service.get_blobs(tenant_id).put(
@@ -238,8 +245,8 @@ def _store_contract(
         attrs={"filename": filename, "sha256": sha256, "vendor_id": vendor_id},
         at=at,
     )
-    # The vendor's node exists once a sync has run; until then the Leakage
-    # engine draws this edge from attrs.vendor_id.
+    # The vendor's node exists once a sync has run; until then the next full
+    # sync draws this edge from attrs.vendor_id.
     vendor_node = graph.nodes_by_ref(tenant_id, "vendors", [vendor_id]).get(
         vendor_id
     )
@@ -288,7 +295,18 @@ async def upload_contract(
 ):
     from .ingest import MAX_DOCUMENT_BYTES  # noqa: PLC0415
 
-    _graph()
+    graph = _graph()
+    too_large = HTTPException(
+        413, f"Contracts are limited to {MAX_DOCUMENT_BYTES // 2**20} MB."
+    )
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    # Multipart framing adds a little; anything far past the cap is refused
+    # before the body is read.
+    if declared > MAX_DOCUMENT_BYTES + 64 * 1024:
+        raise too_large
     if not request.headers.get("content-type", "").startswith(
         "multipart/form-data"
     ):
@@ -303,9 +321,12 @@ async def upload_contract(
     if not vendor_id:
         raise HTTPException(400, "vendor_id is required.")
     data = await upload.read(MAX_DOCUMENT_BYTES + 1)
+    if len(data) > MAX_DOCUMENT_BYTES:
+        raise too_large
     out = await run_in_threadpool(
         _store_contract,
         principal,
+        graph,
         data,
         upload.filename or "contract.pdf",
         vendor_id,

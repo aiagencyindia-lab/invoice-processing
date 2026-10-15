@@ -91,6 +91,36 @@ def _tax_amount(inv, extracted: dict) -> str | None:
     return None
 
 
+def _domain(address: str | None) -> str | None:
+    if not address or "@" not in address:
+        return None
+    return address.rsplit("@", 1)[1].strip(" >").lower() or None
+
+
+def _sync_contract_edges(ctx, graph, at) -> None:
+    """A contract uploaded before its vendor was synced gets its `governs`
+    edge here. The uploader named the vendor, so it stays a human assertion."""
+    for n in graph.nodes(ctx.tenant_id, kind="contract"):
+        vendor_id = n["attrs"].get("vendor_id")
+        if not vendor_id:
+            continue
+        ven = graph.nodes_by_ref(ctx.tenant_id, "vendors", [vendor_id]).get(
+            vendor_id
+        )
+        if ven:
+            graph.upsert_edge(
+                ctx,
+                src=n["id"],
+                dst=ven,
+                kind="governs",
+                source_system="upload",
+                provenance="human_assertion",
+                confidence=1.0,
+                observed_at=at,
+                at=at,
+            )
+
+
 def _maybe_money(value) -> str | None:
     if value in (None, ""):
         return None
@@ -324,8 +354,10 @@ def _sync_v1_invoices(ctx, s, graph, vendors, po_nodes, at, bump, document_id):
             "document_sha256": doc.sha256 if doc else None,
             "document_source": doc.source if doc else None,
             "document_source_ref": doc.source_ref if doc else None,
-            "document_sender": doc.sender if doc else None,
-            "document_reply_to": doc.reply_to if doc else None,
+            # Domains only: the graph keeps no personal email; Payment reads
+            # the addresses from the document itself.
+            "document_sender_domain": _domain(doc.sender if doc else None),
+            "document_reply_to_domain": _domain(doc.reply_to if doc else None),
             "payment_terms": inv.payment_terms,
             "due_date": _date(inv.due_date),
             "total_ex_tax": _money(inv.total_ex_tax),
@@ -580,6 +612,7 @@ def sync_tenant(
         )
         if document_id is None:
             _sync_history(ctx, s, graph, vendors, po_nodes, at, bump)
+            _sync_contract_edges(ctx, graph, at)
 
     if document_id is None:
         counts["links"] = resolve.run(ctx, graph, links, decider=decider)

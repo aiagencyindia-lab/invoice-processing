@@ -22,6 +22,7 @@ DEFAULTS: dict[str, float] = {
     "payment.name_match_min": 0.8,
     "payment.bec_hold_signals": 2,
     "payment.lookalike_ratio": 0.8,
+    "payment.bank_change_recent_days": 30,
     # Provenance v1 (FR-22)
     "provenance.suspect_below": 0.5,
     "provenance.template_min_history": 3,

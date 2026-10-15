@@ -14,7 +14,9 @@ payment or statement nodes it rests on; ₹ impact is deterministic arithmetic.
 `payment`, `vendor_statement_line`, `contract`, `contract_clause` nodes;
 `links.canonical_map`; `ectx.transactions()`. Contract PDF bytes via
 `ectx.blobs.get(storage_key)` → `confidence.extract_page_text` and
-`confidence.locate` for page citations. No providers.
+`confidence.locate` for page citations. No providers. A contract's vendor is
+its `governs` edge (drawn by the upload route or the next full sync; Leakage
+never draws it), else `attrs.vendor_id`.
 
 **Clause extraction.** Deterministic candidate spans per page (regex: `%`,
 ₹/INR amounts, dates, "per unit / tier / rebate / escalat / renew / notice /

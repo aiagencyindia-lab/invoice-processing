@@ -27,7 +27,7 @@ from .findings import model as finding_model
 from .findings.model import Citation, FindingSpec
 from .findings.store import FindingStore
 from .graph.sync import sync_tenant
-from .modes import ENGINES
+from .modes import ENGINES, HOLD_ENGINES
 
 logger = logging.getLogger(__name__)
 
@@ -39,20 +39,27 @@ ENGINE_FAILED = finding_model.ENGINE_FAILED
 MAX_MODEL_CALLS_PER_EVALUATION = 25
 
 
-def _runner(name: str):
-    if name in RUNNERS:
-        return RUNNERS[name]
+_MISSING = object()
+
+
+def _import_engine(name: str):
     module_name = f"{__package__}.{name}"
     try:
-        module = importlib.import_module(module_name)
+        return importlib.import_module(module_name)
     except ModuleNotFoundError as exc:
         if exc.name != module_name:
             raise  # the engine exists but one of its imports does not
         return None
-    run = getattr(module, "run", None)
-    if run is not None:
-        RUNNERS[name] = run
-    return run
+
+
+def _runner(name: str):
+    """The engine's run(), None when its package is absent; raises when the
+    package exists but cannot import (the caller isolates that)."""
+    if name not in RUNNERS:
+        module = _import_engine(name)
+        RUNNERS[name] = getattr(module, "run", None) or _MISSING
+    run = RUNNERS[name]
+    return None if run is _MISSING else run
 
 
 def _document(s, tenant_id: str, document_id: str) -> dict | None:
@@ -77,7 +84,7 @@ def _document(s, tenant_id: str, document_id: str) -> dict | None:
 
 
 def _owns_holds(name: str) -> bool:
-    return any(
+    return name in HOLD_ENGINES or any(
         finding_model.TYPE_ENGINE.get(code) == name
         for code in finding_model.HOLD_TYPES
     )
@@ -95,33 +102,39 @@ def _engine_failed(name: str, node: str, version: str) -> FindingSpec:
         rule_version="contract-3.1.4",
         model_version="none",
         summary=f"The {name} engine failed; payment is held until it runs.",
-        details={"engine": name, "mode": "enforcing"},
+        details={"engine": name, "mode": "enforcing", "hold": True},
         citations=(Citation(node, f"{name} engine failure"),),
     )
 
 
-def _retire_engine_failed(ectx: EngineContext, name: str) -> None:
+def _release(ectx: EngineContext, f: dict, reason: str) -> None:
+    if f["status"] == "detected":
+        ectx.findings.transition(ectx.ctx, f["id"], "triaged", actor="system")
+        f["status"] = "triaged"
+    if f["status"] == "triaged":
+        ectx.findings.transition(
+            ectx.ctx, f["id"], "rejected", actor="system", reason=reason
+        )
+
+
+def _release_cleared(ectx: EngineContext, name: str, emitted: set) -> None:
+    """After a clean per-document run: lift this engine's undecided holds on
+    the invoice that it no longer finds, and its engine-failed hold. A
+    finding a person has decided is theirs and is left alone."""
     node = ectx.invoice_node
     if node is None:
         return
-    for f in ectx.findings.list(
-        ectx.ctx.tenant_id, type=ENGINE_FAILED, transaction_node=node
-    ):
-        if f["dedupe_key"] != f"{ENGINE_FAILED}:{name}:{node}":
+    for f in ectx.findings.list(ectx.ctx.tenant_id, transaction_node=node):
+        if f["status"] not in ("detected", "triaged"):
             continue
-        if f["status"] == "detected":
-            ectx.findings.transition(
-                ectx.ctx, f["id"], "triaged", actor="system"
-            )
-            f["status"] = "triaged"
-        if f["status"] == "triaged":
-            ectx.findings.transition(
-                ectx.ctx,
-                f["id"],
-                "rejected",
-                actor="system",
-                reason="The engine ran cleanly.",
-            )
+        if f["dedupe_key"] == f"{ENGINE_FAILED}:{name}:{node}":
+            _release(ectx, f, "The engine ran cleanly.")
+        elif (
+            f["details"].get("engine") == name
+            and f["details"].get("hold")
+            and f["dedupe_key"] not in emitted
+        ):
+            _release(ectx, f, "No longer found by a clean run.")
 
 
 def _default_providers(graph):
@@ -215,13 +228,13 @@ def evaluate(
         if mode == "off":
             report[name] = "off"
             continue
-        run = _runner(name)
-        if run is None:
-            logger.info("trust_engine_missing", extra={"engine": name})
-            report[name] = "missing"
-            continue
         ectx = dataclasses.replace(base, mode=mode)
         try:
+            run = _runner(name)
+            if run is None:
+                logger.info("trust_engine_missing", extra={"engine": name})
+                report[name] = "missing"
+                continue
             specs = list(run(ectx) or [])
         except Exception as exc:
             logger.warning(
@@ -231,6 +244,8 @@ def evaluate(
             report[name] = "failed"
             # Fail closed for an engine that can hold payment (§3.1.4): with
             # nothing to read its verdict from, the invoice is held instead.
+            # A batch run has no invoice to hold, so its failure is only
+            # logged.
             if mode == "enforcing" and _owns_holds(name) and invoice_node:
                 base.findings.upsert(
                     ctx, _engine_failed(name, invoice_node, f"{name}-?")
@@ -240,10 +255,16 @@ def evaluate(
             base.findings.upsert(
                 ctx,
                 dataclasses.replace(
-                    spec, details={**spec.details, "mode": mode}
+                    spec,
+                    details={
+                        **spec.details,
+                        "mode": mode,
+                        "engine": name,
+                        "hold": spec.type in finding_model.HOLD_TYPES,
+                    },
                 ),
             )
-        if mode == "enforcing" and _owns_holds(name):
-            _retire_engine_failed(ectx, name)
+        if _owns_holds(name):
+            _release_cleared(ectx, name, {spec.dedupe_key for spec in specs})
         report[name] = {"mode": mode, "findings": len(specs)}
     return {"synced": counts, "engines": report}

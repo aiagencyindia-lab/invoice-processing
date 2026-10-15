@@ -539,3 +539,49 @@ class TestPaymentHold:
         )
         r = client.post("/api/invoices/case_002/export", json={"target": "csv"})
         assert r.status_code == 409 and "PAY-X" in r.json()["detail"]
+
+    def test_an_admin_override_at_approval_carries_to_export(
+        self, client, monkeypatch
+    ):
+        from invoice_processing.trust import gate  # noqa: PLC0415
+
+        monkeypatch.setattr(
+            gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
+        )
+        monkeypatch.setitem(CLAIMS["boss"], "role", "admin")
+        r = client.post(
+            "/api/invoices/case_002/actions",
+            json={
+                "action": "approve",
+                "override_reason": "Called the vendor on file",
+            },
+        )
+        assert r.status_code == 200, r.text
+        out = client.post(
+            "/api/invoices/case_002/export", json={"target": "csv"}
+        )
+        assert out.status_code == 200, out.text
+
+    def test_a_hold_raised_after_an_override_still_blocks_export(
+        self, client, monkeypatch
+    ):
+        from invoice_processing.trust import gate  # noqa: PLC0415
+
+        monkeypatch.setitem(CLAIMS["boss"], "role", "admin")
+        monkeypatch.setattr(
+            gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
+        )
+        client.post(
+            "/api/invoices/case_002/actions",
+            json={
+                "action": "approve",
+                "override_reason": "Called the vendor on file",
+            },
+        )
+        monkeypatch.setattr(
+            gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-Y."
+        )
+        out = client.post(
+            "/api/invoices/case_002/export", json={"target": "csv"}
+        )
+        assert out.status_code == 409 and "PAY-Y" in out.json()["detail"]

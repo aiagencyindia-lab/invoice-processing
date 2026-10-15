@@ -310,6 +310,8 @@ class Decision:
     appended_second: bool
     # Step 2.3 matched live for an "unchecked" hold, to store on approval.
     three_way: dict | None = None
+    # The payment hold an administrator overrode, carried to export.
+    hold_overridden: str | None = None
 
 
 def decide(
@@ -366,6 +368,7 @@ def decide(
         raise Refused(refusal)
     pending = [s for s in repo.chain(t, case) if s["status"] == "pending"]
     recheck = None
+    held = None
     if approve and pending and pending[-1]["id"] == current["id"]:
         # Only the decision that would complete the chain is re-checked:
         # that is when the invoice starts counting as billed.
@@ -427,7 +430,7 @@ def decide(
         )
         completed, second = False, True
     return Decision(
-        step, completed, why or "override", overridden, second, recheck
+        step, completed, why or "override", overridden, second, recheck, held
     )
 
 

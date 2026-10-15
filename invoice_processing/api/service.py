@@ -1566,6 +1566,7 @@ def act(
 
     # From the artifacts already in hand rather than a second read.
     previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
+    hold_overridden = None
     # Held from the re-check to the projection that bills this invoice, so
     # two final approvals on one PO cannot both pass against the same units.
     with _final_approval_lock(principal.tenant_id, artifacts, request.action):
@@ -1637,6 +1638,7 @@ def act(
                     "step": step["position"],
                     "next": repo.current(principal.tenant_id, case_id),
                 }
+            hold_overridden = outcome.hold_overridden
             get_audit().emit(
                 ctx, "approval_chain_completed", {"action": request.action}
             )
@@ -1656,8 +1658,20 @@ def act(
                 principal.can("admin") and request.override_reason
             ):
                 raise HTTPException(status_code=409, detail=held)
+            if held:
+                get_audit().emit(
+                    ctx,
+                    "approval_overridden",
+                    {"hold": held, "override_reason": request.override_reason},
+                )
+            hold_overridden = held
         state = _record_workflow(
             ctx,
+            # Export lets through exactly the hold that was overridden; a
+            # finding raised later holds again.
+            hold_overridden=hold_overridden
+            if request.action == "approve"
+            else None,
             decision=request.action,
             decided_by=principal.email,
             decided_at=datetime.now(timezone.utc).isoformat(),
@@ -1980,10 +1994,14 @@ def export_invoice(
             ),
         )
     held = approval_flow.payment_hold(ctx)
-    if held:
+    if held and held != state.get("hold_overridden"):
         # Raised after approval (a later evaluation): nothing is posted
         # while a trust engine in enforcing mode holds the payment.
         raise HTTPException(status_code=409, detail=held)
+    if held:
+        get_audit().emit(
+            ctx, "payment_hold_overridden_at_export", {"hold": held}
+        )
     invoice = _with_gl(
         ctx, (artifacts.get("extraction") or {}).get("invoice") or {}, artifacts
     )

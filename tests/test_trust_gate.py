@@ -1,5 +1,6 @@
 """payment_hold: an open hold-type finding, from an engine in enforcing, stops payment."""
 
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -132,3 +133,47 @@ def test_unknown_case_or_unsynced_invoice_does_not_hold(env):
         )
         is None
     )
+
+
+def test_a_hold_is_seen_without_its_engine_being_imported(env):
+    """The API process never imports engine packages: the finding itself says
+    it holds and which engine owns it (stamped by evaluate)."""
+    url, store, node = env
+    add(store, node, "PAY-NEVER-REGISTERED", engine="payment", hold=True)
+    assert "PAY-NEVER-REGISTERED" not in finding_model.HOLD_TYPES
+    assert "PAY-NEVER-REGISTERED" in hold(url, {"payment": "enforcing"})
+
+
+def test_gate_asks_nothing_when_no_engine_is_enforcing(env, monkeypatch):
+    url, store, node = env
+    add(store, node, "T-PAYHOLD")
+
+    def explode(*a, **k):
+        raise AssertionError("queried findings with every engine off")
+
+    monkeypatch.setattr(gate.FindingStore, "list", explode)
+    assert hold(url, {"payment": "advisory"}) is None
+
+
+def test_the_newest_invoice_row_of_a_case_decides(env):
+    url, store, node = env
+    with tenant_session(T, url) as s:
+        s.add(
+            models.Document(
+                tenant_id=T, id="d0", sha256="b" * 64, storage_key="k0"
+            )
+        )
+        s.flush()
+        s.add(
+            models.Invoice(
+                tenant_id=T,
+                id="inv-0",
+                document_id="d0",
+                case_id="case-1",
+                total_inc_tax=Decimal("1"),
+                status="done",
+                created_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            )
+        )
+    add(store, node, "T-PAYHOLD")
+    assert hold(url, {"payment": "enforcing"}) is not None

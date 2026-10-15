@@ -19,7 +19,7 @@ from ..db.models import Invoice
 from ..db.session import tenant_session
 from .findings import model as finding_model
 from .findings.store import FindingStore
-from .modes import engine_mode
+from .modes import ENGINES, engine_mode
 
 HELD_UNTIL = "rejected"
 
@@ -32,11 +32,18 @@ def payment_hold(
     graph = service.get_graph_store()
     if graph is None:
         return None
+    enforcing = {
+        name
+        for name in ENGINES
+        if engine_mode(tenant_id, name, settings_store) == "enforcing"
+    }
+    if not enforcing:
+        return None
     with tenant_session(tenant_id, url) as s:
         invoice_id = s.scalars(
-            select(Invoice.id).where(
-                Invoice.tenant_id == tenant_id, Invoice.case_id == case_id
-            )
+            select(Invoice.id)
+            .where(Invoice.tenant_id == tenant_id, Invoice.case_id == case_id)
+            .order_by(Invoice.created_at.desc())
         ).first()
     if invoice_id is None:
         return None
@@ -47,18 +54,16 @@ def payment_hold(
         return None
     holding = []
     for f in FindingStore(url).list(tenant_id, transaction_node=node):
-        if (
-            f["type"] not in finding_model.HOLD_TYPES
-            or f["status"] == HELD_UNTIL
-        ):
+        if f["status"] == HELD_UNTIL:
             continue
-        engine = f["details"].get("engine") or finding_model.TYPE_ENGINE.get(
+        # evaluate() stamps engine and hold on every finding, so this process
+        # need not import the engine packages that registered the types.
+        details = f["details"]
+        holds = details.get("hold", f["type"] in finding_model.HOLD_TYPES)
+        engine = details.get("engine") or finding_model.TYPE_ENGINE.get(
             f["type"]
         )
-        if (
-            engine
-            and engine_mode(tenant_id, engine, settings_store) == "enforcing"
-        ):
+        if holds and engine in enforcing:
             holding.append(f"{f['type']} ({f['summary']})")
     if not holding:
         return None

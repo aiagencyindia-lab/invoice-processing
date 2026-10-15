@@ -74,6 +74,7 @@ WAVE1_THRESHOLDS = {
     "payment.name_match_min": 0.8,
     "payment.bec_hold_signals": 2,
     "payment.lookalike_ratio": 0.8,
+    "payment.bank_change_recent_days": 30,
     "provenance.suspect_below": 0.5,
     "provenance.template_min_history": 3,
     "gst.nonfiler_missed_periods": 2,
@@ -108,3 +109,7 @@ def test_trust_thresholds_merges_over_defaults():
     }
     assert "trust_thresholds" in tenant_settings.SETTABLE
     assert "trust_thresholds" in tenant_settings.DESCRIPTIONS
+
+
+def test_bec_window_is_a_payment_threshold():
+    assert thresholds.DEFAULTS["payment.bank_change_recent_days"] == 30

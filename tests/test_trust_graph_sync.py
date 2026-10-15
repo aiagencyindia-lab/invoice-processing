@@ -287,10 +287,13 @@ def test_invoice_node_carries_document_and_tax_attrs(env):
         "email",
         "email/x.eml",
     )
-    assert (a["document_sender"], a["document_reply_to"]) == (
-        "billing@acme.in",
-        "pay@acrne.in",
+    # Domains, not addresses: the engines need the domain and the graph
+    # keeps no personal email.
+    assert (a["document_sender_domain"], a["document_reply_to_domain"]) == (
+        "acme.in",
+        "acrne.in",
     )
+    assert "document_sender" not in a and "document_reply_to" not in a
     assert (a["payment_terms"], a["due_date"]) == ("2/10 net 30", "2026-02-04")
     assert (a["total_ex_tax"], a["tax_amount"]) == ("900.0000", "90.0000")
     assert a["place_of_supply"] == "27-Maharashtra"

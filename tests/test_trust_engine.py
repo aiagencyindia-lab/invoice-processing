@@ -248,3 +248,63 @@ def test_nothing_is_built_when_every_engine_is_off(env, monkeypatch):
         CTX, "doc-1", graph=graph, links=links, url=url, settings_store=Store()
     )
     assert set(out["engines"].values()) == {"off"}
+
+
+def test_findings_are_stamped_with_engine_and_hold(env):
+    url, _, _ = env
+    finding_model.register_type("T-HOLD2", "hold", engine="payment", hold=True)
+    ev.RUNNERS["payment"] = lambda ectx: [finding_for(ectx, "T-HOLD2")]
+    run(env, modes={"payment": "advisory"})
+    [f] = FindingStore(url).list(T, type="T-HOLD2")
+    assert f["details"]["engine"] == "payment" and f["details"]["hold"] is True
+
+
+def test_an_engine_whose_import_breaks_is_isolated(env, monkeypatch):
+    def broken(name):
+        if name == "payment":
+            raise ModuleNotFoundError(
+                "No module named 'pdfplumber'", name="pdfplumber"
+            )
+
+    monkeypatch.setattr(ev, "_import_engine", broken)
+    seen = []
+    ev.RUNNERS["leakage"] = lambda ectx: seen.append(1) or []
+    out = run(env, modes={"payment": "enforcing", "leakage": "advisory"})
+    assert out["engines"]["payment"] == "failed" and seen == [1]
+    url, _, _ = env
+    # payment owns holds even though it never registered: fail closed.
+    [failed] = FindingStore(url).list(T, type="TRUST-ENGINE-FAILED")
+    assert failed["details"]["engine"] == "payment"
+
+
+def test_a_hold_no_longer_found_by_a_clean_run_is_released(env):
+    url, _, _ = env
+    finding_model.register_type("T-HOLD3", "hold", engine="payment", hold=True)
+    state = {"emit": True}
+    ev.RUNNERS["payment"] = lambda ectx: (
+        [finding_for(ectx, "T-HOLD3")] if state["emit"] else []
+    )
+    run(env, modes={"payment": "enforcing"})
+    assert FindingStore(url).list(T, type="T-HOLD3")[0]["status"] == "detected"
+    state["emit"] = False
+    run(env, modes={"payment": "enforcing"})
+    [f] = FindingStore(url).list(T, type="T-HOLD3")
+    assert f["status"] == "rejected"
+
+
+def test_a_human_decided_hold_is_not_released_by_the_engine(env):
+    url, _, _ = env
+    finding_model.register_type("T-HOLD4", "hold", engine="payment", hold=True)
+    state = {"emit": True}
+    ev.RUNNERS["payment"] = lambda ectx: (
+        [finding_for(ectx, "T-HOLD4")] if state["emit"] else []
+    )
+    run(env, modes={"payment": "enforcing"})
+    store = FindingStore(url)
+    [f] = store.list(T, type="T-HOLD4")
+    human = RunContext(tenant_id=T, case_id="", run_id="h", actor="c@x.test")
+    store.transition(human, f["id"], "triaged", actor="c@x.test")
+    store.transition(human, f["id"], "accepted", actor="c@x.test")
+    state["emit"] = False
+    run(env, modes={"payment": "enforcing"})
+    assert store.list(T, type="T-HOLD4")[0]["status"] == "accepted"

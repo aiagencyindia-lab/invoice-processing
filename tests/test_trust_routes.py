@@ -7,12 +7,16 @@ from fastapi.testclient import TestClient
 
 from invoice_processing.adapters import JsonlAuditSink, LocalBlobStore
 from invoice_processing.api import auth, service
+from invoice_processing.api.ingest import MAX_DOCUMENT_BYTES
 from invoice_processing.api.service import app
 from invoice_processing.db import models
 from invoice_processing.db.repositories import PgDocumentRepository
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import RunContext
+from invoice_processing.trust.decide import FakeDecider
+from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
+from invoice_processing.trust.graph.sync import sync_tenant
 from invoice_processing.trust.history import mapping
 from invoice_processing.trust.history.importer import HistoryImporter
 
@@ -273,3 +277,68 @@ def test_contracts_list_is_tenant_scoped(contracts):
     listed = contracts["client"]("viewer").get("/api/trust/contracts").json()
     assert [c["vendor_id"] for c in listed] == ["ven-1"]
     assert listed[0]["filename"] == "msa.pdf"
+
+
+def test_the_same_contract_under_another_vendor_is_refused(contracts):
+    client = contracts["client"]("clerk")
+    with tenant_session(TENANT, contracts["url"]) as s:
+        s.add(
+            models.Vendor(
+                tenant_id=TENANT,
+                id="ven-2",
+                name="Globex",
+                normalized_name="globex",
+                tax_id="29AABCU9603R1ZX",
+            )
+        )
+    assert _upload(client).status_code == 201
+    r = _upload(client, vendor_id="ven-2")
+    assert r.status_code == 409 and "another vendor" in r.json()["detail"]
+
+
+def test_oversized_contract_is_refused_before_reading(contracts):
+    r = contracts["client"]("clerk").post(
+        "/api/trust/contracts",
+        files={
+            "file": (
+                "big.pdf",
+                b"%PDF" + b"0" * (MAX_DOCUMENT_BYTES + 1),
+                "application/pdf",
+            )
+        },
+        data={"vendor_id": "ven-1"},
+    )
+    assert r.status_code == 413
+
+
+def test_a_contract_for_an_unsynced_vendor_gets_its_edge_at_the_next_sync(
+    contracts,
+):
+    with tenant_session(TENANT, contracts["url"]) as s:
+        s.add(
+            models.Vendor(
+                tenant_id=TENANT,
+                id="ven-3",
+                name="Initech",
+                normalized_name="initech",
+                tax_id="24ITCCR9797D1ZQ",
+            )
+        )
+    r = _upload(
+        contracts["client"]("clerk"), vendor_id="ven-3", data=PDF + b"3"
+    )
+    node = r.json()["contract_node"]
+    graph = contracts["graph"]
+    assert graph.edges(TENANT, src=node, kind="governs") == []
+    sync_tenant(
+        CTX_ROUTES,
+        graph,
+        LinkStore(contracts["url"]),
+        url=contracts["url"],
+        decider=FakeDecider({}),
+    )
+    [edge] = graph.edges(TENANT, src=node, kind="governs")
+    assert (
+        edge["dst"] == graph.nodes_by_ref(TENANT, "vendors", ["ven-3"])["ven-3"]
+    )
+    assert edge["provenance"] == "human_assertion"
