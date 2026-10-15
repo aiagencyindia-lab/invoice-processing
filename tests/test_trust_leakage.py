@@ -748,3 +748,71 @@ def test_discount_terms_from_contract_clause(env):
     [f] = found(env, "LEAK-DISCOUNT")
     assert f.impact == Decimal("600.00") and f.transaction_node == inv
     assert f.details["needs_review"] is False
+
+
+# -- Task 6: duplicates -------------------------------------------------------
+
+
+def test_dup_near_normalized_number(env):
+    ven = vendor(env)
+    invoice(env, ven, "INV-0042", "2025-03-01", 1000)
+    later = invoice(env, ven, "inv 42", "2025-03-04", 1200)
+    [f] = found(env, "DUP-NEAR")
+    assert f.transaction_node == later and f.impact == Decimal("1200.00")
+    assert len(f.citations) == 2
+
+
+def test_dup_near_edit_distance_needs_equal_amount(env):
+    ven = vendor(env)
+    invoice(env, ven, "INV-3120", "2025-03-01", 5000)
+    later = invoice(env, ven, "INV-3120A", "2025-03-03", 5000)
+    invoice(env, ven, "INV-3190", "2025-03-04", 7000)
+    [f] = found(env, "DUP-NEAR")
+    assert f.transaction_node == later
+
+
+def test_dup_near_outside_window_is_clean(env):
+    ven = vendor(env)
+    invoice(env, ven, "INV-42", "2025-03-01", 1000)
+    invoice(env, ven, "INV-042", "2025-03-20", 1000)
+    assert found(env, "DUP-NEAR") == []
+
+
+def test_dup_cross_two_vendor_nodes_one_canonical(env):
+    _, _, links = env
+    a = vendor(env, ref_id="ven-a", name="Acme Steel")
+    b = vendor(env, ref_id="ven-b", name="ACME STEEL PVT LTD")
+    links.propose_or_link(CTX, a, b, 0.99, "test")
+    invoice(env, a, "INV-7", "2025-01-01", 9000)
+    later = invoice(env, b, "INV-7", "2025-04-01", 9000)
+    [f] = found(env, "DUP-CROSS")
+    assert f.transaction_node == later and f.impact == Decimal("9000.00")
+    assert found(env, "DUP-NEAR") == []
+
+
+SPLIT = {"high_value_threshold": 100000}
+
+
+def test_dup_split(env):
+    ven = vendor(env)
+    invoice(env, ven, "INV-1", "2025-03-01", 60000)
+    last = invoice(env, ven, "INV-2", "2025-03-03", 45000)
+    invoice(env, ven, "INV-3", "2025-04-01", 60000)
+    [f] = found(env, "DUP-SPLIT", settings=SPLIT)
+    assert f.transaction_node == last and f.impact is None
+    assert len(f.citations) == 2
+
+
+def test_dup_split_off_when_threshold_zero(env):
+    ven = vendor(env)
+    invoice(env, ven, "INV-1", "2025-03-01", 60000)
+    invoice(env, ven, "INV-2", "2025-03-03", 45000)
+    assert found(env, "DUP-SPLIT", settings={"high_value_threshold": 0}) == []
+    assert found(env, "DUP-SPLIT") == []
+
+
+def test_same_invoice_live_and_history_is_not_a_duplicate(env):
+    ven = vendor(env)
+    invoice(env, ven, "INV-9", "2025-03-01", 1000, ref="live-9")
+    invoice(env, ven, "INV-9", "2025-03-01", 1000, live=False, ref="hist-9")
+    assert found(env, "DUP-NEAR") == [] and found(env, "DUP-CROSS") == []
