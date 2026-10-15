@@ -18,6 +18,7 @@ from datetime import date
 from decimal import Decimal
 from email import policy
 from email.utils import parseaddr
+from itertools import pairwise
 from statistics import median
 
 from ... import masking
@@ -26,7 +27,7 @@ from ... import masking
 
 
 def robust_z(amount: Decimal, history: list[Decimal]) -> float:
-    """(amount − median) / (1.4826 × MAD); ±inf when the history never varies."""
+    """(amount - median) / (1.4826 * MAD); +/-inf when the history never varies."""
     med = median(history)
     mad = median(abs(x - med) for x in history)
     if mad == 0:
@@ -40,7 +41,7 @@ def nearest_gap_ratio(when: date, others: list[date]) -> float | None:
     """Days to the nearest other invoice over the median gap between the
     others; None when there is no cadence to compare with."""
     ordered = sorted(others)
-    gaps = [(b - a).days for a, b in zip(ordered, ordered[1:], strict=False)]
+    gaps = [(b - a).days for a, b in pairwise(ordered)]
     if not gaps:
         return None
     typical = median(gaps)
@@ -60,17 +61,17 @@ _CONFUSABLE = str.maketrans(
         "i": "l",
         "3": "e",
         "5": "s",
-        "а": "a",
-        "е": "e",
-        "о": "o",
-        "р": "p",
-        "с": "c",
-        "х": "x",
-        "у": "y",
-        "і": "l",
-        "ο": "o",
-        "α": "a",
-        "ε": "e",
+        "\u0430": "a",
+        "\u0435": "e",
+        "\u043e": "o",
+        "\u0440": "p",
+        "\u0441": "c",
+        "\u0445": "x",
+        "\u0443": "y",
+        "\u0456": "l",
+        "\u03bf": "o",
+        "\u03b1": "a",
+        "\u03b5": "e",
     }
 )
 
@@ -89,10 +90,11 @@ def same_domain(domain: str, vendor_domain: str) -> bool:
 
 def _fold(domain: str) -> str:
     labels = []
-    for label in domain.lower().split("."):
-        if label.startswith("xn--"):
+    for raw in domain.lower().split("."):
+        label = raw
+        if raw.startswith("xn--"):
             try:
-                label = label.encode("ascii").decode("idna")
+                label = raw.encode("ascii").decode("idna")
             except UnicodeError:
                 pass
         labels.append(label)
@@ -266,5 +268,5 @@ def parse_email(raw: bytes) -> Mail:
         if head == b"--":
             return _sendgrid(raw.lstrip())
         return _mime(raw)
-    except Exception:  # noqa: BLE001 - hostile input reads as "no mail"
+    except Exception:  # hostile input reads as "no mail"
         return Mail()

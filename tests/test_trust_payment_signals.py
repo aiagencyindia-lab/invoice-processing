@@ -32,7 +32,7 @@ def test_lookalike_folds_confusables():
     assert sg.lookalike("acme-steel.in", "acrne-steel.in", 0.8)
     assert sg.lookalike("acme.in", "acme.in.co", 0.8)
     assert sg.lookalike("globex.com", "g1obex.com", 0.8)
-    assert sg.lookalike("globex.com", "glоbex.com", 0.8)  # Cyrillic о
+    assert sg.lookalike("globex.com", "gl\u043ebex.com", 0.8)  # Cyrillic o
     assert not sg.lookalike("acme.in", "acme.in", 0.8)
     assert not sg.lookalike("acme.in", "zebra-foods.com", 0.8)
 

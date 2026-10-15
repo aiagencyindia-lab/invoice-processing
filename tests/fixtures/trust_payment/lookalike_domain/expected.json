@@ -1,0 +1,1 @@
+{"types": ["PAY-BEC"], "holds": ["PAY-BEC"], "signals": {"PAY-BEC": ["lookalike_domain", "sender_domain"]}}
