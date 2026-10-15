@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 
 from ..findings.model import FindingSpec, register_type
+from . import clauses, contracts
+from .view import View
 
 ENGINE_VERSION = "leakage-1"
 
@@ -36,5 +38,34 @@ for _code, _description in _TYPES.items():
 logger = logging.getLogger(__name__)
 
 
+def _scope(ectx, view):
+    """Which invoices this run may draw edges for and report on: the one
+    invoice, the contract's vendor's invoices, or (batch) all of them."""
+    if ectx.invoice_node:
+        return lambda node: node == ectx.invoice_node
+    if ectx.document is None:
+        return lambda node: True
+    contract = ectx.graph.nodes_by_ref(
+        ectx.ctx.tenant_id, "documents", [ectx.document["id"]]
+    ).get(ectx.document["id"])
+    vendors = {
+        ven
+        for ven, nodes in view.contracts_of.items()
+        if any(n["id"] == contract for n in nodes)
+    }
+    return lambda node: view.vendor(node) in vendors
+
+
 def run(ectx) -> list[FindingSpec]:
-    return []
+    if ectx.document and ectx.document.get("kind") == "contract":
+        clauses.extract(ectx)
+    elif ectx.document is not None and ectx.invoice_node is None:
+        return []  # a document that is neither a contract nor an invoice
+    view = View(ectx)
+    in_scope = _scope(ectx, view)
+    specs = contracts.findings(ectx, view, in_scope)
+    kept = [s for s in specs if in_scope(s.transaction_node)]
+    logger.info(
+        "leakage_run", extra={"found": len(specs), "reported": len(kept)}
+    )
+    return kept

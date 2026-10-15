@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -345,3 +346,340 @@ def test_model_never_supplies_params(env):
     )
     [rate] = graph.nodes(T, kind="contract_clause")
     assert rate["attrs"]["params"] == {"price": "1000"}
+
+
+# -- Task 4: contract rules ---------------------------------------------------
+
+
+def edge(env, src, dst, kind, provenance="system_record"):
+    _, graph, _ = env
+    graph.upsert_edge(
+        CTX,
+        src=src,
+        dst=dst,
+        kind=kind,
+        source_system="test",
+        provenance=provenance,
+        confidence=1.0,
+        observed_at=AT,
+        at=AT,
+    )
+
+
+def vendor(env, ref_id="ven-1", name="Acme Steel"):
+    _, graph, _ = env
+    return graph.upsert_node(
+        CTX,
+        kind="vendor",
+        natural_key=f"vendors:{ref_id}",
+        ref_table="vendors",
+        ref_id=ref_id,
+        attrs={"name": name},
+        at=AT,
+    )
+
+
+def invoice(
+    env,
+    ven,
+    number,
+    day,
+    amount,
+    lines=(),
+    *,
+    live=True,
+    terms=None,
+    ref=None,
+):
+    _, graph, _ = env
+    ref = ref or f"{ven[:6]}-{number}"
+    table = "invoices" if live else "history_records"
+    iid = graph.upsert_node(
+        CTX,
+        kind="invoice",
+        natural_key=f"{table}:{ref}",
+        ref_table=table,
+        ref_id=ref,
+        attrs={
+            "invoice_number": number,
+            "invoice_date": day,
+            "amount": str(amount),
+            "currency": "INR",
+            "payment_terms": terms,
+        },
+        at=AT,
+    )
+    edge(env, iid, ven, "issued_by")
+    for n, (desc, qty, price) in enumerate(lines, start=1):
+        lid = graph.upsert_node(
+            CTX,
+            kind="invoice_line",
+            natural_key=f"invoice_lines:{ref}:{n}",
+            ref_table="invoice_lines",
+            ref_id=f"{ref}:{n}",
+            attrs={
+                "line_number": n,
+                "description": desc,
+                "quantity": str(qty),
+                "unit_price": str(price),
+                "amount": str(Decimal(str(qty)) * Decimal(str(price))),
+            },
+            at=AT,
+        )
+        edge(env, lid, iid, "part_of")
+    return iid
+
+
+def clause(env, contract, kind, params, excerpt, conf=0.95, reviewed=True):
+    _, graph, _ = env
+    cid = graph.upsert_node(
+        CTX,
+        kind="contract_clause",
+        natural_key=f"clause:{contract}:1:{kind}:{excerpt[:20]}",
+        attrs={
+            "type": kind,
+            "params": params,
+            "page": 1,
+            "excerpt": excerpt,
+            "confidence": conf,
+            "reviewed": reviewed,
+        },
+        at=AT,
+    )
+    edge(env, cid, contract, "part_of", "model_inference")
+    return cid
+
+
+def steel_contract(
+    env,
+    ven,
+    *,
+    doc_id="doc-c",
+    start="2025-01-01",
+    end="2026-12-31",
+    rate="1000",
+    governs=True,
+    **kw,
+):
+    cid = contract_node(env, doc_id=doc_id)
+    if governs:
+        edge(env, cid, ven, "governs", "human_assertion")
+    clause(
+        env,
+        cid,
+        "rate",
+        {"price": rate},
+        f"The rate for Steel Rod 12mm is INR {rate} per unit.",
+        **kw,
+    )
+    clause(
+        env,
+        cid,
+        "term",
+        {"start": start, "end": end},
+        f"This agreement runs from {start} to {end}.",
+        **kw,
+    )
+    return cid
+
+
+def found(env, code=None, **kw):
+    specs = leakage.run(make_ectx(env, **kw))
+    return [s for s in specs if code is None or s.type == code]
+
+
+def test_rate_overcharge(env):
+    ven = vendor(env)
+    steel_contract(env, ven)
+    inv = invoice(
+        env, ven, "INV-1", "2025-03-01", 11000, [("Steel Rod 12mm", 10, 1100)]
+    )
+    [f] = found(env, "LEAK-RATE")
+    assert f.impact == Decimal("1000.00") and f.currency == "INR"
+    assert f.transaction_node == inv
+    assert f.dedupe_key.startswith("LEAK-RATE:")
+    assert f.engine_version == "leakage-1"
+    assert f.details["needs_review"] is False
+    assert f.confidence == pytest.approx(0.9 * 0.95)
+    kinds = {env[1].node(T, c.node_id)["kind"] for c in f.citations}
+    assert kinds == {"invoice", "invoice_line", "contract_clause", "contract"}
+
+
+def test_rate_within_tolerance_is_clean(env):
+    ven = vendor(env)
+    steel_contract(env, ven)
+    invoice(
+        env, ven, "INV-1", "2025-03-01", 10040, [("Steel Rod 12mm", 10, 1004)]
+    )
+    assert found(env, "LEAK-RATE") == []
+
+
+def test_unmatched_description_is_clean(env):
+    ven = vendor(env)
+    steel_contract(env, ven)
+    invoice(
+        env,
+        ven,
+        "INV-1",
+        "2025-03-01",
+        50000,
+        [("Copper wire 4 core", 10, 5000)],
+    )
+    assert found(env, "LEAK-RATE") == []
+
+
+def test_escalator_allows_escalated_price(env):
+    ven = vendor(env)
+    cid = steel_contract(env, ven)
+    clause(env, cid, "escalator", {"pct": "5"}, "Prices escalate by 5% yearly.")
+    invoice(
+        env, ven, "INV-1", "2026-02-01", 10500, [("Steel Rod 12mm", 10, 1050)]
+    )
+    assert found(env, "LEAK-RATE") == [] and found(env, "LEAK-ESCALATOR") == []
+
+
+def test_escalator_overcharge(env):
+    ven = vendor(env)
+    cid = steel_contract(env, ven)
+    clause(env, cid, "escalator", {"pct": "5"}, "Prices escalate by 5% yearly.")
+    invoice(
+        env, ven, "INV-1", "2026-02-01", 11000, [("Steel Rod 12mm", 10, 1100)]
+    )
+    [f] = found(env, "LEAK-ESCALATOR")
+    assert f.impact == Decimal("500.00")  # (1100 - 1050) x 10
+    assert f.details["allowed_unit_price"] == "1050.00"
+
+
+def test_tier_price_after_cumulative_qty(env):
+    ven = vendor(env)
+    cid = steel_contract(env, ven)
+    clause(
+        env,
+        cid,
+        "tier",
+        {"qty": "100", "price": "900"},
+        "Above 100 units in a contract year the price is INR 900.",
+    )
+    invoice(
+        env, ven, "INV-1", "2025-02-01", 80000, [("Steel Rod 12mm", 80, 1000)]
+    )
+    second = invoice(
+        env, ven, "INV-2", "2025-03-01", 50000, [("Steel Rod 12mm", 50, 1000)]
+    )
+    [f] = found(env, "LEAK-TIER")
+    assert f.transaction_node == second
+    assert f.impact == Decimal("5000.00")  # (1000 - 900) x 50
+    assert found(env, "LEAK-RATE") == []
+
+
+def test_rebate_without_credit(env):
+    ven = vendor(env)
+    cid = steel_contract(env, ven)
+    clause(
+        env,
+        cid,
+        "rebate",
+        {"threshold": "100000", "pct": "2"},
+        "A rebate of 2% applies once spend exceeds INR 1,00,000.",
+    )
+    invoice(env, ven, "INV-1", "2025-02-01", 60000)
+    second = invoice(env, ven, "INV-2", "2025-03-01", 60000)
+    [f] = found(env, "LEAK-REBATE")
+    assert f.transaction_node == second
+    assert f.impact == Decimal("2400.00")
+
+
+def statement_line(env, ven, number, day, amount, ref=None):
+    _, graph, _ = env
+    sid = graph.upsert_node(
+        CTX,
+        kind="vendor_statement_line",
+        natural_key=f"history_records:{ref or number}",
+        ref_table="history_records",
+        ref_id=ref or number,
+        attrs={
+            "doc_number": number,
+            "invoice_date": day,
+            "amount": str(amount),
+        },
+        at=AT,
+    )
+    edge(env, sid, ven, "issued_by")
+    return sid
+
+
+def test_rebate_with_credit_is_clean(env):
+    ven = vendor(env)
+    cid = steel_contract(env, ven)
+    clause(
+        env,
+        cid,
+        "rebate",
+        {"threshold": "100000", "pct": "2"},
+        "A rebate of 2% applies once spend exceeds INR 1,00,000.",
+    )
+    invoice(env, ven, "INV-1", "2025-02-01", 60000)
+    invoice(env, ven, "INV-2", "2025-03-01", 60000)
+    statement_line(env, ven, "CN-9", "2025-04-01", -2400)
+    assert found(env, "LEAK-REBATE") == []
+
+
+def test_invoice_outside_term(env):
+    ven = vendor(env)
+    steel_contract(env, ven, end="2025-06-30")
+    inv = invoice(env, ven, "INV-1", "2025-08-01", 1000)
+    [f] = found(env, "LEAK-TERM")
+    assert f.transaction_node == inv and f.impact is None
+
+
+def test_governed_by_prefers_covering_contract(env):
+    _, graph, _ = env
+    ven = vendor(env)
+    old = steel_contract(
+        env, ven, doc_id="doc-old", start="2024-01-01", end="2024-12-31"
+    )
+    new = steel_contract(env, ven, doc_id="doc-new")
+    early = invoice(env, ven, "INV-1", "2024-06-01", 1000)
+    late = invoice(env, ven, "INV-2", "2025-06-01", 1000)
+    found(env)
+    gov = {e["src"]: e for e in graph.edges(T, kind="governed_by")}
+    assert gov[early]["dst"] == old and gov[late]["dst"] == new
+    assert gov[late]["provenance"] == "model_inference"
+
+
+def test_contract_vendor_from_attrs_when_no_governs_edge(env):
+    _, graph, _ = env
+    ven = vendor(env, ref_id="ven-9")
+    cid = contract_node(env, vendor_id="ven-9")
+    clause(
+        env,
+        cid,
+        "rate",
+        {"price": "1000"},
+        "The rate for Steel Rod 12mm is INR 1000 per unit.",
+    )
+    invoice(
+        env, ven, "INV-1", "2025-03-01", 11000, [("Steel Rod 12mm", 10, 1100)]
+    )
+    assert len(found(env, "LEAK-RATE")) == 1
+    assert graph.edges(T, kind="governs") == []
+
+
+def test_low_confidence_clause_is_ignored(env):
+    ven = vendor(env)
+    steel_contract(env, ven, conf=0.5, reviewed=False)
+    invoice(
+        env, ven, "INV-1", "2025-03-01", 11000, [("Steel Rod 12mm", 10, 1100)]
+    )
+    assert found(env, "LEAK-RATE") == []
+
+
+def test_unreviewed_clause_marks_needs_review(env):
+    ven = vendor(env)
+    steel_contract(env, ven, conf=0.8, reviewed=False)
+    invoice(
+        env, ven, "INV-1", "2025-03-01", 11000, [("Steel Rod 12mm", 10, 1100)]
+    )
+    [f] = found(env, "LEAK-RATE")
+    assert f.details["needs_review"] is True
+    assert f.confidence == pytest.approx(0.9 * 0.8)
