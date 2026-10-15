@@ -132,6 +132,10 @@ def by_type(specs):
     return out
 
 
+def nkey(env, node_id):
+    return env.graph.node(T, node_id)["natural_key"]
+
+
 def active(**extra):
     return {"status": "active", "missed_periods": 0, **extra}
 
@@ -160,7 +164,7 @@ def test_cancelled_gstin_is_an_inactive_hold_with_full_itc_at_risk(env):
     found = by_type(env.run(inv))
     [hold] = found["GST-INACTIVE"]
     assert hold.transaction_node == inv
-    assert hold.dedupe_key == f"GST-INACTIVE:{inv}"
+    assert hold.dedupe_key == f"GST-INACTIVE:{nkey(env, inv)}"
     assert hold.impact is None
     cited = {c.node_id for c in hold.citations}
     assert inv in cited and len(cited) == 2  # the provider evidence too
@@ -250,15 +254,15 @@ def test_shared_pan_across_gstins_is_flagged_once_per_invoice_and_pair(env):
     env.script[G1] = env.script[G2] = active()
     a, b = env.vendor("Alpha", G1), env.vendor("Beta", G2)
     inv_a, inv_b = env.invoice(a, 1000, tax="100"), env.invoice(b, 1000)
-    pair = ":".join(sorted((a, b)))
+    pair = ":".join(sorted((G1, G2)))  # GSTINs survive a node re-version
     found = by_type(env.run(inv_a))
     [f] = found["GST-SHARED-IDENTITY"]
-    assert f.dedupe_key == f"GST-SHARED-IDENTITY:{inv_a}:{pair}"
+    assert f.dedupe_key == f"GST-SHARED-IDENTITY:{nkey(env, inv_a)}:{pair}"
     assert {c.node_id for c in f.citations} == {inv_a, a, b}
     assert f.details["shared"] == ["pan"]
     assert found["GST-ITC-RISK"][0].impact == Decimal("30.0")
     [g] = by_type(env.run(inv_b))["GST-SHARED-IDENTITY"]
-    assert g.dedupe_key == f"GST-SHARED-IDENTITY:{inv_b}:{pair}"
+    assert g.dedupe_key == f"GST-SHARED-IDENTITY:{nkey(env, inv_b)}:{pair}"
 
 
 def test_shared_bank_account_or_domain_counts_but_name_does_not(env):
@@ -337,6 +341,127 @@ def test_contract_document_is_skipped(env):
     ectx = env.ectx()
     ectx.document = {"id": "c", "kind": "contract"}
     assert gst_itc.run(ectx) == []
+
+
+# -- review fixes: malformed and non-positive inputs, shared-identity scale --
+
+
+def gap_records(caplog):
+    return [r for r in caplog.records if r.msg == "gst_itc_tax_amount_unknown"]
+
+
+def test_credit_note_yields_no_itc_risk_and_no_new_large(env, caplog):
+    history(env)
+    env.script[G1] = {"status": "cancelled"}
+    ven = env.vendor("New", G1)
+    credit = env.invoice(ven, -10000, tax="-1800")
+    zero = env.invoice(ven, 1000, tax="0")
+    with caplog.at_level(logging.INFO, logger=gst_itc.__name__):
+        assert set(by_type(env.run(credit))) == {"GST-INACTIVE"}
+        assert set(by_type(env.run(zero))) == {"GST-INACTIVE"}
+    assert gap_records(caplog) == []  # known, just not positive
+
+
+def test_median_ignores_credit_notes(env):
+    old = history(env)
+    for m in range(1, 7):
+        env.invoice(old, -1000, day=f"2024-{m:02d}-20")
+    env.script[G1] = active()
+    assert env.run(env.invoice(env.vendor("New", G1), 2000)) == []
+
+
+def test_unparseable_tax_is_a_gap_and_does_not_abort_the_batch(env, caplog):
+    env.script[G1] = {"status": "cancelled"}
+    ven = env.vendor("Acme", G1)
+    bad = env.invoice(ven, 1000, tax="N/A")
+    good = env.invoice(ven, 1000, tax="10")
+    with caplog.at_level(logging.INFO, logger=gst_itc.__name__):
+        specs = env.run()
+    risks = {s.transaction_node for s in specs if s.type == "GST-ITC-RISK"}
+    assert risks == {good}
+    assert bad in {
+        s.transaction_node for s in specs if s.type == "GST-INACTIVE"
+    }
+    [rec] = gap_records(caplog)
+    assert rec.invoices == 1
+
+
+def test_unparseable_missed_periods_is_unverified(env):
+    env.script[G1] = active(missed_periods="n/a")
+    [f] = env.run(env.invoice(env.vendor("Acme", G1), 1000))
+    assert f.type == "GST-UNVERIFIED" and f.details["reason"] == "unknown"
+
+
+def test_public_mail_domain_is_not_a_shared_identity(env, monkeypatch):
+    def quadratic(nodes):
+        raise AssertionError("candidates() over every vendor")
+
+    monkeypatch.setattr(resolve, "candidates", quadratic)
+    gs = [G1, G3, gstin("19ZZZZZ9999Z1Z")]
+    vendors = []
+    for i, g in enumerate(gs):
+        env.script[g] = active()
+        vendors.append(env.vendor(f"V{i}", g, email_domain="Gmail.com"))
+    assert env.run(env.invoice(vendors[0], 1000)) == []
+
+
+def test_shared_identity_key_is_stable_across_a_vendor_reversion(env):
+    env.script[G1] = env.script[G2] = active()
+    a = env.vendor("Alpha", G1)
+    env.vendor("Beta", G2)
+    inv = env.invoice(a, 1000)
+    [before] = by_type(env.run(inv))["GST-SHARED-IDENTITY"]
+    b2 = env.vendor("Beta", G2, email_domain="beta.in")  # new node id
+    [after] = by_type(env.run(inv))["GST-SHARED-IDENTITY"]
+    assert after.dedupe_key == before.dedupe_key
+    assert b2 in {c.node_id for c in after.citations}
+
+
+def test_dedupe_keys_survive_an_invoice_reversion(env):
+    """A re-versioned invoice node gets a new id; its findings must not
+    double up."""
+    history(env)
+    env.script[G1] = {"status": "cancelled", "missed_periods": 3}
+    env.script[G2] = active()
+    a = env.vendor("Alpha", G1)
+    env.vendor("Beta", G2)
+    inv = env.invoice(a, 10000, tax="100")
+    store = FindingStore(env.url)
+    first = env.run(inv)
+    for spec in first:
+        store.upsert(CTX, spec)
+    old = env.graph.node(T, inv)
+    new = env.graph.upsert_node(
+        CTX,
+        kind="invoice",
+        natural_key=old["natural_key"],
+        attrs={**old["attrs"], "due_date": "2025-07-01"},
+        at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+    assert new != inv
+    env.graph.upsert_edge(
+        CTX,
+        src=new,
+        dst=a,
+        kind="issued_by",
+        source_system="t",
+        provenance="system_record",
+        confidence=1.0,
+        observed_at=AT,
+    )
+    second = env.run(new)
+    assert {s.dedupe_key for s in second} == {s.dedupe_key for s in first}
+    for spec in second:
+        store.upsert(CTX, spec)
+    types = [f["type"] for f in store.list(T) if f["type"].startswith("GST-")]
+    assert sorted(types) == sorted(set(types))
+    assert set(types) == {
+        "GST-INACTIVE",
+        "GST-NONFILER",
+        "GST-NEW-LARGE-FIRST",
+        "GST-SHARED-IDENTITY",
+        "GST-ITC-RISK",
+    }
 
 
 # -- through evaluate -------------------------------------------------------
