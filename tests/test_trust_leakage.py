@@ -15,6 +15,7 @@ from invoice_processing.trust.engine import EngineContext
 from invoice_processing.trust.findings import model as finding_model
 from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
+from invoice_processing.trust.leakage import clauses
 
 T = "tenant-leak"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="worker")
@@ -88,3 +89,79 @@ def test_types_are_registered_to_leakage_and_none_hold():
 
 def test_empty_graph_finds_nothing(env):
     assert leakage.run(make_ectx(env)) == []
+
+
+# -- Task 2: clause params by regex ------------------------------------------
+
+
+def test_params_rate():
+    assert clauses.params(
+        "rate", "The rate for Steel Rod 12mm is INR 1,000.50 per unit."
+    ) == {"price": "1000.50"}
+    assert clauses.params("rate", "Price: ₹ 2,50,000 per unit") == {
+        "price": "250000"
+    }
+
+
+def test_params_escalator():
+    assert clauses.params(
+        "escalator", "Prices escalate by 5% on each anniversary."
+    ) == {"pct": "5"}
+
+
+def test_params_tier():
+    assert clauses.params(
+        "tier", "Above 500 units in a contract year the price is Rs. 900."
+    ) == {"qty": "500", "price": "900"}
+
+
+def test_params_rebate():
+    assert clauses.params(
+        "rebate", "A rebate of 2.5% applies once spend exceeds INR 10,00,000."
+    ) == {"threshold": "1000000", "pct": "2.5"}
+
+
+def test_params_discount_terms():
+    assert clauses.params("discount", "Payment terms 2/10 net 30.") == {
+        "pct": "2",
+        "days": "10",
+        "net": "30",
+    }
+    assert clauses.params(
+        "discount", "A 1.5% discount applies if paid within 15 days, net 45."
+    ) == {"pct": "1.5", "days": "15", "net": "45"}
+
+
+def test_params_term_dates():
+    assert clauses.params(
+        "term", "This agreement runs from 01/04/2025 to 31 March 2026."
+    ) == {"start": "2025-04-01", "end": "2026-03-31"}
+    assert clauses.params("term", "Effective 2025-01-01 until 2025-12-31.") == {
+        "start": "2025-01-01",
+        "end": "2025-12-31",
+    }
+
+
+def test_params_unparseable_is_none():
+    assert clauses.params("rate", "The rate is agreed separately.") is None
+    assert clauses.params("tier", "Tiered pricing applies at INR 5.") is None
+    assert clauses.params("term", "Starts on 2025-01-01.") is None
+    assert clauses.params("none", "INR 5") is None
+
+
+def test_candidates_pick_money_percent_and_keywords():
+    text = (
+        "MASTER SUPPLY AGREEMENT\nThe parties agree as follows.\n"
+        "The rate for Steel Rod is Rs. 1,000 per unit. "
+        "Prices escalate by 5% yearly.\nGoverning law is Maharashtra."
+    )
+    assert clauses.candidates(text) == [
+        "The rate for Steel Rod is Rs. 1,000 per unit.",
+        "Prices escalate by 5% yearly.",
+    ]
+
+
+def test_bank_numbers_are_masked_in_excerpts():
+    text = "Pay INR 500 to account 123456789012 at IFSC HDFC0001234."
+    [cand] = clauses.candidates(text)
+    assert "123456789012" not in cand and "…9012" in cand
