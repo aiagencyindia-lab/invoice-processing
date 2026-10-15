@@ -8,8 +8,9 @@ Branch `v2/w1-provenance`. Package `invoice_processing/trust/provenance/`.
   registration, `run(ectx)`.
 - `invoice_processing/trust/provenance/pdfmeta.py` — PDF facts (metadata,
   pages, fonts, text), PDF date parser, fingerprint.
-- `tests/test_trust_provenance.py` — engine tests (graph-backed, local PDFs).
-- `tests/test_trust_provenance_pdf.py` — PDF facts and fingerprint tests.
+- `tests/test_trust_provenance.py` — PDF facts, engine (graph-backed, PDFs
+  built by hand in the test) and one end-to-end `evaluate()` + gate test. One
+  file, so CI's Postgres list (exact name) runs all of it.
 - `benchmark/history/faults/provenance.py` — `inject`, `seed_graph`, `GATES`.
 
 ## Tasks (TDD, one commit each)
@@ -47,6 +48,14 @@ Branch `v2/w1-provenance`. Package `invoice_processing/trust/provenance/`.
 - Email from a domain other than the vendor's counts as "other" (0.3).
 - Template history is found through the invoice's `document_id` attr, not the
   `evidences` edge (the sync closes edges when an invoice node re-versions).
+- A missing blob raises: evaluate() then fails closed in enforcing
+  (`TRUST-ENGINE-FAILED`), the scaffold's contract for a hold engine.
+- Ledger attr `channel` is the source name; the 0–1 value is in
+  `components.channel`. Attr `template` is `{prior, matching}`.
+- `PROV-SUSPECT` dedupes per document id; `PROV-TAMPER` per invoice natural
+  key (stable across node versions, so a clean run can release it).
+- Benchmark pairs use `PRV-*` numbers, no dates and unequal amounts, so sibling
+  engines' duplicate rules never see them.
 - "Approved" = invoice `decision == "approve"` or an `approval` node with
   status `approved` on it.
 
