@@ -10,6 +10,7 @@ from sqlalchemy.exc import DatabaseError
 from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import RunContext, StatusChanged
+from invoice_processing.trust.findings import model as finding_model
 from invoice_processing.trust.findings.model import (
     Citation,
     FindingSpec,
@@ -175,3 +176,38 @@ def test_db_refuses_a_finding_without_a_citation():
             ),
             {"t": T},
         )
+
+
+def test_register_type_records_engine_and_hold(monkeypatch):
+    monkeypatch.setattr(finding_model, "TYPES", dict(finding_model.TYPES))
+    monkeypatch.setattr(
+        finding_model, "TYPE_ENGINE", dict(finding_model.TYPE_ENGINE)
+    )
+    monkeypatch.setattr(
+        finding_model, "HOLD_TYPES", set(finding_model.HOLD_TYPES)
+    )
+    finding_model.register_type("X-HOLD", "a hold", engine="payment", hold=True)
+    finding_model.register_type("X-NOTE", "a note", engine="leakage")
+    assert finding_model.TYPE_ENGINE["X-HOLD"] == "payment"
+    assert finding_model.TYPE_ENGINE["X-NOTE"] == "leakage"
+    assert "X-HOLD" in finding_model.HOLD_TYPES
+    assert "X-NOTE" not in finding_model.HOLD_TYPES
+
+
+def test_hold_types_lists_only_holds():
+    assert "BENCH-IMPORT" not in finding_model.HOLD_TYPES
+    assert finding_model.TYPE_ENGINE["BENCH-IMPORT"] == "bench"
+
+
+def test_list_filters_by_transaction_node(env):
+    url, store, node = env
+    graph = GraphStore(url)
+    other = graph.upsert_node(CTX, kind="invoice", natural_key="i2")
+    store.upsert(CTX, spec(node))
+    store.upsert(
+        CTX,
+        spec(other, dedupe_key="BENCH-IMPORT:i2", citations=(Citation(other),)),
+    )
+    assert [
+        f["transaction_node"] for f in store.list(T, transaction_node=other)
+    ] == [other]

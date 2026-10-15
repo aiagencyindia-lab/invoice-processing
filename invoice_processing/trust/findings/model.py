@@ -75,10 +75,21 @@ class FindingSpec:
 # Each engine registers the finding types it emits; the registry is what the
 # UI and the eval harness enumerate.
 TYPES: dict[str, str] = {}
+# Which engine owns each type (its per-tenant mode decides whether a hold
+# gates), and which types are holds rather than insights.
+TYPE_ENGINE: dict[str, str] = {}
+HOLD_TYPES: set[str] = set()
 
 
-def register_type(code: str, description: str) -> None:
+def register_type(
+    code: str, description: str, *, engine: str = "bench", hold: bool = False
+) -> None:
     TYPES[code] = description
+    TYPE_ENGINE[code] = engine
+    if hold:
+        HOLD_TYPES.add(code)
+    else:
+        HOLD_TYPES.discard(code)
 
 
 register_type(

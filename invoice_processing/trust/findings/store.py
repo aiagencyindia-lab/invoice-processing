@@ -230,6 +230,7 @@ class FindingStore:
         *,
         status: str | None = None,
         type: str | None = None,
+        transaction_node: str | None = None,
     ) -> list[dict]:
         with tenant_session(tenant_id, self.url) as s:
             q = select(TrustFinding).where(TrustFinding.tenant_id == tenant_id)
@@ -237,5 +238,7 @@ class FindingStore:
                 q = q.where(TrustFinding.status == status)
             if type:
                 q = q.where(TrustFinding.type == type)
+            if transaction_node:
+                q = q.where(TrustFinding.transaction_node == transaction_node)
             q = q.order_by(TrustFinding.created_at.desc())
             return [_finding_dict(f) for f in s.scalars(q)]
