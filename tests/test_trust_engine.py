@@ -106,7 +106,9 @@ def finding_for(ectx, code="T-NOTE"):
     )
 
 
-def test_missing_engine_package_is_skipped(env, caplog):
+def test_missing_engine_package_is_skipped(env, monkeypatch):
+    # Every engine package exists once Wave 1 lands, so absence is simulated.
+    monkeypatch.setattr(ev, "_import_engine", lambda name: None)
     out = run(env, modes={"provenance": "advisory"})
     assert out["engines"]["provenance"] == "missing"
 
@@ -308,3 +310,30 @@ def test_a_human_decided_hold_is_not_released_by_the_engine(env):
     state["emit"] = False
     run(env, modes={"payment": "enforcing"})
     assert store.list(T, type="T-HOLD4")[0]["status"] == "accepted"
+
+
+def test_a_clean_run_also_releases_a_hold_engines_cleared_insight(env):
+    """An ITC-at-risk amount must not outlive the hold it was priced from."""
+    url, _, _ = env
+    finding_model.register_type("T-RISK", "risk", engine="gst_itc")
+    state = {"emit": True}
+    ev.RUNNERS["gst_itc"] = lambda ectx: (
+        [finding_for(ectx, "T-RISK")] if state["emit"] else []
+    )
+    run(env, modes={"gst_itc": "advisory"})
+    state["emit"] = False
+    run(env, modes={"gst_itc": "advisory"})
+    assert FindingStore(url).list(T, type="T-RISK")[0]["status"] == "rejected"
+
+
+def test_an_insight_engines_findings_are_not_released(env):
+    url, _, _ = env
+    finding_model.register_type("T-LEAK", "leak", engine="leakage")
+    state = {"emit": True}
+    ev.RUNNERS["leakage"] = lambda ectx: (
+        [finding_for(ectx, "T-LEAK")] if state["emit"] else []
+    )
+    run(env, modes={"leakage": "advisory"})
+    state["emit"] = False
+    run(env, modes={"leakage": "advisory"})
+    assert FindingStore(url).list(T, type="T-LEAK")[0]["status"] == "detected"
