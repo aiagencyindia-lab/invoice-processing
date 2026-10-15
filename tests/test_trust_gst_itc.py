@@ -1,11 +1,13 @@
 """GST/ITC v1 (FR-26): vendor GST standing, shared identities, ITC at risk."""
 
 import logging
-from datetime import datetime, timezone
+import random
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
 
+from benchmark.history.faults import gst_itc as family
 from invoice_processing import tax_ids
 from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
@@ -410,3 +412,24 @@ def test_evaluate_enforcing_holds_and_clean_rerun_releases(env):
     evaluate()
     [hold] = store.list(T, type="GST-INACTIVE")
     assert hold["status"] == "rejected"
+
+
+# -- benchmark family -------------------------------------------------------
+
+
+def test_fault_family_plants_valid_gstins_and_priced_faults():
+    rows = {"vendor": [], "ap_invoice": []}
+    faults: list = []
+    family.inject(
+        random.Random(1),  # noqa: S311 - synthetic data
+        rows,
+        faults,
+        start=date(2025, 1, 1),
+        months=18,
+    )
+    gstins = [v["gstin"] for v in rows["vendor"]]
+    assert all(tax_ids.validate_gstin(g)[0] for g in gstins)
+    twins = [v for v in rows["vendor"] if v["pan"]]
+    assert len({v["gstin"][2:12] for v in twins}) == 1 and len(twins) == 2
+    priced = [f for f in faults if f["type"] == "GST-ITC-RISK"]
+    assert priced and all(Decimal(f["expected_impact"]) > 0 for f in priced)
