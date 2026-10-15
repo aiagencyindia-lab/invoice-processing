@@ -683,3 +683,68 @@ def test_unreviewed_clause_marks_needs_review(env):
     [f] = found(env, "LEAK-RATE")
     assert f.details["needs_review"] is True
     assert f.confidence == pytest.approx(0.9 * 0.8)
+
+
+# -- Task 5: early-payment discount -------------------------------------------
+
+
+def payment(env, ven, number, day, amount, settles=None, ref=None):
+    _, graph, _ = env
+    pid = graph.upsert_node(
+        CTX,
+        kind="payment",
+        natural_key=f"history_records:{ref or 'pay-' + number + day}",
+        ref_table="history_records",
+        ref_id=ref or f"pay-{number}{day}",
+        attrs={
+            "doc_number": number,
+            "invoice_date": day,
+            "amount": str(amount),
+        },
+        at=AT,
+    )
+    edge(env, pid, ven, "issued_by")
+    if settles:
+        edge(env, pid, settles, "settles")
+    return pid
+
+
+def test_missed_discount_paid_early_in_full(env):
+    ven = vendor(env)
+    inv = invoice(env, ven, "INV-1", "2025-03-01", 50000, terms="2/10 net 30")
+    pay = payment(env, ven, "INV-1", "2025-03-08", 50000, settles=inv)
+    [f] = found(env, "LEAK-DISCOUNT")
+    assert f.impact == Decimal("1000.00") and f.transaction_node == inv
+    assert pay in {c.node_id for c in f.citations}
+
+
+def test_discount_taken_is_clean(env):
+    ven = vendor(env)
+    inv = invoice(env, ven, "INV-1", "2025-03-01", 50000, terms="2/10 net 30")
+    payment(env, ven, "INV-1", "2025-03-08", 49000, settles=inv)
+    assert found(env, "LEAK-DISCOUNT") == []
+
+
+def test_late_payment_is_clean(env):
+    ven = vendor(env)
+    inv = invoice(env, ven, "INV-1", "2025-03-01", 50000, terms="2/10 net 30")
+    payment(env, ven, "INV-1", "2025-03-25", 50000, settles=inv)
+    assert found(env, "LEAK-DISCOUNT") == []
+
+
+def test_discount_terms_from_contract_clause(env):
+    ven = vendor(env)
+    cid = steel_contract(env, ven)
+    clause(
+        env,
+        cid,
+        "discount",
+        {"pct": "1.5", "days": "15", "net": "45"},
+        "A 1.5% discount applies if paid within 15 days, net 45.",
+    )
+    inv = invoice(env, ven, "INV-1", "2025-03-01", 40000)
+    # No settles edge: matched by vendor and normalised number.
+    payment(env, ven, "inv 1", "2025-03-10", 40000)
+    [f] = found(env, "LEAK-DISCOUNT")
+    assert f.impact == Decimal("600.00") and f.transaction_node == inv
+    assert f.details["needs_review"] is False

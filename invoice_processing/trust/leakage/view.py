@@ -7,6 +7,7 @@ from collections import defaultdict
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from ...duplicates import normalize_number
 from ..findings.model import Citation
 from .clauses import scrub
 
@@ -103,6 +104,23 @@ class View:
                 n["natural_key"],
             ),
         )
+
+        self._paid: dict[tuple, list[dict]] = defaultdict(list)
+        for p in self.of_kind["payment"]:
+            number = normalize_number(p["attrs"].get("doc_number"))
+            if number:
+                self._paid[(self.vendor(p["id"]), number)].append(p)
+
+    def payments(self, inv: dict) -> list[dict]:
+        """What settled this invoice: `settles` edges, and payments of the
+        same vendor under the same normalised number (live invoices have no
+        `settles` edge)."""
+        number = normalize_number(inv["attrs"].get("invoice_number"))
+        found = {p["id"]: p for p in self.settled_by.get(inv["id"], [])}
+        if number:
+            for p in self._paid.get((self.vendor(inv["id"]), number), []):
+                found.setdefault(p["id"], p)
+        return list(found.values())
 
     def canon(self, node_id: str | None) -> str | None:
         return self.canonical.get(node_id, node_id) if node_id else None

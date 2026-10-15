@@ -8,6 +8,7 @@ from datetime import date
 from decimal import Decimal
 
 from ..findings.model import FindingSpec
+from . import clauses
 from .view import SOURCE, View, cents, cite, day, money
 
 ENGINE_VERSION = "leakage-1"
@@ -340,7 +341,68 @@ def findings(ectx, view: View, in_scope) -> list[FindingSpec]:
             cum.setdefault(contract.node["id"], {}),
         )
         out += _rebate(ectx, view, inv, d, ven, contract, spend)
+    for inv in view.invoices:
+        out += _discount(view, inv, by_vendor)
     return out
+
+
+def _discount(view, inv, by_vendor) -> list[FindingSpec]:
+    """Paid inside the discount window for the full amount: the discount
+    was ours and we did not take it."""
+    a = inv["attrs"]
+    amount, d = money(a.get("amount")), day(a.get("invoice_date"))
+    if amount is None or amount <= 0 or d is None:
+        return []
+    terms, used = clauses.parse_terms(a.get("payment_terms")), []
+    contract = None
+    if terms is None and view.vendor(inv["id"]) in by_vendor:
+        contract, _ = governing(by_vendor[view.vendor(inv["id"])], d)
+        cl = contract.first("discount")
+        if cl is not None:
+            terms, used = cl["attrs"]["params"], [cl]
+    if not terms:
+        return []
+    pct, days = money(terms.get("pct")), money(terms.get("days"))
+    if pct is None or days is None:
+        return []
+    early = [
+        p
+        for p in view.payments(inv)
+        if (pd := day(p["attrs"].get("invoice_date"))) is not None
+        and (pd - d).days <= days
+        and money(p["attrs"].get("amount")) is not None
+    ]
+    paid = sum((money(p["attrs"]["amount"]) for p in early), Decimal(0))
+    if not early or paid < amount:
+        return []
+    cites = [cite(inv), *(cite(p) for p in early)]
+    if contract is not None:
+        cites += [
+            cite(contract.node),
+            *(cite(c, c["attrs"].get("excerpt")) for c in used),
+        ]
+    return [
+        _spec(
+            "LEAK-DISCOUNT",
+            inv["id"],
+            inv["natural_key"],
+            amount * pct / 100,
+            _clause_conf(used),
+            "Paid in full inside the early-payment window without the discount.",
+            _clause_details(
+                used,
+                {
+                    "pct": str(pct),
+                    "days": str(days),
+                    "paid": str(paid),
+                    "payments": [p["id"] for p in early],
+                },
+            ),
+            cites,
+            "FR-20.discount-1",
+            a.get("currency") or "INR",
+        )
+    ]
 
 
 def _rebate(ectx, view, inv, d, ven, contract, spend) -> list[FindingSpec]:
