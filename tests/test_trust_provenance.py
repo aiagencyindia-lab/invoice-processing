@@ -595,3 +595,10 @@ def test_evaluate_end_to_end_holds_in_enforcing(world, monkeypatch):
     versions = world.graph.nodes(T, kind="document_version")
     assert len(versions) == 2
     assert all(v["attrs"]["components"]["channel"] == 1.0 for v in versions)
+
+
+def test_tamper_still_checked_for_a_non_pdf_document(world):
+    world.invoice("old", number="INV-8", decision="approve")
+    _, specs = world.ingest("new", number="INV-8", pdf=b"GIF89a image")
+    assert [s.type for s in specs] == ["PROV-TAMPER"]
+    assert world.version("new") is None
