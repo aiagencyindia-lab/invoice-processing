@@ -6,12 +6,15 @@ An invoice is held while it has an open finding of a hold type whose engine is
 administrator overrides at approval with a reason; resolving a confirmed hold
 (`prevented`, `recovered`) does not make the payment safe to release.
 
-Asked from the final approval step and from export. Fails open when the trust
-layer is not deployed or the invoice has not been evaluated yet; the window
-between approval and an asynchronous evaluation is a known Wave 2 item.
+Asked from the final approval step and from export. Fails open only when the
+trust layer is not deployed. An invoice that an enforcing engine able to hold
+payment has not checked yet (evaluation is asynchronous) is held until it has:
+"nothing found" and "not looked yet" are different answers.
 """
 
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -19,7 +22,7 @@ from ..db.models import Invoice
 from ..db.session import tenant_session
 from .findings import model as finding_model
 from .findings.store import FindingStore
-from .modes import ENGINES, engine_mode
+from .modes import ENGINES, HOLD_ENGINES, engine_mode
 
 HELD_UNTIL = "rejected"
 
@@ -40,18 +43,23 @@ def payment_hold(
     if not enforcing:
         return None
     with tenant_session(tenant_id, url) as s:
-        invoice_id = s.scalars(
-            select(Invoice.id)
+        row = s.execute(
+            select(Invoice.id, Invoice.created_at)
             .where(Invoice.tenant_id == tenant_id, Invoice.case_id == case_id)
             .order_by(Invoice.created_at.desc())
         ).first()
-    if invoice_id is None:
+    if row is None:
         return None
+    invoice_id, created_at = row
+    waiting = sorted(
+        (enforcing & HOLD_ENGINES)
+        - _checked(graph, tenant_id, invoice_id, created_at)
+    )
     node = graph.nodes_by_ref(tenant_id, "invoices", [invoice_id]).get(
         invoice_id
     )
     if node is None:
-        return None
+        return _message([], waiting)
     holding = []
     for f in FindingStore(url).list(tenant_id, transaction_node=node):
         if f["status"] == HELD_UNTIL:
@@ -65,11 +73,42 @@ def payment_hold(
         )
         if holds and engine in enforcing:
             holding.append(f"{f['type']} ({f['summary']})")
-    if not holding:
+    return _message(holding, waiting)
+
+
+def _checked(graph, tenant_id, invoice_id, created_at) -> set[str]:
+    from .evaluate import TENANT_RUN, evaluation_key  # noqa: PLC0415
+
+    own = graph.open_node(
+        tenant_id, "trust_evaluation", evaluation_key(f"invoices:{invoice_id}")
+    )
+    done = set((own or {}).get("attrs") or {})
+    batch = graph.open_node(tenant_id, "trust_evaluation", TENANT_RUN)
+    if created_at is not None and created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)  # SQLite
+    for name, at in ((batch or {}).get("attrs") or {}).items():
+        # A batch run covers the invoices that existed when it ran.
+        if created_at is None or datetime.fromisoformat(at) >= created_at:
+            done.add(name)
+    return done
+
+
+def _message(holding: list[str], waiting: list[str]) -> str | None:
+    parts = []
+    if holding:
+        parts.append(
+            "Payment is held: "
+            + "; ".join(sorted(holding))
+            + ". Rule the finding wrong to lift it"
+        )
+    if waiting:
+        parts.append(
+            "Payment is held until the trust checks for this invoice finish ("
+            + ", ".join(waiting)
+            + ")"
+        )
+    if not parts:
         return None
     return (
-        "Payment is held: "
-        + "; ".join(sorted(holding))
-        + ". Rule the finding wrong to lift it, or an administrator can "
-        "override with a reason."
+        ". ".join(parts) + ", or an administrator can override with a reason."
     )

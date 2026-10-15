@@ -337,3 +337,51 @@ def test_an_insight_engines_findings_are_not_released(env):
     state["emit"] = False
     run(env, modes={"leakage": "advisory"})
     assert FindingStore(url).list(T, type="T-LEAK")[0]["status"] == "detected"
+
+
+def _stamp(graph, key):
+    [n] = [
+        n
+        for n in graph.nodes(T, kind="trust_evaluation")
+        if n["natural_key"] == key
+    ] or [None]
+    return (n or {}).get("attrs") or {}
+
+
+def test_a_document_run_records_which_engines_checked_the_invoice(env):
+    _, graph, _ = env
+    ev.RUNNERS["payment"] = lambda ectx: []
+    ev.RUNNERS["leakage"] = lambda ectx: []
+    run(env, modes={"payment": "enforcing", "leakage": "advisory"})
+    assert set(_stamp(graph, "trust_evaluation:invoices:inv-1")) == {
+        "payment",
+        "leakage",
+    }
+    ev.RUNNERS["gst_itc"] = lambda ectx: []
+    run(env, modes={"gst_itc": "advisory"})
+    assert set(_stamp(graph, "trust_evaluation:invoices:inv-1")) == {
+        "payment",
+        "leakage",
+        "gst_itc",
+    }
+
+
+def test_a_missing_engine_is_not_recorded_as_having_checked(env, monkeypatch):
+    _, graph, _ = env
+    monkeypatch.setattr(ev, "_import_engine", lambda name: None)
+    run(env, modes={"payment": "enforcing"})
+    assert "payment" not in _stamp(graph, "trust_evaluation:invoices:inv-1")
+
+
+def test_a_batch_run_records_a_tenant_wide_check(env):
+    _, graph, _ = env
+    ev.RUNNERS["payment"] = lambda ectx: []
+    run(env, document_id=None, modes={"payment": "advisory"})
+    assert "payment" in _stamp(graph, "trust_evaluation:tenant")
+
+
+def test_a_contract_run_is_not_a_tenant_wide_check(env):
+    _, graph, _ = env
+    ev.RUNNERS["payment"] = lambda ectx: []
+    run(env, document_id="doc-c", modes={"payment": "advisory"})
+    assert _stamp(graph, "trust_evaluation:tenant") == {}

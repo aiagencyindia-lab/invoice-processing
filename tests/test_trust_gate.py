@@ -68,6 +68,14 @@ def env(scratch_db, monkeypatch):
     return url, FindingStore(url), node
 
 
+@pytest.fixture
+def evaluated(env):
+    """The invoice has been checked by every engine that can hold."""
+    url, _, _ = env
+    stamp(url, ["payment", "provenance", "gst_itc"])
+    return env
+
+
 def add(store, node, code, **details):
     fid, _ = store.upsert(
         CTX,
@@ -101,14 +109,14 @@ def test_no_graph_store_means_no_hold(env, monkeypatch):
     assert hold(url, {"payment": "enforcing"}) is None
 
 
-def test_open_hold_in_enforcing_holds(env):
+def test_open_hold_in_enforcing_holds(env, evaluated):
     url, store, node = env
     add(store, node, "T-PAYHOLD")
     message = hold(url, {"payment": "enforcing"})
     assert "T-PAYHOLD" in message and "T-PAYHOLD summary" in message
 
 
-def test_advisory_or_rejected_does_not_hold(env):
+def test_advisory_or_rejected_does_not_hold(env, evaluated):
     url, store, node = env
     fid = add(store, node, "T-PAYHOLD")
     add(store, node, "T-PAYNOTE")
@@ -118,7 +126,7 @@ def test_advisory_or_rejected_does_not_hold(env):
     assert hold(url, {"payment": "enforcing"}) is None
 
 
-def test_engine_failed_hold_follows_the_failed_engines_mode(env):
+def test_engine_failed_hold_follows_the_failed_engines_mode(env, evaluated):
     url, store, node = env
     add(store, node, "TRUST-ENGINE-FAILED", engine="payment")
     assert hold(url, {"payment": "enforcing"}) is not None
@@ -135,7 +143,7 @@ def test_unknown_case_or_unsynced_invoice_does_not_hold(env):
     )
 
 
-def test_a_hold_is_seen_without_its_engine_being_imported(env):
+def test_a_hold_is_seen_without_its_engine_being_imported(env, evaluated):
     """The API process never imports engine packages: the finding itself says
     it holds and which engine owns it (stamped by evaluate)."""
     url, store, node = env
@@ -155,7 +163,7 @@ def test_gate_asks_nothing_when_no_engine_is_enforcing(env, monkeypatch):
     assert hold(url, {"payment": "advisory"}) is None
 
 
-def test_the_newest_invoice_row_of_a_case_decides(env):
+def test_the_newest_invoice_row_of_a_case_decides(env, evaluated):
     url, store, node = env
     with tenant_session(T, url) as s:
         s.add(
@@ -179,7 +187,7 @@ def test_the_newest_invoice_row_of_a_case_decides(env):
     assert hold(url, {"payment": "enforcing"}) is not None
 
 
-def test_a_hold_survives_the_invoice_node_being_re_versioned(env):
+def test_a_hold_survives_the_invoice_node_being_re_versioned(env, evaluated):
     """A sync that changes the invoice's attrs mints a new node id; the
     finding must move with it or the gate stops seeing the hold."""
     url, store, node = env
@@ -196,3 +204,77 @@ def test_a_hold_survives_the_invoice_node_being_re_versioned(env):
     assert hold(url, {"payment": "enforcing"}) is not None
     [f] = store.list(T, type="T-PAYHOLD")
     assert f["transaction_node"] == new
+
+
+def stamp(url, engines, natural_key="trust_evaluation:invoices:inv-1"):
+    GraphStore(url).upsert_node(
+        CTX,
+        kind="trust_evaluation",
+        natural_key=natural_key,
+        attrs=dict.fromkeys(engines, "2030-01-01T00:00:00+00:00"),
+    )
+
+
+def test_an_invoice_no_enforcing_engine_has_checked_yet_is_held(env):
+    url, _, _ = env
+    message = hold(url, {"payment": "enforcing"})
+    assert (
+        message and "until the trust checks" in message and "payment" in message
+    )
+
+
+def test_an_invoice_its_enforcing_engines_checked_is_not_held(env):
+    url, _, _ = env
+    stamp(url, ["payment"])
+    assert hold(url, {"payment": "enforcing"}) is None
+    # Another hold engine switched to enforcing has not checked it yet.
+    assert (
+        hold(url, {"payment": "enforcing", "gst_itc": "enforcing"}) is not None
+    )
+
+
+def test_a_batch_run_after_the_invoice_arrived_counts(env):
+    url, _, _ = env
+    stamp(url, ["payment"], natural_key="trust_evaluation:tenant")
+    assert hold(url, {"payment": "enforcing"}) is None
+
+
+def test_a_batch_run_before_the_invoice_arrived_does_not_count(env):
+    url, _, _ = env
+    GraphStore(url).upsert_node(
+        CTX,
+        kind="trust_evaluation",
+        natural_key="trust_evaluation:tenant",
+        attrs={"payment": "2000-01-01T00:00:00+00:00"},
+    )
+    assert hold(url, {"payment": "enforcing"}) is not None
+
+
+def test_an_insight_engine_in_enforcing_does_not_wait(env):
+    url, _, _ = env
+    assert hold(url, {"leakage": "enforcing"}) is None
+
+
+def test_an_invoice_not_yet_in_the_graph_is_held(env):
+    url, _, _ = env
+    with tenant_session(T, url) as s:
+        s.add(
+            models.Document(
+                tenant_id=T, id="d9", sha256="9" * 64, storage_key="k9"
+            )
+        )
+        s.flush()
+        s.add(
+            models.Invoice(
+                tenant_id=T,
+                id="inv-9",
+                document_id="d9",
+                case_id="case-9",
+                total_inc_tax=Decimal("5"),
+                status="done",
+            )
+        )
+    message = gate.payment_hold(
+        T, "case-9", url=url, settings_store=Store({"payment": "enforcing"})
+    )
+    assert message and "until the trust checks" in message
