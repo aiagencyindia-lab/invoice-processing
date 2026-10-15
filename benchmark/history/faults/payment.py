@@ -11,6 +11,7 @@ confirms, as a tenant's verified masters would; the faults are then
 
 from __future__ import annotations
 
+import csv
 from datetime import date, timedelta
 from decimal import Decimal
 from statistics import median
@@ -36,6 +37,31 @@ provider_scripts = {
 }
 _GATE = {"precision": 0.9, "recall": 0.8, "impact_error": 0.1}
 GATES = {"PAY-ANOMALY": dict(_GATE), "PAY-UNVERIFIED": dict(_GATE)}
+
+
+def _planted(account: str) -> bool:
+    return (
+        account.isdigit()
+        and 0 <= int(account) - 80_000_000_000 < FIRST_PAYMENTS
+    )
+
+
+def seed_graph(ctx, graph, data_dir) -> None:
+    """Every account on file is a verified master except the ones planted
+    as unverified first payments, including accounts other families gave
+    the vendors they add (inject cannot see vendors added after it runs)."""
+    path = data_dir / "vendor.csv"
+    if not path.exists():
+        return
+    with path.open(newline="") as f:
+        accounts = {r.get("bank_account") or "" for r in csv.DictReader(f)}
+    provider_scripts["bank_verification"].update(
+        {
+            a: {"result": "verified", "name_match": 1.0}
+            for a in accounts
+            if a and not _planted(a)
+        }
+    )
 
 
 def inject(rng, rows, faults, *, start, months) -> None:
