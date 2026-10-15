@@ -5,15 +5,19 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from invoice_processing.adapters import JsonlAuditSink
+from invoice_processing.adapters import JsonlAuditSink, LocalBlobStore
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
 from invoice_processing.db import models
+from invoice_processing.db.repositories import PgDocumentRepository
 from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.ports import RunContext
+from invoice_processing.trust.graph.store import GraphStore
 from invoice_processing.trust.history import mapping
 from invoice_processing.trust.history.importer import HistoryImporter
 
 TENANT = "tenant-acme"
+CTX_ROUTES = RunContext(tenant_id=TENANT, case_id="", run_id="t", actor="t")
 CSV = (
     b"Bill No,Supplier,Amount,Date\n"
     b"INV-1,Acme,100.50,2026-01-05\n"
@@ -177,3 +181,95 @@ def test_one_audit_row_per_import_and_lean_listing(env, tmp_path):
     assert sum("trust_history" in r.action for r in rows) == 1
     [listed] = env("viewer").get("/api/trust/history/imports").json()
     assert listed["rows_bad"] == 1 and "errors" not in listed
+
+
+PDF = b"%PDF-1.4\n% a contract\n"
+
+
+@pytest.fixture
+def contracts(env, tmp_path, monkeypatch, scratch_db):
+    url = scratch_db("trust_routes.db")
+    graph = GraphStore(url)
+    monkeypatch.setattr(service, "_graph_store", graph)
+    monkeypatch.setattr(service, "_documents", PgDocumentRepository(url))
+    blobs = LocalBlobStore(tmp_path / "blobs")
+    monkeypatch.setattr(service, "get_blobs", lambda tenant_id: blobs)
+    queued = []
+
+    class Queue:
+        def publish(self, payload, **attributes):
+            queued.append(payload)
+            return "m"
+
+    monkeypatch.setattr(service, "get_queue", Queue)
+    with tenant_session(TENANT, url) as s:
+        s.add(
+            models.Vendor(
+                tenant_id=TENANT,
+                id="ven-1",
+                name="Acme Steel",
+                normalized_name="acme steel",
+                tax_id="27AAPFU0939F1ZV",
+            )
+        )
+    vendor_node = graph.upsert_node(
+        CTX_ROUTES,
+        kind="vendor",
+        natural_key="vendors:ven-1",
+        ref_table="vendors",
+        ref_id="ven-1",
+    )
+    return {
+        "client": env,
+        "graph": graph,
+        "blobs": blobs,
+        "queued": queued,
+        "vendor_node": vendor_node,
+        "url": url,
+    }
+
+
+def _upload(client, data=PDF, vendor_id="ven-1", name="msa.pdf"):
+    return client.post(
+        "/api/trust/contracts",
+        files={"file": (name, data, "application/pdf")},
+        data={"vendor_id": vendor_id},
+    )
+
+
+def test_contract_upload_stores_document_node_and_governs_edge(contracts):
+    r = _upload(contracts["client"]("clerk"))
+    assert r.status_code == 201, r.text
+    body = r.json()
+    graph = contracts["graph"]
+    node = graph.node(TENANT, body["contract_node"])
+    assert node["kind"] == "contract" and node["ref_table"] == "documents"
+    assert (
+        node["attrs"]["vendor_id"] == "ven-1"
+        and node["attrs"]["filename"] == "msa.pdf"
+    )
+    [edge] = graph.edges(TENANT, src=node["id"], kind="governs")
+    assert edge["dst"] == contracts["vendor_node"]
+    with tenant_session(TENANT, contracts["url"]) as s:
+        doc = s.get(models.Document, body["document_id"])
+        assert doc.kind == "contract" and doc.source == "upload"
+    assert contracts["blobs"].get(doc.storage_key) == PDF
+    assert contracts["queued"][-1]["type"] == "trust.evaluate"
+    assert contracts["queued"][-1]["document_id"] == body["document_id"]
+    again = _upload(contracts["client"]("clerk"))
+    assert again.status_code == 200 and again.json()["duplicate"] is True
+
+
+def test_contract_upload_refuses_non_pdf_and_unknown_vendor(contracts):
+    client = contracts["client"]("clerk")
+    assert _upload(client, data=b"not a pdf").status_code == 400
+    r = _upload(client, vendor_id="nope")
+    assert r.status_code == 404 and "vendor" in r.json()["detail"].lower()
+    assert _upload(contracts["client"]("viewer")).status_code == 403
+
+
+def test_contracts_list_is_tenant_scoped(contracts):
+    _upload(contracts["client"]("clerk"))
+    listed = contracts["client"]("viewer").get("/api/trust/contracts").json()
+    assert [c["vendor_id"] for c in listed] == ["ven-1"]
+    assert listed[0]["filename"] == "msa.pdf"

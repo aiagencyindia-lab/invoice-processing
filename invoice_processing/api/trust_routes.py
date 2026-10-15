@@ -142,3 +142,191 @@ def list_imports(
     principal: Annotated[Principal, Depends(require_role("viewer"))],
 ):
     return _importer().list_imports(principal.tenant_id)
+
+
+# ---------------------------------------------------------------------------
+# Contracts (Wave 1): the documents the Leakage engine reads clauses from.
+# Stored like any upload (content-addressed, tenant-prefixed), but kept out of
+# the invoice pipeline: a contract is evaluated by the trust engines only.
+# ---------------------------------------------------------------------------
+
+NEEDS_GRAPH = "Contracts need a database. Configure DATABASE_URL."
+
+
+def _graph():
+    from . import service  # noqa: PLC0415
+
+    try:
+        graph = service.get_graph_store()
+    except Exception:
+        logger.exception("The evidence graph could not be reached")
+        raise HTTPException(503, "The evidence graph is unavailable.") from None
+    if graph is None:
+        raise HTTPException(503, NEEDS_GRAPH)
+    return graph
+
+
+def _vendor_exists(tenant_id: str, vendor_id: str) -> bool:
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from ..db.models import Vendor  # noqa: PLC0415
+    from ..db.session import tenant_session  # noqa: PLC0415
+
+    with tenant_session(tenant_id) as s:
+        return (
+            s.scalars(
+                select(Vendor.id).where(
+                    Vendor.tenant_id == tenant_id, Vendor.id == vendor_id
+                )
+            ).first()
+            is not None
+        )
+
+
+def _store_contract(
+    principal: Principal, data: bytes, filename: str, vendor_id: str
+):
+    import hashlib  # noqa: PLC0415
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    from . import service  # noqa: PLC0415
+    from .ingest import IngestionRefused, check_acceptable, storage_key_for  # noqa: PLC0415
+
+    graph = _graph()
+    try:
+        check_acceptable(data, filename)
+    except IngestionRefused as exc:
+        raise HTTPException(400, str(exc)) from None
+    tenant_id = principal.tenant_id
+    if not _vendor_exists(tenant_id, vendor_id):
+        raise HTTPException(404, "Unknown vendor.")
+    documents = service.get_documents()
+    sha256 = hashlib.sha256(data).hexdigest()
+    existing = documents.find_by_sha(tenant_id, sha256)
+    duplicate = existing is not None
+    if duplicate:
+        stored = documents.get(tenant_id, existing["id"]) or {}
+        if stored.get("kind") != "contract":
+            raise HTTPException(
+                409, "These bytes were already received as another document."
+            )
+        document_id = existing["id"]
+    else:
+        key = storage_key_for(sha256)
+        service.get_blobs(tenant_id).put(
+            key, data, content_type="application/pdf"
+        )
+        document_id = documents.create(
+            tenant_id=tenant_id,
+            storage_key=key,
+            sha256=sha256,
+            filename=filename,
+            mime_type="application/pdf",
+            byte_size=len(data),
+            source="upload",
+            source_ref=principal.email,
+            kind="contract",
+        )
+    ctx = principal.context(document_id)
+    at = datetime.now(timezone.utc)
+    node = graph.upsert_node(
+        ctx,
+        kind="contract",
+        natural_key=f"documents:{document_id}",
+        ref_table="documents",
+        ref_id=document_id,
+        attrs={"filename": filename, "sha256": sha256, "vendor_id": vendor_id},
+        at=at,
+    )
+    # The vendor's node exists once a sync has run; until then the Leakage
+    # engine draws this edge from attrs.vendor_id.
+    vendor_node = graph.nodes_by_ref(tenant_id, "vendors", [vendor_id]).get(
+        vendor_id
+    )
+    if vendor_node:
+        graph.upsert_edge(
+            ctx,
+            src=node,
+            dst=vendor_node,
+            kind="governs",
+            source_system="upload",
+            provenance="human_assertion",
+            confidence=1.0,
+            observed_at=at,
+            at=at,
+        )
+    if not duplicate:
+        service.get_audit().emit(
+            ctx,
+            "trust_contract_uploaded",
+            {
+                "document_id": document_id,
+                "vendor_id": vendor_id,
+                "sha256": sha256,
+            },
+        )
+    try:
+        from ..worker.runner import enqueue_trust_evaluate  # noqa: PLC0415
+
+        enqueue_trust_evaluate(
+            service.get_queue(), tenant_id, document_id, ctx.run_id
+        )
+    except Exception:
+        logger.warning("Contract evaluation could not be queued", exc_info=True)
+    return {
+        "document_id": document_id,
+        "contract_node": node,
+        "vendor_id": vendor_id,
+        "duplicate": duplicate,
+    }
+
+
+@router.post("/api/trust/contracts", status_code=201)
+async def upload_contract(
+    request: Request,
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+):
+    from .ingest import MAX_DOCUMENT_BYTES  # noqa: PLC0415
+
+    _graph()
+    if not request.headers.get("content-type", "").startswith(
+        "multipart/form-data"
+    ):
+        raise HTTPException(
+            400, "Send multipart form data with the file as 'file'."
+        )
+    form = await request.form()
+    upload = form.get("file")
+    if not isinstance(upload, UploadFile):
+        raise HTTPException(400, "Attach the file as 'file'.")
+    vendor_id = str(form.get("vendor_id") or "").strip()
+    if not vendor_id:
+        raise HTTPException(400, "vendor_id is required.")
+    data = await upload.read(MAX_DOCUMENT_BYTES + 1)
+    out = await run_in_threadpool(
+        _store_contract,
+        principal,
+        data,
+        upload.filename or "contract.pdf",
+        vendor_id,
+    )
+    if out["duplicate"]:
+        return JSONResponse(out, status_code=200)
+    return out
+
+
+@router.get("/api/trust/contracts")
+def list_contracts(
+    principal: Annotated[Principal, Depends(require_role("viewer"))],
+):
+    graph = _graph()
+    return [
+        {
+            "contract_node": n["id"],
+            "document_id": n["ref_id"],
+            "filename": n["attrs"].get("filename"),
+            "vendor_id": n["attrs"].get("vendor_id"),
+            "since": n["valid_from"],
+        }
+        for n in graph.nodes(principal.tenant_id, kind="contract")
+    ]
