@@ -1,8 +1,29 @@
 """Provenance v1: PDF facts, the ledger and score, and tamper after approval."""
 
+import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 
+import pytest
+
+from invoice_processing.api import service
+from invoice_processing.db import models
+from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.ports import RunContext
+from invoice_processing.trust import evaluate as ev
+from invoice_processing.trust import gate, provenance
+from invoice_processing.trust.decide import FakeDecider
+from invoice_processing.trust.engine import EngineContext
+from invoice_processing.trust.findings import model as finding_model
+from invoice_processing.trust.findings.store import FindingStore
+from invoice_processing.trust.graph.links import LinkStore
+from invoice_processing.trust.graph.store import GraphStore
+from invoice_processing.trust.graph.sync import sync_tenant
 from invoice_processing.trust.provenance import pdfmeta
+
+T = "tenant-acme"
+CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="worker")
+NOW = datetime(2026, 10, 15, tzinfo=timezone.utc)
 
 WORDS = " ".join(f"word{i}" for i in range(40))
 
@@ -122,3 +143,455 @@ def test_fingerprint_ignores_page_count_and_text_but_not_fonts_or_producer():
 def test_non_pdf_bytes_give_none():
     assert pdfmeta.facts(b"\x89PNG\r\n\x1a\n...") is None
     assert pdfmeta.facts(b"%PDF-1.4 truncated garbage") is None
+
+
+# -- ledger, score, tamper ---------------------------------------------------
+
+
+class Blobs(dict):
+    def get(self, key):
+        return self[key]
+
+
+class World:
+    """A tenant's graph with vendors, invoices and their document bytes."""
+
+    def __init__(self, url):
+        self.url, self.graph, self.links = url, GraphStore(url), LinkStore(url)
+        self.blobs = Blobs()
+        self.vendors: dict[str, str] = {}
+
+    def vendor(self, name="Acme Supplies", domain="acme.in"):
+        nid = self.graph.upsert_node(
+            CTX,
+            kind="vendor",
+            natural_key=f"vendors:{name}",
+            attrs={"name": name, "email_domain": domain},
+        )
+        self.vendors[name] = nid
+        return nid
+
+    def invoice(
+        self,
+        doc_id,
+        *,
+        number="INV-1",
+        sha=None,
+        vendor="Acme Supplies",
+        decision=None,
+        amount="1180.00",
+        source="email",
+        sender_domain="acme.in",
+    ):
+        nid = self.graph.upsert_node(
+            CTX,
+            kind="invoice",
+            natural_key=f"invoices:{doc_id}",
+            attrs={
+                "document_id": doc_id,
+                "document_sha256": sha or doc_id.ljust(64, "0"),
+                "document_source": source,
+                "document_sender_domain": sender_domain,
+                "invoice_number": number,
+                "amount": amount,
+                "currency": "INR",
+                "decision": decision,
+            },
+        )
+        ven = self.vendors.get(vendor) or self.vendor(vendor)
+        self.graph.upsert_edge(
+            CTX,
+            src=nid,
+            dst=ven,
+            kind="issued_by",
+            source_system="v1",
+            provenance="system_record",
+            confidence=1.0,
+            observed_at=NOW,
+        )
+        return nid
+
+    def ectx(self, node=None, doc=None, settings=None):
+        return EngineContext(
+            ctx=CTX,
+            mode="advisory",
+            document=doc,
+            invoice_node=node,
+            graph=self.graph,
+            links=self.links,
+            findings=None,
+            providers=None,
+            settings=settings or {},
+            decider=None,
+            blobs=self.blobs,
+            url=self.url,
+            now=NOW,
+        )
+
+    def ingest(self, doc_id, pdf=None, *, kind="invoice", settings=None, **kw):
+        """Plant the invoice and its bytes, then run the engine on the document."""
+        node = self.invoice(doc_id, **kw)
+        attrs = self.graph.node(T, node)["attrs"]
+        self.blobs[f"documents/{doc_id}.pdf"] = (
+            make_pdf() if pdf is None else pdf
+        )
+        doc = {
+            "id": doc_id,
+            "kind": kind,
+            "sha256": attrs["document_sha256"],
+            "storage_key": f"documents/{doc_id}.pdf",
+            "source": attrs["document_source"],
+            "source_ref": None,
+            "sender": None,
+            "reply_to": None,
+            "filename": f"{doc_id}.pdf",
+        }
+        node = None if kind != "invoice" else node
+        return node, provenance.run(self.ectx(node, doc, settings))
+
+    def version(self, doc_id):
+        sha = doc_id.ljust(64, "0")
+        return self.graph.open_node(
+            T, "document_version", f"documents:{doc_id}:{sha}"
+        )
+
+
+@pytest.fixture
+def world(scratch_db):
+    url = scratch_db("provenance.db")
+    models.Base.metadata.drop_all(get_engine(url))
+    create_all(url)
+    with tenant_session(T, url) as s:
+        s.add(models.Tenant(id=T, name="Acme", slug="acme", status="active"))
+    w = World(url)
+    w.vendor()
+    return w
+
+
+def test_types_are_registered_and_tamper_is_a_hold():
+    assert provenance.ENGINE_VERSION == "provenance-1"
+    assert finding_model.TYPE_ENGINE["PROV-TAMPER"] == "provenance"
+    assert "PROV-TAMPER" in finding_model.HOLD_TYPES
+    assert "PROV-SUSPECT" not in finding_model.HOLD_TYPES
+
+
+def test_ledger_node_and_evidences_edge(world):
+    node, specs = world.ingest("d1")
+    assert specs == []
+    v = world.version("d1")
+    a = v["attrs"]
+    assert v["ref_table"] == "documents" and v["ref_id"] == "d1"
+    assert a["sha256"] == "d1".ljust(64, "0") and a["source"] == "email"
+    assert a["sender_domain"] == "acme.in" and a["producer"] == "Tally"
+    assert a["page_count"] == 1 and a["has_text"] is True
+    assert a["fingerprint"] == pdfmeta.fingerprint(pdfmeta.facts(make_pdf()))
+    assert a["actor"] == "worker"
+    assert a["components"] == {
+        "channel": 1.0,
+        "template": 1.0,
+        "text": 1.0,
+        "meta": 1.0,
+    }
+    assert a["score"] == 1.0
+    [edge] = world.graph.edges(T, src=v["id"], kind="evidences")
+    assert edge["dst"] == node and edge["provenance"] == "system_record"
+    assert edge["confidence"] == 1.0
+
+
+@pytest.mark.parametrize(
+    "source,sender,channel",
+    [
+        ("email", "acme.in", 1.0),
+        ("email", "ACME.IN", 1.0),
+        ("email", "acme-billing.in", 0.3),
+        ("api", None, 0.8),
+        ("upload", None, 0.6),
+        ("whatsapp", None, 0.3),
+    ],
+)
+def test_channel_values_by_source(world, source, sender, channel):
+    world.ingest("d1", source=source, sender_domain=sender)
+    assert world.version("d1")["attrs"]["components"]["channel"] == channel
+
+
+def test_email_scores_other_when_the_vendor_has_no_domain(world):
+    world.vendor("No Domain Ltd", domain=None)
+    world.ingest("d1", vendor="No Domain Ltd")
+    assert world.version("d1")["attrs"]["components"]["channel"] == 0.3
+
+
+def test_template_is_one_below_min_history(world):
+    world.ingest("d1")
+    world.ingest("d2", number="INV-2", pdf=make_pdf(font="Courier"))
+    world.ingest("d3", number="INV-3", pdf=make_pdf(font="Times-Roman"))
+    # two prior documents, both different: still under the minimum of three
+    assert world.version("d3")["attrs"]["components"]["template"] == 1.0
+
+
+def test_template_is_share_of_matching_prior_fingerprints(world):
+    for i in range(3):
+        world.ingest(f"p{i}", number=f"INV-{i}")
+    world.ingest("p3", number="INV-3", pdf=make_pdf(font="Courier"))
+    # another vendor's documents never count
+    world.vendor("Other Co", "other.in")
+    world.ingest(
+        "o1", number="X-1", vendor="Other Co", sender_domain="other.in"
+    )
+    world.ingest("d9", number="INV-9")
+    assert world.version("d9")["attrs"]["components"]["template"] == 0.75
+    assert world.version("d9")["attrs"]["template"] == {
+        "prior": 4,
+        "matching": 3,
+    }
+
+
+def test_template_threshold_is_read_from_the_tenant(world):
+    world.ingest("p0", number="INV-0", pdf=make_pdf(font="Courier"))
+    world.ingest(
+        "d1",
+        number="INV-1",
+        settings={"trust_thresholds": {"provenance.template_min_history": 1}},
+    )
+    assert world.version("d1")["attrs"]["components"]["template"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "pdf",
+    [
+        make_pdf(producer=None),
+        make_pdf(created=None),
+        make_pdf(created="D:20250201", modified="D:20250101"),
+        make_pdf(created="D:20250101", modified="D:20990101"),
+    ],
+)
+def test_meta_zero_when_dates_out_of_order_or_no_producer(world, pdf):
+    world.ingest("d1", pdf=pdf)
+    assert world.version("d1")["attrs"]["components"]["meta"] == 0.0
+
+
+def test_missing_mod_date_counts_as_unmodified(world):
+    world.ingest("d1", pdf=make_pdf(modified=None))
+    assert world.version("d1")["attrs"]["components"]["meta"] == 1.0
+
+
+def test_suspect_below_threshold_cites_the_version(world):
+    for i in range(3):
+        world.ingest(f"p{i}", number=f"INV-{i}")
+    node, specs = world.ingest(
+        "d1",
+        number="INV-9",
+        source="email",
+        sender_domain="gmail.com",
+        pdf=make_pdf(producer=None, font="Courier", text=""),
+    )
+    [spec] = specs
+    v = world.version("d1")
+    # 0.4*0.3 + 0.3*0 + 0.2*0 + 0.1*0
+    assert v["attrs"]["score"] == 0.12
+    assert spec.type == "PROV-SUSPECT" and spec.transaction_node == node
+    assert spec.dedupe_key == "PROV-SUSPECT:d1"
+    assert spec.impact is None and spec.engine_version == "provenance-1"
+    assert [c.node_id for c in spec.citations] == [v["id"]]
+    assert spec.details["components"] == v["attrs"]["components"]
+
+
+def test_score_at_threshold_is_not_suspect(world):
+    # upload 0.6 -> 0.24 + template 0.3 + text 0 + meta 0 = 0.54
+    _, specs = world.ingest(
+        "d1", source="upload", pdf=make_pdf(producer=None, text="")
+    )
+    assert world.version("d1")["attrs"]["score"] == 0.54
+    assert specs == []
+    _, specs = world.ingest(
+        "d2",
+        number="INV-2",
+        source="upload",
+        pdf=make_pdf(producer=None, text=""),
+        settings={"trust_thresholds": {"provenance.suspect_below": 0.6}},
+    )
+    assert [s.type for s in specs] == ["PROV-SUSPECT"]
+
+
+def test_non_pdf_document_is_skipped_and_logged(world, caplog):
+    with caplog.at_level(logging.INFO):
+        _, specs = world.ingest("d1", pdf=b"\x89PNG\r\n\x1a\nimage")
+    assert specs == [] and world.version("d1") is None
+    [rec] = [r for r in caplog.records if r.msg == "provenance_skipped"]
+    assert rec.reason == "not_pdf"
+
+
+def test_contract_document_is_ignored(world):
+    node, specs = world.ingest("c1", kind="contract")
+    assert node is None and specs == []
+    assert world.version("c1") is None
+
+
+# -- tamper ------------------------------------------------------------------
+
+
+def test_tamper_when_an_approved_twin_has_another_sha(world):
+    # its version exists from its own evaluation
+    old, _ = world.ingest("old", number="INV-0042", decision="approve")
+    new, specs = world.ingest("new", number="inv 42", amount="2360.50")
+    [spec] = specs
+    assert spec.type == "PROV-TAMPER" and spec.transaction_node == new
+    assert spec.impact == Decimal("2360.50") and spec.currency == "INR"
+    assert spec.dedupe_key == "PROV-TAMPER:invoices:new"
+    cited = {c.node_id for c in spec.citations}
+    assert cited == {
+        new,
+        old,
+        world.version("new")["id"],
+        world.version("old")["id"],
+    }
+
+
+def test_no_tamper_for_same_sha_or_unapproved_twin_or_other_vendor(world):
+    world.invoice("a", number="INV-1", decision="approve", sha="s" * 64)
+    world.invoice("b", number="INV-2", decision=None)
+    world.vendor("Other Co", "other.in")
+    world.invoice("c", number="INV-3", decision="approve", vendor="Other Co")
+    world.invoice("d", number="INV-4", decision="reject")
+    for doc, number in (("x1", "INV-1"), ("x2", "INV-2"), ("x3", "INV-3")):
+        _, specs = world.ingest(
+            doc, number=number, sha="s" * 64 if doc == "x1" else None
+        )
+        assert specs == []
+    _, specs = world.ingest("x4", number="INV-4")
+    assert specs == []
+
+
+def test_approval_step_counts_as_approved(world):
+    old = world.invoice("old", number="INV-7")
+    step = world.graph.upsert_node(
+        CTX,
+        kind="approval",
+        natural_key="approval_steps:s1",
+        attrs={"position": 1, "status": "approved", "decided_by": "a@x.test"},
+    )
+    world.graph.upsert_edge(
+        CTX,
+        src=step,
+        dst=old,
+        kind="approves",
+        source_system="v1",
+        provenance="system_record",
+        confidence=1.0,
+        observed_at=NOW,
+    )
+    _, specs = world.ingest("new", number="INV-7")
+    assert [s.type for s in specs] == ["PROV-TAMPER"]
+
+
+def test_linked_vendor_nodes_count_as_one_vendor(world):
+    a = world.vendors["Acme Supplies"]
+    b = world.vendor("ACME SUPPLIES PVT LTD", "acme.in")
+    world.links.propose_or_link(CTX, a, b, 0.99, "test")
+    world.invoice("old", number="INV-5", decision="approve")
+    _, specs = world.ingest(
+        "new", number="INV-5", vendor="ACME SUPPLIES PVT LTD"
+    )
+    assert [s.type for s in specs] == ["PROV-TAMPER"]
+
+
+def test_batch_run_finds_tamper_across_the_tenant(world):
+    old = world.invoice("old", number="INV-1", decision="approve")
+    new = world.invoice("new", number="INV-1")
+    world.invoice("other", number="INV-2")
+    specs = provenance.run(world.ectx())
+    assert [(s.type, s.transaction_node) for s in specs] == [
+        ("PROV-TAMPER", new)
+    ]
+    assert {c.node_id for c in specs[0].citations} == {new, old}
+    assert world.graph.nodes(T, kind="document_version") == []
+
+
+# -- end to end ----------------------------------------------------------------
+
+
+class Settings:
+    def __init__(self, modes):
+        self.modes = modes
+
+    def get(self, tenant_id):
+        return {"trust_engine_modes": self.modes}
+
+
+def test_evaluate_end_to_end_holds_in_enforcing(world, monkeypatch):
+    url = world.url
+    with tenant_session(T, url) as s:
+        s.add(
+            models.Vendor(
+                tenant_id=T,
+                id="v1",
+                name="Acme Supplies",
+                normalized_name="acme supplies",
+                tax_id="27AAPFU0939F1ZV",
+                email_domain="acme.in",
+            )
+        )
+        for doc, sha, case, decision in (
+            ("d-old", "1" * 64, "case-old", "approve"),
+            ("d-new", "2" * 64, "case-new", None),
+        ):
+            s.add(
+                models.Document(
+                    tenant_id=T,
+                    id=doc,
+                    sha256=sha,
+                    storage_key=f"documents/{sha}.pdf",
+                    source="email",
+                    sender="billing@acme.in",
+                )
+            )
+            s.flush()
+            s.add(
+                models.Invoice(
+                    tenant_id=T,
+                    id=f"inv-{doc}",
+                    document_id=doc,
+                    case_id=case,
+                    invoice_number="INV-0042",
+                    vendor_name="Acme Supplies",
+                    vendor_tax_id="27AAPFU0939F1ZV",
+                    total_inc_tax=Decimal("1180.00"),
+                    currency="INR",
+                    decision=decision,
+                    status="done",
+                )
+            )
+            world.blobs[f"documents/{sha}.pdf"] = make_pdf()
+    sync_tenant(CTX, world.graph, world.links, url=url)
+    monkeypatch.setattr(service, "_graph_store", world.graph)
+    monkeypatch.setattr(ev, "RUNNERS", {})
+    settings = Settings({"provenance": "enforcing"})
+
+    def evaluate(doc):
+        return ev.evaluate(
+            CTX,
+            doc,
+            graph=world.graph,
+            links=world.links,
+            url=url,
+            settings_store=settings,
+            decider=FakeDecider({}, fail=True),
+            blobs=world.blobs,
+        )
+
+    assert evaluate("d-old")["engines"]["provenance"] == {
+        "mode": "enforcing",
+        "findings": 0,
+    }
+    assert evaluate("d-new")["engines"]["provenance"]["findings"] == 1
+    [f] = FindingStore(url).list(T, type="PROV-TAMPER")
+    assert f["details"]["hold"] is True and f["details"]["mode"] == "enforcing"
+    assert Decimal(f["impact"]) == Decimal("1180.00")
+    held = gate.payment_hold(T, "case-new", url=url, settings_store=settings)
+    assert held and "PROV-TAMPER" in held
+    assert (
+        gate.payment_hold(T, "case-old", url=url, settings_store=settings)
+        is None
+    )
+    versions = world.graph.nodes(T, kind="document_version")
+    assert len(versions) == 2
+    assert all(v["attrs"]["components"]["channel"] == 1.0 for v in versions)
