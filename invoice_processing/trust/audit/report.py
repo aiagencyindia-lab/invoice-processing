@@ -159,8 +159,11 @@ def assemble(
     now,
     tenant_id: str,
     modes: dict | None = None,
+    findings=None,
 ) -> dict:
-    """`scope` rows carry `vendor` ({node, name} or None) already resolved."""
+    """`scope` rows carry `vendor` ({node, name} or None) already resolved.
+    A listed finding carries no citations; `findings` (a FindingStore) fetches
+    them for the top recoveries only."""
     vendor_name = {f["id"]: (f.get("vendor") or {}).get("name") for f in scope}
     rows = ledger.rows(vendor_name, events)
     totals = ledger.totals(rows)
@@ -183,6 +186,11 @@ def assemble(
     )
     live = [f for f in scope if f["status"] not in ("rejected", "written_off")]
     live.sort(key=lambda f: (-_impact(f), f["id"]))
+    if findings is not None:
+        for f in live[:TOP]:
+            if not f.get("citations"):
+                full = findings.get(tenant_id, f["id"]) or {}
+                f["citations"] = full.get("citations") or []
     top = [
         {
             "id": f["id"],
