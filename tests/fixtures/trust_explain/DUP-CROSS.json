@@ -1,0 +1,76 @@
+{
+ "finding": {
+  "id": "f-dup-cross",
+  "type": "DUP-CROSS",
+  "transaction_node": "n-inv",
+  "status": "detected",
+  "impact": "1000.00",
+  "currency": "INR",
+  "confidence": 0.9,
+  "engine_version": "leakage-1",
+  "rule_version": "r",
+  "model_version": "none",
+  "summary": "The same invoice is recorded under two records of one vendor.",
+  "details": {
+   "matches": [
+    "n-inv0"
+   ]
+  },
+  "citations": [
+   {
+    "node_id": "n-inv",
+    "excerpt": "INV-1041"
+   },
+   {
+    "node_id": "n-inv0",
+    "excerpt": "INV-1041"
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-inv0": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i0",
+   "attrs": {
+    "invoice_number": "INV-1040",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-01",
+    "case_id": "case-0"
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ]
+ ],
+ "expect": {
+  "payable_now": "1000.00",
+  "payable_correct": "0.00",
+  "delta": "1000.00"
+ }
+}

@@ -75,3 +75,184 @@ def test_as_dict_matches_the_frontend_contract():
         {"text": "The contract says 50.", "node_id": "n-clause"}
     ]
     assert d["would_change"] == ["A reviewed clause."]
+
+
+# -- fixtures: one tiny graph per registered type ----------------------------
+
+import json  # noqa: E402
+from decimal import Decimal  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import invoice_processing.trust.gst_itc  # noqa: E402
+import invoice_processing.trust.leakage  # noqa: E402
+import invoice_processing.trust.payment  # noqa: E402
+import invoice_processing.trust.provenance  # noqa: E402, F401
+from invoice_processing.trust.explain import counterfactual as cf  # noqa: E402
+from invoice_processing.trust.explain import engine  # noqa: E402
+from invoice_processing.trust.explain.templates import TEMPLATES  # noqa: E402
+from invoice_processing.trust.findings import model as finding_model  # noqa: E402
+
+FIXTURES = Path(__file__).parent / "fixtures" / "trust_explain"
+T = "tenant-acme"
+
+
+class FakeGraph:
+    """Just enough of GraphStore for the engine: node() and edges()."""
+
+    def __init__(self, nodes: dict, edges: list):
+        self._nodes = {
+            nid: {
+                "id": nid,
+                "kind": n["kind"],
+                "natural_key": n.get("natural_key", nid),
+                "ref_table": n.get("ref_table"),
+                "ref_id": n.get("ref_id"),
+                "attrs": dict(n.get("attrs") or {}),
+                "natural_keys": {},
+                "valid_from": "2026-10-01T00:00:00+00:00",
+                "valid_to": None,
+            }
+            for nid, n in nodes.items()
+        }
+        self._edges = [
+            {
+                "id": f"e{i}",
+                "src": s,
+                "dst": d,
+                "kind": k,
+                "source_system": "test",
+                "observed_at": "2026-10-01T00:00:00+00:00",
+                "provenance": "system_record",
+                "confidence": 1.0,
+                "attrs": {},
+                "valid_from": "2026-10-01T00:00:00+00:00",
+                "valid_to": None,
+            }
+            for i, (s, d, k) in enumerate(edges)
+        ]
+
+    def node(self, tenant_id, node_id):
+        return self._nodes.get(node_id)
+
+    def edges(self, tenant_id, *, src=None, dst=None, kind=None, as_of=None):
+        return [
+            e
+            for e in self._edges
+            if (src is None or e["src"] == src)
+            and (dst is None or e["dst"] == dst)
+            and (kind is None or e["kind"] == kind)
+        ]
+
+
+def load(code: str) -> tuple[dict, FakeGraph, dict]:
+    data = json.loads((FIXTURES / f"{code}.json").read_text())
+    f = {
+        "owner_id": None,
+        "dedupe_key": f"{code}:x",
+        "decided_at": None,
+        "events": [],
+        **data["finding"],
+    }
+    return f, FakeGraph(data["nodes"], data["edges"]), data["expect"]
+
+
+ALL_TYPES = sorted(finding_model.TYPES)
+
+
+@pytest.mark.parametrize("code", ALL_TYPES)
+def test_every_type_has_a_fixture(code):
+    assert (FIXTURES / f"{code}.json").exists()
+
+
+@pytest.mark.parametrize("code", ALL_TYPES)
+def test_counterfactual(code):
+    f, graph, expect = load(code)
+    out = cf.counterfactual(f, graph.node(T, f["transaction_node"]))
+    if "note" in expect:
+        assert out.note == expect["note"]
+        assert out.delta is None and out.payable_correct is None
+    else:
+        assert out.payable_now == expect["payable_now"]
+        assert out.payable_correct == expect["payable_correct"]
+        assert out.delta == expect["delta"]
+        assert Decimal(out.delta) == Decimal(f["impact"])
+        assert out.formula
+    assert out.currency == f["currency"]
+
+
+def test_counterfactual_without_an_amount_still_prices_the_delta():
+    f, _graph, _ = load("LEAK-RATE")
+    out = cf.counterfactual(f, {"id": "x", "kind": "invoice", "attrs": {}})
+    assert out.payable_now is None and out.payable_correct is None
+    assert out.delta == "100.00"
+
+
+@pytest.mark.parametrize("code", ALL_TYPES)
+def test_every_type_explains(code):
+    f, graph, _ = load(code)
+    x = engine.build(T, f, graph=graph)
+    cited = {c["node_id"] for c in f["citations"]}
+    x.check(cited)  # the engine already did; a second pass costs nothing
+    assert x.type == code and x.finding_id == f["id"]
+    assert x.version == xm.EXPLAIN_VERSION
+    assert len(x.why) >= 1 and x.what_happened and x.next_action
+    assert {e.node_id for e in x.evidence} == cited
+    assert x.versions["explain_version"] == xm.EXPLAIN_VERSION
+    assert x.versions["engine_version"] == f["engine_version"]
+    assert x.counterfactual is not None
+    assert all(
+        a.kind in ("vendor", "person", "system", "engine", "provider")
+        for a in x.caused_by
+    )
+    d = x.as_dict()
+    json.dumps(d)  # serialisable as the route returns it
+    if code not in TEMPLATES:
+        assert x.what_happened == f["summary"]
+
+
+def test_unknown_type_falls_back_to_generic():
+    f, graph, _ = load("LEAK-RATE")
+    f = {**f, "type": "NEW-THING"}
+    x = engine.build(T, f, graph=graph)
+    x.check({c["node_id"] for c in f["citations"]})
+    assert x.what_happened == f["summary"]
+    assert x.next_action == "Review the cited evidence and accept or reject."
+    assert any(a.kind == "engine" for a in x.caused_by)
+
+
+def test_template_that_cites_an_uncited_node_is_refused(monkeypatch):
+    f, graph, _ = load("LEAK-RATE")
+    monkeypatch.setitem(
+        TEMPLATES,
+        "LEAK-RATE",
+        lambda ctx: {"why": [xm.Step("made up", "n-ven")]},
+    )
+    with pytest.raises(xm.Uncited):
+        engine.build(T, f, graph=graph)
+
+
+def test_missing_cited_node_is_still_evidence():
+    f, graph, _ = load("LEAK-RATE")
+    graph._nodes.pop("n-rate")
+    x = engine.build(T, f, graph=graph)
+    ev = {e.node_id: e for e in x.evidence}
+    assert ev["n-rate"].kind == "missing" and ev["n-rate"].excerpt
+
+
+def test_evidence_carries_source_and_labels():
+    f, graph, _ = load("LEAK-RATE")
+    x = engine.build(T, f, graph=graph)
+    ev = {e.node_id: e for e in x.evidence}
+    assert ev["n-inv"].source == {
+        "document_url": "/api/invoices/case-1/document",
+        "page": None,
+    }
+    assert ev["n-rate"].source == {
+        "document_url": "/api/trust/contracts/doc-c/file",
+        "page": 2,
+    }
+    assert "INV-1041" in ev["n-inv"].label
+    assert (
+        x.caused_by[0].kind == "vendor" and "Acme Steel" in x.caused_by[0].label
+    )
+    assert x.caused_by[0].node_id is None  # the vendor was not cited

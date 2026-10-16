@@ -1,0 +1,110 @@
+{
+ "finding": {
+  "id": "f-leak-discount",
+  "type": "LEAK-DISCOUNT",
+  "transaction_node": "n-inv",
+  "status": "detected",
+  "impact": "100.00",
+  "currency": "INR",
+  "confidence": 0.9,
+  "engine_version": "leakage-1",
+  "rule_version": "r",
+  "model_version": "none",
+  "summary": "Paid in full inside the early-payment window without the discount.",
+  "details": {
+   "pct": "10",
+   "days": "10",
+   "paid": "1000.00",
+   "payments": [
+    "n-pay"
+   ],
+   "clauses": [
+    "n-disc"
+   ],
+   "needs_review": false
+  },
+  "citations": [
+   {
+    "node_id": "n-inv",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-pay",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-con",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-disc",
+    "excerpt": "10% off if paid within 10 days"
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-con": {
+   "kind": "contract",
+   "ref_table": "documents",
+   "ref_id": "doc-c",
+   "attrs": {
+    "filename": "msa.pdf",
+    "vendor_id": "v1"
+   }
+  },
+  "n-pay": {
+   "kind": "payment",
+   "attrs": {
+    "doc_number": "INV-1041",
+    "amount": "1000.00",
+    "invoice_date": "2026-03-12"
+   }
+  },
+  "n-disc": {
+   "kind": "contract_clause",
+   "attrs": {
+    "type": "discount",
+    "params": {
+     "pct": "10",
+     "days": "10"
+    },
+    "page": 2,
+    "excerpt": "10% off if paid within 10 days",
+    "confidence": 0.8,
+    "reviewed": false
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ]
+ ],
+ "expect": {
+  "payable_now": "1000.00",
+  "payable_correct": "900.00",
+  "delta": "100.00"
+ }
+}

@@ -1,0 +1,75 @@
+{
+ "finding": {
+  "id": "f-prov-suspect",
+  "type": "PROV-SUSPECT",
+  "transaction_node": "n-inv",
+  "status": "detected",
+  "impact": null,
+  "currency": null,
+  "confidence": 0.7,
+  "engine_version": "provenance-1",
+  "rule_version": "r",
+  "model_version": "none",
+  "summary": "Document authenticity score 0.30 is below 0.50.",
+  "details": {
+   "score": 0.3,
+   "components": {
+    "channel": 0.0,
+    "template": 0.5,
+    "text": 0.0,
+    "meta": 0.6
+   },
+   "fingerprint": "abcdef0123456789"
+  },
+  "citations": [
+   {
+    "node_id": "n-docv",
+    "excerpt": "authenticity score 0.30"
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-docv": {
+   "kind": "document_version",
+   "attrs": {
+    "case_id": "case-1",
+    "score": 0.3
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ],
+  [
+   "n-docv",
+   "n-inv",
+   "evidences"
+  ]
+ ],
+ "expect": {
+  "note": "no money is computed for this finding"
+ }
+}
