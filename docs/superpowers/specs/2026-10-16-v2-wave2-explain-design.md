@@ -1,0 +1,19 @@
+# Wave 2 — Causal Why engine (FR-24) design
+
+**Program plan:** `docs/superpowers/plans/2026-10-16-v2-wave2-program.md` (decisions, ownership, execution). **Contracts:** `docs/superpowers/specs/2026-10-14-v2-trust-layer-design.md` §3.1.
+
+### B. Causal Why engine (FR-24) — `trust/explain/`, `api/trust_explain_routes.py`
+
+**Layout:** `model.py` (frozen `Step(text, node_id)`, `Actor(kind, label, node_id|None)`, `Evidence(node_id, kind, label, excerpt, source)`, `Counterfactual(currency, payable_now, payable_correct, delta, formula, note)`, `Explanation(finding_id, type, version, what_happened, why, caused_by, evidence, confidence, confidence_note, next_action, would_change, counterfactual, versions, transaction_node)`, `EXPLAIN_VERSION="explain-1"`, `check()`); `engine.py` `build(tenant_id, finding, *, graph, links=None) -> Explanation`; `counterfactual.py`; `templates/{__init__,leakage,payment,provenance,gst_itc,generic}.py` (`register(code)` decorator; `TEMPLATES` dict); `pack.py` `evidence_pack(...) -> dict` (`pack_version: 1`: generated_at, finding, explanation, lineage, masked nodes + edges, versions incl. `explain_version`, decision {status, owner_id, decided_at, events}, ratings, `sha256` over canonical JSON); `render.py` `pack_html(pack)`; `ratings.py` `RatingStore(url).rate(...)` (upsert per rater; audit `trust_explanation_rated`), `.aggregate(tenant_id) -> {type: {rated, correct, useful}}`.
+
+**Citation enforcement:** `check()` raises `Uncited` unless `evidence` non-empty, every `Step.node_id` ∈ citation ids ∪ {transaction_node}, every `Actor.node_id` likewise or None, no empty step text. Templates read `details` defensively and cite only cited nodes → FR-24.2 by construction. **Generic fallback** for any type without a template: `what_happened = summary`; steps from `TYPES` description + each citation excerpt; `caused_by` vendor + engine; next action "Review the cited evidence and accept or reject." Satisfies `check()` because the DB guarantees ≥ 1 citation.
+
+**Per-family templates** (implementer re-reads each engine's `details` keys first): LEAK-RATE/ESCALATOR/TIER (clause → line billed → over by impact; would_change: reviewed clause with another rate, statement credit; next: short-pay/claim), LEAK-REBATE/DISCOUNT/TERM + RADAR-* (clause → timing/spend → missed ₹), DUP-*/STMT-* (earlier → this, same amount/number; next: hold the later), PAY-* (provider evidence → verdict; would_change: verified result, call-back), PROV-SUSPECT/TAMPER (score components / approved twins), GST-* (lookup → status → ITC). `caused_by` is heuristic, worded "likely", persons only as the approver on record.
+
+**Counterfactual** (Decimal): LEAK-RATE/ESCALATOR/TIER/REBATE/DISCOUNT → `payable_correct = amount − impact`, formula from details; DUP-*/STMT-DOUBLE-PAID/UNAPPLIED-CREDIT → pay once (`0` for the later copy); PAY-*/PROV-*/GST holds → unchanged, delta = exposure "amount at risk if paid now"; GST-ITC-RISK → "ITC claimable if the vendor is active/files"; impact None → `note="no money is computed for this finding"`.
+
+**Routes:** `GET /api/trust/findings/{id}/explanation` (viewer); `GET .../evidence-pack?format=json|html` (viewer; HTML `Content-Disposition: inline`); `POST .../rating` `{correct, useful, note?}` (clerk); `GET /api/trust/explanations/ratings` (viewer).
+
+**Benchmark** (`benchmark/history/explain.py` `measure(...)`): `explanation_citation_coverage` (share of eval-DB findings whose `build()` passes `check()` with ≥1 evidence) gate `== 1.0`; `counterfactual_impact_error` (Σ|delta − expected_impact| / Σexpected over priced manifest faults, same matching as `_score`) gate `≤ 0.01`.
+
+**Tests:** `test_trust_explain.py` parametrized over **every** `TYPES` code with a fixture per type (`tests/fixtures/trust_explain/<TYPE>.json`) asserting `check()`, ≥1 step, counterfactual math; unknown type → generic; HTML escapes `<script>`; pack sha stable; ratings; `test_trust_explain_routes.py` with `PROBED` + probes.
