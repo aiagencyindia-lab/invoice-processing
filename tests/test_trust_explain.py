@@ -432,3 +432,94 @@ def test_pack_html_escapes_script():
     assert "&lt;script&gt;" in html
     assert out["sha256"] in html and "Evidence pack" in html
     assert "Acme Steel" in html and "What happened" in html
+
+
+# -- ratings --------------------------------------------------------------------
+
+from invoice_processing.db import models  # noqa: E402
+from invoice_processing.db.session import (  # noqa: E402
+    create_all,
+    get_engine,
+    tenant_session,
+)
+from invoice_processing.ports import RunContext  # noqa: E402
+from invoice_processing.trust.explain.ratings import RatingStore  # noqa: E402
+from invoice_processing.trust.findings.model import Citation, FindingSpec  # noqa: E402
+from invoice_processing.trust.findings.store import FindingStore  # noqa: E402
+from invoice_processing.trust.graph.store import GraphStore  # noqa: E402
+
+CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="engine")
+OTHER = "tenant-globex"
+
+
+@pytest.fixture
+def db(scratch_db):
+    url = scratch_db("explain.db")
+    models.Base.metadata.drop_all(get_engine(url))
+    create_all(url)
+    for tid, slug in ((T, "acme"), (OTHER, "globex")):
+        with tenant_session(tid, url) as s:
+            s.add(models.Tenant(id=tid, name=slug, slug=slug, status="active"))
+    graph, findings = GraphStore(url), FindingStore(url)
+    node = graph.upsert_node(CTX, kind="invoice", natural_key="i1")
+    ids = {}
+    for code in ("LEAK-RATE", "LEAK-RATE", "DUP-NEAR"):
+        fid, _ = findings.upsert(
+            CTX,
+            FindingSpec(
+                type=code,
+                transaction_node=node,
+                dedupe_key=f"{code}:{len(ids)}",
+                impact=Decimal("10"),
+                currency="INR",
+                confidence=0.9,
+                engine_version="e",
+                rule_version="r",
+                model_version="none",
+                summary="s",
+                citations=(Citation(node, "x"),),
+            ),
+        )
+        ids[fid] = code
+    return url, RatingStore(url), ids
+
+
+def test_rating_upserts_per_rater_and_audits(db):
+    url, store, ids = db
+    fid = next(iter(ids))
+    who = RunContext(tenant_id=T, run_id="req", actor="clerk@x.test")
+    first = store.rate(who, fid, correct=True, useful=True, note="fine")
+    assert first["rater"] == "clerk@x.test" and first["correct"] is True
+    again = store.rate(who, fid, correct=False, useful=True, note=None)
+    assert again["correct"] is False and again["note"] is None
+    assert len(store.list(T, fid)) == 1
+    store.rate(who.child(actor="boss@x.test"), fid, correct=True, useful=False)
+    assert [r["rater"] for r in store.list(T, fid)] == [
+        "boss@x.test",
+        "clerk@x.test",
+    ]
+    with tenant_session(T, url) as s:
+        rows = s.query(models.AuditEvent).filter_by(
+            action="trust_explanation_rated"
+        )
+        assert rows.count() == 3
+        assert {r.entity_id for r in rows} == {fid}
+        assert rows.first().after["correct"] is True
+    with pytest.raises(KeyError):
+        store.rate(who, "nope", correct=True, useful=True)
+    with pytest.raises(KeyError):
+        store.rate(who.child(tenant_id=OTHER), fid, correct=True, useful=True)
+    assert store.list(OTHER, fid) == []
+
+
+def test_ratings_aggregate_by_type(db):
+    _, store, ids = db
+    who = RunContext(tenant_id=T, run_id="req", actor="clerk@x.test")
+    for i, (fid, _code) in enumerate(ids.items()):
+        store.rate(who, fid, correct=i != 1, useful=True)
+        store.rate(who.child(actor="b@x.test"), fid, correct=True, useful=False)
+    assert store.aggregate(T) == {
+        "LEAK-RATE": {"rated": 4, "correct": 3, "useful": 2},
+        "DUP-NEAR": {"rated": 2, "correct": 2, "useful": 1},
+    }
+    assert store.aggregate(OTHER) == {}
