@@ -37,10 +37,15 @@ export default function ContractPage() {
         made = url;
         setFile({ url, problem: null });
       })
-      .catch((caught) => setFile({ url: null, problem: caught instanceof ApiError ? caught.friendly : String(caught) }));
+      .catch((caught) => {
+        if (cancelled) return;
+        setFile({ url: null, problem: caught instanceof ApiError ? caught.friendly : String(caught) });
+      });
     return () => {
       cancelled = true;
       if (made) URL.revokeObjectURL(made);
+      // The blob is gone; never let a later render show its URL again.
+      setFile({ url: null, problem: null });
     };
   }, [documentId]);
 

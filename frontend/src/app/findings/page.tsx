@@ -62,7 +62,14 @@ function FindingsView() {
       });
       setNotice("Finding triaged.");
     } catch (caught) {
-      setNotice(caught instanceof ApiError ? caught.friendly : String(caught));
+      const moved = caught instanceof ApiError && caught.status === 409 ? (caught.detail as { current?: string; message?: string }) : null;
+      setNotice(
+        moved?.current
+          ? `This finding moved to ${STATUS_LABELS[moved.current] ?? moved.current}; reloaded.`
+          : caught instanceof ApiError
+            ? caught.friendly
+            : String(caught),
+      );
     }
     reload();
     reloadSummary();

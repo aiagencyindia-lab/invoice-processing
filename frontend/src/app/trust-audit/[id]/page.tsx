@@ -16,6 +16,7 @@ import {
   type ContractRow,
   type Me,
   type TrustAuditDetail,
+  type TrustFindingSummary,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { ENGINE_LABELS, STATUS_LABELS, money } from "@/lib/trust";
@@ -23,6 +24,7 @@ import { ENGINE_LABELS, STATUS_LABELS, money } from "@/lib/trust";
 const TABS = ["Overview", "Sampling", "Report", "Ledger", "Contracts"] as const;
 type Tab = (typeof TABS)[number];
 const ACTIVE = new Set(["queued", "running"]);
+const ENGINES = ["leakage", "payment", "provenance", "gst_itc"];
 
 function friendly(caught: unknown): string {
   return caught instanceof ApiError ? caught.friendly : String(caught);
@@ -66,11 +68,20 @@ export default function TrustAuditDetailPage() {
   const [tab, setTab] = useState<Tab>("Overview");
   const [notice, setNotice] = useState<string | null>(null);
   const [size, setSize] = useState("20");
+  const [engines, setEngines] = useState<string[]>(ENGINES);
+  // Vendor node ids read as names through the same mapping the form used.
+  const { data: summary } = usePoll<TrustFindingSummary>("/api/trust/findings/summary");
 
   // Poll the latest run every 3 s while it is queued or running; once it has
   // finished the audit itself carries the result.
-  const latest = audit?.runs[audit.runs.length - 1] ?? null;
-  const activeRun = latest && ACTIVE.has(latest.status) ? latest : null;
+  // Runs are not promised in order: the active one is the queued/running one,
+  // the latest the most recently started.
+  const activeRun = audit?.runs.find((r) => ACTIVE.has(r.status)) ?? null;
+  const latest =
+    activeRun ??
+    (audit?.runs.length
+      ? [...audit.runs].sort((a, b) => (a.started_at ?? "").localeCompare(b.started_at ?? "")).at(-1) ?? null
+      : null);
   const { data: polled } = usePoll<AuditRun>(activeRun ? `${path}/runs/${encodeURIComponent(activeRun.id)}` : null, 3000);
   const run = polled && activeRun && polled.id === activeRun.id ? polled : latest;
   // The run finished since the audit was fetched: refetch so the audit's own
@@ -146,9 +157,13 @@ export default function TrustAuditDetailPage() {
         <div className="stack" style={{ gap: 12 }}>
           <dl className="kv panel" style={{ padding: 16 }}>
             <dt>Vendors</dt>
-            <dd>{audit.vendors.length ? audit.vendors.join(", ") : "all"}</dd>
+            <dd>
+              {audit.vendors.length
+                ? audit.vendors.map((node) => summary?.vendors.find((v) => v.node === node)?.name ?? node).join(", ")
+                : "all"}
+            </dd>
             <dt>Categories</dt>
-            <dd>{audit.categories.length ? audit.categories.map((c) => ENGINE_LABELS[c] ?? c).join(", ") : "all"}</dd>
+            <dd>{audit.categories.length ? audit.categories.join(", ") : "all"}</dd>
             <dt>Terms</dt>
             <dd>
               {audit.terms.recovered_pct}% of recovered · {audit.terms.prevented_pct}% of prevented
@@ -160,14 +175,28 @@ export default function TrustAuditDetailPage() {
             <div className="row-between">
               <div className="eyebrow">Batch run</div>
               {canRun ? (
-                <button
-                  type="button"
-                  className="btn-primary"
-                  disabled={!!activeRun}
-                  onClick={() => post<AuditRun>("/runs", {}).then((out) => out && setNotice("Run queued."))}
-                >
-                  Run batch
-                </button>
+                <span className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  {ENGINES.map((engine) => (
+                    <label key={engine} className="row" style={{ gap: 4, alignItems: "center", fontSize: 12.5 }}>
+                      <input
+                        type="checkbox"
+                        checked={engines.includes(engine)}
+                        onChange={(event) =>
+                          setEngines(event.target.checked ? [...engines, engine] : engines.filter((e) => e !== engine))
+                        }
+                      />
+                      {ENGINE_LABELS[engine] ?? engine}
+                    </label>
+                  ))}
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={!!activeRun || engines.length === 0}
+                    onClick={() => post<AuditRun>("/runs", { engines }).then((out) => out && setNotice("Run queued."))}
+                  >
+                    Run batch
+                  </button>
+                </span>
               ) : null}
             </div>
             {run ? (
@@ -230,7 +259,7 @@ export default function TrustAuditDetailPage() {
               <button
                 type="button"
                 className="btn-primary"
-                onClick={() => post<AuditSample>("/samples", { size: Number(size) || 1 })}
+                onClick={() => post<AuditSample>("/samples", { size: Math.min(200, Math.max(1, Math.trunc(Number(size)) || 1)) })}
               >
                 Draw sample
               </button>

@@ -67,7 +67,7 @@ export default function FindingDetailPage() {
           {Object.entries(detail.details).map(([key, value]) => (
             <Fragment key={key}>
               <dt>{key}</dt>
-              <dd>{value === null || value === undefined ? "—" : String(value)}</dd>
+              <dd>{value === null || value === undefined ? "—" : typeof value === "object" ? JSON.stringify(value) : String(value)}</dd>
             </Fragment>
           ))}
         </dl>

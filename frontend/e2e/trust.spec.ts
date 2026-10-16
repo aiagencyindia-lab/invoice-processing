@@ -26,7 +26,9 @@ test("the findings queue lists the seeded finding", async ({ page }) => {
   await expect(row.getByText("Detected")).toBeVisible();
 
   // The hold-only view is the Payment Trust queue, and the seed is not a hold.
-  await page.getByLabel("Payment Trust queue").check();
+  // click, not check(): the box reads its state from the URL, which router.replace
+  // updates a tick later, and check() verifies the state synchronously.
+  await page.getByLabel("Payment Trust queue").click();
   await expect(page).toHaveURL(/hold=true/);
   await expect(page.locator(".empty-state")).toBeVisible();
 });

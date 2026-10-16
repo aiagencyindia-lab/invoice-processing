@@ -3,18 +3,17 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { api, ApiError, can, type Me, type TrustAudit } from "@/lib/api";
+import { api, ApiError, can, type Me, type TrustAudit, type TrustFindingSummary } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
-import { ENGINE_LABELS } from "@/lib/trust";
-
-const CATEGORIES = ["leakage", "payment", "provenance", "gst_itc"];
 
 const EMPTY = {
   name: "",
   period_from: "",
   period_to: "",
-  vendors: "",
-  categories: [] as string[],
+  vendors: [] as string[],
+  // Vendor node ids typed by hand, for a vendor with no finding yet.
+  vendor_ids: "",
+  categories: "",
   recovered_pct: "25",
   prevented_pct: "10",
   cap: "",
@@ -36,6 +35,8 @@ export default function TrustAuditPage() {
   // The audit routes land on the v2/w2-audit branch; until then this is a 404
   // the page shows as text, with the form still usable once they exist.
   const { data: audits, error } = usePoll<TrustAudit[]>("/api/trust/audits");
+  // The vendor -> graph node mapping the audit scopes by.
+  const { data: summary } = usePoll<TrustFindingSummary>("/api/trust/findings/summary");
   const [form, setForm] = useState(EMPTY);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -50,10 +51,9 @@ export default function TrustAuditPage() {
           name: form.name.trim(),
           period_from: form.period_from || null,
           period_to: form.period_to || null,
-          // TODO(scaffold follow-up): the API scopes by vendor *node id*; the
-          // scaffold has no vendors -> nodes mapping, so names are sent as typed.
-          vendors: listOf(form.vendors),
-          categories: form.categories,
+          vendors: [...new Set([...form.vendors, ...listOf(form.vendor_ids)])],
+          // Line keywords, not engines: the engines are chosen per run.
+          categories: listOf(form.categories),
           terms: {
             recovered_pct: form.recovered_pct,
             prevented_pct: form.prevented_pct,
@@ -70,13 +70,15 @@ export default function TrustAuditPage() {
     }
   }
 
-  const field = (key: keyof typeof EMPTY, label: string, type = "text") => (
+  const field = (key: keyof typeof EMPTY, label: string, type = "text", required = false) => (
     <label className="stack" style={{ gap: 2, fontSize: 12.5 }}>
       {label}
       <input
         type={type}
         className="input-field"
-        inputMode={type === "text" && /pct|cap|minimum/.test(key) ? "decimal" : undefined}
+        min={type === "number" ? 0 : undefined}
+        step={type === "number" ? "any" : undefined}
+        required={required}
         value={form[key] as string}
         onChange={(event) => setForm({ ...form, [key]: event.target.value })}
       />
@@ -137,40 +139,49 @@ export default function TrustAuditPage() {
             {field("period_from", "Period from", "date")}
             {field("period_to", "Period to", "date")}
           </div>
-          <label className="stack" style={{ gap: 2, fontSize: 12.5 }}>
-            Vendors (one per line; blank for all)
-            <textarea
-              className="input-field"
-              rows={3}
-              value={form.vendors}
-              onChange={(event) => setForm({ ...form, vendors: event.target.value })}
-            />
-          </label>
-          <fieldset className="row" style={{ gap: 12, border: 0, padding: 0, margin: 0, flexWrap: "wrap" }}>
-            <legend className="eyebrow">Categories (blank for all)</legend>
-            {CATEGORIES.map((category) => (
-              <label key={category} className="row" style={{ gap: 4, alignItems: "center", fontSize: 12.5 }}>
+          <fieldset className="stack" style={{ gap: 4, border: 0, padding: 0, margin: 0 }}>
+            <legend className="eyebrow">Vendors (none for all)</legend>
+            {(summary?.vendors ?? []).map((vendor) => (
+              <label key={vendor.node} className="row" style={{ gap: 4, alignItems: "center", fontSize: 12.5 }}>
                 <input
                   type="checkbox"
-                  checked={form.categories.includes(category)}
+                  checked={form.vendors.includes(vendor.node)}
                   onChange={(event) =>
                     setForm({
                       ...form,
-                      categories: event.target.checked
-                        ? [...form.categories, category]
-                        : form.categories.filter((c) => c !== category),
+                      vendors: event.target.checked
+                        ? [...form.vendors, vendor.node]
+                        : form.vendors.filter((v) => v !== vendor.node),
                     })
                   }
                 />
-                {ENGINE_LABELS[category] ?? category}
+                {vendor.name ?? vendor.node} ({vendor.count})
               </label>
             ))}
+            <label className="stack" style={{ gap: 2, fontSize: 12.5 }}>
+              Other vendor node ids (one per line)
+              <textarea
+                className="input-field"
+                rows={2}
+                value={form.vendor_ids}
+                onChange={(event) => setForm({ ...form, vendor_ids: event.target.value })}
+              />
+            </label>
           </fieldset>
+          <label className="stack" style={{ gap: 2, fontSize: 12.5 }}>
+            Categories — line keywords, comma-separated (blank for all)
+            <textarea
+              className="input-field"
+              rows={2}
+              value={form.categories}
+              onChange={(event) => setForm({ ...form, categories: event.target.value })}
+            />
+          </label>
           <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-            {field("recovered_pct", "Recovered %")}
-            {field("prevented_pct", "Prevented %")}
-            {field("cap", "Cap (optional)")}
-            {field("minimum", "Minimum (optional)")}
+            {field("recovered_pct", "Recovered %", "number", true)}
+            {field("prevented_pct", "Prevented %", "number", true)}
+            {field("cap", "Cap (optional)", "number")}
+            {field("minimum", "Minimum (optional)", "number")}
           </div>
           {field("approver", "Approver email", "email")}
           {problem ? (
