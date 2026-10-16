@@ -256,3 +256,92 @@ def test_evidence_carries_source_and_labels():
         x.caused_by[0].kind == "vendor" and "Acme Steel" in x.caused_by[0].label
     )
     assert x.caused_by[0].node_id is None  # the vendor was not cited
+
+
+# -- per-family templates ------------------------------------------------------
+
+
+def test_every_engine_type_has_a_template():
+    engine_types = {
+        t
+        for t, e in finding_model.TYPE_ENGINE.items()
+        if e in ("leakage", "payment", "provenance", "gst_itc")
+    }
+    assert engine_types <= set(TEMPLATES)
+
+
+def _steps(code):
+    f, graph, _ = load(code)
+    x = engine.build(T, f, graph=graph)
+    return x, {s.node_id for s in x.why}, " ".join(s.text for s in x.why)
+
+
+def test_leak_rate_walks_clause_line_and_overbilling():
+    x, nodes, text = _steps("LEAK-RATE")
+    assert {"n-rate", "n-line"} <= nodes
+    assert "60.00" in text and "50" in text and "100.00" in text
+    assert "short-pay" in x.next_action.lower()
+    assert len(x.would_change) >= 2
+    assert "not yet reviewed" in x.confidence_note
+
+
+def test_dup_near_points_at_the_earlier_invoice_and_holds_the_later():
+    x, nodes, text = _steps("DUP-NEAR")
+    assert "n-inv0" in nodes
+    assert "INV-1040" in text
+    assert "hold" in x.next_action.lower()
+
+
+def test_pay_unverified_starts_from_the_provider_evidence():
+    x, _nodes, text = _steps("PAY-UNVERIFIED")
+    assert x.why[0].node_id == "n-prov"
+    assert "not_verified" in text and "****1234" in text
+    assert any("call-back" in w.lower() for w in x.would_change)
+    assert any(a.kind == "provider" for a in x.caused_by)
+
+
+def test_prov_suspect_names_the_score_components():
+    _x, _nodes, text = _steps("PROV-SUSPECT")
+    assert "channel" in text and "meta" in text and "0.30" in text
+
+
+def test_prov_tamper_cites_the_approved_twin():
+    _x, nodes, text = _steps("PROV-TAMPER")
+    assert "n-inv0" in nodes and "approved" in text
+
+
+def test_gst_inactive_reads_lookup_then_status_then_itc():
+    _x, nodes, text = _steps("GST-INACTIVE")
+    assert "n-gst" in nodes and "cancelled" in text
+    assert "ITC" in text or "input tax credit" in text.lower()
+
+
+def test_leak_discount_cites_the_payment():
+    _x, nodes, text = _steps("LEAK-DISCOUNT")
+    assert "n-pay" in nodes and "10%" in text
+
+
+def test_radar_renewal_is_about_the_contract_itself():
+    x, nodes, text = _steps("RADAR-RENEWAL")
+    assert "2026-11-30" in text and "n-term" in nodes
+    assert x.counterfactual.note == cf.NO_MONEY
+
+
+def test_caused_by_is_worded_as_likely_and_names_the_approver():
+    f, graph, _ = load("LEAK-RATE")
+    graph._nodes["n-appr"] = {
+        "id": "n-appr",
+        "kind": "approval",
+        "attrs": {"decided_by": "boss@x.test", "status": "approved"},
+    }
+    graph._edges.append(
+        {"src": "n-appr", "dst": "n-inv", "kind": "approves", "attrs": {}}
+    )
+    x = engine.build(T, f, graph=graph)
+    assert any("likely" in a.label for a in x.caused_by)
+    person = [a for a in x.caused_by if a.kind == "person"]
+    assert (
+        person
+        and person[0].node_id is None
+        and "boss@x.test" in person[0].label
+    )
