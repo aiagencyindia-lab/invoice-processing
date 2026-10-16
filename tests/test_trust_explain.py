@@ -156,7 +156,14 @@ def load(code: str) -> tuple[dict, FakeGraph, dict]:
     return f, FakeGraph(data["nodes"], data["edges"]), data["expect"]
 
 
+# Snapshots at import: other test modules register throwaway T-* types at
+# run time, which have no fixture and no template by design.
 ALL_TYPES = sorted(finding_model.TYPES)
+ENGINE_TYPES = {
+    t
+    for t, e in finding_model.TYPE_ENGINE.items()
+    if e in ("leakage", "payment", "provenance", "gst_itc")
+}
 
 
 @pytest.mark.parametrize("code", ALL_TYPES)
@@ -262,12 +269,7 @@ def test_evidence_carries_source_and_labels():
 
 
 def test_every_engine_type_has_a_template():
-    engine_types = {
-        t
-        for t, e in finding_model.TYPE_ENGINE.items()
-        if e in ("leakage", "payment", "provenance", "gst_itc")
-    }
-    assert engine_types <= set(TEMPLATES)
+    assert ENGINE_TYPES <= set(TEMPLATES)
 
 
 def _steps(code):
