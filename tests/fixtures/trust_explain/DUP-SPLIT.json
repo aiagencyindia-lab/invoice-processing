@@ -1,0 +1,77 @@
+{
+ "finding": {
+  "id": "f-dup-split",
+  "type": "DUP-SPLIT",
+  "transaction_node": "n-inv",
+  "status": "detected",
+  "impact": null,
+  "currency": null,
+  "confidence": 0.5,
+  "engine_version": "leakage-1",
+  "rule_version": "r",
+  "model_version": "none",
+  "summary": "Invoices split to stay under the high-value threshold.",
+  "details": {
+   "total": "1900.00",
+   "threshold": "1500",
+   "invoices": [
+    "n-inv0",
+    "n-inv"
+   ]
+  },
+  "citations": [
+   {
+    "node_id": "n-inv",
+    "excerpt": "INV-1041"
+   },
+   {
+    "node_id": "n-inv0",
+    "excerpt": "INV-1040"
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-inv0": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i0",
+   "attrs": {
+    "invoice_number": "INV-1040",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-01",
+    "case_id": "case-0"
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ]
+ ],
+ "expect": {
+  "note": "no money is computed for this finding"
+ }
+}

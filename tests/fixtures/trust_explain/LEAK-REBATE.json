@@ -1,0 +1,96 @@
+{
+ "finding": {
+  "id": "f-leak-rebate",
+  "type": "LEAK-REBATE",
+  "transaction_node": "n-inv",
+  "status": "detected",
+  "impact": "100.00",
+  "currency": "INR",
+  "confidence": 0.9,
+  "engine_version": "leakage-1",
+  "rule_version": "r",
+  "model_version": "none",
+  "summary": "Spend passed the rebate threshold and no rebate credit arrived.",
+  "details": {
+   "period_start": "2026-01-01",
+   "period_spend": "5000",
+   "threshold": "4000",
+   "pct": "2",
+   "clauses": [
+    "n-reb"
+   ],
+   "needs_review": false
+  },
+  "citations": [
+   {
+    "node_id": "n-inv",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-con",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-reb",
+    "excerpt": "2% rebate above INR 4000 a year"
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-con": {
+   "kind": "contract",
+   "ref_table": "documents",
+   "ref_id": "doc-c",
+   "attrs": {
+    "filename": "msa.pdf",
+    "vendor_id": "v1"
+   }
+  },
+  "n-reb": {
+   "kind": "contract_clause",
+   "attrs": {
+    "type": "rebate",
+    "params": {
+     "threshold": "4000",
+     "pct": "2"
+    },
+    "page": 2,
+    "excerpt": "2% rebate above INR 4000 a year",
+    "confidence": 0.8,
+    "reviewed": false
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ]
+ ],
+ "expect": {
+  "payable_now": "1000.00",
+  "payable_correct": "900.00",
+  "delta": "100.00"
+ }
+}
