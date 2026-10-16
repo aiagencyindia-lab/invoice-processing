@@ -8,7 +8,13 @@ import pytest
 from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import RunContext
-from invoice_processing.trust.audit import ledger, render, report, sampling
+from invoice_processing.trust.audit import (
+    batch,
+    ledger,
+    render,
+    report,
+    sampling,
+)
 from invoice_processing.trust.audit.store import TrustAuditStore
 from invoice_processing.trust.graph.store import GraphStore
 
@@ -591,3 +597,176 @@ def test_store_samples_and_verdicts(store):
     )
     assert store.get_sample("tenant-globex", s["id"]) is None
     assert [x["id"] for x in store.samples(T, a["id"])] == [s["id"]]
+
+
+# -- batch --------------------------------------------------------------------
+
+
+class _Settings:
+    def __init__(self, modes):
+        self.modes = modes
+
+    def get(self, tenant_id):
+        return {"trust_engine_modes": self.modes, "other": 1}
+
+
+def test_lifted_settings_raise_requested_off_engines_to_advisory_only():
+    inner = _Settings(
+        {"leakage": "off", "payment": "enforcing", "gst_itc": "shadow"}
+    )
+    out = batch.lifted(inner, ["leakage", "payment", "provenance"]).get(T)
+    assert out["trust_engine_modes"] == {
+        "leakage": "advisory",
+        "payment": "enforcing",
+        "provenance": "advisory",
+        "gst_itc": "off",  # not requested: does not run in this batch
+    }
+    assert out["other"] == 1
+    assert batch.lifted(inner, []).get(T)["trust_engine_modes"] == {
+        "leakage": "advisory",
+        "payment": "enforcing",
+        "provenance": "advisory",
+        "gst_itc": "shadow",
+    }
+
+
+@pytest.fixture
+def batch_env(store, graph_db, monkeypatch):
+    a = store.create(CTX, name="FY26", terms=TERMS)
+    run = store.create_run(CTX, a["id"], engines=["leakage"], requested_by="x")
+    calls = []
+
+    def fake_evaluate(
+        ctx,
+        document_id,
+        *,
+        graph,
+        links,
+        url,
+        settings_store,
+        on_progress,
+        **kw,
+    ):
+        calls.append(
+            {
+                "document_id": document_id,
+                "modes": settings_store.get(ctx.tenant_id)[
+                    "trust_engine_modes"
+                ],
+            }
+        )
+        on_progress(
+            {
+                "engine": "leakage",
+                "done": 1,
+                "total": 1,
+                "findings": 2,
+                "report": {"mode": "advisory", "findings": 2},
+            }
+        )
+        return {
+            "synced": {},
+            "engines": {
+                "leakage": {"mode": "advisory", "findings": 2},
+                "payment": "off",
+            },
+        }
+
+    monkeypatch.setattr(batch, "evaluate", fake_evaluate)
+    return {
+        "store": store,
+        "run": run,
+        "calls": calls,
+        "graph": graph_db["graph"],
+        "url": graph_db["url"],
+    }
+
+
+def test_run_batch_marks_running_then_done_with_the_report(batch_env):
+    st, run = batch_env["store"], batch_env["run"]
+    out = batch.run_batch(
+        CTX,
+        run["id"],
+        graph=batch_env["graph"],
+        links=None,
+        url=batch_env["url"],
+        store=st,
+        settings_store=_Settings({}),
+        now=AT,
+    )
+    assert out["engines"]["payment"] == "off"
+    [call] = batch_env["calls"]
+    assert (
+        call["document_id"] is None and call["modes"]["leakage"] == "advisory"
+    )
+    after = st.get_run(T, run["id"])
+    assert after["status"] == "done" and after["finished_at"] == AT.isoformat()
+    assert after["progress"]["per_engine"] == {
+        "leakage": {"mode": "advisory", "findings": 2},
+        "payment": "off",
+    }
+    assert (
+        after["progress"]["engines_done"] == 1
+        and after["progress"]["findings_so_far"] == 2
+    )
+    # done: a redelivered message is a no-op
+    assert (
+        batch.run_batch(
+            CTX,
+            run["id"],
+            graph=batch_env["graph"],
+            links=None,
+            url=batch_env["url"],
+            store=st,
+        )
+        is None
+    )
+    assert len(batch_env["calls"]) == 1
+
+
+def test_run_batch_records_the_failure_and_reraises(batch_env, monkeypatch):
+    st, run = batch_env["store"], batch_env["run"]
+
+    def boom(*a, **k):
+        raise RuntimeError("db gone")
+
+    monkeypatch.setattr(batch, "evaluate", boom)
+    with pytest.raises(RuntimeError):
+        batch.run_batch(
+            CTX,
+            run["id"],
+            graph=batch_env["graph"],
+            links=None,
+            url=batch_env["url"],
+            store=st,
+            settings_store=_Settings({}),
+        )
+    after = st.get_run(T, run["id"])
+    assert (
+        after["status"] == "failed"
+        and after["error"] == "RuntimeError: db gone"
+    )
+    # a retry starts again from failed
+    monkeypatch.setattr(batch, "evaluate", lambda *a, **k: {"engines": {}})
+    batch.run_batch(
+        CTX,
+        run["id"],
+        graph=batch_env["graph"],
+        links=None,
+        url=batch_env["url"],
+        store=st,
+        settings_store=_Settings({}),
+    )
+    assert st.get_run(T, run["id"])["status"] == "done"
+
+
+def test_run_batch_unknown_run_raises_key_error(batch_env):
+    with pytest.raises(KeyError):
+        batch.run_batch(
+            CTX,
+            "nope",
+            graph=batch_env["graph"],
+            links=None,
+            url=batch_env["url"],
+            store=batch_env["store"],
+        )
