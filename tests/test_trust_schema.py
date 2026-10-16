@@ -91,3 +91,53 @@ def test_dedupe_key_is_unique_per_tenant(url):
                 dedupe_key="k",
             )
         )
+
+
+def test_the_wave2_tables_are_tenant_tables():
+    for name in (
+        "trust_audits",
+        "trust_audit_runs",
+        "trust_audit_samples",
+        "trust_explanation_ratings",
+    ):
+        assert name in TENANT_TABLES, name
+
+
+def test_one_rating_per_rater_per_finding(url):
+    from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+
+    with tenant_session(T, url) as s:
+        node = models.GraphNode(
+            tenant_id=T, kind="invoice", natural_key="invoices:i1"
+        )
+        s.add(node)
+        s.flush()
+        f = models.TrustFinding(
+            tenant_id=T,
+            type="T",
+            transaction_node=node.id,
+            dedupe_key="T:i1",
+        )
+        s.add(f)
+        s.flush()
+        s.add(
+            models.TrustExplanationRating(
+                tenant_id=T,
+                finding_id=f.id,
+                rater="a@x.test",
+                correct=True,
+                useful=True,
+            )
+        )
+        s.flush()
+        fid = f.id
+    with pytest.raises(IntegrityError), tenant_session(T, url) as s:
+        s.add(
+            models.TrustExplanationRating(
+                tenant_id=T,
+                finding_id=fid,
+                rater="a@x.test",
+                correct=False,
+                useful=True,
+            )
+        )
