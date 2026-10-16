@@ -16,7 +16,13 @@ PACK_VERSION = 1
 LINEAGE_VERSION = "lineage-1"
 
 
-def canonical_sha256(body: dict) -> str:
+# Not hashed: the hash itself, and the clock. Two downloads of an unchanged
+# finding carry the same sha (the pack is content-addressed, not a receipt).
+UNHASHED = ("sha256", "generated_at")
+
+
+def canonical_sha256(pack: dict) -> str:
+    body = {k: v for k, v in pack.items() if k not in UNHASHED}
     raw = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(raw.encode()).hexdigest()
 

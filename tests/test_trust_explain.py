@@ -370,7 +370,12 @@ def test_pack_sha_is_stable_and_excludes_itself():
     a = xp.evidence_pack(T, f, graph=graph, ratings=[RATING], now=NOW)
     b = xp.evidence_pack(T, f, graph=graph, ratings=[RATING], now=NOW)
     assert a == b and a["pack_version"] == 1
-    body = {k: v for k, v in a.items() if k != "sha256"}
+    later = xp.evidence_pack(
+        T, f, graph=graph, ratings=[RATING], now=NOW.replace(hour=13)
+    )
+    assert later["sha256"] == a["sha256"]  # the clock is not content
+    assert xp.evidence_pack(T, f, graph=graph, now=NOW)["sha256"] != a["sha256"]
+    body = {k: v for k, v in a.items() if k not in ("sha256", "generated_at")}
     assert (
         a["sha256"]
         == hashlib.sha256(
