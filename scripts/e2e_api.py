@@ -141,6 +141,69 @@ def seed_database() -> None:
             book=po_book.DbBook(PgPurchaseOrderRepository(), TENANT),
         )
         target.project_case(ctx, {**artifacts, **(coded or {})})
+    seed_finding()
+
+
+def seed_finding() -> None:
+    """One cited LEAK-RATE finding on case_005, so the findings pages can be
+    driven end to end without a worker or an engine run."""
+    from decimal import Decimal  # noqa: PLC0415
+
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from invoice_processing.db.models import Invoice  # noqa: PLC0415
+    from invoice_processing.db.session import tenant_session  # noqa: PLC0415
+    from invoice_processing.ports import RunContext  # noqa: PLC0415
+    from invoice_processing.trust import leakage  # noqa: F401, PLC0415 - registers its types
+    from invoice_processing.trust.decide import FakeDecider  # noqa: PLC0415
+    from invoice_processing.trust.findings.model import (  # noqa: PLC0415
+        Citation,
+        FindingSpec,
+    )
+    from invoice_processing.trust.findings.store import FindingStore  # noqa: PLC0415
+    from invoice_processing.trust.graph.links import LinkStore  # noqa: PLC0415
+    from invoice_processing.trust.graph.store import GraphStore  # noqa: PLC0415
+    from invoice_processing.trust.graph.sync import sync_tenant  # noqa: PLC0415
+
+    ctx = RunContext(tenant_id=TENANT, case_id="case_005", actor="e2e-seed")
+    graph, links = GraphStore(), LinkStore()
+    sync_tenant(ctx, graph, links, decider=FakeDecider({}))
+    with tenant_session(TENANT) as session:
+        invoice_id = session.scalar(
+            select(Invoice.id).where(
+                Invoice.tenant_id == TENANT, Invoice.case_id == "case_005"
+            )
+        )
+    node = graph.nodes_by_ref(TENANT, "invoices", [invoice_id]).get(invoice_id)
+    if node is None:
+        return
+    FindingStore().upsert(
+        ctx,
+        FindingSpec(
+            type="LEAK-RATE",
+            transaction_node=node,
+            dedupe_key=f"LEAK-RATE:invoices:{invoice_id}:1",
+            impact=Decimal("1250.00"),
+            currency="INR",
+            confidence=0.86,
+            engine_version="leakage-1",
+            rule_version="contract-3.1",
+            model_version="none",
+            summary="Line 1 billed above the contract rate",
+            details={
+                "engine": "leakage",
+                "hold": False,
+                "mode": "advisory",
+                "line": 1,
+                "description": "Hex bolts",
+                "quantity": "250",
+                "unit_price": "55.00",
+                "rate": "50.00",
+                "needs_review": True,
+            },
+            citations=(Citation(node, "Line 1: 250 x INR 55.00"),),
+        ),
+    )
 
 
 def _golden_invoice() -> dict:

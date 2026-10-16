@@ -1,6 +1,7 @@
 """Findings v2: cited, versioned, deduplicated, with a money ledger of every step."""
 
 import os
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -211,3 +212,128 @@ def test_list_filters_by_transaction_node(env):
     assert [
         f["transaction_node"] for f in store.list(T, transaction_node=other)
     ] == [other]
+
+
+@pytest.fixture
+def book(env):
+    """Two vendors, three invoices, findings of two types across them."""
+    url, store, _ = env
+    graph = GraphStore(url)
+    ven_a = graph.upsert_node(CTX, kind="vendor", natural_key="vendors:a")
+    ven_b = graph.upsert_node(CTX, kind="vendor", natural_key="vendors:b")
+    invs = []
+    for i, ven in enumerate((ven_a, ven_a, ven_b)):
+        inv = graph.upsert_node(
+            CTX, kind="invoice", natural_key=f"invoices:x{i}"
+        )
+        graph.upsert_edge(
+            CTX,
+            src=inv,
+            dst=ven,
+            kind="issued_by",
+            source_system="v1",
+            provenance="system_record",
+            confidence=1.0,
+            observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        invs.append(inv)
+    ids = [
+        store.upsert(CTX, spec(invs[0], "10", dedupe_key="A:x0", type="T-A"))[
+            0
+        ],
+        store.upsert(CTX, spec(invs[1], "20", dedupe_key="B:x1", type="T-B"))[
+            0
+        ],
+        store.upsert(CTX, spec(invs[2], "30", dedupe_key="A:x2", type="T-A"))[
+            0
+        ],
+    ]
+    return url, store, {"a": ven_a, "b": ven_b}, invs, ids
+
+
+def test_list_filters_by_vendor_statuses_types_and_pages(book):
+    _, store, vendors, _, ids = book
+    assert {f["id"] for f in store.list(T, vendor_node=vendors["a"])} == {
+        ids[0],
+        ids[1],
+    }
+    assert [f["id"] for f in store.list(T, types=["T-A"])] == [ids[2], ids[0]]
+    store.transition(HUMAN, ids[0], "triaged", actor="c@x.test")
+    assert {f["id"] for f in store.list(T, statuses=["triaged"])} == {ids[0]}
+    page = store.list(T, limit=2, offset=1)
+    assert [f["id"] for f in page] == [ids[1], ids[0]]
+    assert store.count(T, types=["T-A"]) == 2 and store.count(T) == 3
+
+
+def test_list_filters_by_time_window(book):
+    url, store, _, _, ids = book
+    with tenant_session(T, url) as s:
+        row = s.get(models.TrustFinding, ids[0])
+        row.created_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    cutoff = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    assert {f["id"] for f in store.list(T, until=cutoff)} == {ids[0]}
+    assert ids[0] not in {f["id"] for f in store.list(T, since=cutoff)}
+
+
+def test_a_re_versioned_invoice_still_lists_under_its_vendor(book):
+    url, store, vendors, invs, ids = book
+    graph = GraphStore(url)
+    new = graph.upsert_node(
+        CTX,
+        kind="invoice",
+        natural_key="invoices:x2",
+        attrs={"decision": "approve"},
+    )
+    assert new != invs[2]
+    graph.upsert_edge(
+        CTX,
+        src=new,
+        dst=vendors["b"],
+        kind="issued_by",
+        source_system="v1",
+        provenance="system_record",
+        confidence=1.0,
+        observed_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
+    assert [f["id"] for f in store.list(T, vendor_node=vendors["b"])] == [
+        ids[2]
+    ]
+
+
+def test_summary_counts_by_status_type_and_vendor(book):
+    _, store, vendors, _, ids = book
+    store.transition(HUMAN, ids[1], "triaged", actor="c@x.test")
+    out = store.summary(T)
+    assert out["by_status"] == {"detected": 2, "triaged": 1}
+    assert out["by_type"] == {"T-A": 2, "T-B": 1}
+    assert out["vendors"] == [
+        {"node": vendors["a"], "count": 2},
+        {"node": vendors["b"], "count": 1},
+    ]
+
+
+def test_events_are_the_ledger_with_finding_context(book):
+    _, store, _, invs, ids = book
+    store.transition(HUMAN, ids[0], "triaged", actor="c@x.test")
+    store.transition(HUMAN, ids[0], "accepted", actor="c@x.test")
+    store.transition(HUMAN, ids[0], "claimed", actor="c@x.test")
+    store.transition(
+        HUMAN, ids[0], "recovered", actor="c@x.test", amount=Decimal("7.50")
+    )
+    [row] = store.events(T, to_status=("recovered", "prevented"))
+    assert row["finding_id"] == ids[0] and row["type"] == "T-A"
+    assert row["transaction_node"] == invs[0]
+    assert row["amount"] == "7.5000" and row["actor"] == "c@x.test"
+    assert row["impact"] == "10.0000" and row["currency"] == "INR"
+    assert len(store.events(T)) == 7  # 3 detected + 4 transitions
+
+
+def test_the_store_refuses_a_non_finite_or_negative_ledger_amount(env):
+    _, store, node = env
+    fid, _ = store.upsert(CTX, spec(node))
+    for amount in (Decimal("NaN"), Decimal("Infinity"), Decimal("-1")):
+        with pytest.raises(ValueError):
+            store.transition(
+                HUMAN, fid, "triaged", actor="c@x.test", amount=amount
+            )
+    assert store.get(T, fid)["status"] == "detected"

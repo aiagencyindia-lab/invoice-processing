@@ -5,9 +5,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 
-from ...db.models import TrustFinding, TrustFindingCitation, TrustFindingEvent
+from ...db.models import (
+    GraphEdge,
+    TrustFinding,
+    TrustFindingCitation,
+    TrustFindingEvent,
+)
 from ...db.repositories import audit_event_row
 from ...db.session import tenant_session
 from ...ports import RunContext, StatusChanged
@@ -18,6 +23,9 @@ from .model import (
     IllegalTransition,
     can_transition,
 )
+
+# trust_finding_events.amount is Numeric(18, 4): fourteen integer digits.
+MAX_AMOUNT = Decimal("1e14")
 
 
 def _now() -> datetime:
@@ -143,6 +151,12 @@ class FindingStore:
             raise ValueError(
                 f"A reason is required to mark a finding {to_status}."
             )
+        if amount is not None and (
+            not amount.is_finite() or amount < 0 or amount >= MAX_AMOUNT
+        ):
+            raise ValueError(
+                "A ledger amount must be a non-negative number below 10^14."
+            )
         with tenant_session(ctx.tenant_id, self.url) as s:
             row = s.scalars(
                 select(TrustFinding).where(
@@ -224,21 +238,163 @@ class FindingStore:
             ).all()
             return _finding_dict(row, cites, events)
 
+    def _filtered(
+        self,
+        tenant_id: str,
+        *,
+        status=None,
+        statuses=None,
+        type=None,
+        types=None,
+        transaction_node=None,
+        vendor_node=None,
+        since=None,
+        until=None,
+    ):
+        q = select(TrustFinding).where(TrustFinding.tenant_id == tenant_id)
+        wanted = set(statuses or ()) | ({status} if status else set())
+        if wanted:
+            q = q.where(TrustFinding.status.in_(sorted(wanted)))
+        kinds = set(types or ()) | ({type} if type else set())
+        if kinds:
+            q = q.where(TrustFinding.type.in_(sorted(kinds)))
+        if transaction_node:
+            q = q.where(TrustFinding.transaction_node == transaction_node)
+        if vendor_node:
+            # The open issued_by edge of the finding's transaction node; a
+            # re-versioned invoice carries its findings to the new node.
+            issued = (
+                select(GraphEdge.src)
+                .where(
+                    GraphEdge.tenant_id == tenant_id,
+                    GraphEdge.kind == "issued_by",
+                    GraphEdge.dst == vendor_node,
+                    GraphEdge.valid_to.is_(None),
+                )
+                .scalar_subquery()
+            )
+            q = q.where(TrustFinding.transaction_node.in_(issued))
+        if since is not None:
+            q = q.where(TrustFinding.created_at >= since)
+        if until is not None:
+            q = q.where(TrustFinding.created_at < until)
+        return q
+
     def list(
         self,
         tenant_id: str,
         *,
         status: str | None = None,
+        statuses=None,
         type: str | None = None,
+        types=None,
         transaction_node: str | None = None,
+        vendor_node: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict]:
+        q = self._filtered(
+            tenant_id,
+            status=status,
+            statuses=statuses,
+            type=type,
+            types=types,
+            transaction_node=transaction_node,
+            vendor_node=vendor_node,
+            since=since,
+            until=until,
+        ).order_by(TrustFinding.created_at.desc(), TrustFinding.id)
+        if offset:
+            q = q.offset(offset)
+        if limit is not None:
+            q = q.limit(limit)
         with tenant_session(tenant_id, self.url) as s:
-            q = select(TrustFinding).where(TrustFinding.tenant_id == tenant_id)
-            if status:
-                q = q.where(TrustFinding.status == status)
-            if type:
-                q = q.where(TrustFinding.type == type)
-            if transaction_node:
-                q = q.where(TrustFinding.transaction_node == transaction_node)
-            q = q.order_by(TrustFinding.created_at.desc())
             return [_finding_dict(f) for f in s.scalars(q)]
+
+    def count(self, tenant_id: str, **filters) -> int:
+        q = self._filtered(tenant_id, **filters)
+        with tenant_session(tenant_id, self.url) as s:
+            return int(
+                s.scalar(select(func.count()).select_from(q.subquery())) or 0
+            )
+
+    def summary(self, tenant_id: str, *, top_vendors: int = 50) -> dict:
+        """Counts by status and type, and the vendors with the most findings."""
+        with tenant_session(tenant_id, self.url) as s:
+            by_status = dict(
+                s.execute(
+                    select(TrustFinding.status, func.count())
+                    .where(TrustFinding.tenant_id == tenant_id)
+                    .group_by(TrustFinding.status)
+                ).all()
+            )
+            by_type = dict(
+                s.execute(
+                    select(TrustFinding.type, func.count())
+                    .where(TrustFinding.tenant_id == tenant_id)
+                    .group_by(TrustFinding.type)
+                ).all()
+            )
+            vendors = s.execute(
+                select(GraphEdge.dst, func.count())
+                .join(
+                    TrustFinding,
+                    TrustFinding.transaction_node == GraphEdge.src,
+                )
+                .where(
+                    TrustFinding.tenant_id == tenant_id,
+                    GraphEdge.tenant_id == tenant_id,
+                    GraphEdge.kind == "issued_by",
+                    GraphEdge.valid_to.is_(None),
+                )
+                .group_by(GraphEdge.dst)
+                .order_by(func.count().desc(), GraphEdge.dst)
+                .limit(top_vendors)
+            ).all()
+        return {
+            "by_status": {k: int(v) for k, v in by_status.items()},
+            "by_type": {k: int(v) for k, v in by_type.items()},
+            "vendors": [{"node": n, "count": int(c)} for n, c in vendors],
+        }
+
+    def events(
+        self,
+        tenant_id: str,
+        *,
+        to_status: tuple[str, ...] = (),
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[dict]:
+        """The raw ledger: every status change with the money at that step,
+        carrying its finding's type, node and impact."""
+        q = (
+            select(TrustFindingEvent, TrustFinding)
+            .join(TrustFinding, TrustFinding.id == TrustFindingEvent.finding_id)
+            .where(TrustFindingEvent.tenant_id == tenant_id)
+            .order_by(TrustFindingEvent.created_at, TrustFindingEvent.id)
+        )
+        if to_status:
+            q = q.where(TrustFindingEvent.to_status.in_(to_status))
+        if since is not None:
+            q = q.where(TrustFindingEvent.created_at >= since)
+        if until is not None:
+            q = q.where(TrustFindingEvent.created_at < until)
+        with tenant_session(tenant_id, self.url) as s:
+            return [
+                {
+                    "finding_id": f.id,
+                    "type": f.type,
+                    "transaction_node": f.transaction_node,
+                    "impact": _money(f.impact),
+                    "currency": f.currency,
+                    "from_status": e.from_status,
+                    "to_status": e.to_status,
+                    "amount": _money(e.amount),
+                    "actor": e.actor,
+                    "reason": e.reason,
+                    "at": e.created_at.isoformat() if e.created_at else None,
+                }
+                for e, f in s.execute(q).all()
+            ]

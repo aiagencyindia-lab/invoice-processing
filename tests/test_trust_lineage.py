@@ -73,7 +73,7 @@ def by_stage(links):
     return {link.stage: link.status for link in links}
 
 
-def test_full_chain_is_found_except_contract_and_gl_in_wave0(graph):
+def test_full_chain_is_found_except_contract_and_gl(graph):
     out = lineage(T, build(graph), graph=graph)
     assert [link.stage for link in out] == list(CHAIN)
     assert by_stage(out) == {
@@ -86,7 +86,31 @@ def test_full_chain_is_found_except_contract_and_gl_in_wave0(graph):
         "gl": "no_evidence",
     }
     contract = next(link for link in out if link.stage == "contract")
-    assert "Wave 1" in contract.note
+    assert contract.note == "No contract governs this invoice."
+
+
+def contract_for(graph, inv, vendor):
+    c = graph.upsert_node(CTX, kind="contract", natural_key="msa")
+    edge(graph, c, vendor, "governs")
+    edge(graph, inv, c, "governed_by")
+    return c
+
+
+def test_governed_invoice_finds_its_contract(graph):
+    inv = build(graph)
+    v1 = graph.open_node(T, "vendor", "v1")["id"]
+    c = contract_for(graph, inv, v1)
+    contract = lineage(T, inv, graph=graph)[0]
+    assert (contract.status, contract.node_id) == ("found", c)
+
+
+def test_contract_with_another_vendor_contradicts(graph):
+    inv = build(graph)
+    v2 = graph.open_node(T, "vendor", "v2")["id"]
+    contract_for(graph, inv, v2)
+    contract = lineage(T, inv, graph=graph)[0]
+    assert contract.status == "contradicts"
+    assert "different vendor" in contract.note
 
 
 def test_missing_grn_is_no_evidence(graph):

@@ -19,6 +19,7 @@ def wave0_only(monkeypatch):
     """The Wave 0 baseline, without whatever engine fault families are
     installed: those add rows, faults and gates of their own."""
     monkeypatch.setattr(faults, "modules", lambda: [])
+    monkeypatch.setattr(history_eval, "_explain_module", lambda: None)
 
 
 def test_generator_is_deterministic_for_a_seed(tmp_path, wave0_only):
@@ -225,6 +226,7 @@ def test_a_wrong_impact_fails_the_impact_gate(
 
 def test_type_without_a_module_is_not_gated(tmp_path, scratch_db, monkeypatch):
     monkeypatch.setattr(faults, "modules", lambda: [])
+    monkeypatch.setattr(history_eval, "_explain_module", lambda: None)
     data = tmp_path / "d"
     generate.generate(7, data)
     out = history_eval.run(scratch_db("bench7.db"), data)
@@ -234,3 +236,33 @@ def test_type_without_a_module_is_not_gated(tmp_path, scratch_db, monkeypatch):
         "contract_clause_coverage",
     }
     assert out["types"] == {}
+
+
+def test_an_explain_measure_module_adds_its_gates(
+    tmp_path, scratch_db, monkeypatch, wave0_only
+):
+    """The explain branch ships benchmark/history/explain.py; the harness
+    picks it up by name and merges its gates, like the fault families."""
+    fake = SimpleNamespace(
+        measure=lambda tenant_id, graph, findings, manifest, url: {
+            "explanation_citation_coverage": 1.0,
+            "gates": {"explanation_citation_coverage": True},
+        }
+    )
+    monkeypatch.setattr(history_eval, "_explain_module", lambda: fake)
+    data = tmp_path / "d"
+    generate.generate(7, data)
+    out = history_eval.run(scratch_db("bench8.db"), data)
+    assert out["explain"]["explanation_citation_coverage"] == 1.0
+    assert out["gates"]["explanation_citation_coverage"] is True
+
+
+def test_without_an_explain_module_nothing_is_gated(
+    tmp_path, scratch_db, monkeypatch, wave0_only
+):
+    monkeypatch.setattr(history_eval, "_explain_module", lambda: None)
+    data = tmp_path / "d"
+    generate.generate(7, data)
+    out = history_eval.run(scratch_db("bench9.db"), data)
+    assert "explain" not in out
+    assert "explanation_citation_coverage" not in out["gates"]

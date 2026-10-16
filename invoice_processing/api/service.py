@@ -240,6 +240,7 @@ _gl_rules = None
 _purchase_orders = None
 _supporting_documents = None
 _graph_store = None
+_finding_store = None
 _history_importer = None
 _rules = None
 _tenant_settings = None
@@ -560,6 +561,22 @@ def get_graph_store():
 
         _graph_store = GraphStore()
     return _graph_store
+
+
+def get_finding_store():
+    """The v2 findings (trust layer). `None` without a database."""
+    global _finding_store
+    if (
+        _finding_store is None
+        and _database_configured()
+        and _table_exists(
+            "trust_findings", "Trust findings", raise_on_error=True
+        )
+    ):
+        from ..trust.findings.store import FindingStore  # noqa: PLC0415
+
+        _finding_store = FindingStore()
+    return _finding_store
 
 
 def get_history_importer():
@@ -2082,6 +2099,8 @@ from .sheet import router as sheet_router  # noqa: E402
 from .signup import router as signup_router  # noqa: E402
 from .supporting_routes import router as supporting_router  # noqa: E402
 from .system import router as system_router  # noqa: E402
+from .trust_audit_routes import router as trust_audit_router  # noqa: E402
+from .trust_explain_routes import router as trust_explain_router  # noqa: E402
 from .trust_routes import router as trust_router  # noqa: E402
 from .vendor_routes import router as vendor_router  # noqa: E402
 
@@ -2098,6 +2117,8 @@ app.include_router(gl_router)
 app.include_router(kpi_router)
 app.include_router(po_router)
 app.include_router(trust_router)
+app.include_router(trust_audit_router)
+app.include_router(trust_explain_router)
 app.include_router(supporting_router)
 
 

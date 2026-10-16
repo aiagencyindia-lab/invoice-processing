@@ -41,6 +41,16 @@ GATES = {
 _BASELINE = object()
 
 
+def _explain_module():
+    """benchmark/history/explain.py, when the explain package's branch has
+    landed; absent until then, like a fault family that is not installed."""
+    try:
+        from . import explain  # noqa: PLC0415
+    except ImportError:
+        return None
+    return explain
+
+
 def _ratio(num: int, den: int) -> float:
     return round(num / den, 4) if den else 0.0
 
@@ -169,6 +179,11 @@ def run(
                 else scores[metric] >= floor
             )
             out["gates"][f"{code}.{metric}"] = ok
+    explain = _explain_module()
+    if explain is not None:
+        measured = explain.measure(tenant_id, graph, findings, manifest, url)
+        out["gates"].update(measured.pop("gates", {}) or {})
+        out["explain"] = measured
     out["passed"] = all(out["gates"].values())
     return out
 

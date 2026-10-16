@@ -111,7 +111,22 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         that can hold are); decide the policy for insight findings.
   - [ ] A contract or invoice node re-version closes its `part_of` /
         `evidences` edges until the next evaluation of that document.
-- [ ] Waves 2–4 per the spec §2.
+- [ ] **Wave 2 (Surfaces)** — program plan
+      `docs/superpowers/plans/2026-10-16-v2-wave2-program.md`; specs
+      `docs/superpowers/specs/2026-10-16-v2-wave2-*.md`.
+  - [x] Scaffold (`v2/w2-scaffold`): Wave 2 tables, findings/lineage/clause
+        routes, `trust.audit.run` job, frontend shell, benchmark hook.
+  - [ ] Trust Audit backend (`v2/w2-audit`) · [ ] Why engine (`v2/w2-explain`)
+        · [ ] Findings + workspace frontend (`v2/w2-frontend`).
+  - [ ] Deferred from the PRD's Wave 2 row: partner mode (v1 has no partner
+        console), mobile surface, Slack/WhatsApp/email notifications, trust
+        strip (Wave 3's score), `/v2` public API + webhooks (Wave 3),
+        server-side PDF (the browser prints the HTML), evidence region
+        highlight (page-level only), clause-edit impact assessment.
+  - [ ] Engagement scope is a filter, not a FK: overlapping engagements
+        count a recovery twice. Add `audit_id` to finding events if it bites.
+  - [ ] `categories` scoping is keyword-weak (no category master in v1).
+- [ ] Waves 3–4 per the spec §2.
 - [ ] Remove the Postgres TCP proxy before the trust routes go live (it was
       added for bootstrap only).
 

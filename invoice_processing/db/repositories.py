@@ -669,6 +669,7 @@ class PgDocumentRepository:
                 "sender": d.sender,
                 "reply_to": d.reply_to,
                 "kind": d.kind,
+                "storage_key": d.storage_key,
             }
 
     def create(self, tenant_id: str, **fields) -> str:

@@ -1138,6 +1138,89 @@ class TrustFindingEvent(Base, TenantMixin, TimestampMixin):
     reason: Mapped[str | None] = mapped_column(String(500))
 
 
+class TrustAudit(Base, TenantMixin, TimestampMixin):
+    """A Trust Audit engagement: scope, contingency terms, approver (FR-29.1)."""
+
+    __tablename__ = "trust_audits"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="draft"
+    )
+    period_from: Mapped[date | None] = mapped_column(Date)
+    period_to: Mapped[date | None] = mapped_column(Date)
+    # Vendor graph node ids; empty means every vendor.
+    vendors: Mapped[list] = mapped_column(JSONType, default=list)
+    categories: Mapped[list] = mapped_column(JSONType, default=list)
+    # Decimal strings: recovered_pct, prevented_pct, cap, minimum.
+    terms: Mapped[dict] = mapped_column(JSONType, default=dict)
+    approver: Mapped[str | None] = mapped_column(String(320))
+    created_by: Mapped[str | None] = mapped_column(String(320))
+
+
+class TrustAuditRun(Base, TenantMixin, TimestampMixin):
+    """One batch run of the engines over the tenant's history (FR-29.2)."""
+
+    __tablename__ = "trust_audit_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    audit_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_audits.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="queued"
+    )
+    engines: Mapped[list] = mapped_column(JSONType, default=list)
+    progress: Mapped[dict] = mapped_column(JSONType, default=dict)
+    error: Mapped[str | None] = mapped_column(String(500))
+    requested_by: Mapped[str | None] = mapped_column(String(320))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+
+class TrustAuditSample(Base, TenantMixin, TimestampMixin):
+    """A random sample of findings a controller validates for precision."""
+
+    __tablename__ = "trust_audit_samples"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    audit_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_audits.id"), nullable=False, index=True
+    )
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    seed: Mapped[str | None] = mapped_column(String(32))
+    finding_ids: Mapped[list] = mapped_column(JSONType, default=list)
+    # finding_id -> true | false | null (not yet validated)
+    verdicts: Mapped[dict] = mapped_column(JSONType, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(320))
+
+
+class TrustExplanationRating(Base, TenantMixin, TimestampMixin):
+    """A reviewer's verdict on an explanation (FR-24.5): one per rater."""
+
+    __tablename__ = "trust_explanation_ratings"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "finding_id",
+            "rater",
+            name="uq_trust_explanation_ratings_rater",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_findings.id"), nullable=False, index=True
+    )
+    rater: Mapped[str] = mapped_column(String(320), nullable=False)
+    correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    useful: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500))
+
+
 TENANT_TABLES = (
     "users",
     "record_locks",
@@ -1173,4 +1256,8 @@ TENANT_TABLES = (
     "trust_findings",
     "trust_finding_citations",
     "trust_finding_events",
+    "trust_audits",
+    "trust_audit_runs",
+    "trust_audit_samples",
+    "trust_explanation_ratings",
 )

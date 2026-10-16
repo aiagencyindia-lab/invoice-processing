@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import json
 import logging
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
@@ -351,3 +353,475 @@ def list_contracts(
         }
         for n in graph.nodes(principal.tenant_id, kind="contract")
     ]
+
+
+# ---------------------------------------------------------------------------
+# Findings, nodes, lineage, contract files and clauses (Wave 2 scaffold).
+# Every surface in Wave 2 reads through these; the audit and explain branches
+# import `source_of` and `vendor_of` and never edit this file.
+# ---------------------------------------------------------------------------
+
+NEEDS_FINDINGS = "Findings need a database. Configure DATABASE_URL."
+OPEN_STATUSES = ("detected", "triaged", "needs_vendor_input")
+MONEY_STATUSES = frozenset(
+    {"accepted", "rejected", "claimed", "recovered", "prevented", "written_off"}
+)
+LEDGER_STATUSES = frozenset({"recovered", "prevented", "written_off"})
+CLAUSE_TYPES = ("rate", "escalator", "tier", "rebate", "discount", "term")
+MAX_PAGE = 200
+# The ledger column is Numeric(18, 4): fourteen integer digits.
+MAX_AMOUNT = Decimal("1e14")
+
+
+def _findings():
+    from . import service  # noqa: PLC0415
+
+    try:
+        store = service.get_finding_store()
+    except Exception:
+        logger.exception("Findings could not be reached")
+        raise HTTPException(503, "Findings are unavailable.") from None
+    if store is None:
+        raise HTTPException(503, NEEDS_FINDINGS)
+    return store
+
+
+def _role_for(status: str) -> str:
+    """Clerks triage; the statuses that move money need an approver."""
+    return "approver" if status in MONEY_STATUSES else "clerk"
+
+
+def source_of(graph, tenant_id: str, node: dict | None) -> dict | None:
+    """Where the evidence viewer finds this node's source document."""
+    if not node:
+        return None
+    kind, attrs = node["kind"], node.get("attrs") or {}
+    if kind in ("invoice", "document_version"):
+        case_id = attrs.get("case_id") or node.get("ref_id")
+        if not case_id:
+            return None
+        return {
+            "document_url": f"/api/invoices/{case_id}/document",
+            "page": None,
+        }
+    if kind == "contract" and node.get("ref_id"):
+        return {
+            "document_url": f"/api/trust/contracts/{node['ref_id']}/file",
+            "page": attrs.get("page"),
+        }
+    if kind == "contract_clause":
+        for e in graph.edges(tenant_id, src=node["id"], kind="part_of"):
+            contract = graph.node(tenant_id, e["dst"])
+            if contract and contract.get("ref_id"):
+                return {
+                    "document_url": f"/api/trust/contracts/{contract['ref_id']}/file",
+                    "page": attrs.get("page"),
+                }
+    return None
+
+
+def vendor_of(graph, tenant_id: str, node_id: str) -> dict | None:
+    """The vendor a transaction (or contract) node belongs to, by its edge."""
+    for kind in ("issued_by", "governs"):
+        for e in graph.edges(tenant_id, src=node_id, kind=kind):
+            vendor = graph.node(tenant_id, e["dst"])
+            if vendor and vendor["kind"] == "vendor":
+                return {
+                    "node": vendor["id"],
+                    "name": vendor["attrs"].get("name"),
+                }
+    return None
+
+
+def _when(value: str | None, name: str):
+    from datetime import datetime  # noqa: PLC0415
+
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(
+            400, f"{name} must be an ISO-8601 datetime."
+        ) from None
+
+
+def _engine_types(engine: str | None, hold: bool) -> set[str] | None:
+    from ..trust.findings import model as fm  # noqa: PLC0415
+    from ..trust.modes import ENGINES  # noqa: PLC0415
+
+    types: set[str] | None = None
+    if engine:
+        if engine not in ENGINES and engine != "trust":
+            raise HTTPException(
+                400, f"engine must be one of {', '.join(ENGINES)}."
+            )
+        types = {t for t, e in fm.TYPE_ENGINE.items() if e == engine}
+    if hold:
+        types = fm.HOLD_TYPES if types is None else types & fm.HOLD_TYPES
+    return types
+
+
+def _row(graph, tenant_id: str, f: dict, vendors: dict) -> dict:
+    from ..trust.findings import model as fm  # noqa: PLC0415
+
+    node = f["transaction_node"]
+    if node not in vendors:
+        vendors[node] = vendor_of(graph, tenant_id, node)
+    details = f.get("details") or {}
+    return {
+        **f,
+        "vendor": vendors[node],
+        "engine": details.get("engine") or fm.TYPE_ENGINE.get(f["type"]),
+        "hold": bool(details.get("hold", f["type"] in fm.HOLD_TYPES)),
+    }
+
+
+@router.get("/api/trust/findings")
+def list_findings(
+    principal: Annotated[Principal, Depends(require_role("viewer"))],
+    status: str | None = None,
+    open: bool = False,
+    type: str | None = None,
+    engine: str | None = None,
+    vendor: str | None = None,
+    hold: bool = False,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    from ..trust.findings.model import STATUSES  # noqa: PLC0415
+
+    store, graph = _findings(), _graph()
+    if status and status not in STATUSES:
+        raise HTTPException(
+            400, f"status must be one of {', '.join(STATUSES)}."
+        )
+    types = _engine_types(engine, hold)
+    if type:
+        types = {type} if types is None else types & {type}
+    statuses = set(OPEN_STATUSES) if open else None
+    if status:
+        statuses = {status} if statuses is None else statuses & {status}
+    if (types is not None and not types) or (
+        statuses is not None and not statuses
+    ):
+        return {"findings": [], "total": 0, "offset": offset, "limit": limit}
+    filters = {
+        "statuses": sorted(statuses) if statuses is not None else None,
+        "types": sorted(types) if types is not None else None,
+        "vendor_node": vendor,
+        "since": _when(since, "since"),
+        "until": _when(until, "until"),
+    }
+    limit = max(1, min(limit, MAX_PAGE))
+    offset = max(0, offset)
+    tenant = principal.tenant_id
+    rows = store.list(tenant, limit=limit, offset=offset, **filters)
+    vendors: dict = {}
+    return {
+        "findings": [_row(graph, tenant, f, vendors) for f in rows],
+        "total": store.count(tenant, **filters),
+        "offset": offset,
+        "limit": limit,
+    }
+
+
+@router.get("/api/trust/findings/summary")
+def findings_summary(
+    principal: Annotated[Principal, Depends(require_role("viewer"))],
+):
+    from ..trust.findings import model as fm  # noqa: PLC0415
+
+    store, graph = _findings(), _graph()
+    tenant = principal.tenant_id
+    out = store.summary(tenant)
+    for v in out["vendors"]:
+        node = graph.node(tenant, v["node"])
+        v["name"] = (node or {}).get("attrs", {}).get("name")
+    out["hold_open"] = store.count(
+        tenant, statuses=OPEN_STATUSES, types=sorted(fm.HOLD_TYPES)
+    )
+    return out
+
+
+@router.get("/api/trust/findings/{finding_id}")
+def get_finding(
+    finding_id: str,
+    principal: Annotated[Principal, Depends(require_role("viewer"))],
+):
+    from ..trust.findings.model import TRANSITIONS  # noqa: PLC0415
+    from ..trust.graph.lineage import lineage  # noqa: PLC0415
+    from ..trust.graph.links import LinkStore  # noqa: PLC0415
+
+    store, graph = _findings(), _graph()
+    tenant = principal.tenant_id
+    f = store.get(tenant, finding_id)
+    if f is None:
+        raise HTTPException(404, "Unknown finding.")
+    out = _row(graph, tenant, f, {})
+    for c in out["citations"]:
+        node = graph.node(tenant, c["node_id"])
+        c["node"] = node
+        c["source"] = source_of(graph, tenant, node)
+    txn = graph.node(tenant, f["transaction_node"])
+    out["transaction"] = {"node": txn, "source": source_of(graph, tenant, txn)}
+    try:
+        out["lineage"] = [
+            link.__dict__
+            for link in lineage(
+                tenant, f["transaction_node"], graph=graph, links=LinkStore()
+            )
+        ]
+    except KeyError:
+        out["lineage"] = []
+    out["allowed_transitions"] = sorted(TRANSITIONS.get(f["status"], ()))
+    return out
+
+
+class TransitionRequest(BaseModel):
+    to_status: str
+    reason: str | None = Field(default=None, max_length=500)
+    amount: str | None = None
+    expect: str | None = None
+
+
+@router.post("/api/trust/findings/{finding_id}/transition")
+def transition_finding(
+    finding_id: str,
+    request: TransitionRequest,
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+):
+    from decimal import InvalidOperation  # noqa: PLC0415
+
+    from ..ports import StatusChanged  # noqa: PLC0415
+    from ..trust.findings.model import STATUSES, IllegalTransition  # noqa: PLC0415
+
+    store = _findings()
+    to_status = request.to_status
+    if to_status not in STATUSES:
+        raise HTTPException(
+            400, f"to_status must be one of {', '.join(STATUSES)}."
+        )
+    if not principal.can(_role_for(to_status)):
+        raise HTTPException(
+            403, f"Marking a finding {to_status} needs an approver."
+        )
+    tenant = principal.tenant_id
+    current = store.get(tenant, finding_id)
+    if current is None:
+        raise HTTPException(404, "Unknown finding.")
+    amount = None
+    if request.amount is not None:
+        try:
+            amount = Decimal(request.amount)
+        except (InvalidOperation, ValueError):
+            raise HTTPException(400, "amount must be a number.") from None
+        if not amount.is_finite() or amount < 0 or amount >= MAX_AMOUNT:
+            raise HTTPException(
+                400, "amount must be a non-negative number below 10^14."
+            )
+    elif to_status in LEDGER_STATUSES and current.get("impact") is not None:
+        # The ledger never falls back: what was recovered is, by default,
+        # what the finding said was at stake.
+        amount = Decimal(current["impact"])
+    try:
+        return store.transition(
+            principal.context(finding_id),
+            finding_id,
+            to_status,
+            actor=principal.email,
+            reason=request.reason,
+            amount=amount,
+            expect=request.expect,
+        )
+    except IllegalTransition as exc:  # a ValueError: caught first
+        raise HTTPException(
+            409, {"current": current["status"], "message": str(exc)}
+        ) from None
+    except StatusChanged as exc:
+        raise HTTPException(
+            409,
+            {"current": exc.status, "message": "The finding moved meanwhile."},
+        ) from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@router.get("/api/trust/nodes/{node_id}")
+def get_node(
+    node_id: str,
+    principal: Annotated[Principal, Depends(require_role("viewer"))],
+):
+    graph = _graph()
+    tenant = principal.tenant_id
+    node = graph.node(tenant, node_id)
+    if node is None:
+        raise HTTPException(404, "Unknown node.")
+    return {
+        "node": node,
+        "source": source_of(graph, tenant, node),
+        "edges_out": graph.edges(tenant, src=node_id)[:50],
+        "edges_in": graph.edges(tenant, dst=node_id)[:50],
+    }
+
+
+@router.get("/api/trust/lineage/{node_id}")
+def get_lineage(
+    node_id: str,
+    principal: Annotated[Principal, Depends(require_role("viewer"))],
+    as_of: str | None = None,
+):
+    from ..trust.graph.lineage import lineage  # noqa: PLC0415
+    from ..trust.graph.links import LinkStore  # noqa: PLC0415
+
+    graph = _graph()
+    try:
+        links = lineage(
+            principal.tenant_id,
+            node_id,
+            graph=graph,
+            links=LinkStore(),
+            as_of=_when(as_of, "as_of"),
+        )
+    except KeyError:
+        raise HTTPException(404, "Unknown node.") from None
+    return {"node_id": node_id, "links": [link.__dict__ for link in links]}
+
+
+def _contract_document(tenant_id: str, document_id: str) -> dict:
+    from . import service  # noqa: PLC0415
+
+    doc = service.get_documents().get(tenant_id, document_id)
+    if doc is None or doc.get("kind") != "contract":
+        raise HTTPException(404, "Unknown contract.")
+    return doc
+
+
+@router.get("/api/trust/contracts/{document_id}/file")
+def contract_file(
+    document_id: str,
+    principal: Annotated[Principal, Depends(require_role("viewer"))],
+):
+    from fastapi.responses import Response  # noqa: PLC0415
+
+    from . import service  # noqa: PLC0415
+
+    doc = _contract_document(principal.tenant_id, document_id)
+    try:
+        data = service.get_blobs(principal.tenant_id).get(doc["storage_key"])
+    except Exception as exc:  # a store's own NotFound is not an OSError
+        logger.warning(
+            "trust_contract_blob_missing", extra={"error": type(exc).__name__}
+        )
+        raise HTTPException(404, "The contract file is not stored.") from None
+    return Response(content=data, media_type="application/pdf")
+
+
+def _clause_dict(n: dict) -> dict:
+    a = n.get("attrs") or {}
+    return {
+        "node_id": n["id"],
+        "type": a.get("type"),
+        "params": a.get("params") or {},
+        "page": a.get("page"),
+        "excerpt": a.get("excerpt"),
+        "confidence": a.get("confidence"),
+        "reviewed": bool(a.get("reviewed")),
+        "since": n.get("valid_from"),
+    }
+
+
+@router.get("/api/trust/contracts/{document_id}/clauses")
+def contract_clauses(
+    document_id: str,
+    principal: Annotated[Principal, Depends(require_role("viewer"))],
+):
+    graph = _graph()
+    tenant = principal.tenant_id
+    contract = graph.nodes_by_ref(tenant, "documents", [document_id]).get(
+        document_id
+    )
+    if contract is None:
+        raise HTTPException(404, "Unknown contract.")
+    clauses = [
+        graph.node(tenant, e["src"])
+        for e in graph.edges(tenant, dst=contract, kind="part_of")
+    ]
+    clauses = [n for n in clauses if n and n["kind"] == "contract_clause"]
+    clauses.sort(key=lambda n: (n["attrs"].get("page") or 0, n["natural_key"]))
+    return [_clause_dict(n) for n in clauses]
+
+
+class ClauseEdit(BaseModel):
+    type: str | None = None
+    params: dict | None = None
+
+
+@router.patch("/api/trust/clauses/{node_id}")
+def review_clause(
+    node_id: str,
+    edit: ClauseEdit,
+    principal: Annotated[Principal, Depends(require_role("approver"))],
+):
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    from . import service  # noqa: PLC0415
+
+    graph = _graph()
+    tenant = principal.tenant_id
+    node = graph.node(tenant, node_id)
+    if node is None or node["kind"] != "contract_clause":
+        raise HTTPException(404, "Unknown clause.")
+    if node.get("valid_to") is not None:
+        # A stale id (a second tab, a double submit): review the open version
+        # of the same clause, not a copy of what the stale one said.
+        node = graph.open_node(tenant, "contract_clause", node["natural_key"])
+        if node is None:
+            raise HTTPException(404, "Unknown clause.")
+        node_id = node["id"]
+    if edit.type is not None and edit.type not in CLAUSE_TYPES:
+        raise HTTPException(
+            400, f"type must be one of {', '.join(CLAUSE_TYPES)}."
+        )
+    attrs = dict(node["attrs"])
+    if edit.type is not None:
+        attrs["type"] = edit.type
+    if edit.params is not None:
+        attrs["params"] = {str(k): str(v) for k, v in edit.params.items()}
+    attrs["reviewed"] = True
+    ctx = principal.context()
+    now = datetime.now(timezone.utc)
+    # A reviewed clause is a new version; the old row keeps what the engine
+    # read. Re-versioning closes the clause's edges, so they are redrawn.
+    out_edges = graph.edges(tenant, src=node_id)
+    in_edges = graph.edges(tenant, dst=node_id)
+    new_id = graph.upsert_node(
+        ctx,
+        kind="contract_clause",
+        natural_key=node["natural_key"],
+        attrs=attrs,
+        natural_keys=node.get("natural_keys") or None,
+        at=now,
+    )
+    if new_id != node_id:
+        for e in out_edges + in_edges:
+            graph.upsert_edge(
+                ctx,
+                src=new_id if e["src"] == node_id else e["src"],
+                dst=new_id if e["dst"] == node_id else e["dst"],
+                kind=e["kind"],
+                source_system=e["source_system"],
+                provenance=e["provenance"],
+                confidence=e["confidence"],
+                observed_at=now,
+                attrs=e.get("attrs"),
+                at=now,
+            )
+        service.get_audit().emit(
+            ctx,
+            "trust_clause_reviewed",
+            {"clause": new_id, "previous": node_id, "type": attrs.get("type")},
+        )
+    return _clause_dict(graph.node(tenant, new_id))

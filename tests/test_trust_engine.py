@@ -385,3 +385,41 @@ def test_a_contract_run_is_not_a_tenant_wide_check(env):
     ev.RUNNERS["payment"] = lambda ectx: []
     run(env, document_id="doc-c", modes={"payment": "advisory"})
     assert _stamp(graph, "trust_evaluation:tenant") == {}
+
+
+def test_on_progress_is_called_after_every_engine_that_is_not_off(
+    env, monkeypatch
+):
+    seen = []
+    ev.RUNNERS["leakage"] = lambda ectx: [finding_for(ectx, "T-NOTE")]
+    finding_model.register_type("T-NOTE", "note", engine="leakage")
+
+    def boom(ectx):
+        raise RuntimeError("engine bug")
+
+    ev.RUNNERS["gst_itc"] = boom
+    monkeypatch.setattr(
+        ev, "_import_engine", lambda name: None
+    )  # payment missing
+    run(
+        env,
+        modes={
+            "leakage": "advisory",
+            "gst_itc": "advisory",
+            "payment": "advisory",
+        },
+        on_progress=seen.append,
+    )
+    assert [p["engine"] for p in seen] == ["leakage", "payment", "gst_itc"]
+    assert [p["done"] for p in seen] == [1, 2, 3] and {
+        p["total"] for p in seen
+    } == {3}
+    assert seen[0]["findings"] == 1 and seen[-1]["findings"] == 1
+    assert seen[1]["report"] == "missing" and seen[2]["report"] == "failed"
+    assert seen[0]["report"] == {"mode": "advisory", "findings": 1}
+
+
+def test_on_progress_is_not_called_when_every_engine_is_off(env):
+    seen = []
+    run(env, modes={}, on_progress=seen.append)
+    assert seen == []
