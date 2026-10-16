@@ -29,6 +29,8 @@ VIEWS = (
     "purchase-orders",
     "settings",
     "admin",
+    "findings",
+    "trust-audit",
 )
 
 pytestmark = pytest.mark.skipif(

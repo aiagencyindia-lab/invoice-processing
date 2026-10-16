@@ -828,3 +828,337 @@ export type ActionResult = {
   step?: number;
   next?: ApprovalStep | null;
 };
+
+// -- v2 trust layer (Wave 2) ------------------------------------------------
+// Shapes of /api/trust/*: the findings queue, finding detail, lineage, the
+// Why engine and the Trust Audit workspace. The Python side is the source of
+// truth; a change there lands here first, then in the pages.
+
+export type TrustVendor = { node: string; name: string | null };
+
+export type TrustFindingEvent = {
+  from_status: string | null;
+  to_status: string;
+  amount: string | null;
+  actor: string;
+  reason: string | null;
+  at: string | null;
+};
+
+export type TrustCitation = {
+  node_id: string;
+  excerpt: string | null;
+  node?: GraphNodeRecord | null;
+  source?: EvidenceSource | null;
+};
+
+export type EvidenceSource = { document_url: string; page: number | null };
+
+export type GraphNodeRecord = {
+  id: string;
+  kind: string;
+  natural_key: string;
+  ref_table: string | null;
+  ref_id: string | null;
+  attrs: Record<string, unknown>;
+  natural_keys: Record<string, unknown>;
+  valid_from: string;
+  valid_to: string | null;
+};
+
+export type GraphEdgeRecord = {
+  id: string;
+  src: string;
+  dst: string;
+  kind: string;
+  source_system: string;
+  observed_at: string;
+  provenance: string;
+  confidence: number;
+  attrs: Record<string, unknown>;
+};
+
+export type TrustFinding = {
+  id: string;
+  type: string;
+  transaction_node: string;
+  status: string;
+  impact: string | null;
+  currency: string | null;
+  confidence: number | null;
+  owner_id: string | null;
+  engine_version: string | null;
+  rule_version: string | null;
+  model_version: string | null;
+  dedupe_key: string;
+  summary: string | null;
+  details: Record<string, unknown>;
+  decided_at: string | null;
+  citations: TrustCitation[];
+  events: TrustFindingEvent[];
+  vendor: TrustVendor | null;
+  engine: string | null;
+  hold: boolean;
+};
+
+export type TrustFindingPage = {
+  findings: TrustFinding[];
+  total: number;
+  offset: number;
+  limit: number;
+};
+
+export type TrustFindingSummary = {
+  by_status: Record<string, number>;
+  by_type: Record<string, number>;
+  hold_open: number;
+  vendors: (TrustVendor & { count: number })[];
+};
+
+export type LineageLink = {
+  stage: string;
+  status: "found" | "no_evidence" | "contradicts";
+  node_id: string | null;
+  note: string;
+};
+
+export type TrustFindingDetail = TrustFinding & {
+  transaction: { node: GraphNodeRecord | null; source: EvidenceSource | null };
+  lineage: LineageLink[];
+  allowed_transitions: string[];
+  previous?: string;
+};
+
+export type TrustFindingFilters = {
+  status?: string;
+  open?: boolean;
+  type?: string;
+  engine?: string;
+  vendor?: string;
+  hold?: boolean;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export function findingsQuery(filters: TrustFindingFilters): string {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "" || value === false) return;
+    params.set(key, String(value));
+  });
+  return params.toString();
+}
+
+export type TransitionRequest = {
+  to_status: string;
+  reason?: string;
+  amount?: string;
+  expect?: string;
+};
+
+export type NodeView = {
+  node: GraphNodeRecord;
+  source: EvidenceSource | null;
+  edges_out: GraphEdgeRecord[];
+  edges_in: GraphEdgeRecord[];
+};
+
+export type Lineage = { node_id: string; links: LineageLink[] };
+
+export type ContractClause = {
+  node_id: string;
+  type: string | null;
+  params: Record<string, string>;
+  page: number | null;
+  excerpt: string | null;
+  confidence: number | null;
+  reviewed: boolean;
+  since: string | null;
+};
+
+export type ContractRow = {
+  contract_node: string;
+  document_id: string;
+  filename: string | null;
+  vendor_id: string | null;
+  since: string;
+};
+
+// The Why engine (trust/explain; the v2/w2-explain branch fills these in).
+export type ExplanationStep = { text: string; node_id: string };
+export type ExplanationActor = {
+  kind: "vendor" | "person" | "system" | "engine" | "provider";
+  label: string;
+  node_id: string | null;
+};
+export type ExplanationEvidence = {
+  node_id: string;
+  kind: string;
+  label: string;
+  excerpt: string | null;
+  source: EvidenceSource | null;
+};
+export type Counterfactual = {
+  currency: string | null;
+  payable_now: string | null;
+  payable_correct: string | null;
+  delta: string | null;
+  formula: string;
+  note: string | null;
+};
+export type Explanation = {
+  finding_id: string;
+  type: string;
+  version: string;
+  what_happened: string;
+  why: ExplanationStep[];
+  caused_by: ExplanationActor[];
+  evidence: ExplanationEvidence[];
+  confidence: number | null;
+  confidence_note: string;
+  next_action: string;
+  would_change: string[];
+  counterfactual: Counterfactual | null;
+  versions: Record<string, string>;
+  transaction_node: string;
+};
+export type EvidencePack = {
+  pack_version: number;
+  generated_at: string;
+  finding: TrustFinding;
+  explanation: Explanation;
+  lineage: LineageLink[];
+  nodes: GraphNodeRecord[];
+  edges: GraphEdgeRecord[];
+  versions: Record<string, string>;
+  decision: {
+    status: string;
+    owner_id: string | null;
+    decided_at: string | null;
+    events: TrustFindingEvent[];
+  };
+  ratings: { rater: string; correct: boolean; useful: boolean; note: string | null; at: string }[];
+  sha256: string;
+};
+export type RatingSummary = {
+  by_type: Record<string, { rated: number; correct: number; useful: number }>;
+};
+
+// The Trust Audit workspace (trust/audit; the v2/w2-audit branch fills these in).
+export type AuditTerms = {
+  recovered_pct: string;
+  prevented_pct: string;
+  cap: string | null;
+  minimum: string | null;
+};
+export type TrustAudit = {
+  id: string;
+  name: string;
+  status: "draft" | "active" | "closed";
+  period_from: string | null;
+  period_to: string | null;
+  vendors: string[];
+  categories: string[];
+  terms: AuditTerms;
+  approver: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+export type AuditRunProgress = {
+  engines_done: number;
+  engines_total: number;
+  engine: string | null;
+  findings_so_far: number;
+  per_engine: Record<string, { mode: string; findings: number } | "off" | "failed" | "missing">;
+};
+export type AuditRun = {
+  id: string;
+  audit_id: string;
+  status: "queued" | "running" | "done" | "failed";
+  engines: string[];
+  progress: AuditRunProgress;
+  error: string | null;
+  requested_by: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+};
+export type AuditSample = {
+  id: string;
+  audit_id: string;
+  size: number;
+  seed: string | null;
+  finding_ids: string[];
+  verdicts: Record<string, boolean | null>;
+  validated: number;
+  true: number;
+  false: number;
+  precision: number | null;
+};
+export type TrustAuditDetail = TrustAudit & { runs: AuditRun[]; samples: AuditSample[] };
+export type AuditReportRow = {
+  type?: string;
+  engine?: string;
+  vendor?: string | null;
+  vendor_node?: string;
+  count: number;
+  impact: string;
+  recovered: string;
+  prevented: string;
+};
+export type AuditReport = {
+  report_version: number;
+  generated_at: string;
+  audit: TrustAudit;
+  run: AuditRun | null;
+  summary: {
+    findings: number;
+    detected_impact: string;
+    accepted_impact: string;
+    recovered: string;
+    prevented: string;
+    written_off: string;
+    at_risk_holds: string;
+    currency: string | null;
+  };
+  by_type: AuditReportRow[];
+  by_vendor: AuditReportRow[];
+  top_recoveries: (Pick<TrustFinding, "id" | "type" | "impact" | "status" | "summary"> & {
+    vendor: string | null;
+    citations: ExplanationEvidence[];
+  })[];
+  prevention: {
+    engine: string;
+    finding_types: string[];
+    count: number;
+    impact: string;
+    mode_now: string;
+    mode_suggested: string;
+    thresholds_hint: string[];
+  }[];
+  itc_exposure: { count: number; impact: string; by_vendor: AuditReportRow[] };
+  ledger: LedgerExport;
+};
+export type LedgerRow = {
+  finding_id: string;
+  type: string;
+  vendor: string | null;
+  to_status: string;
+  amount: string | null;
+  attested_by: string;
+  at: string | null;
+  reason: string | null;
+};
+export type LedgerExport = {
+  rows: LedgerRow[];
+  totals: { recovered: string; prevented: string; written_off: string; claimed: string };
+  fee: {
+    fee_recovered: string;
+    fee_prevented: string;
+    gross: string;
+    capped: string;
+    due: string;
+  };
+};
