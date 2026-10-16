@@ -24,6 +24,9 @@ from .model import (
     can_transition,
 )
 
+# trust_finding_events.amount is Numeric(18, 4): fourteen integer digits.
+MAX_AMOUNT = Decimal("1e14")
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -147,6 +150,12 @@ class FindingStore:
         if to_status in REASON_REQUIRED and not (reason or "").strip():
             raise ValueError(
                 f"A reason is required to mark a finding {to_status}."
+            )
+        if amount is not None and (
+            not amount.is_finite() or amount < 0 or amount >= MAX_AMOUNT
+        ):
+            raise ValueError(
+                "A ledger amount must be a non-negative number below 10^14."
             )
         with tenant_session(ctx.tenant_id, self.url) as s:
             row = s.scalars(

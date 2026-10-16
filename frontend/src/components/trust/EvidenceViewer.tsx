@@ -51,6 +51,8 @@ export function EvidenceViewer({ left, citations, selected, onSelect }: Props) {
     return () => {
       cancelled = true;
       if (made) URL.revokeObjectURL(made);
+      // The blob is gone; never let a later render show its URL again.
+      setLoaded((state) => (state?.forUrl === documentUrl ? null : state));
     };
   }, [documentUrl]);
 
@@ -58,6 +60,7 @@ export function EvidenceViewer({ left, citations, selected, onSelect }: Props) {
     function onKey(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+      if (citations.length === 0) return;
       if (event.key === "j" || event.key === "ArrowDown") {
         event.preventDefault();
         onSelect(Math.min(selected + 1, citations.length - 1));

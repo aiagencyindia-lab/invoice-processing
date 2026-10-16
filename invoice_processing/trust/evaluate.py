@@ -211,7 +211,8 @@ def evaluate(
     """Run every engine whose mode is not off for one document, or for the
     whole tenant when `document_id` is None. `on_progress` is called after
     each engine with {engine, done, total, findings, report}; a batch run
-    records it so a person can watch the audit advance."""
+    records it so a person can watch the audit advance. It must not raise:
+    an exception from it ends the run with the findings written so far."""
     from .. import tenant_settings  # noqa: PLC0415 - avoids an import cycle
 
     document = None

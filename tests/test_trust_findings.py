@@ -326,3 +326,14 @@ def test_events_are_the_ledger_with_finding_context(book):
     assert row["amount"] == "7.5000" and row["actor"] == "c@x.test"
     assert row["impact"] == "10.0000" and row["currency"] == "INR"
     assert len(store.events(T)) == 7  # 3 detected + 4 transitions
+
+
+def test_the_store_refuses_a_non_finite_or_negative_ledger_amount(env):
+    _, store, node = env
+    fid, _ = store.upsert(CTX, spec(node))
+    for amount in (Decimal("NaN"), Decimal("Infinity"), Decimal("-1")):
+        with pytest.raises(ValueError):
+            store.transition(
+                HUMAN, fid, "triaged", actor="c@x.test", amount=amount
+            )
+    assert store.get(T, fid)["status"] == "detected"

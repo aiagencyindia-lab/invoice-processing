@@ -385,3 +385,59 @@ def test_routes_are_503_without_a_database(env, monkeypatch):
     monkeypatch.setattr(service, "_finding_store", None)
     monkeypatch.setattr(service, "_database_configured", lambda: False)
     assert env["client"]("viewer").get("/api/trust/findings").status_code == 503
+
+
+# -- review fix pass ----------------------------------------------------------
+
+
+def test_reviewing_a_stale_clause_id_keeps_the_contract_edge(env):
+    approver, viewer = env["client"]("approver"), env["client"]("viewer")
+    first = approver.patch(
+        f"/api/trust/clauses/{env['clause']}", json={"params": {"price": "48"}}
+    ).json()
+    # A second tab still holds the original id.
+    second = approver.patch(
+        f"/api/trust/clauses/{env['clause']}", json={"params": {"price": "47"}}
+    )
+    assert second.status_code == 200, second.text
+    [clause] = viewer.get("/api/trust/contracts/doc-c/clauses").json()
+    assert clause["node_id"] == second.json()["node_id"] != first["node_id"]
+    assert clause["params"] == {"price": "47"} and clause["reviewed"] is True
+
+
+@pytest.mark.parametrize("amount", ["Infinity", "NaN", "-5", "1e400"])
+def test_transition_refuses_non_finite_or_negative_amounts(env, amount):
+    approver = env["client"]("approver")
+    path = f"/api/trust/findings/{env['leak']}/transition"
+    for status in ("triaged", "accepted", "claimed"):
+        approver.post(path, json={"to_status": status})
+    r = approver.post(path, json={"to_status": "recovered", "amount": amount})
+    assert r.status_code == 400, r.text
+    assert env["findings"].events(T, to_status=("recovered",)) == []
+
+
+def test_open_and_status_filters_intersect_and_unknown_status_is_400(env):
+    c = env["client"]("viewer")
+    assert (
+        c.get("/api/trust/findings?open=true&status=accepted").json()["total"]
+        == 0
+    )
+    assert (
+        c.get("/api/trust/findings?open=true&status=detected").json()["total"]
+        == 2
+    )
+    assert c.get("/api/trust/findings?status=bogus").status_code == 400
+
+
+def test_a_contract_whose_blob_is_gone_is_404_not_500(env, monkeypatch):
+    class Gone:
+        def get(self, key):
+            raise RuntimeError("NotFound: no such object")
+
+    monkeypatch.setattr(service, "get_blobs", lambda tenant_id: Gone())
+    assert (
+        env["client"]("viewer")
+        .get("/api/trust/contracts/doc-c/file")
+        .status_code
+        == 404
+    )

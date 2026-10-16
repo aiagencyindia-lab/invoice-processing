@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -368,6 +369,8 @@ MONEY_STATUSES = frozenset(
 LEDGER_STATUSES = frozenset({"recovered", "prevented", "written_off"})
 CLAUSE_TYPES = ("rate", "escalator", "tier", "rebate", "discount", "term")
 MAX_PAGE = 200
+# The ledger column is Numeric(18, 4): fourteen integer digits.
+MAX_AMOUNT = Decimal("1e14")
 
 
 def _findings():
@@ -488,15 +491,25 @@ def list_findings(
     limit: int = 50,
     offset: int = 0,
 ):
+    from ..trust.findings.model import STATUSES  # noqa: PLC0415
+
     store, graph = _findings(), _graph()
+    if status and status not in STATUSES:
+        raise HTTPException(
+            400, f"status must be one of {', '.join(STATUSES)}."
+        )
     types = _engine_types(engine, hold)
     if type:
         types = {type} if types is None else types & {type}
-    if types is not None and not types:
+    statuses = set(OPEN_STATUSES) if open else None
+    if status:
+        statuses = {status} if statuses is None else statuses & {status}
+    if (types is not None and not types) or (
+        statuses is not None and not statuses
+    ):
         return {"findings": [], "total": 0, "offset": offset, "limit": limit}
     filters = {
-        "statuses": OPEN_STATUSES if open else None,
-        "status": status,
+        "statuses": sorted(statuses) if statuses is not None else None,
         "types": sorted(types) if types is not None else None,
         "vendor_node": vendor,
         "since": _when(since, "since"),
@@ -580,7 +593,7 @@ def transition_finding(
     request: TransitionRequest,
     principal: Annotated[Principal, Depends(require_role("clerk"))],
 ):
-    from decimal import Decimal, InvalidOperation  # noqa: PLC0415
+    from decimal import InvalidOperation  # noqa: PLC0415
 
     from ..ports import StatusChanged  # noqa: PLC0415
     from ..trust.findings.model import STATUSES, IllegalTransition  # noqa: PLC0415
@@ -605,6 +618,10 @@ def transition_finding(
             amount = Decimal(request.amount)
         except (InvalidOperation, ValueError):
             raise HTTPException(400, "amount must be a number.") from None
+        if not amount.is_finite() or amount < 0 or amount >= MAX_AMOUNT:
+            raise HTTPException(
+                400, "amount must be a non-negative number below 10^14."
+            )
     elif to_status in LEDGER_STATUSES and current.get("impact") is not None:
         # The ledger never falls back: what was recovered is, by default,
         # what the finding said was at stake.
@@ -694,7 +711,10 @@ def contract_file(
     doc = _contract_document(principal.tenant_id, document_id)
     try:
         data = service.get_blobs(principal.tenant_id).get(doc["storage_key"])
-    except (OSError, KeyError):
+    except Exception as exc:  # a store's own NotFound is not an OSError
+        logger.warning(
+            "trust_contract_blob_missing", extra={"error": type(exc).__name__}
+        )
         raise HTTPException(404, "The contract file is not stored.") from None
     return Response(content=data, media_type="application/pdf")
 
@@ -754,6 +774,13 @@ def review_clause(
     node = graph.node(tenant, node_id)
     if node is None or node["kind"] != "contract_clause":
         raise HTTPException(404, "Unknown clause.")
+    if node.get("valid_to") is not None:
+        # A stale id (a second tab, a double submit): review the open version
+        # of the same clause, not a copy of what the stale one said.
+        node = graph.open_node(tenant, "contract_clause", node["natural_key"])
+        if node is None:
+            raise HTTPException(404, "Unknown clause.")
+        node_id = node["id"]
     if edit.type is not None and edit.type not in CLAUSE_TYPES:
         raise HTTPException(
             400, f"type must be one of {', '.join(CLAUSE_TYPES)}."
@@ -768,7 +795,8 @@ def review_clause(
     now = datetime.now(timezone.utc)
     # A reviewed clause is a new version; the old row keeps what the engine
     # read. Re-versioning closes the clause's edges, so they are redrawn.
-    edges = graph.edges(tenant, src=node_id)
+    out_edges = graph.edges(tenant, src=node_id)
+    in_edges = graph.edges(tenant, dst=node_id)
     new_id = graph.upsert_node(
         ctx,
         kind="contract_clause",
@@ -777,22 +805,23 @@ def review_clause(
         natural_keys=node.get("natural_keys") or None,
         at=now,
     )
-    for e in edges:
-        graph.upsert_edge(
+    if new_id != node_id:
+        for e in out_edges + in_edges:
+            graph.upsert_edge(
+                ctx,
+                src=new_id if e["src"] == node_id else e["src"],
+                dst=new_id if e["dst"] == node_id else e["dst"],
+                kind=e["kind"],
+                source_system=e["source_system"],
+                provenance=e["provenance"],
+                confidence=e["confidence"],
+                observed_at=now,
+                attrs=e.get("attrs"),
+                at=now,
+            )
+        service.get_audit().emit(
             ctx,
-            src=new_id,
-            dst=e["dst"],
-            kind=e["kind"],
-            source_system=e["source_system"],
-            provenance=e["provenance"],
-            confidence=e["confidence"],
-            observed_at=now,
-            attrs=e.get("attrs"),
-            at=now,
+            "trust_clause_reviewed",
+            {"clause": new_id, "previous": node_id, "type": attrs.get("type")},
         )
-    service.get_audit().emit(
-        ctx,
-        "trust_clause_reviewed",
-        {"clause": new_id, "previous": node_id, "type": attrs.get("type")},
-    )
     return _clause_dict(graph.node(tenant, new_id))
