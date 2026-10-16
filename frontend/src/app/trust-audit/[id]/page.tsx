@@ -80,7 +80,7 @@ export default function TrustAuditDetailPage() {
   const latest =
     activeRun ??
     (audit?.runs.length
-      ? [...audit.runs].sort((a, b) => (a.started_at ?? "").localeCompare(b.started_at ?? "")).at(-1) ?? null
+      ? [...audit.runs].sort((a, b) => a.created_at.localeCompare(b.created_at)).at(-1) ?? null
       : null);
   const { data: polled } = usePoll<AuditRun>(activeRun ? `${path}/runs/${encodeURIComponent(activeRun.id)}` : null, 3000);
   const run = polled && activeRun && polled.id === activeRun.id ? polled : latest;

@@ -1084,6 +1084,7 @@ export type AuditRun = {
   requested_by: string | null;
   started_at: string | null;
   finished_at: string | null;
+  created_at: string;
 };
 export type AuditSample = {
   id: string;
@@ -1096,6 +1097,8 @@ export type AuditSample = {
   true: number;
   false: number;
   precision: number | null;
+  created_by: string | null;
+  created_at: string;
 };
 export type TrustAuditDetail = TrustAudit & { runs: AuditRun[]; samples: AuditSample[] };
 export type AuditReportRow = {
