@@ -1,6 +1,6 @@
 """Trust Audit (Wave 2): ledger + fee, scope and sampling, report, store, batch."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -9,6 +9,7 @@ from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust.audit import ledger, render, report, sampling
+from invoice_processing.trust.audit.store import TrustAuditStore
 from invoice_processing.trust.graph.store import GraphStore
 
 # -- ledger + fee -------------------------------------------------------------
@@ -458,3 +459,135 @@ def test_render_escapes_and_prints_every_section(graph_db):
     ):
         assert title in html
     assert "f1" not in html  # no ids on the printed page
+
+
+# -- store --------------------------------------------------------------------
+
+
+@pytest.fixture
+def store(graph_db):
+    return TrustAuditStore(graph_db["url"])
+
+
+def test_store_creates_lists_and_updates_audits(store):
+    a = store.create(
+        CTX,
+        name="FY26",
+        period_from=date(2026, 1, 1),
+        period_to=None,
+        vendors=["v-1"],
+        categories=["freight"],
+        terms=TERMS,
+        approver="cfo@x.test",
+    )
+    assert a["status"] == "draft" and a["created_by"] == "engine"
+    assert a["period_from"] == "2026-01-01" and a["period_to"] is None
+    assert a["terms"] == TERMS and a["created_at"] and a["updated_at"]
+    assert store.get(T, a["id"]) == a
+    assert store.get("tenant-globex", a["id"]) is None
+    assert [x["id"] for x in store.list(T)] == [a["id"]]
+    assert store.list("tenant-globex") == []
+    b = store.update(T, a["id"], status="active", name="FY26 Q1")
+    assert b["status"] == "active" and b["name"] == "FY26 Q1"
+    assert store.update("tenant-globex", a["id"], name="x") is None
+
+
+def test_store_runs_progress_and_finish(store):
+    a = store.create(CTX, name="FY26", terms=TERMS)
+    run = store.create_run(
+        CTX, a["id"], engines=["leakage"], requested_by="cfo@x.test"
+    )
+    assert run["status"] == "queued" and run["audit_id"] == a["id"]
+    assert run["progress"] == {
+        "engines_done": 0,
+        "engines_total": 0,
+        "engine": None,
+        "findings_so_far": 0,
+        "per_engine": {},
+    }
+    assert store.get_run("tenant-globex", run["id"]) is None
+    started = store.start(T, run["id"], now=AT)
+    assert (
+        started["status"] == "running"
+        and started["started_at"] == AT.isoformat()
+    )
+    store.progress(T, run["id"])(
+        {
+            "engine": "leakage",
+            "done": 1,
+            "total": 2,
+            "findings": 3,
+            "report": {"mode": "advisory", "findings": 3},
+        }
+    )
+    p = store.get_run(T, run["id"])["progress"]
+    assert p == {
+        "engines_done": 1,
+        "engines_total": 2,
+        "engine": "leakage",
+        "findings_so_far": 3,
+        "per_engine": {"leakage": {"mode": "advisory", "findings": 3}},
+    }
+    done = store.finish(
+        T,
+        run["id"],
+        status="done",
+        per_engine={
+            "leakage": {"mode": "advisory", "findings": 3},
+            "payment": "off",
+        },
+        now=AT,
+    )
+    assert done["status"] == "done" and done["finished_at"] == AT.isoformat()
+    assert done["progress"]["per_engine"]["payment"] == "off"
+    failed = store.finish(
+        T, run["id"], status="failed", error="x" * 600, now=AT
+    )
+    assert failed["status"] == "failed" and len(failed["error"]) == 500
+    assert [r["id"] for r in store.runs(T, a["id"])] == [run["id"]]
+
+
+def test_store_blocking_run_abandons_stale_ones(store):
+    a = store.create(CTX, name="FY26", terms=TERMS)
+    fresh = store.create_run(CTX, a["id"], engines=[], requested_by="x", now=AT)
+    assert (
+        store.blocking_run(T, a["id"], now=AT + timedelta(minutes=29))["id"]
+        == fresh["id"]
+    )
+    assert (
+        store.blocking_run(T, a["id"], now=AT + timedelta(minutes=31)) is None
+    )
+    assert store.get_run(T, fresh["id"])["error"] == "abandoned"
+    running = store.create_run(
+        CTX, a["id"], engines=[], requested_by="x", now=AT
+    )
+    store.start(T, running["id"], now=AT)
+    assert (
+        store.blocking_run(T, a["id"], now=AT + timedelta(hours=1, minutes=59))
+        is not None
+    )
+    assert (
+        store.blocking_run(T, a["id"], now=AT + timedelta(hours=2, minutes=1))
+        is None
+    )
+    assert store.get_run(T, running["id"])["status"] == "failed"
+    store.finish(T, running["id"], status="done", now=AT)  # done never blocks
+    assert store.blocking_run(T, a["id"], now=AT) is None
+
+
+def test_store_samples_and_verdicts(store):
+    a = store.create(CTX, name="FY26", terms=TERMS)
+    s = store.create_sample(
+        CTX, a["id"], size=2, seed="s", finding_ids=["f1", "f2"]
+    )
+    assert s["verdicts"] == {"f1": None, "f2": None} and s["precision"] is None
+    out = store.set_verdicts(T, s["id"], {"f1": True})
+    assert out["verdicts"] == {"f1": True, "f2": None}
+    assert (out["validated"], out["true"], out["false"], out["precision"]) == (
+        1,
+        1,
+        0,
+        1.0,
+    )
+    assert store.get_sample("tenant-globex", s["id"]) is None
+    assert [x["id"] for x in store.samples(T, a["id"])] == [s["id"]]
