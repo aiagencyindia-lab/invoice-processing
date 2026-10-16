@@ -1,0 +1,92 @@
+{
+ "finding": {
+  "id": "f-radar-renewal",
+  "type": "RADAR-RENEWAL",
+  "transaction_node": "n-con",
+  "status": "detected",
+  "impact": null,
+  "currency": null,
+  "confidence": 0.9,
+  "engine_version": "leakage-1",
+  "rule_version": "r",
+  "model_version": "none",
+  "summary": "The contract term ends inside the notice window.",
+  "details": {
+   "on": "2026-11-30",
+   "clauses": [
+    "n-term"
+   ],
+   "needs_review": false
+  },
+  "citations": [
+   {
+    "node_id": "n-con",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-term",
+    "excerpt": "term to 2026-11-30"
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-con": {
+   "kind": "contract",
+   "ref_table": "documents",
+   "ref_id": "doc-c",
+   "attrs": {
+    "filename": "msa.pdf",
+    "vendor_id": "v1"
+   }
+  },
+  "n-term": {
+   "kind": "contract_clause",
+   "attrs": {
+    "type": "term",
+    "params": {
+     "start": "2024-12-01",
+     "end": "2026-11-30"
+    },
+    "page": 2,
+    "excerpt": "term to 2026-11-30",
+    "confidence": 0.8,
+    "reviewed": false
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ],
+  [
+   "n-con",
+   "n-ven",
+   "governs"
+  ]
+ ],
+ "expect": {
+  "note": "no money is computed for this finding"
+ }
+}

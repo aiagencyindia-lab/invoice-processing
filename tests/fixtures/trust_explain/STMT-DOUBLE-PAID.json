@@ -1,0 +1,86 @@
+{
+ "finding": {
+  "id": "f-stmt-double-paid",
+  "type": "STMT-DOUBLE-PAID",
+  "transaction_node": "n-inv",
+  "status": "detected",
+  "impact": "1000.00",
+  "currency": "INR",
+  "confidence": 0.8,
+  "engine_version": "leakage-1",
+  "rule_version": "r",
+  "model_version": "none",
+  "summary": "This invoice was paid more than its amount.",
+  "details": {
+   "paid": "2000.00",
+   "payments": [
+    "n-pay",
+    "n-pay2"
+   ]
+  },
+  "citations": [
+   {
+    "node_id": "n-inv",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-pay",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-pay2",
+    "excerpt": null
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-pay": {
+   "kind": "payment",
+   "attrs": {
+    "doc_number": "INV-1041",
+    "amount": "1000.00",
+    "invoice_date": "2026-03-12"
+   }
+  },
+  "n-pay2": {
+   "kind": "payment",
+   "attrs": {
+    "doc_number": "INV-1041",
+    "amount": "1000.00",
+    "invoice_date": "2026-03-20"
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ]
+ ],
+ "expect": {
+  "payable_now": "1000.00",
+  "payable_correct": "0.00",
+  "delta": "1000.00"
+ }
+}
