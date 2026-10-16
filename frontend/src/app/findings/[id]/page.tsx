@@ -152,6 +152,17 @@ export default function FindingDetailPage() {
                 ))}
               </div>
             </div>
+            <div>
+              <div className="eyebrow">Evidence</div>
+              <ul className="citation-list" aria-label="Explanation evidence">
+                {explanation.evidence.map((item, index) => (
+                  <li key={item.node_id + index}>
+                    <strong style={{ fontSize: 13 }}>{item.label}</strong>
+                    {item.excerpt ? <span className="evidence">{item.excerpt}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
             {explanation.counterfactual ? (
               <dl className="kv">
                 <dt>Payable now</dt>

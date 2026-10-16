@@ -1,9 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
-/** The Wave 2 trust surfaces over the scaffold's routes: the queue, a finding's
- *  evidence and lineage, a triage, and the Trust Audit form. The Why engine and
- *  the audit routes land on sibling branches, so their panels are asserted to
- *  degrade, not to work. */
+/** The Wave 2 trust surfaces: the queue, a finding's explanation, evidence,
+ *  lineage and triage, and a Trust Audit engagement from creation to ledger.
+ *  No worker runs in this stack, so a batch run is asserted queued, not done. */
 
 async function goto(page: Page, path: string) {
   await page.goto(path);
@@ -40,9 +39,20 @@ test("a finding can be read, cited, and triaged", async ({ page }) => {
   await expect(page.getByRole("heading", { name: /LEAK-RATE/ })).toBeVisible();
   await expect(page.getByText("Line 1 billed above the contract rate").first()).toBeVisible();
 
-  // The Why engine is not on this branch: its panel says so instead of breaking.
+  // Why: what happened, the cited evidence, and what would be payable.
   await page.getByRole("tab", { name: "Why" }).click();
-  await expect(page.locator(".empty-state")).toContainText("Not Found");
+  await expect(page.getByText("What happened")).toBeVisible();
+  await expect(page.getByText(/^Line 1 billed above the contract rate/).last()).toBeVisible();
+  await expect(page.getByRole("list", { name: "Explanation evidence" }).getByRole("listitem")).not.toHaveCount(0);
+  await expect(page.getByText("Invoice INV-00005")).toBeVisible();
+  await expect(page.getByText("Payable if correct")).toBeVisible();
+  await expect(page.locator("dt", { hasText: "Delta" }).locator("+ dd")).toHaveText("₹1,250.00");
+
+  // A clerk rates the explanation once.
+  await page.getByRole("group", { name: "Correct?" }).getByRole("button", { name: "✓ Yes" }).click();
+  await page.getByRole("group", { name: "Useful?" }).getByRole("button", { name: "✓ Yes" }).click();
+  await page.getByRole("button", { name: "Rate this explanation" }).click();
+  await expect(page.getByText("your rating was recorded")).toBeVisible();
 
   await page.getByRole("tab", { name: "Evidence" }).click();
   await expect(page.locator(".citation-list li")).toHaveCount(1);
@@ -59,13 +69,42 @@ test("a finding can be read, cited, and triaged", async ({ page }) => {
   await expect(page.getByRole("row", { name: /alice@e2e.test/ })).toContainText("Triaged");
 });
 
-test("the trust audit page offers the engagement form", async ({ page }) => {
+test("an engagement runs from creation to sample, report and ledger", async ({ page }) => {
+  const name = "E2E Trust Audit";
   await goto(page, "/trust-audit");
   await expect(page.getByRole("heading", { name: "Trust audit" })).toBeVisible();
-  // No audit routes on this branch: the list degrades, the form still renders.
-  await expect(page.locator(".empty-state")).toContainText("Not Found");
-  await expect(page.getByLabel("Name")).toBeVisible();
+  await expect(page.getByText("No engagements yet.")).toBeVisible();
+
+  // Vendors and categories left empty: the engagement covers everything in
+  // the period, which includes the seeded invoice (dated 2026-02-11).
+  await page.getByLabel("Name").fill(name);
+  await page.getByLabel("Period from").fill("2026-01-01");
+  await page.getByLabel("Period to").fill("2026-12-31");
   await expect(page.getByLabel("Recovered %")).toHaveValue("25");
   await expect(page.getByLabel("Prevented %")).toHaveValue("10");
-  await expect(page.getByLabel("Period from")).toHaveAttribute("type", "date");
+  await page.getByRole("button", { name: "Create engagement" }).click();
+  await expect(page.getByRole("heading", { name })).toBeVisible();
+
+  // It is listed, and opens from the list.
+  await goto(page, "/trust-audit");
+  await page.getByRole("link", { name }).click();
+  await expect(page.getByRole("heading", { name })).toBeVisible();
+
+  await page.getByRole("button", { name: "Run batch" }).click();
+  await expect(page.locator(".badge", { hasText: /^queued$/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run batch" })).toBeDisabled();
+
+  await page.getByRole("tab", { name: "Sampling" }).click();
+  await page.getByLabel("Sample size").fill("1");
+  await page.getByRole("button", { name: "Draw sample" }).click();
+  await page.getByRole("button", { name: /^Mark .* true$/ }).click();
+  await expect(page.locator(".tiles .panel", { hasText: "Precision" })).toContainText("100%");
+
+  await page.getByRole("tab", { name: "Report" }).click();
+  await expect(page.getByRole("heading", { name: "Executive summary" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "LEAK-RATE · Leakage" })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Ledger" }).click();
+  await expect(page.getByRole("button", { name: "Download CSV" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Download JSON" })).toBeVisible();
 });
