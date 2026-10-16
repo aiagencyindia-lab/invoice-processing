@@ -528,3 +528,61 @@ def test_ratings_aggregate_by_type(db):
         "DUP-NEAR": {"rated": 2, "correct": 2, "useful": 1},
     }
     assert store.aggregate(OTHER) == {}
+
+
+# -- benchmark measure -----------------------------------------------------------
+
+from benchmark.history import explain as bench_explain  # noqa: E402
+
+
+class FakeFindings:
+    def __init__(self, rows):
+        self.rows = {r["id"]: r for r in rows}
+
+    def list(self, tenant_id, **_):
+        return [
+            {k: v for k, v in r.items() if k != "citations"}
+            for r in self.rows.values()
+        ]
+
+    def get(self, tenant_id, finding_id):
+        return self.rows.get(finding_id)
+
+
+def test_measure_scores_coverage_and_counterfactual_error(monkeypatch):
+    f, graph, _ = load("LEAK-RATE")
+    g, _, _ = load("PAY-ANOMALY")  # same invoice and vendor nodes
+    manifest = {
+        "faults": [
+            {
+                "type": "LEAK-RATE",
+                "doc_number": "INV-1041",
+                "expected_impact": "100",
+            },
+            {
+                "type": "PAY-ANOMALY",
+                "doc_number": "INV-1041",
+                "expected_impact": "500",
+            },
+            {
+                "type": "LEAK-TERM",
+                "doc_number": "INV-1041",
+                "expected_impact": None,
+            },
+        ]
+    }
+    out = bench_explain.measure(T, graph, FakeFindings([f, g]), manifest, None)
+    assert out["explanation_citation_coverage"] == 1.0
+    assert out["findings"] == 2 and out["priced"] == 2
+    # |100-100| + |600-500| over 600
+    assert out["counterfactual_impact_error"] == round(100 / 600, 4)
+    assert out["gates"] == {
+        "explanation_citation_coverage": True,
+        "counterfactual_impact_error": False,
+    }
+    monkeypatch.setitem(
+        TEMPLATES, "LEAK-RATE", lambda ctx: {"why": [xm.Step("x", "zz")]}
+    )
+    out = bench_explain.measure(T, graph, FakeFindings([f, g]), manifest, None)
+    assert out["explanation_citation_coverage"] == 0.5
+    assert out["gates"]["explanation_citation_coverage"] is False
