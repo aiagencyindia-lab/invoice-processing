@@ -44,6 +44,8 @@ from invoice_processing.api import (
     service,
     supporting_routes,
     system,
+    trust_audit_routes,
+    trust_explain_routes,
     trust_routes,
     vendor_routes,
 )
@@ -1369,6 +1371,139 @@ class TestTrustContractIsolation:
         assert probe.status_code == 404
 
 
+class TestTrustFindingsIsolation:
+    @pytest.fixture
+    def findings_db(self, scratch_db, monkeypatch, tmp_path):
+        from decimal import Decimal  # noqa: PLC0415
+
+        from invoice_processing.adapters import LocalBlobStore  # noqa: PLC0415
+        from invoice_processing.db.models import Document  # noqa: PLC0415
+        from invoice_processing.db.repositories import (  # noqa: PLC0415
+            PgDocumentRepository,
+        )
+        from invoice_processing.trust.findings.model import (  # noqa: PLC0415
+            Citation,
+            FindingSpec,
+        )
+        from invoice_processing.trust.findings.store import (  # noqa: PLC0415
+            FindingStore,
+        )
+        from invoice_processing.trust.graph.store import GraphStore  # noqa: PLC0415
+
+        url = scratch_db("iso-findings.db")
+        Base.metadata.drop_all(get_engine(url))
+        create_all(url)
+        for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
+            with db_session(tid, url) as session:
+                session.add(
+                    Tenant(id=tid, name=slug, slug=slug, status="active")
+                )
+        with db_session(ACME, url) as session:
+            session.add(
+                Document(
+                    tenant_id=ACME,
+                    id="doc-acme",
+                    sha256="a" * 64,
+                    storage_key="contracts/a.pdf",
+                    kind="contract",
+                )
+            )
+        graph, findings = GraphStore(url), FindingStore(url)
+        ctx = RunContext(tenant_id=ACME, case_id="", run_id="r", actor="e")
+        invoice = graph.upsert_node(
+            ctx,
+            kind="invoice",
+            natural_key="invoices:i",
+            attrs={"case_id": "c"},
+        )
+        contract = graph.upsert_node(
+            ctx,
+            kind="contract",
+            natural_key="documents:doc-acme",
+            ref_table="documents",
+            ref_id="doc-acme",
+        )
+        clause = graph.upsert_node(
+            ctx,
+            kind="contract_clause",
+            natural_key="clause:a",
+            attrs={"type": "rate", "params": {"price": "1"}, "page": 1},
+        )
+        graph.upsert_edge(
+            ctx,
+            src=clause,
+            dst=contract,
+            kind="part_of",
+            source_system="leakage",
+            provenance="model_inference",
+            confidence=0.9,
+            observed_at=datetime.now(timezone.utc),
+        )
+        fid, _ = findings.upsert(
+            ctx,
+            FindingSpec(
+                type="BENCH-IMPORT",
+                transaction_node=invoice,
+                dedupe_key="BENCH-IMPORT:i",
+                impact=Decimal("10"),
+                currency="INR",
+                confidence=1.0,
+                engine_version="e",
+                rule_version="r",
+                model_version="none",
+                summary="acme's",
+                citations=(Citation(invoice),),
+            ),
+        )
+        monkeypatch.setattr(service, "_graph_store", graph)
+        monkeypatch.setattr(service, "_finding_store", findings)
+        monkeypatch.setattr(service, "_documents", PgDocumentRepository(url))
+        blobs = LocalBlobStore(tmp_path / "blobs")
+        blobs.put("contracts/a.pdf", b"%PDF-1.4\n")
+        monkeypatch.setattr(service, "get_blobs", lambda tenant_id: blobs)
+        monkeypatch.setenv("DATABASE_URL", url)
+        return {"finding": fid, "invoice": invoice, "clause": clause}
+
+    def test_findings_nodes_and_contracts_stay_with_their_tenant(
+        self, clients, findings_db
+    ):
+        acme, globex = clients("acme"), clients("globex")
+        fid, inv, clause = (
+            findings_db["finding"],
+            findings_db["invoice"],
+            findings_db["clause"],
+        )
+        assert acme.get("/api/trust/findings").json()["total"] == 1
+        assert globex.get("/api/trust/findings").json()["total"] == 0
+        assert (
+            globex.get("/api/trust/findings/summary").json()["by_status"] == {}
+        )
+        assert globex.get(f"/api/trust/findings/{fid}").status_code == 404
+        probe = globex.post(
+            f"/api/trust/findings/{fid}/transition",
+            json={"to_status": "triaged"},
+        )
+        assert probe.status_code == 404
+        assert acme.get(f"/api/trust/findings/{fid}").json()["status"] == (
+            "detected"
+        )
+        assert globex.get(f"/api/trust/nodes/{inv}").status_code == 404
+        assert globex.get(f"/api/trust/lineage/{inv}").status_code == 404
+        assert (
+            globex.get("/api/trust/contracts/doc-acme/file").status_code == 404
+        )
+        assert (
+            globex.get("/api/trust/contracts/doc-acme/clauses").status_code
+            == 404
+        )
+        probe = globex.patch(
+            f"/api/trust/clauses/{clause}", json={"params": {"price": "9"}}
+        )
+        assert probe.status_code == 404
+        [kept] = acme.get("/api/trust/contracts/doc-acme/clauses").json()
+        assert kept["params"] == {"price": "1"} and kept["reviewed"] is False
+
+
 class TestCoverage:
     # Routes that legitimately serve no tenant data, with the reason each is
     # exempt. Anything not listed must be probed above.
@@ -1456,7 +1591,34 @@ class TestCoverage:
         "/api/trust/history/import",
         "/api/trust/history/imports",
         "/api/trust/contracts",
+        "/api/trust/findings",
+        "/api/trust/findings/summary",
+        "/api/trust/findings/{finding_id}",
+        "/api/trust/findings/{finding_id}/transition",
+        "/api/trust/nodes/{node_id}",
+        "/api/trust/lineage/{node_id}",
+        "/api/trust/contracts/{document_id}/file",
+        "/api/trust/contracts/{document_id}/clauses",
+        "/api/trust/clauses/{node_id}",
     }
+
+    # Sibling test modules that own routes and carry their own two-tenant
+    # probes (the Wave 2 audit and explain branches); each defines PROBED.
+    EXTRA_PROBE_MODULES: ClassVar[tuple] = (
+        "tests.test_trust_audit_routes",
+        "tests.test_trust_explain_routes",
+    )
+
+    def _probed(self) -> set:
+        import importlib  # noqa: PLC0415
+
+        probed = set(self.PROBED)
+        for name in self.EXTRA_PROBE_MODULES:
+            try:
+                probed |= set(importlib.import_module(name).PROBED)
+            except ImportError:
+                continue
+        return probed
 
     def test_every_route_is_covered(self):
         """A new endpoint cannot ship without an isolation probe.
@@ -1465,7 +1627,7 @@ class TestCoverage:
         decays silently as endpoints are added.
         """
         routes = {r.path for r in app.routes if hasattr(r, "path")}
-        uncovered = routes - self.PROBED - set(self.EXEMPT)
+        uncovered = routes - self._probed() - set(self.EXEMPT)
         assert not uncovered, (
             f"These routes have no cross-tenant test: {sorted(uncovered)}. "
             "Add a probe above, or list it in EXEMPT with a reason."
@@ -1497,6 +1659,8 @@ class TestCoverage:
             po_routes,
             supporting_routes,
             system,
+            trust_audit_routes,
+            trust_explain_routes,
             trust_routes,
             vendor_routes,
         ):
