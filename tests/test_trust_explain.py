@@ -345,3 +345,90 @@ def test_caused_by_is_worded_as_likely_and_names_the_approver():
         and person[0].node_id is None
         and "boss@x.test" in person[0].label
     )
+
+
+# -- evidence pack + HTML -------------------------------------------------------
+
+import hashlib  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+
+from invoice_processing.trust.explain import pack as xp  # noqa: E402
+from invoice_processing.trust.explain import render  # noqa: E402
+
+NOW = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+RATING = {
+    "rater": "clerk@x.test",
+    "correct": True,
+    "useful": False,
+    "note": "<script>alert(1)</script>",
+    "at": "2026-10-16T11:00:00+00:00",
+}
+
+
+def test_pack_sha_is_stable_and_excludes_itself():
+    f, graph, _ = load("LEAK-RATE")
+    a = xp.evidence_pack(T, f, graph=graph, ratings=[RATING], now=NOW)
+    b = xp.evidence_pack(T, f, graph=graph, ratings=[RATING], now=NOW)
+    assert a == b and a["pack_version"] == 1
+    body = {k: v for k, v in a.items() if k != "sha256"}
+    assert (
+        a["sha256"]
+        == hashlib.sha256(
+            json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    assert a["generated_at"] == NOW.isoformat()
+    assert a["versions"]["explain_version"] == xm.EXPLAIN_VERSION
+    assert a["versions"]["lineage_version"]
+    assert a["decision"] == {
+        "status": "detected",
+        "owner_id": None,
+        "decided_at": None,
+        "events": [],
+    }
+    assert a["ratings"] == [RATING]
+    assert a["explanation"]["finding_id"] == f["id"]
+    assert [link["stage"] for link in a["lineage"]][:1] == ["contract"]
+    assert set(a) == {
+        "pack_version", "generated_at", "finding", "explanation", "lineage",
+        "nodes", "edges", "versions", "decision", "ratings", "sha256",
+    }  # fmt: skip
+
+
+def test_pack_edges_only_between_cited_nodes():
+    f, graph, _ = load("LEAK-RATE")
+    out = xp.evidence_pack(T, f, graph=graph, now=NOW)
+    ids = {n["id"] for n in out["nodes"]}
+    assert ids == {"n-inv", "n-con", "n-line", "n-rate"}  # not the vendor
+    assert out["edges"] and all(
+        e["src"] in ids and e["dst"] in ids for e in out["edges"]
+    )
+    assert {(e["src"], e["dst"]) for e in out["edges"]} == {
+        ("n-line", "n-inv"),
+        ("n-rate", "n-con"),
+    }
+
+
+def test_pack_rereads_a_finding_without_citations_through_the_store():
+    f, graph, _ = load("LEAK-RATE")
+
+    class Store:
+        def get(self, tenant_id, finding_id):
+            assert (tenant_id, finding_id) == (T, f["id"])
+            return f
+
+    row = {k: v for k, v in f.items() if k not in ("citations", "events")}
+    out = xp.evidence_pack(T, row, graph=graph, findings=Store(), now=NOW)
+    assert out["finding"]["citations"] == f["citations"]
+
+
+def test_pack_html_escapes_script():
+    f, graph, _ = load("LEAK-RATE")
+    f["citations"][3]["excerpt"] = "<script>alert('x')</script> INR 50"
+    f["summary"] = "<b>bold</b> summary"
+    out = xp.evidence_pack(T, f, graph=graph, ratings=[RATING], now=NOW)
+    html = render.pack_html(out)
+    assert "<script>" not in html and "<b>" not in html
+    assert "&lt;script&gt;" in html
+    assert out["sha256"] in html and "Evidence pack" in html
+    assert "Acme Steel" in html and "What happened" in html
