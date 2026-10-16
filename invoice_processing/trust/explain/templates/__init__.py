@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 
 from ..model import Actor, Step
 
@@ -89,9 +90,13 @@ class Context:
     @property
     def money(self) -> str:
         impact, cur = self.finding.get("impact"), self.finding.get("currency")
-        return (
-            f"{cur or ''} {impact}".strip() if impact else "an unpriced amount"
-        )
+        if not impact:
+            return "an unpriced amount"
+        try:
+            shown = str(Decimal(str(impact)).quantize(Decimal("0.01")))
+        except InvalidOperation:
+            shown = str(impact)
+        return f"{cur or ''} {shown}".strip()
 
     @property
     def vendor_name(self) -> str:

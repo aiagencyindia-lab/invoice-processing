@@ -506,12 +506,15 @@ def test_rating_upserts_per_rater_and_audits(db):
         "clerk@x.test",
     ]
     with tenant_session(T, url) as s:
-        rows = s.query(models.AuditEvent).filter_by(
-            action="trust_explanation_rated"
+        rows = (
+            s.query(models.AuditEvent)
+            .filter_by(action="trust_explanation_rated")
+            .order_by(models.AuditEvent.occurred_at, models.AuditEvent.id)
+            .all()
         )
-        assert rows.count() == 3
+        assert len(rows) == 3
         assert {r.entity_id for r in rows} == {fid}
-        assert rows.first().after["correct"] is True
+        assert [r.after["correct"] for r in rows] == [True, False, True]
     with pytest.raises(KeyError):
         store.rate(who, "nope", correct=True, useful=True)
     with pytest.raises(KeyError):
@@ -588,3 +591,97 @@ def test_measure_scores_coverage_and_counterfactual_error(monkeypatch):
     out = bench_explain.measure(T, graph, FakeFindings([f, g]), manifest, None)
     assert out["explanation_citation_coverage"] == 0.5
     assert out["gates"]["explanation_citation_coverage"] is False
+
+
+# -- review fix pass -----------------------------------------------------------
+
+from invoice_processing.trust.explain.templates import Context  # noqa: E402
+
+
+def test_discount_formula_uses_the_invoice_amount_not_what_was_paid():
+    f, graph, _ = load("LEAK-DISCOUNT")
+    out = cf.counterfactual(f, graph.node(T, f["transaction_node"]))
+    assert f["details"]["paid"] == "1100.00"  # overpaid: must not appear
+    assert out.formula == "1000.00 x 10% = 100.00"
+
+
+def test_counterfactual_note_distinguishes_holds_from_insights():
+    f, graph, _ = load("PAY-ANOMALY")
+    out = cf.counterfactual(f, graph.node(T, f["transaction_node"]))
+    assert out.note == "amount above the vendor's median; no hold applies"
+    # A priced insight that is not a hold (PROV-TAMPER is one).
+    f = {**f, "type": "GST-NONFILER"}
+    out = cf.counterfactual(f, graph.node(T, f["transaction_node"]))
+    assert out.note == "informational; nothing is withheld"
+    f, graph, _ = load("PAY-UNVERIFIED")
+    out = cf.counterfactual(f, graph.node(T, f["transaction_node"]))
+    assert "hold is cleared" in out.note
+
+
+def test_context_money_is_shown_to_two_places():
+    f, _graph, _ = load("LEAK-RATE")
+    ctx = Context({**f, "impact": "100.0000"}, {})
+    assert ctx.money == "INR 100.00"
+    assert Context({**f, "impact": None, "currency": None}, {}).money == (
+        "an unpriced amount"
+    )
+
+
+def test_leak_term_without_an_excerpt_reads_the_clause_dates():
+    f, graph, _ = load("LEAK-TERM")
+    f["citations"][2]["excerpt"] = None
+    x = engine.build(T, f, graph=graph)
+    assert x.why[0].node_id == "n-term"
+    assert x.why[0].text == (
+        "The contract term is the cited clause, 2024-01-01 to 2025-12-31."
+    )
+
+
+def test_rating_upsert_survives_a_concurrent_insert(db, monkeypatch):
+    from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+
+    from invoice_processing.trust.explain import ratings as rt  # noqa: PLC0415
+
+    url, store, ids = db
+    fid = next(iter(ids))
+    who = RunContext(tenant_id=T, run_id="req", actor="clerk@x.test")
+    real, calls = rt.tenant_session, {"n": 0}
+
+    class Racer:
+        """The first session's flush loses the race: a twin row lands
+        between our SELECT and our INSERT."""
+
+        def __init__(self, s):
+            self.s = s
+
+        def __getattr__(self, name):
+            return getattr(self.s, name)
+
+        def flush(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                with real(T, url) as other:
+                    other.add(
+                        models.TrustExplanationRating(
+                            tenant_id=T,
+                            finding_id=fid,
+                            rater="clerk@x.test",
+                            correct=False,
+                            useful=False,
+                        )
+                    )
+                self.s.rollback()
+                raise IntegrityError("twin", {}, Exception("unique"))
+            return self.s.flush()
+
+    from contextlib import contextmanager  # noqa: PLC0415
+
+    @contextmanager
+    def racing(tenant_id, u=None):
+        with real(tenant_id, u) as s:
+            yield Racer(s)
+
+    monkeypatch.setattr(rt, "tenant_session", racing)
+    out = store.rate(who, fid, correct=True, useful=True, note="won")
+    assert out["correct"] is True and out["note"] == "won"
+    assert len(store.list(T, fid)) == 1 and calls["n"] == 2

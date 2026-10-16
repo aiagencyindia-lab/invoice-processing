@@ -146,9 +146,23 @@ def discount(ctx: Context) -> dict:
 @register("LEAK-TERM")
 def term(ctx: Context) -> dict:
     d = ctx.detail
+    clauses = _clauses(ctx)
+    node = clauses[0] if clauses else _contract(ctx)
+    if ctx.excerpt(node):
+        first = _clause_step(ctx, "The contract term is")
+    else:
+        params = ctx.attr(node, "params") or {}
+        dates = (
+            f", {params.get('start')} to {params.get('end')}"
+            if isinstance(params, dict)
+            and params.get("start")
+            and params.get("end")
+            else ""
+        )
+        first = ctx.step(f"The contract term is the cited clause{dates}.", node)
     return {
         "why": [
-            _clause_step(ctx, "The contract term is"),
+            first,
             ctx.step(f"This invoice is dated {d('invoice_date')}, outside it."),
         ],
         "caused_by": [ctx.vendor_actor(ctx.vendor_name), ctx.engine_actor()],

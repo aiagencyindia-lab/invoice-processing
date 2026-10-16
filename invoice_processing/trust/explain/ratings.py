@@ -4,6 +4,7 @@ finding, upserted, each write audited like a finding transition."""
 from __future__ import annotations
 
 from sqlalchemy import case, func, select
+from sqlalchemy.exc import IntegrityError
 
 from ...db.models import TrustExplanationRating, TrustFinding
 from ...db.repositories import audit_event_row
@@ -35,6 +36,14 @@ class RatingStore:
         note: str | None = None,
     ) -> dict:
         rater = ctx.actor or "system"
+        try:
+            return self._rate(ctx, finding_id, rater, correct, useful, note)
+        except IntegrityError:
+            # Two raters' tabs racing for the same (finding, rater): the
+            # loser re-reads the row the winner inserted and updates it.
+            return self._rate(ctx, finding_id, rater, correct, useful, note)
+
+    def _rate(self, ctx, finding_id, rater, correct, useful, note) -> dict:
         with tenant_session(ctx.tenant_id, self.url) as s:
             owned = s.scalars(
                 select(TrustFinding.id).where(

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
+from ..findings.model import HOLD_TYPES
 from .model import Counterfactual
 
 NO_MONEY = "no money is computed for this finding"
@@ -38,7 +39,9 @@ def _money(value: Decimal | None) -> str | None:
     return None if value is None else str(value.quantize(Decimal("0.01")))
 
 
-def _formula(code: str, d: dict, impact: Decimal) -> str:
+def _formula(
+    code: str, d: dict, impact: Decimal, amount: Decimal | None
+) -> str:
     g = d.get
     if code in ("LEAK-RATE", "LEAK-ESCALATOR"):
         return (
@@ -53,7 +56,8 @@ def _formula(code: str, d: dict, impact: Decimal) -> str:
     if code == "LEAK-REBATE":
         return f"{g('period_spend')} x {g('pct')}% = {_money(impact)}"
     if code == "LEAK-DISCOUNT":
-        return f"{g('paid')} x {g('pct')}% = {_money(impact)}"
+        # The engine prices amount x pct / 100; `paid` can exceed the amount.
+        return f"{_money(amount) or 'amount'} x {g('pct')}% = {_money(impact)}"
     if code == "STMT-DOUBLE-PAID":
         return f"paid {g('paid')} - invoiced = {_money(impact)}"
     if code == "GST-ITC-RISK":
@@ -70,7 +74,7 @@ def counterfactual(finding: dict, txn: dict | None) -> Counterfactual:
         return Counterfactual(currency, None, None, None, "", NO_MONEY)
     amount = _dec(((txn or {}).get("attrs") or {}).get("amount"))
     details = finding.get("details") or {}
-    formula = _formula(code, details, impact)
+    formula = _formula(code, details, impact, amount)
     if code in OVERBILLED:
         return Counterfactual(
             currency,
@@ -91,11 +95,14 @@ def counterfactual(finding: dict, txn: dict | None) -> Counterfactual:
             if code == "STMT-UNAPPLIED-CREDIT"
             else "pay once: nothing is payable on the later copy",
         )
-    note = (
-        "ITC claimable if the vendor is active and files"
-        if code == "GST-ITC-RISK"
-        else "amount at risk if paid now; nothing changes until the hold is cleared"
-    )
+    if code == "GST-ITC-RISK":
+        note = "ITC claimable if the vendor is active and files"
+    elif code in HOLD_TYPES:
+        note = "amount at risk if paid now; nothing changes until the hold is cleared"
+    elif code == "PAY-ANOMALY":
+        note = "amount above the vendor's median; no hold applies"
+    else:
+        note = "informational; nothing is withheld"
     return Counterfactual(
         currency, _money(amount), _money(amount), _money(impact), formula, note
     )

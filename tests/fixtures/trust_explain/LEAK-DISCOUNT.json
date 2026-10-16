@@ -14,7 +14,7 @@
   "details": {
    "pct": "10",
    "days": "10",
-   "paid": "1000.00",
+   "paid": "1100.00",
    "payments": [
     "n-pay"
    ],
@@ -76,7 +76,7 @@
    "kind": "payment",
    "attrs": {
     "doc_number": "INV-1041",
-    "amount": "1000.00",
+    "amount": "1100.00",
     "invoice_date": "2026-03-12"
    }
   },
