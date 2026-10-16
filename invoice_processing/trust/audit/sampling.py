@@ -23,9 +23,26 @@ def _date(value) -> date | None:
         return None
 
 
-def _vendor_map(graph, tenant_id: str) -> dict[str, str]:
+def vendor_map(graph, tenant_id: str) -> dict[str, str]:
+    """transaction or contract node -> vendor node, by its open edge: three
+    graph reads for the whole tenant, never one per finding."""
     return {
-        e["src"]: e["dst"] for e in graph.edges(tenant_id, kind="issued_by")
+        e["src"]: e["dst"]
+        for kind in ("issued_by", "governs")
+        for e in graph.edges(tenant_id, kind=kind)
+    }
+
+
+def vendors(graph, tenant_id: str) -> dict[str, dict]:
+    """transaction node -> {node, name} as `trust_routes.vendor_of` shapes it."""
+    names = {
+        n["id"]: n["attrs"].get("name")
+        for n in graph.nodes(tenant_id, kind="vendor")
+    }
+    return {
+        src: {"node": dst, "name": names.get(dst)}
+        for src, dst in vendor_map(graph, tenant_id).items()
+        if dst in names
     }
 
 
@@ -51,9 +68,11 @@ def scope_findings(
         _date(audit.get("period_from")),
         _date(audit.get("period_to")),
     )
-    vendors = set(audit.get("vendors") or ())
-    keywords = [k.lower() for k in audit.get("categories") or () if k.strip()]
-    vendor_of = _vendor_map(graph, tenant_id) if vendors else {}
+    wanted = set(audit.get("vendors") or ())
+    keywords = [
+        k.strip().lower() for k in audit.get("categories") or () if k.strip()
+    ]
+    vendor_of = vendor_map(graph, tenant_id) if wanted else {}
     lines = _line_text(graph, tenant_id) if keywords else {}
     dates: dict[str, date | None] = {}
     if period_from or period_to:
@@ -66,14 +85,15 @@ def scope_findings(
     for f in findings:
         node = f["transaction_node"]
         if period_from or period_to:
-            when = dates.get(node)
+            # A contract-level finding (RADAR-*) is dated by the engine.
+            when = dates.get(node) or _date((f.get("details") or {}).get("on"))
             if when is None:
                 continue
             if period_from and when < period_from:
                 continue
             if period_to and when > period_to:
                 continue
-        if vendors and vendor_of.get(node) not in vendors:
+        if wanted and vendor_of.get(node) not in wanted:
             continue
         if keywords and not any(k in lines.get(node, "") for k in keywords):
             continue

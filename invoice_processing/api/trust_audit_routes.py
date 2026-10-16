@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import date, datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,7 +18,7 @@ from ..trust.audit import render, report, sampling
 from ..trust.audit.store import AUDIT_STATUSES, TrustAuditStore
 from ..trust.modes import ENGINES
 from .auth import Principal, require_role
-from .trust_routes import _findings, _graph, vendor_of
+from .trust_routes import _findings, _graph
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -58,9 +58,15 @@ def _audit(principal: Principal, audit_id: str) -> dict:
     return audit
 
 
-def _terms(raw: dict | None) -> dict:
-    """Decimal strings, validated: pct and cap/minimum non-negative."""
-    out = dict(DEFAULT_TERMS)
+def _closed(audit: dict) -> None:
+    if audit["status"] == "closed":
+        raise HTTPException(409, "The audit is closed.")
+
+
+def _terms(raw: dict | None, base: dict | None = None) -> dict:
+    """Decimal strings over `base` (the defaults, or on a PATCH the terms as
+    they stand): pct and cap/minimum non-negative, money to the cent."""
+    out = {**DEFAULT_TERMS, **(base or {})}
     for key, value in (raw or {}).items():
         if key not in DEFAULT_TERMS:
             continue
@@ -71,11 +77,13 @@ def _terms(raw: dict | None) -> dict:
             number = Decimal(str(value))
         except (InvalidOperation, ValueError):
             raise HTTPException(400, f"terms.{key} must be a number.") from None
-        if not number.is_finite() or number < 0:
+        if not number.is_finite() or number.is_signed():
             raise HTTPException(
                 400, f"terms.{key} must be a non-negative number."
             )
-        out[key] = str(number)
+        if key in ("cap", "minimum"):
+            number = number.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        out[key] = format(number, "f")
     return out
 
 
@@ -91,12 +99,9 @@ def _scope(principal: Principal, audit: dict) -> list[dict]:
     rows = sampling.scope_findings(
         audit, _findings().list(tenant), graph, tenant_id=tenant
     )
-    vendors: dict = {}
+    vendors = sampling.vendors(graph, tenant)
     for f in rows:
-        node = f["transaction_node"]
-        if node not in vendors:
-            vendors[node] = vendor_of(graph, tenant, node)
-        f["vendor"] = vendors[node]
+        f["vendor"] = vendors.get(f["transaction_node"])
     return rows
 
 
@@ -174,6 +179,8 @@ def patch_audit(
 ):
     audit = _audit(principal, audit_id)
     fields = body.model_dump(exclude_unset=True)
+    if "status" not in fields:
+        _closed(audit)  # a closed audit only reopens
     if "name" in fields:
         if not (fields["name"] or "").strip():
             raise HTTPException(400, "name is required.")
@@ -183,7 +190,9 @@ def patch_audit(
             400, f"status must be one of {', '.join(AUDIT_STATUSES)}."
         )
     if "terms" in fields:
-        fields["terms"] = _terms(fields["terms"])
+        if fields["terms"] is None:
+            raise HTTPException(400, "terms must be an object.")
+        fields["terms"] = _terms(fields["terms"], base=audit["terms"])
     if "categories" in fields:
         fields["categories"] = [
             str(c) for c in fields["categories"] or [] if str(c).strip()
@@ -215,6 +224,7 @@ def request_run(
     principal: Annotated[Principal, Depends(require_role("approver"))],
 ):
     audit = _audit(principal, audit_id)
+    _closed(audit)
     unknown = [e for e in body.engines if e not in ENGINES]
     if unknown:
         raise HTTPException(400, f"engines must be among {', '.join(ENGINES)}.")
@@ -284,6 +294,7 @@ def draw_sample(
     principal: Annotated[Principal, Depends(require_role("approver"))],
 ):
     audit = _audit(principal, audit_id)
+    _closed(audit)
     if not 1 <= body.size <= MAX_SAMPLE:
         raise HTTPException(400, f"size must be between 1 and {MAX_SAMPLE}.")
     ids = [f["id"] for f in _scope(principal, audit)]
@@ -308,7 +319,7 @@ def set_verdicts(
     body: VerdictsRequest,
     principal: Annotated[Principal, Depends(require_role("clerk"))],
 ):
-    _audit(principal, audit_id)
+    _closed(_audit(principal, audit_id))
     store = _store()
     sample = store.get_sample(principal.tenant_id, sample_id)
     if sample is None or sample["audit_id"] != audit_id:
@@ -327,7 +338,10 @@ def _report(principal: Principal, audit: dict) -> dict:
 
     tenant = principal.tenant_id
     scope = _scope(principal, audit)
-    events = _findings().events(tenant)
+    # An engagement bills only what was attested after it began; earlier
+    # recoveries in scope are reported, not billed.
+    began = datetime.fromisoformat(audit["created_at"])
+    events = _findings().events(tenant, since=began)
     runs = _store().runs(tenant, audit["id"])
     modes = tenant_settings.effective(tenant).get("trust_engine_modes") or {}
     return report.assemble(

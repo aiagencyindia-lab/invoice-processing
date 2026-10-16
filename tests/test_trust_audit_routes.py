@@ -162,7 +162,7 @@ def test_create_get_list_and_patch_an_engagement(env):
             "terms": {
                 "recovered_pct": "30",
                 "prevented_pct": "5",
-                "cap": "1000",
+                "cap": "1000.00",
                 "minimum": None,
             },
         },
@@ -171,7 +171,7 @@ def test_create_get_list_and_patch_an_engagement(env):
     assert r.json()["terms"] == {
         "recovered_pct": "30",
         "prevented_pct": "5",
-        "cap": "1000",
+        "cap": "1000.00",
         "minimum": None,
     }
 
@@ -495,3 +495,170 @@ def test_engagements_runs_samples_report_and_ledger_stay_with_their_tenant(env):
     assert globex.get(
         f"/api/trust/audits/{a['id']}/samples/{sample['id']}"
     ).status_code in (404, 405)
+
+
+# -- fix pass -----------------------------------------------------------------
+
+
+def test_patch_terms_merges_over_the_existing_terms(env):
+    a = _create(env, terms={"recovered_pct": "30", "prevented_pct": "10"})
+    c = env["client"]()
+    r = c.patch(
+        f"/api/trust/audits/{a['id']}", json={"terms": {"cap": "50000"}}
+    )
+    assert r.status_code == 200
+    assert r.json()["terms"] == {
+        "recovered_pct": "30",
+        "prevented_pct": "10",
+        "cap": "50000.00",
+        "minimum": None,
+    }
+    assert (
+        c.patch(
+            f"/api/trust/audits/{a['id']}", json={"terms": None}
+        ).status_code
+        == 400
+    )
+
+
+def test_terms_are_plain_cent_strings_and_signed_zero_is_refused(env):
+    c = env["client"]()
+    a = _create(
+        env,
+        terms={"recovered_pct": "2.5E+1", "cap": "1E+3", "minimum": "0.005"},
+    )
+    assert a["terms"] == {
+        "recovered_pct": "25",
+        "prevented_pct": "10",
+        "cap": "1000.00",
+        "minimum": "0.01",
+    }
+    assert (
+        c.post(
+            "/api/trust/audits", json={**BODY, "terms": {"cap": "-0"}}
+        ).status_code
+        == 400
+    )
+
+
+def test_the_ledger_bills_only_attestations_after_the_engagement_began(env):
+    _recover(env, env["acme"]["finding"])  # attested before the engagement
+    a = _create(env)
+    v = env["client"]("acme", "viewer")
+    rep = v.get(f"/api/trust/audits/{a['id']}/report").json()
+    assert (
+        rep["summary"]["findings"] == 1
+        and rep["summary"]["accepted_impact"] == "100.00"
+    )
+    assert rep["summary"]["recovered"] == "0.00" and rep["ledger"]["rows"] == []
+    assert rep["ledger"]["fee"]["due"] == "0.00"
+    assert v.get(f"/api/trust/audits/{a['id']}/ledger").json()["rows"] == []
+    csv_text = v.get(
+        f"/api/trust/audits/{a['id']}/ledger?format=csv"
+    ).content.decode("utf-8-sig")
+    assert len(csv_text.splitlines()) == 1
+
+
+def test_scope_resolves_vendors_in_a_fixed_number_of_graph_calls(
+    env, monkeypatch
+):
+    graph = env["graph"]
+    ctx = RunContext(tenant_id=ACME, case_id="", run_id="r", actor="engine")
+    for i in range(50):
+        inv = graph.upsert_node(
+            ctx,
+            kind="invoice",
+            natural_key=f"invoices:n{i}",
+            attrs={"invoice_date": "2026-03-01"},
+        )
+        graph.upsert_edge(
+            ctx,
+            src=inv,
+            dst=env["acme"]["vendor"],
+            kind="issued_by",
+            source_system="v1",
+            provenance="system_record",
+            confidence=1.0,
+            observed_at=AT,
+        )
+        env["findings"].upsert(
+            ctx,
+            FindingSpec(
+                type="LEAK-RATE",
+                transaction_node=inv,
+                dedupe_key=f"LEAK-RATE:n{i}",
+                impact=Decimal("1"),
+                currency="INR",
+                confidence=0.9,
+                engine_version="e",
+                rule_version="r",
+                model_version="none",
+                summary="x",
+                citations=(Citation(inv, "inv"),),
+            ),
+        )
+    calls = []
+
+    def counting(name, real):
+        def call(*a, **k):
+            calls.append(name)
+            return real(*a, **k)
+
+        return call
+
+    for name in ("node", "nodes", "edges", "nodes_by_ref", "open_node"):
+        monkeypatch.setattr(graph, name, counting(name, getattr(graph, name)))
+    a = _create(env)
+    calls.clear()
+    s = (
+        env["client"]()
+        .post(f"/api/trust/audits/{a['id']}/samples", json={"size": 51})
+        .json()
+    )
+    assert len(s["finding_ids"]) == 51
+    assert calls.count("node") == 0 and len(calls) <= 6, calls
+
+
+def test_a_closed_audit_refuses_changes_with_409(env):
+    a = _create(env)
+    c, clerk = env["client"](), env["client"]("acme", "clerk")
+    s = c.post(f"/api/trust/audits/{a['id']}/samples", json={"size": 1}).json()
+    assert (
+        c.patch(
+            f"/api/trust/audits/{a['id']}", json={"status": "closed"}
+        ).status_code
+        == 200
+    )
+    base = f"/api/trust/audits/{a['id']}"
+    assert c.post(f"{base}/runs", json={}).status_code == 409
+    assert c.post(f"{base}/samples", json={"size": 1}).status_code == 409
+    assert (
+        clerk.patch(
+            f"{base}/samples/{s['id']}", json={"verdicts": {}}
+        ).status_code
+        == 409
+    )
+    assert c.patch(base, json={"name": "renamed"}).status_code == 409
+    assert (
+        c.patch(base, json={"status": "active"}).status_code == 200
+    )  # reopening is allowed
+    assert c.get(f"{base}/report").status_code == 200
+
+
+def test_polling_a_stale_run_self_heals(env, monkeypatch):
+    from invoice_processing.trust.audit import store as audit_store  # noqa: PLC0415
+
+    a = _create(env)
+    c = env["client"]()
+    run = c.post(f"/api/trust/audits/{a['id']}/runs", json={}).json()
+    monkeypatch.setattr(
+        audit_store,
+        "_now",
+        lambda: datetime.now(timezone.utc) + audit_store.QUEUED_FOR * 2,
+    )
+    got = (
+        env["client"]("acme", "viewer")
+        .get(f"/api/trust/audits/{a['id']}/runs/{run['id']}")
+        .json()
+    )
+    assert got["status"] == "failed" and got["error"] == "abandoned"

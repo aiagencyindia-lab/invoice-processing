@@ -770,3 +770,54 @@ def test_run_batch_unknown_run_raises_key_error(batch_env):
             url=batch_env["url"],
             store=batch_env["store"],
         )
+
+
+# -- fix pass -----------------------------------------------------------------
+
+
+def test_scope_keeps_contract_findings_by_governs_edge_and_details_on(graph_db):
+    g = graph_db["graph"]
+    contract = g.upsert_node(CTX, kind="contract", natural_key="documents:d1")
+    g.upsert_edge(
+        CTX,
+        src=contract,
+        dst=graph_db["v1"],
+        kind="governs",
+        source_system="upload",
+        provenance="human_assertion",
+        confidence=1.0,
+        observed_at=AT,
+    )
+    radar = _finding(
+        "r1", contract, type="RADAR-RENEWAL", details={"on": "2026-05-15"}
+    )
+    fs = [_finding("f1", graph_db["i1"]), radar]
+    out = sampling.scope_findings(
+        _audit(period_from="2026-05-01", period_to="2026-05-31"),
+        fs,
+        g,
+        tenant_id=T,
+    )
+    assert [f["id"] for f in out] == ["r1"]
+    out = sampling.scope_findings(
+        _audit(vendors=[graph_db["v1"]]), fs, g, tenant_id=T
+    )
+    assert [f["id"] for f in out] == ["f1", "r1"]
+
+
+def test_scope_strips_category_keywords(graph_db):
+    fs = [_finding("f2", graph_db["i2"])]
+    out = sampling.scope_findings(
+        _audit(categories=["  freight  ", "   "]),
+        fs,
+        graph_db["graph"],
+        tenant_id=T,
+    )
+    assert [f["id"] for f in out] == ["f2"]
+
+
+def test_get_run_abandons_a_stale_run_too(store):
+    a = store.create(CTX, name="FY26", terms=TERMS)
+    run = store.create_run(CTX, a["id"], engines=[], requested_by="x", now=AT)
+    got = store.get_run(T, run["id"], now=AT + timedelta(minutes=31))
+    assert got["status"] == "failed" and got["error"] == "abandoned"

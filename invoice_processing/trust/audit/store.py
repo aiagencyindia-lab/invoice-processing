@@ -174,10 +174,33 @@ class TrustAuditStore:
             )
         ).first()
 
-    def get_run(self, tenant_id: str, run_id: str) -> dict | None:
+    def get_run(
+        self, tenant_id: str, run_id: str, *, now: datetime | None = None
+    ) -> dict | None:
+        """Polling a stale run marks it failed, so the UI self-heals."""
         with tenant_session(tenant_id, self.url) as s:
             row = self._run(s, tenant_id, run_id)
-            return _run_dict(row) if row else None
+            if row is None:
+                return None
+            self._abandon_if_stale(row, now or _now())
+            s.flush()
+            return _run_dict(row)
+
+    @staticmethod
+    def _abandon_if_stale(row: TrustAuditRun, now: datetime) -> bool:
+        if row.status not in ("queued", "running"):
+            return False
+        since = (
+            _aware(row.started_at)
+            if row.status == "running"
+            else _aware(row.created_at)
+        ) or now
+        limit = RUNNING_FOR if row.status == "running" else QUEUED_FOR
+        if now - since <= limit:
+            return False
+        logger.warning("trust_audit_run_abandoned", extra={"was": row.status})
+        row.status, row.error, row.finished_at = "failed", "abandoned", now
+        return True
 
     def runs(self, tenant_id: str, audit_id: str) -> list[dict]:
         with tenant_session(tenant_id, self.url) as s:
@@ -205,22 +228,7 @@ class TrustAuditStore:
             )
             blocking = None
             for row in s.scalars(q):
-                since = (
-                    _aware(row.started_at)
-                    if row.status == "running"
-                    else _aware(row.created_at)
-                ) or now
-                limit = RUNNING_FOR if row.status == "running" else QUEUED_FOR
-                if now - since > limit:
-                    logger.warning(
-                        "trust_audit_run_abandoned", extra={"was": row.status}
-                    )
-                    row.status, row.error, row.finished_at = (
-                        "failed",
-                        "abandoned",
-                        now,
-                    )
-                else:
+                if not self._abandon_if_stale(row, now):
                     blocking = _run_dict(row)
             s.flush()
             return blocking
