@@ -8,7 +8,7 @@ import pytest
 from invoice_processing.db import models
 from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.ports import RunContext
-from invoice_processing.trust.audit import ledger, sampling
+from invoice_processing.trust.audit import ledger, render, report, sampling
 from invoice_processing.trust.graph.store import GraphStore
 
 # -- ledger + fee -------------------------------------------------------------
@@ -287,3 +287,174 @@ def test_precision_counts_only_validated_verdicts():
         "false": 0,
         "precision": None,
     }
+
+
+# -- report -------------------------------------------------------------------
+
+
+def _scoped(fid, node, vendor, **kw):
+    f = _finding(fid, node, **kw)
+    f["vendor"] = vendor
+    return f
+
+
+def test_assemble_reconciles_with_the_ledger_and_groups(graph_db):
+    acme = {"node": graph_db["v1"], "name": "Acme Steel"}
+    globex = {"node": graph_db["v2"], "name": "<Globex>"}
+    scope = [
+        _scoped("f1", graph_db["i1"], acme, impact="100", status="recovered"),
+        _scoped(
+            "f2",
+            graph_db["i2"],
+            globex,
+            impact="50",
+            status="accepted",
+            type="PAY-BEC",
+            details={"hold": True},
+        ),
+        _scoped(
+            "f3",
+            graph_db["i3"],
+            acme,
+            impact="30",
+            status="detected",
+            type="PAY-BEC",
+            details={"hold": True},
+        ),
+        _scoped(
+            "f4",
+            graph_db["i1"],
+            None,
+            impact="7",
+            status="rejected",
+            type="GST-ITC-RISK",
+        ),
+        _scoped(
+            "f5",
+            graph_db["i1"],
+            acme,
+            impact="9",
+            status="triaged",
+            type="GST-ITC-RISK",
+        ),
+    ]
+    events = [
+        _event("f1", "claimed", "100.0000"),
+        _event("f1", "recovered", "90.0000", actor="cfo@x.test"),
+        _event("f2", "prevented", "50.0000", type="PAY-BEC"),
+        _event("zz", "recovered", "1000"),
+    ]
+    out = report.assemble(
+        _audit(),
+        scope,
+        events,
+        graph=graph_db["graph"],
+        run=None,
+        now=AT,
+        tenant_id=T,
+    )
+    assert out["report_version"] == 1 and out["generated_at"] == AT.isoformat()
+    assert out["summary"] == {
+        "findings": 5,
+        "detected_impact": "196.00",
+        "accepted_impact": "150.00",
+        "recovered": "90.00",
+        "prevented": "50.00",
+        "written_off": "0.00",
+        "at_risk_holds": "30.00",
+        "currency": "INR",
+    }
+    assert out["ledger"]["totals"]["recovered"] == "90.00"
+    assert out["ledger"]["fee"]["due"] == "27.50"  # 90*25% + 50*10%
+    by_type = {r["type"]: r for r in out["by_type"]}
+    assert by_type["PAY-BEC"] == {
+        "type": "PAY-BEC",
+        "engine": "payment",
+        "count": 2,
+        "impact": "80.00",
+        "recovered": "0.00",
+        "prevented": "50.00",
+    }
+    by_vendor = {r["vendor_node"]: r for r in out["by_vendor"]}
+    assert by_vendor[graph_db["v1"]]["recovered"] == "90.00"
+    assert (
+        by_vendor[graph_db["v1"]]["count"] == 3
+        and by_vendor[""]["vendor"] is None
+    )
+    assert (
+        out["itc_exposure"]["count"] == 2
+        and out["itc_exposure"]["impact"] == "16.00"
+    )
+    assert [p["engine"] for p in out["prevention"]] == [
+        "leakage",
+        "payment",
+        "provenance",
+        "gst_itc",
+    ]
+    pay = out["prevention"][1]
+    assert pay["count"] == 2 and pay["impact"] == "80.00"
+    assert pay["mode_suggested"] == "enforcing" and pay["mode_now"] == "off"
+    assert "payment.bec_hold_signals" in pay["thresholds_hint"]
+    assert "GST-ITC-RISK" in out["prevention"][3]["finding_types"]
+
+
+def test_assemble_top_recoveries_are_capped_ordered_and_cited(graph_db):
+    acme = {"node": graph_db["v1"], "name": "Acme Steel"}
+    scope = [
+        _scoped(f"f{i}", graph_db["i1"], acme, impact=str(i)) for i in range(25)
+    ] + [
+        _scoped(
+            "gone", graph_db["i1"], acme, impact="999", status="written_off"
+        )
+    ]
+    out = report.assemble(
+        _audit(),
+        scope,
+        [],
+        graph=graph_db["graph"],
+        run=None,
+        now=AT,
+        tenant_id=T,
+    )
+    top = out["top_recoveries"]
+    assert len(top) == 20 and [t["id"] for t in top][:3] == [
+        "f24",
+        "f23",
+        "f22",
+    ]
+    assert top[0]["vendor"] == "Acme Steel" and top[0]["status"] == "detected"
+    [cite] = top[0]["citations"]
+    assert cite["kind"] == "invoice" and cite["excerpt"] == "inv"
+    assert cite["source"] == {
+        "document_url": "/api/invoices/c1/document",
+        "page": None,
+    }
+
+
+def test_render_escapes_and_prints_every_section(graph_db):
+    globex = {"node": graph_db["v2"], "name": "<Globex & Co>"}
+    scope = [
+        _scoped("f1", graph_db["i2"], globex, impact="5", summary="<b>x</b>")
+    ]
+    scope[0]["summary"] = "<script>alert(1)</script>"
+    out = report.assemble(
+        _audit(name="<FY26>"),
+        scope,
+        [],
+        graph=graph_db["graph"],
+        run=None,
+        now=AT,
+        tenant_id=T,
+    )
+    html = render.report_html(out)
+    assert "<script>" not in html and "&lt;Globex &amp; Co&gt;" in html
+    for title in (
+        "Executive summary",
+        "By type",
+        "By vendor",
+        "Top recoveries",
+        "Prevention",
+        "Recovery ledger",
+    ):
+        assert title in html
+    assert "f1" not in html  # no ids on the printed page
