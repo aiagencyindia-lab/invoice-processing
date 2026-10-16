@@ -58,6 +58,7 @@ REMATCH_ATTEMPTS = "rematch_attempts"
 # v2 trust layer: graph projection after an import, evaluation after a job.
 TRUST_GRAPH_SYNC = "trust.graph.sync"
 TRUST_EVALUATE = "trust.evaluate"
+TRUST_AUDIT_RUN = "trust.audit.run"
 TRUST_ATTEMPTS = "trust_attempts"
 
 
@@ -874,6 +875,7 @@ class Worker:
             REMATCH: self._handle_rematch,
             TRUST_GRAPH_SYNC: self._handle_trust_sync,
             TRUST_EVALUATE: self._handle_trust_evaluate,
+            TRUST_AUDIT_RUN: self._handle_trust_audit_run,
         }
 
     # -- one message -------------------------------------------------------
@@ -1197,6 +1199,47 @@ class Worker:
             done="trust-evaluated",
         )
 
+    def _handle_trust_audit_run(self, message: Message) -> str:
+        """A Trust Audit batch run (Wave 2): the engines over the whole
+        tenant, with progress written to the run row by the audit package."""
+        tenant_id = str(message.payload.get("tenant_id") or "")
+        run_id = str(message.payload.get("run_id") or "")
+        if not tenant_id or not run_id:
+            self._dead_letter(
+                message,
+                "Audit run message is missing tenant_id or run_id",
+                event="trust_dead_lettered",
+            )
+            return "dead-lettered:malformed"
+
+        def run():
+            from ..api import service  # noqa: PLC0415
+            from ..trust.graph.links import LinkStore  # noqa: PLC0415
+
+            try:
+                from ..trust.audit.batch import run_batch  # noqa: PLC0415
+            except ImportError:
+                raise _NoDatabase(
+                    "Audit runs need the Wave 2 audit package."
+                ) from None
+            graph = service.get_graph_store()
+            if graph is None:
+                raise _NoDatabase("Audit runs need a database.")
+            run_batch(
+                self._trust_context(message, run_id),
+                run_id,
+                graph=graph,
+                links=LinkStore(),
+            )
+
+        return self._run_claimless(
+            message,
+            key=f"audit:{run_id}",
+            fn=run,
+            event="trust_dead_lettered",
+            done="trust-audited",
+        )
+
     def run_once(self, max_messages: int = 10) -> list[str]:
         return [
             self.handle(message) for message in self.queue.pull(max_messages)
@@ -1434,7 +1477,7 @@ def _dead_letter_event(message: Message) -> str:
     kind = message.payload.get("type")
     if kind == REMATCH:
         return "rematch_dead_lettered"
-    if kind in (TRUST_GRAPH_SYNC, TRUST_EVALUATE):
+    if kind in (TRUST_GRAPH_SYNC, TRUST_EVALUATE, TRUST_AUDIT_RUN):
         return "trust_dead_lettered"
     return "document_dead_lettered"
 
@@ -1460,6 +1503,20 @@ def enqueue_trust_evaluate(
             "type": TRUST_EVALUATE,
             "tenant_id": tenant_id,
             "document_id": document_id,
+            "request_id": request_id,
+        },
+        tenant_id=tenant_id,
+    )
+
+
+def enqueue_trust_audit_run(
+    queue: Queue, tenant_id: str, run_id: str, request_id: str = ""
+) -> str:
+    return queue.publish(
+        {
+            "type": TRUST_AUDIT_RUN,
+            "tenant_id": tenant_id,
+            "run_id": run_id,
             "request_id": request_id,
         },
         tenant_id=tenant_id,

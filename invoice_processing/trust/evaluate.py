@@ -206,7 +206,12 @@ def evaluate(
     decider=None,
     blobs=None,
     now: datetime | None = None,
+    on_progress: Callable[[dict], None] | None = None,
 ) -> dict:
+    """Run every engine whose mode is not off for one document, or for the
+    whole tenant when `document_id` is None. `on_progress` is called after
+    each engine with {engine, done, total, findings, report}; a batch run
+    records it so a person can watch the audit advance."""
     from .. import tenant_settings  # noqa: PLC0415 - avoids an import cycle
 
     document = None
@@ -256,6 +261,23 @@ def evaluate(
     )
 
     report: dict = {}
+    total = sum(1 for name in ENGINES if modes.get(name, "off") != "off")
+    found = 0
+
+    def progress(name: str) -> None:
+        if on_progress is None:
+            return
+        done = sum(1 for n, r in report.items() if r != "off")
+        on_progress(
+            {
+                "engine": name,
+                "done": done,
+                "total": total,
+                "findings": found,
+                "report": report[name],
+            }
+        )
+
     for name in ENGINES:
         mode = modes.get(name, "off")
         if mode == "off":
@@ -267,6 +289,7 @@ def evaluate(
             if run is None:
                 logger.info("trust_engine_missing", extra={"engine": name})
                 report[name] = "missing"
+                progress(name)
                 continue
             specs = list(run(ectx) or [])
         except Exception as exc:
@@ -283,6 +306,7 @@ def evaluate(
                 base.findings.upsert(
                     ctx, _engine_failed(name, invoice_node, f"{name}-?")
                 )
+            progress(name)
             continue
         for spec in specs:
             base.findings.upsert(
@@ -300,6 +324,8 @@ def evaluate(
         if _owns_holds(name):
             _release_cleared(ectx, name, {spec.dedupe_key for spec in specs})
         report[name] = {"mode": mode, "findings": len(specs)}
+        found += len(specs)
+        progress(name)
     if document_id is None or invoice_node is not None:
         # A contract's run checks no invoice; a batch run checks them all.
         _record_checked(

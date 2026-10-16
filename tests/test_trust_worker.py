@@ -1,5 +1,8 @@
 """Graph sync and trust evaluation ride the existing queue, and never run twice by mistake."""
 
+import sys
+import types
+
 import pytest
 
 from invoice_processing.api import service
@@ -8,10 +11,12 @@ from invoice_processing.db.session import create_all, get_engine, tenant_session
 from invoice_processing.trust.graph.store import GraphStore
 from invoice_processing.worker.queue import LocalQueue
 from invoice_processing.worker.runner import (
+    TRUST_AUDIT_RUN,
     TRUST_EVALUATE,
     TRUST_GRAPH_SYNC,
     ClaimStore,
     Worker,
+    enqueue_trust_audit_run,
     enqueue_trust_evaluate,
     enqueue_trust_graph_sync,
 )
@@ -96,3 +101,62 @@ def test_sync_without_a_database_is_dead_lettered(env, monkeypatch):
     monkeypatch.setattr(service, "_database_configured", lambda: False)
     enqueue_trust_graph_sync(queue, T, "req")
     assert worker.run_once() == ["dead-lettered:no-database"]
+
+
+def _audit_package(monkeypatch, calls):
+    """The audit branch's batch module, stubbed: the scaffold ships without it."""
+    mod = types.ModuleType("invoice_processing.trust.audit.batch")
+
+    def run_batch(ctx, run_id, *, graph, links):
+        calls.append((ctx.tenant_id, run_id, ctx.actor))
+        return {"status": "done"}
+
+    mod.run_batch = run_batch
+    monkeypatch.setitem(
+        sys.modules, "invoice_processing.trust.audit.batch", mod
+    )
+
+
+def test_audit_run_job_calls_the_batch_runner_for_its_run(env, monkeypatch):
+    queue, worker, _ = env
+    calls = []
+    _audit_package(monkeypatch, calls)
+    enqueue_trust_audit_run(queue, T, "run-1", "req-1")
+    assert worker.run_once() == ["trust-audited"]
+    assert calls == [(T, "run-1", "worker")]
+    assert worker.run_once() == []
+
+
+def test_audit_run_without_the_audit_package_is_dead_lettered(env, monkeypatch):
+    queue, worker, _ = env
+    monkeypatch.setitem(
+        sys.modules, "invoice_processing.trust.audit.batch", None
+    )
+    enqueue_trust_audit_run(queue, T, "run-2")
+    assert worker.run_once() == ["dead-lettered:no-database"]
+    [dead] = queue.dead_letters()
+    assert "audit package" in str(dead)
+
+
+def test_audit_run_message_without_a_run_id_is_malformed(env):
+    queue, worker, _ = env
+    queue.publish({"type": TRUST_AUDIT_RUN, "tenant_id": T})
+    assert worker.run_once() == ["dead-lettered:malformed"]
+
+
+def test_a_failing_batch_run_is_retried_then_dead_lettered(env, monkeypatch):
+    queue, worker, _ = env
+    mod = types.ModuleType("invoice_processing.trust.audit.batch")
+
+    def run_batch(ctx, run_id, *, graph, links):
+        raise RuntimeError("db gone")
+
+    mod.run_batch = run_batch
+    monkeypatch.setitem(
+        sys.modules, "invoice_processing.trust.audit.batch", mod
+    )
+    enqueue_trust_audit_run(queue, T, "run-3")
+    outcomes = [worker.run_once() for _ in range(worker.max_attempts)]
+    assert outcomes[0] == ["retry"] and outcomes[-1] == [
+        "dead-lettered:exhausted"
+    ]
