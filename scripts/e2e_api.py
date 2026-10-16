@@ -198,7 +198,7 @@ def seed_finding() -> None:
                 "description": "Hex bolts",
                 "quantity": "250",
                 "unit_price": "55.00",
-                "rate": "50.00",
+                "contract_rate": "50.00",
                 "needs_review": True,
             },
             citations=(Citation(node, "Line 1: 250 x INR 55.00"),),
