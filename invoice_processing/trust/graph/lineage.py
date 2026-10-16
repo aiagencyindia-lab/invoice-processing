@@ -62,15 +62,36 @@ def lineage(
             tenant_id, b
         )
 
-    result = [
-        Link(
-            "contract",
-            "no_evidence",
-            None,
-            "Contract clauses arrive in Wave 1.",
-        )
-    ]
     vendors = out("issued_by", node_id)
+    contracts = out("governed_by", node_id)
+    if not contracts:
+        result = [
+            Link(
+                "contract",
+                "no_evidence",
+                None,
+                "No contract governs this invoice.",
+            )
+        ]
+    else:
+        contract_vendors = out("governs", contracts[0])
+        if (
+            vendors
+            and contract_vendors
+            and not same(vendors[0], contract_vendors[0])
+        ):
+            result = [
+                Link(
+                    "contract",
+                    "contradicts",
+                    contracts[0],
+                    "The governing contract is with a different vendor.",
+                )
+            ]
+        else:
+            result = [
+                Link("contract", "found", contracts[0], "Governed by contract.")
+            ]
     pos = out("references", node_id)
     po_id = pos[0] if pos else None
     if po_id is None:
@@ -159,7 +180,7 @@ def lineage(
             "gl",
             "no_evidence",
             None,
-            "GL postings are not projected in Wave 0.",
+            "GL postings are not projected yet.",
         )
     )
     return result
