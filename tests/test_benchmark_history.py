@@ -19,6 +19,7 @@ def wave0_only(monkeypatch):
     """The Wave 0 baseline, without whatever engine fault families are
     installed: those add rows, faults and gates of their own."""
     monkeypatch.setattr(faults, "modules", lambda: [])
+    monkeypatch.setattr(history_eval, "_explain_module", lambda: None)
 
 
 def test_generator_is_deterministic_for_a_seed(tmp_path, wave0_only):
@@ -225,6 +226,7 @@ def test_a_wrong_impact_fails_the_impact_gate(
 
 def test_type_without_a_module_is_not_gated(tmp_path, scratch_db, monkeypatch):
     monkeypatch.setattr(faults, "modules", lambda: [])
+    monkeypatch.setattr(history_eval, "_explain_module", lambda: None)
     data = tmp_path / "d"
     generate.generate(7, data)
     out = history_eval.run(scratch_db("bench7.db"), data)
