@@ -6,9 +6,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from ...api.trust_routes import source_of
 from .. import thresholds
 from ..findings import model as fm
+from ..graph.locate import source_of
 from . import ledger
 
 TOP = 20

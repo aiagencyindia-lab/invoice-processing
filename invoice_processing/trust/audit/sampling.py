@@ -34,7 +34,7 @@ def vendor_map(graph, tenant_id: str) -> dict[str, str]:
 
 
 def vendors(graph, tenant_id: str) -> dict[str, dict]:
-    """transaction node -> {node, name} as `trust_routes.vendor_of` shapes it."""
+    """transaction node -> {node, name} as `graph.locate.vendor_of` shapes it."""
     names = {
         n["id"]: n["attrs"].get("name")
         for n in graph.nodes(tenant_id, kind="vendor")

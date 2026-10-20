@@ -527,6 +527,8 @@ export type Vendor = {
   bank_verified_at: string | null;
   bank_verified_by: string | null;
   pending_change_id: string | null;
+  /** The vendor's Evidence Graph node, once the graph has synced it. */
+  node: string | null;
 };
 export type VendorList = { vendors: Vendor[]; count: number; source: string };
 export type BankChange = {
@@ -1039,7 +1041,7 @@ export type EvidencePack = {
     decided_at: string | null;
     events: TrustFindingEvent[];
   };
-  ratings: { rater: string; correct: boolean; useful: boolean; note: string | null; at: string }[];
+  ratings: { rater: string; correct: boolean; useful: boolean; note: string | null; at: string | null }[];
   sha256: string;
 };
 export type RatingSummary = {

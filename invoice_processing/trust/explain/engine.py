@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..graph.locate import source_of, vendor_of
 from .counterfactual import counterfactual
 from .model import EXPLAIN_VERSION, Evidence, Explanation
 from .templates import TEMPLATES, Context, generic
@@ -55,8 +56,6 @@ def _confidence_note(finding: dict) -> str:
 def build(tenant_id: str, finding: dict, *, graph, links=None) -> Explanation:
     """`links` is accepted for parity with the other engines; the
     explanation reads only what the finding cited."""
-    from ...api.trust_routes import source_of, vendor_of  # noqa: PLC0415
-
     txn = finding["transaction_node"]
     cites = finding.get("citations") or []
     ids = list(dict.fromkeys([c["node_id"] for c in cites] + [txn]))
