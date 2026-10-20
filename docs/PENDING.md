@@ -111,13 +111,14 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         that can hold are); decide the policy for insight findings.
   - [ ] A contract or invoice node re-version closes its `part_of` /
         `evidences` edges until the next evaluation of that document.
-- [ ] **Wave 2 (Surfaces)** — program plan
+- [x] **Wave 2 (Surfaces)** — program plan
       `docs/superpowers/plans/2026-10-16-v2-wave2-program.md`; specs
       `docs/superpowers/specs/2026-10-16-v2-wave2-*.md`.
   - [x] Scaffold (`v2/w2-scaffold`): Wave 2 tables, findings/lineage/clause
         routes, `trust.audit.run` job, frontend shell, benchmark hook.
-  - [ ] Trust Audit backend (`v2/w2-audit`) · [ ] Why engine (`v2/w2-explain`)
-        · [ ] Findings + workspace frontend (`v2/w2-frontend`).
+  - [x] Trust Audit backend (`v2/w2-audit`, #62) · [x] Why engine
+        (`v2/w2-explain`, #63) · [x] Findings + workspace frontend
+        (`v2/w2-frontend`, #64). Merged 2026-10-16; `main` d770be9.
   - [ ] Deferred from the PRD's Wave 2 row: partner mode (v1 has no partner
         console), mobile surface, Slack/WhatsApp/email notifications, trust
         strip (Wave 3's score), `/v2` public API + webhooks (Wave 3),
