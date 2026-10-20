@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { api, ApiError, can, type Me, type TrustAudit, type TrustFindingSummary } from "@/lib/api";
+import { api, ApiError, can, type Me, type TrustAudit, type TrustFindingSummary, type VendorList } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 
 const EMPTY = {
@@ -35,8 +35,13 @@ export default function TrustAuditPage() {
   // The audit routes land on the v2/w2-audit branch; until then this is a 404
   // the page shows as text, with the form still usable once they exist.
   const { data: audits, error } = usePoll<TrustAudit[]>("/api/trust/audits");
-  // The vendor -> graph node mapping the audit scopes by.
+  // The vendor -> graph node mapping the audit scopes by: every vendor the
+  // graph knows, with the finding count where there is one.
   const { data: summary } = usePoll<TrustFindingSummary>("/api/trust/findings/summary");
+  const { data: master } = usePoll<VendorList>("/api/vendors");
+  const vendors = new Map<string, { node: string; name: string | null; count: number }>();
+  for (const v of master?.vendors ?? []) if (v.node) vendors.set(v.node, { node: v.node, name: v.name, count: 0 });
+  for (const v of summary?.vendors ?? []) vendors.set(v.node, { ...v, name: v.name ?? vendors.get(v.node)?.name ?? null });
   const [form, setForm] = useState(EMPTY);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -141,7 +146,7 @@ export default function TrustAuditPage() {
           </div>
           <fieldset className="stack" style={{ gap: 4, border: 0, padding: 0, margin: 0 }}>
             <legend className="eyebrow">Vendors (none for all)</legend>
-            {(summary?.vendors ?? []).map((vendor) => (
+            {[...vendors.values()].map((vendor) => (
               <label key={vendor.node} className="row" style={{ gap: 4, alignItems: "center", fontSize: 12.5 }}>
                 <input
                   type="checkbox"

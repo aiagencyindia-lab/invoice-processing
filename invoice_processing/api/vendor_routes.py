@@ -149,18 +149,34 @@ def list_vendors(
         for r in records:
             v = vendor_master.Vendor.from_dict(r)
             vendors.append(
-                vendor_out(
-                    {
-                        "id": "",
-                        "name": v.name,
-                        "tax_id": v.tax_id,
-                        "kind": v.kind,
-                        "email_domain": v.email_domain,
-                    }
-                )
+                {
+                    **vendor_out(
+                        {
+                            "id": "",
+                            "name": v.name,
+                            "tax_id": v.tax_id,
+                            "kind": v.kind,
+                            "email_domain": v.email_domain,
+                        }
+                    ),
+                    "node": None,
+                }
             )
         return {"vendors": vendors, "count": len(vendors), "source": path.name}
-    vendors = [vendor_out(v) for v in repo.list(principal.tenant_id)]
+    rows = repo.list(principal.tenant_id)
+    # The Trust Audit scopes by vendor graph node; carry it so a person picks
+    # vendors by name instead of pasting node ids.
+    from . import service  # noqa: PLC0415
+
+    graph = service.get_graph_store()
+    nodes = (
+        graph.nodes_by_ref(
+            principal.tenant_id, "vendors", [v["id"] for v in rows]
+        )
+        if graph
+        else {}
+    )
+    vendors = [{**vendor_out(v), "node": nodes.get(v["id"])} for v in rows]
     return {"vendors": vendors, "count": len(vendors), "source": "database"}
 
 
