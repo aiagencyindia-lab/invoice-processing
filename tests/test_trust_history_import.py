@@ -6,9 +6,10 @@ from decimal import Decimal
 
 import openpyxl
 import pytest
+from fresh_schema import fresh_schema
 
 from invoice_processing.db import models
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust.decide import FakeDecider
 from invoice_processing.trust.history import mapping, readers
@@ -37,8 +38,7 @@ MAP = {
 @pytest.fixture
 def importer(scratch_db):
     url = scratch_db("history.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(T, url) as s:
         s.add(models.Tenant(id=T, name="Acme", slug="acme", status="active"))
     return HistoryImporter(url)

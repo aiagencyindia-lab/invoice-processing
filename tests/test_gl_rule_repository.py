@@ -2,11 +2,12 @@
 reads them, and they are separate containers."""
 
 import pytest
+from fresh_schema import fresh_schema
 from sqlalchemy import inspect
 
 from invoice_processing.db import models
 from invoice_processing.db.repositories import PgGlRuleRepository
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import create_all, tenant_session
 
 T = "tenant-a"
 
@@ -14,8 +15,7 @@ T = "tenant-a"
 @pytest.fixture
 def repo(scratch_db):
     url = scratch_db("gl_rules.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     for tenant_id, slug in ((T, "a"), ("tenant-b", "b")):
         with tenant_session(tenant_id, url) as session:
             session.add(models.Tenant(id=tenant_id, name=slug, slug=slug))

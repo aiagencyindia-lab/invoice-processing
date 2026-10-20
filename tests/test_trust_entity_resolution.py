@@ -1,9 +1,10 @@
 """Two records are one vendor when the evidence says so; a human sees the doubtful ones."""
 
 import pytest
+from fresh_schema import fresh_schema
 
 from invoice_processing.db import models
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust.decide import FakeDecider
 from invoice_processing.trust.graph import resolve
@@ -53,8 +54,7 @@ def test_conflicting_gstins_never_link_even_with_same_name():
 @pytest.fixture
 def env(scratch_db):
     url = scratch_db("links.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(T, url) as s:
         s.add(models.Tenant(id=T, name="Acme", slug="acme", status="active"))
     return GraphStore(url), LinkStore(url)

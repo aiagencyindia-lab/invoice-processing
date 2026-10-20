@@ -24,6 +24,7 @@ from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 from golden import GOLDEN_CASES
 from sqlalchemy.orm import Session
 
@@ -61,7 +62,6 @@ from invoice_processing.db.repositories import (
     PgVendorRepository,
 )
 from invoice_processing.db.session import (
-    create_all,
     get_engine,
 )
 from invoice_processing.db.session import tenant_session as db_session
@@ -286,8 +286,7 @@ class TestWritesDoNotCross:
     @pytest.fixture
     def vendor_db(self, scratch_db, monkeypatch):
         url = scratch_db("iso-vendors.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tid, url) as session:
                 session.add(
@@ -321,8 +320,7 @@ class TestWritesDoNotCross:
     @pytest.fixture
     def approvals_db(self, scratch_db, monkeypatch):
         url = scratch_db("iso-approvals.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tid, url) as session:
                 session.add(
@@ -406,8 +404,7 @@ class TestWritesDoNotCross:
     @pytest.fixture
     def gl_db(self, scratch_db, monkeypatch):
         url = scratch_db("iso-gl.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tid, url) as session:
                 session.add(
@@ -451,8 +448,7 @@ class TestWritesDoNotCross:
     @pytest.fixture
     def po_db(self, scratch_db, monkeypatch):
         url = scratch_db("iso-po.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tid, url) as session:
                 session.add(
@@ -972,9 +968,7 @@ class TestSheetIsolation:
         url = scratch_db("sheet.db")
         monkeypatch.setenv("DATABASE_URL", url)
         monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
-        engine = get_engine(url)
-        Base.metadata.drop_all(engine)
-        create_all(url)
+        fresh_schema(url)
 
         approved = {
             "workflow": {
@@ -1205,9 +1199,7 @@ class TestRuleIsolation:
         url = scratch_db("rules.db")
         monkeypatch.setenv("DATABASE_URL", url)
         monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
-        engine = get_engine(url)
-        Base.metadata.drop_all(engine)
-        create_all(url)
+        fresh_schema(url)
         for tenant_id, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tenant_id, url) as session:
                 session.add(Tenant(id=tenant_id, slug=slug, name=slug))
@@ -1286,8 +1278,7 @@ class TestTrustHistoryIsolation:
         )
 
         url = scratch_db("iso-history.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tid, url) as session:
                 session.add(
@@ -1329,8 +1320,7 @@ class TestTrustContractIsolation:
         from invoice_processing.trust.graph.store import GraphStore  # noqa: PLC0415
 
         url = scratch_db("iso-contracts.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tid, url) as session:
                 session.add(
@@ -1391,8 +1381,7 @@ class TestTrustFindingsIsolation:
         from invoice_processing.trust.graph.store import GraphStore  # noqa: PLC0415
 
         url = scratch_db("iso-findings.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tid, url) as session:
                 session.add(

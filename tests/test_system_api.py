@@ -15,6 +15,7 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 
 from invoice_processing.adapters import (
     FsCaseRepository,
@@ -683,13 +684,11 @@ class TestAudit:
             PgAuditSink,
         )
         from invoice_processing.db.session import (  # noqa: PLC0415
-            create_all,
             tenant_session,
         )
 
         url = scratch_db("audit_api.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         with tenant_session(TENANT, url) as s:
             s.add(Tenant(id=TENANT, slug="acme", name="Acme"))
         t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)

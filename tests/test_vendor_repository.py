@@ -4,6 +4,7 @@ invisible to the other. Bank details and the dual-control queue that governs
 them need a record both can read."""
 
 import pytest
+from fresh_schema import fresh_schema
 from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
@@ -15,7 +16,7 @@ from invoice_processing.db.repositories import (
     PgVendorRepository,
     SelfApproval,
 )
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import create_all, tenant_session
 
 
 class TestSchema:
@@ -67,8 +68,7 @@ BANK = {
 @pytest.fixture
 def repo(scratch_db):
     url = scratch_db("vendors.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     for tenant_id, slug in ((T, "a"), ("tenant-b", "b")):
         with tenant_session(tenant_id, url) as session:
             session.add(models.Tenant(id=tenant_id, name=slug, slug=slug))

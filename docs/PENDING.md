@@ -127,7 +127,6 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   - [ ] Engagement scope is a filter, not a FK: overlapping engagements
         count a recovery twice. Add `audit_id` to finding events if it bites.
   - [ ] `categories` scoping is keyword-weak (no category master in v1).
-  - [ ] CI's Postgres job is ~30 min and growing (every `tests/test_trust_*.py` file reruns on Postgres with a fresh schema per test); the cap is 45 min. Share one schema per module, or split the job, before it passes 40.
 - [ ] Waves 3–4 per the spec §2.
 - [ ] Remove the Postgres TCP proxy before the trust routes go live (it was
       added for bootstrap only).

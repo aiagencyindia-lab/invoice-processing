@@ -7,6 +7,7 @@ import shutil
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 from golden import GOLDEN_CASES
 
 from invoice_processing import master_files, paths, vendor_master
@@ -19,8 +20,6 @@ from invoice_processing.db.repositories import (
     entity_type_for,
 )
 from invoice_processing.db.session import (
-    create_all,
-    get_engine,
     tenant_session,
 )
 from invoice_processing.ports import RunContext
@@ -57,8 +56,7 @@ class FakeVerifier:
 def env(tmp_path, monkeypatch, scratch_db):
     url = scratch_db("vendors.db")
     # CI reruns these on a shared Postgres, so start from an empty schema.
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(
             models.Tenant(id=TENANT, name="Acme", slug="acme", status="active")

@@ -8,9 +8,10 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from fresh_schema import fresh_schema
 
 from invoice_processing.db import models
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust import evaluate as ev
 from invoice_processing.trust import leakage
@@ -32,8 +33,7 @@ AT = datetime(2025, 1, 1, tzinfo=timezone.utc)
 @pytest.fixture
 def env(scratch_db):
     url = scratch_db("leakage.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(T, url) as s:
         s.add(models.Tenant(id=T, name="Leak", slug="leak", status="active"))
     return url, GraphStore(url), LinkStore(url)

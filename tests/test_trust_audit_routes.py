@@ -6,13 +6,14 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 from test_tenant_isolation_api import ACME, GLOBEX, FakeVerifier
 
 from invoice_processing.adapters import JsonlAuditSink
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
 from invoice_processing.db import models
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.tenant_settings import JsonTenantSettings
 from invoice_processing.trust.findings.model import Citation, FindingSpec
@@ -52,8 +53,7 @@ BODY = {
 @pytest.fixture
 def env(tmp_path, monkeypatch, scratch_db):
     url = scratch_db("audit_routes.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
         with tenant_session(tid, url) as s:
             s.add(models.Tenant(id=tid, name=slug, slug=slug, status="active"))
