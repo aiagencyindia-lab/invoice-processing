@@ -5,16 +5,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from fresh_schema import fresh_schema
 from sqlalchemy.exc import DBAPIError
 
 from invoice_processing.db import repositories
-from invoice_processing.db.models import AuditEvent, Base, Tenant, User
+from invoice_processing.db.models import AuditEvent, Tenant, User
 from invoice_processing.db.repositories import (
     DomainTaken,
     PgSsoDomainRepository,
     PgUserDirectory,
 )
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 
 ACME = "tenant-acme"
@@ -25,9 +26,7 @@ NOW = datetime(2026, 10, 12, 9, 0, tzinfo=timezone.utc)
 @pytest.fixture
 def db(scratch_db):
     url = scratch_db("sso.db")
-    engine = get_engine(url)
-    Base.metadata.drop_all(engine)
-    create_all(url)
+    fresh_schema(url)
     for tenant_id, slug, name in (
         (ACME, "acme", "Acme Pty Ltd"),
         (GLOBEX, "globex", "Globex Inc"),

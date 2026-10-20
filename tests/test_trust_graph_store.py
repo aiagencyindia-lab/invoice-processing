@@ -3,9 +3,10 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fresh_schema import fresh_schema
 
 from invoice_processing.db import models
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
@@ -19,8 +20,7 @@ CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="t")
 @pytest.fixture
 def store(scratch_db):
     url = scratch_db("graph.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(T, url) as s:
         s.add(models.Tenant(id=T, name="Acme", slug="acme", status="active"))
     return GraphStore(url)

@@ -443,10 +443,10 @@ def test_pack_html_escapes_script():
 
 # -- ratings --------------------------------------------------------------------
 
+from fresh_schema import fresh_schema  # noqa: E402
+
 from invoice_processing.db import models  # noqa: E402
 from invoice_processing.db.session import (  # noqa: E402
-    create_all,
-    get_engine,
     tenant_session,
 )
 from invoice_processing.ports import RunContext  # noqa: E402
@@ -462,8 +462,7 @@ OTHER = "tenant-globex"
 @pytest.fixture
 def db(scratch_db):
     url = scratch_db("explain.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     for tid, slug in ((T, "acme"), (OTHER, "globex")):
         with tenant_session(tid, url) as s:
             s.add(models.Tenant(id=tid, name=slug, slug=slug, status="active"))

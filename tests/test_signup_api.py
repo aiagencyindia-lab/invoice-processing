@@ -7,6 +7,7 @@ weigh most heavily on what it refuses.
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,9 +16,9 @@ from invoice_processing.adapters import JsonlAuditSink
 from invoice_processing.admin.provision import DryRunClaims, ProvisioningError
 from invoice_processing.api import auth, service, signup
 from invoice_processing.api.service import app
-from invoice_processing.db.models import AuditEvent, Base, Tenant, User
+from invoice_processing.db.models import AuditEvent, Tenant, User
 from invoice_processing.db.repositories import PgSsoDomainRepository
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import get_engine, tenant_session
 from tests.test_sso import FakeDirectory
 
 
@@ -50,9 +51,7 @@ def env(scratch_db, tmp_path, monkeypatch):
     monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
     monkeypatch.setenv("ALLOW_SELF_SIGNUP", "1")
     monkeypatch.delenv("AUTH_DISABLED", raising=False)
-    engine = get_engine(url)
-    Base.metadata.drop_all(engine)
-    create_all(url)
+    fresh_schema(url)
 
     monkeypatch.setattr(auth, "_verifier", FakeVerifier())
     monkeypatch.setattr(

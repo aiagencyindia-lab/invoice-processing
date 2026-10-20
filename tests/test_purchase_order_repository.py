@@ -3,17 +3,17 @@
 from datetime import datetime, timezone
 
 import pytest
+from fresh_schema import fresh_schema
 from sqlalchemy import inspect
 
 from invoice_processing.db import models
 from invoice_processing.db.repositories import PgPurchaseOrderRepository
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import get_engine, tenant_session
 
 
 def test_tables_are_tenant_tables_and_build(scratch_db):
     url = scratch_db("po.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     names = ("purchase_orders", "po_lines", "goods_receipts", "grn_lines")
     assert set(names) <= set(models.TENANT_TABLES)
     assert all(inspect(get_engine(url)).has_table(n) for n in names)
@@ -22,8 +22,7 @@ def test_tables_are_tenant_tables_and_build(scratch_db):
 @pytest.fixture
 def repo(scratch_db):
     url = scratch_db("po_repo.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     for tenant_id in ("t1", "t2"):
         with tenant_session(tenant_id, url) as session:
             session.add(

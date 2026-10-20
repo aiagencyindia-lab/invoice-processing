@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 from golden import GOLDEN_CASES
 
 from invoice_processing import approval_flow
@@ -28,8 +29,6 @@ from invoice_processing.db.repositories import (
     PgUserDirectory,
 )
 from invoice_processing.db.session import (
-    create_all,
-    get_engine,
     tenant_session,
 )
 from invoice_processing.ports import RunContext
@@ -55,8 +54,7 @@ class FakeVerifier:
 @pytest.fixture
 def env(tmp_path, monkeypatch, scratch_db):
     url = scratch_db("approvals.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(
             models.Tenant(id=TENANT, name="Acme", slug="acme", status="active")

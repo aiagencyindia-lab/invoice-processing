@@ -22,6 +22,7 @@ import shutil
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 from golden import GOLDEN_CASES
 
 from invoice_processing import paths
@@ -40,8 +41,6 @@ from invoice_processing.connectors.xero import (
 from invoice_processing.db import models
 from invoice_processing.db.repositories import PgApprovalRepository
 from invoice_processing.db.session import (
-    create_all,
-    get_engine,
     tenant_session,
 )
 
@@ -501,8 +500,7 @@ class TestXeroCredentialsBelongToOneTenant:
 def test_completion_of_a_chain_still_exports(client, scratch_db, monkeypatch):
     """Export reads the workflow keys chain completion writes, nothing else."""
     url = scratch_db("chain.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(
             models.Tenant(id=TENANT, name="Acme", slug="acme", status="active")

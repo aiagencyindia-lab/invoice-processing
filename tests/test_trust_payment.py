@@ -7,11 +7,12 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from fresh_schema import fresh_schema
 
 from invoice_processing.adapters import LocalBlobStore
 from invoice_processing.api import service
 from invoice_processing.db import models
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust import evaluate as ev
 from invoice_processing.trust import gate, payment
@@ -75,8 +76,7 @@ INVOICE = {
 @pytest.fixture
 def world(scratch_db, tmp_path, monkeypatch):
     url = scratch_db("payment.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     monkeypatch.setattr(ev, "RUNNERS", {})
     return url, tmp_path / "blobs"
 

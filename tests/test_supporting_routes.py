@@ -6,6 +6,7 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 
 from invoice_processing.adapters import JsonlAuditSink
 from invoice_processing.api import auth, po_routes, service
@@ -18,7 +19,7 @@ from invoice_processing.db.repositories import (
     PgSupportingDocumentRepository,
     entity_type_for,
 )
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.worker.queue import LocalQueue
 
 TENANT = "tenant-acme"
@@ -117,8 +118,7 @@ def _client(token="clerk"):
 @pytest.fixture
 def env(tmp_path, monkeypatch, scratch_db):
     url = scratch_db("supporting_routes.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(
             models.Tenant(id=TENANT, name="Acme", slug="acme", status="active")

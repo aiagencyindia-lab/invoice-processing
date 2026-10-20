@@ -4,10 +4,11 @@ import sys
 import types
 
 import pytest
+from fresh_schema import fresh_schema
 
 from invoice_processing.api import service
 from invoice_processing.db import models
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.trust.graph.store import GraphStore
 from invoice_processing.worker.queue import LocalQueue
 from invoice_processing.worker.runner import (
@@ -27,8 +28,7 @@ T = "tenant-acme"
 @pytest.fixture
 def env(tmp_path, monkeypatch, scratch_db):
     url = scratch_db("trust_worker.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(T, url) as s:
         s.add(models.Tenant(id=T, name="Acme", slug="acme", status="active"))
         s.add(

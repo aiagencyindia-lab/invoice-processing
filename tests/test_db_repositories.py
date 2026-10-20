@@ -16,6 +16,7 @@ test_rls_policies.py.
 from datetime import datetime
 
 import pytest
+from fresh_schema import fresh_schema
 from sqlalchemy.exc import DatabaseError
 
 from invoice_processing.adapters import JsonDocumentRepository
@@ -44,7 +45,7 @@ from invoice_processing.db.repositories import (
     entity_type_for,
 )
 from invoice_processing.db.rls import enable_rls_statements
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import (
     AuditSink,
     CaseRepository,
@@ -63,9 +64,7 @@ GLOBEX = "tenant-globex"
 def db(scratch_db):
     """A fresh database with two tenants."""
     url = scratch_db("test.db")
-    engine = get_engine(url)
-    Base.metadata.drop_all(engine)
-    create_all(url)
+    fresh_schema(url)
     for tenant_id, slug in ((ACME, "acme"), (GLOBEX, "globex")):
         with tenant_session(tenant_id, url) as session:
             session.add(Tenant(id=tenant_id, slug=slug, name=slug.title()))

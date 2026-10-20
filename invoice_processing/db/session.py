@@ -124,7 +124,10 @@ def get_engine(url: str | None = None, **kwargs) -> Engine:
         return _engine
 
     target = url or database_url()
-    if _engine is None or str(_engine.url) != target:
+    # Compared against the string we built the engine from, never against
+    # str(engine.url): that masks the password, so on any Postgres URL it
+    # never matched and every call disposed the pool and reconnected.
+    if _engine is None or getattr(_engine, "_target", None) != target:
         if _engine is not None:
             # Release the old pool now, not at garbage collection: on Postgres
             # each switch otherwise holds connections until the server

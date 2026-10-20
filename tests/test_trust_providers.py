@@ -1,9 +1,10 @@
 """External answers are evidence; a provider outage is an evidence record too, never a pass."""
 
 import pytest
+from fresh_schema import fresh_schema
 
 from invoice_processing.db import models
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust.graph.store import GraphStore
 from invoice_processing.trust.providers import fakes
@@ -24,8 +25,7 @@ class Store:
 @pytest.fixture
 def registry(scratch_db):
     url = scratch_db("providers.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(T, url) as s:
         s.add(models.Tenant(id=T, name="Acme", slug="acme", status="active"))
     reg = Registry(GraphStore(url))

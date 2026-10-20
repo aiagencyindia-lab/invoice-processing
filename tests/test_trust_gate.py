@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
+from fresh_schema import fresh_schema
 
 from invoice_processing.api import service
 from invoice_processing.db import models
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust import gate
 from invoice_processing.trust.findings import model as finding_model
@@ -31,8 +32,7 @@ class Store:
 @pytest.fixture
 def env(scratch_db, monkeypatch):
     url = scratch_db("gate.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(T, url) as s:
         s.add(models.Tenant(id=T, name="Acme", slug="acme", status="active"))
         s.flush()

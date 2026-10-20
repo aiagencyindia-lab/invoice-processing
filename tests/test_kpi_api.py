@@ -7,11 +7,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 
 from invoice_processing.api import auth
 from invoice_processing.api.service import app
-from invoice_processing.db.models import Base, Invoice, Tenant
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.models import Invoice, Tenant
+from invoice_processing.db.session import tenant_session
 
 TENANT = "tenant-acme"
 CLAIMS = {
@@ -38,9 +39,7 @@ def db(scratch_db, monkeypatch):
     url = scratch_db("kpi-api.db")
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
-    engine = get_engine(url)
-    Base.metadata.drop_all(engine)
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(Tenant(id=TENANT, slug="acme", name="Acme"))
         session.flush()

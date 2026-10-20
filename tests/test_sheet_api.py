@@ -12,12 +12,12 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 from sqlalchemy import event
 
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import CSV_COLUMNS, LINE_COLUMNS, app
 from invoice_processing.db.models import (
-    Base,
     Correction,
     Document,
     Finding,
@@ -25,7 +25,7 @@ from invoice_processing.db.models import (
     Tenant,
 )
 from invoice_processing.db.repositories import SheetRepository, _as_number
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import get_engine, tenant_session
 from invoice_processing.sheet_columns import BY_KEY, CSV_EQUIVALENT
 
 TENANT = "tenant-acme"
@@ -82,9 +82,7 @@ def db(scratch_db, monkeypatch):
     url = scratch_db("sheet.db")
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
-    engine = get_engine(url)
-    Base.metadata.drop_all(engine)
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(Tenant(id=TENANT, slug="acme", name="Acme"))
     monkeypatch.delenv("AUTH_DISABLED", raising=False)
@@ -896,7 +894,10 @@ class TestThePageCostsAFixedNumberOfQueries:
         seen = []
 
         def record(conn, cursor, statement, params, context, executemany):
-            if statement.strip().lower().startswith("select"):
+            lowered = statement.strip().lower()
+            # Reads only: on Postgres each session opens with a SELECT that
+            # sets the RLS tenant, and that is scoping, not a row fetched.
+            if lowered.startswith("select") and "set_config" not in lowered:
                 seen.append(statement)
 
         event.listen(engine, "before_cursor_execute", record)

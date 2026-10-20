@@ -5,13 +5,14 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 
 from invoice_processing.adapters import JsonlAuditSink, LocalBlobStore
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
 from invoice_processing.db import models
 from invoice_processing.db.repositories import PgDocumentRepository
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust.findings import model as finding_model
 from invoice_processing.trust.findings.model import Citation, FindingSpec
@@ -40,8 +41,7 @@ class FakeVerifier:
 @pytest.fixture
 def env(tmp_path, monkeypatch, scratch_db):
     url = scratch_db("findings_routes.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(T, url) as s:
         s.add(models.Tenant(id=T, name="Acme", slug="acme", status="active"))
         s.flush()
