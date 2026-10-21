@@ -196,19 +196,38 @@ def report(
     current = settings.get("trust_engine_modes") or {}
     t = thresholds.merged(settings.get("trust_thresholds"))
     holds = hold_rows(tenant_id, url)
+    since_of = {
+        e: _at(modes_mod.mode_since(tenant_id, e, settings_store))
+        for e in engines
+    }
+    # One read of each, from the earliest clock (all time when any engine
+    # never moved through set_engine_mode), cut per engine below.
+    known = [v for v in since_of.values() if v is not None]
+    floor = min(known) if len(known) == len(since_of) else None
+    all_findings = findings.list(tenant_id, since=floor)
+    all_events = findings.events(tenant_id, since=floor)
+    created = {
+        e["finding_id"]: _at(e["at"])
+        for e in all_events
+        if e["from_status"] is None and e.get("at")
+    }
     out = []
     for engine in engines:
-        since = _at(modes_mod.mode_since(tenant_id, engine, settings_store))
-        # ponytail: one findings and one events read per engine (five); one
-        # read filtered in Python if engines multiply.
+        since = since_of[engine]
+
+        def after(at, since=since):
+            return since is None or (at is not None and at >= since)
+
         out.append(
             row(
                 engine,
                 mode=current.get(engine, "off"),
                 since=since,
                 now=now,
-                findings=findings.list(tenant_id, since=since),
-                events=findings.events(tenant_id, since=since),
+                findings=[
+                    f for f in all_findings if after(created.get(f["id"]))
+                ],
+                events=[e for e in all_events if after(_at(e.get("at")))],
                 holds=holds,
                 t=t,
             )

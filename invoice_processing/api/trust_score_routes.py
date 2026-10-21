@@ -72,8 +72,21 @@ def transaction_trust(
     node = score.score_node(graph, tenant, current, as_of=when)
     if node is None:
         raise HTTPException(404, "This transaction has not been scored yet.")
+    rows = store.list(tenant, transaction_node=current["id"])
+    attrs = node["attrs"]
+    if when is None:
+        from .. import tenant_settings  # noqa: PLC0415
+        from . import service  # noqa: PLC0415
+
+        modes = (
+            tenant_settings.effective(
+                tenant, service.get_tenant_settings()
+            ).get("trust_engine_modes")
+            or {}
+        )
+        attrs = score.with_modes(attrs, rows, modes)
     by_dimension: dict[str, list] = {d: [] for d in (*DIMENSIONS, "other")}
-    for f in store.list(tenant, transaction_node=current["id"]):
+    for f in rows:
         by_dimension[dm.dimension_of(f) or "other"].append(
             {
                 "id": f["id"],
@@ -87,7 +100,7 @@ def transaction_trust(
             }
         )
     return {
-        **node["attrs"],
+        **attrs,
         "node": node["id"],
         "valid_from": node["valid_from"],
         "transaction_node": current["id"],

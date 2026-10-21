@@ -308,3 +308,37 @@ def test_an_unknown_or_non_vendor_node_has_no_profile(env):
     assert vendor.profile(T, "nope", **kw) is None
     invoice = env["graph"].nodes(T, kind="invoice")[0]["id"]
     assert vendor.profile(T, invoice, **kw) is None
+
+
+def test_vendor_profile_reads_invoices_and_documents_in_bulk(env, monkeypatch):
+    calls = []
+    real = env["graph"].node
+    monkeypatch.setattr(
+        env["graph"], "node", lambda *a, **k: calls.append(a) or real(*a, **k)
+    )
+    p = vendor.profile(
+        T,
+        env["vendor"],
+        graph=env["graph"],
+        findings=env["findings"],
+        url=env["url"],
+    )
+    assert p["vendor"]["invoices"] == 3 and len(p["kyc"]) == 1
+    assert len(calls) == 1  # the vendor itself
+
+
+def test_a_rejected_link_is_not_network_evidence(env):
+    link = env["links"].propose_or_link(
+        CTX, env["vendor"], env["twin"], 0.7, "name", reason="similar"
+    )
+    env["links"].decide(CTX, link["id"], accept=False, actor="a@x")
+    p = vendor.profile(
+        T,
+        env["vendor"],
+        graph=env["graph"],
+        findings=env["findings"],
+        links=env["links"],
+        url=env["url"],
+    )
+    (twin,) = p["network"]
+    assert twin["shared"] == ["pan"]

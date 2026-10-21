@@ -85,12 +85,22 @@ def _bank_verified(graph, tenant_id, vendor, cited) -> bool | None:
     )
 
 
+def _sources(graph, tenant_id, vendor_id, edge: str, kind: str) -> list[dict]:
+    """The open `kind` nodes with an `edge` edge into the vendor: one read
+    of the kind, not one per edge.
+    ponytail: reads every node of the kind; a natural-key or id filter in
+    GraphStore if a tenant passes ~50k of them."""
+    srcs = {e["src"] for e in graph.edges(tenant_id, dst=vendor_id, kind=edge)}
+    if not srcs:
+        return []
+    return [n for n in graph.nodes(tenant_id, kind=kind) if n["id"] in srcs]
+
+
 def _kyc(graph, tenant_id, vendor_id) -> list[dict]:
     out = []
-    for e in graph.edges(tenant_id, dst=vendor_id, kind="evidences"):
-        n = graph.node(tenant_id, e["src"])
-        if not n or n["kind"] != "document_version":
-            continue
+    for n in _sources(
+        graph, tenant_id, vendor_id, "evidences", "document_version"
+    ):
         a = n["attrs"]
         out.append(
             {
@@ -119,6 +129,8 @@ def _network(graph, links, tenant_id, vendor) -> list[dict]:
             if k != "name" and v and theirs.get(k) == v:
                 shared[other["id"]].add(k)
     for link in links.open_links(tenant_id) if links else []:
+        if link["status"] == "rejected":  # a person ruled them apart
+            continue
         ends = {link["node_a"], link["node_b"]}
         if vendor["id"] in ends and len(ends) == 2:
             (other,) = ends - {vendor["id"]}
@@ -136,14 +148,7 @@ def profile(
     vendor = graph.node(tenant_id, vendor_id)
     if vendor is None or vendor["kind"] != "vendor":
         return None
-    invoices = [
-        n
-        for n in (
-            graph.node(tenant_id, e["src"])
-            for e in graph.edges(tenant_id, dst=vendor_id, kind="issued_by")
-        )
-        if n and n["kind"] == "invoice"
-    ]
+    invoices = _sources(graph, tenant_id, vendor_id, "issued_by", "invoice")
     scores_by_key = {
         n["natural_key"]: n for n in graph.nodes(tenant_id, kind=KIND)
     }

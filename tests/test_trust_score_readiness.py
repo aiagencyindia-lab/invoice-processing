@@ -157,3 +157,51 @@ def test_leakage_is_insight_only():
     assert rd.insight_only("leakage")
     assert not rd.insight_only("payment")
     assert not rd.insight_only("reality")
+
+
+class CountingStore:
+    def __init__(self):
+        self.calls = []
+
+    def list(self, tenant_id, **kw):
+        self.calls.append(("list", kw))
+        return []
+
+    def events(self, tenant_id, **kw):
+        self.calls.append(("events", kw))
+        return []
+
+
+class Settings:
+    def __init__(self, settings):
+        self.settings = settings
+
+    def get(self, tenant_id):
+        return self.settings
+
+
+def test_the_report_reads_findings_and_events_once(monkeypatch):
+    monkeypatch.setattr(rd, "hold_rows", lambda tenant_id, url=None: [])
+    early = NOW - timedelta(days=30)
+    store = CountingStore()
+    rows = rd.report(
+        "t",
+        findings=store,
+        settings_store=Settings(
+            {
+                "trust_engine_modes": {
+                    "payment": "shadow",
+                    "reality": "shadow",
+                },
+                "trust_engine_mode_since": {
+                    "payment": early.isoformat(),
+                    "reality": (NOW - timedelta(days=2)).isoformat(),
+                },
+            }
+        ),
+        now=NOW,
+    )
+    assert len(rows) == 5
+    assert [c[0] for c in store.calls] == ["list", "events"]
+    # An engine never moved through set_engine_mode reads all time.
+    assert store.calls[0][1]["since"] is None

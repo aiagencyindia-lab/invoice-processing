@@ -261,3 +261,24 @@ def test_evaluate_writes_the_score_after_the_engines(env):
     n = score.score_node(env["graph"], T, env["graph"].node(T, invoice))
     assert n["attrs"]["dimensions"]["identity"]["value"] == 0.0
     assert n["attrs"]["dimensions"]["identity"]["hold"] is False
+
+
+def test_a_purchase_order_is_not_price_history(env):
+    g = env["graph"]
+    v = g.upsert_node(CTX, kind="vendor", natural_key="vendors:v1")
+    po = g.upsert_node(CTX, kind="po", natural_key="purchase_orders:p1")
+    for src in (env["invoice"], po):
+        g.upsert_edge(
+            CTX,
+            src=src,
+            dst=v,
+            kind="issued_by",
+            source_system="v1",
+            provenance="system_record",
+            confidence=1.0,
+            observed_at=AT,
+        )
+    score.compute(ectx(env, {"reality": "advisory"}), {})
+    assert node(env)["attrs"]["dimensions"]["price"]["value"] is None
+    score.compute(ectx(env, {"reality": "advisory"}, invoice=False), {})
+    assert node(env)["attrs"]["dimensions"]["price"]["value"] is None

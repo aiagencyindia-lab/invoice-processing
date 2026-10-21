@@ -176,6 +176,20 @@ def test_transaction_trust_is_the_score_node_with_hold_and_findings(env):
     assert x["findings"]["other"] == []
 
 
+def test_transaction_trust_reads_the_holds_with_todays_modes(env):
+    PgTenantSettings(env["url"]).put(
+        ACME, {"trust_engine_modes": {"payment": "enforcing"}}
+    )
+    x = (
+        env["client"]("acme:viewer")
+        .get(f"/api/trust/transactions/{env['invoice']}/trust")
+        .json()
+    )
+    assert x["dimensions"]["identity"]["hold"] is True
+    assert x["holds"] == [env["finding"]]
+    assert x["mode"]["payment"] == "enforcing"
+
+
 def test_transaction_trust_as_of_and_errors(env):
     c = env["client"]("acme:viewer")
     base = f"/api/trust/transactions/{env['invoice']}/trust"

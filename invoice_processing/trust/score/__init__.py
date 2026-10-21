@@ -68,11 +68,17 @@ class _World:
             e["src"]: e["dst"] for e in g.edges(t, src=one, kind="issued_by")
         }
         vendors = set(self.vendor.values())
-        # Another transaction from the same vendor is the price baseline.
+        # Another invoice from the same vendor is the price baseline; its
+        # purchase orders (also `issued_by`) are not.
+        if one:
+            invoice_ids = {x.node_id for x in ectx.transactions()} | {one}
+        else:
+            invoice_ids = {n["id"] for n in invoices}
         self.issued = defaultdict(set)
         for v in vendors if one else [None]:
             for e in g.edges(t, dst=v, kind="issued_by"):
-                self.issued[e["dst"]].add(e["src"])
+                if e["src"] in invoice_ids:
+                    self.issued[e["dst"]].add(e["src"])
         self.governed = {
             e["src"] for e in g.edges(t, src=one, kind="governed_by")
         }
@@ -93,13 +99,13 @@ class _World:
         self.reality = self._by_key(ectx, "reality_check", invoices, one)
         self.documents = self._by_key(ectx, "document_version", invoices, one)
         self.scores = self._by_key(ectx, KIND, invoices, one)
-        ids = [n["ref_id"] for n in invoices if n["ref_table"] == "invoices"]
+        q = select(Invoice.id, Invoice.fields).where(Invoice.tenant_id == t)
+        if one:
+            q = q.where(Invoice.id == invoices[0]["ref_id"])
+        # A batch reads the tenant's invoices whole: an IN list of every id
+        # passes SQLite's bound-variable cap on a large tenant.
         with tenant_session(t, ectx.url) as s:
-            rows = s.execute(
-                select(Invoice.id, Invoice.fields).where(
-                    Invoice.tenant_id == t, Invoice.id.in_(ids)
-                )
-            ).all()
+            rows = s.execute(q).all()
         self.workflow = {
             i: (fields or {}).get("workflow") or {} for i, fields in rows
         }
@@ -207,3 +213,28 @@ def compute(ectx, report: dict) -> None:
             attrs=attrs,
             at=ectx.now,
         )
+
+
+def with_modes(attrs: dict, findings: list[dict], modes: dict) -> dict:
+    """The stored score with its holds re-read against today's modes: a mode
+    change re-scores nothing, and an engine promoted since the last run
+    holds now. Values are as of the last run."""
+    enforcing = {e for e, m in modes.items() if m == "enforcing"}
+    by_id = {f["id"]: f for f in findings if dm.is_open(f)}
+    dims = {
+        name: {
+            **d,
+            "hold": any(
+                dm.is_hold(by_id[i]) and dm.engine_of(by_id[i]) in enforcing
+                for i in d.get("drivers", ())
+                if i in by_id
+            ),
+        }
+        for name, d in (attrs.get("dimensions") or {}).items()
+    }
+    return {
+        **attrs,
+        "dimensions": dims,
+        "holds": dm.holds(findings, enforcing),
+        "mode": {e: modes.get(e, "off") for e in ENGINES},
+    }
