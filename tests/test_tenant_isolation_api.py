@@ -1528,38 +1528,6 @@ def branch_probed() -> set[str]:
     return probed
 
 
-class TestWave3StubsIsolation:
-    """The scaffold's route stubs answer 503 to every tenant: nothing to leak
-    until a branch builds them, and then that branch's own module carries the
-    real two-tenant probe (its PROBED replaces these paths)."""
-
-    # (method, route template, role). Each entry counts as this route's
-    # probe while it is a stub. A branch that builds the route lists it in its
-    # own module's PROBED; the stub check then skips it, and the entry is
-    # deleted when the wave closes.
-    STUBS: ClassVar[list[tuple[str, str, str]]] = [
-        ("get", "/api/trust/transactions/{node_id}/trust", "viewer"),
-        ("get", "/api/trust/vendors/{node_id}/trust", "viewer"),
-        ("get", "/api/trust/posture", "viewer"),
-        ("get", "/api/trust/readiness", "admin"),
-        ("post", "/api/trust/engines/{engine}/mode", "admin"),
-        ("post", "/api/trust/findings/{finding_id}/evidence-request", "clerk"),
-        ("get", "/api/trust/evidence-requests", "viewer"),
-        ("post", "/api/trust/evidence-requests/{request_id}/proof", "clerk"),
-        ("post", "/api/vendors/{vendor_id}/documents", "clerk"),
-        ("post", "/api/trust/documents/{document_id}/authenticity", "viewer"),
-    ]
-
-    @pytest.mark.parametrize(("method", "template", "role"), STUBS)
-    def test_a_stub_answers_no_tenant(self, clients, method, template, role):
-        if template in branch_probed():
-            pytest.skip(f"{template} is built; its branch module probes it")
-        path = re.sub(r"\{[^}]+\}", "x1", template)
-        for slug in ("acme", "globex"):
-            r = getattr(clients(slug, role), method)(path)
-            assert r.status_code == 503, (slug, path, r.status_code)
-
-
 class TestCoverage:
     # Routes that legitimately serve no tenant data, with the reason each is
     # exempt. Anything not listed must be probed above.
@@ -1672,10 +1640,7 @@ class TestCoverage:
 
     def _probed(self) -> set:
 
-        probed = set(self.PROBED)
-        # The Wave 3 stubs, while they are stubs (TestWave3StubsIsolation).
-        probed |= {t for _, t, _ in TestWave3StubsIsolation.STUBS}
-        return probed | branch_probed()
+        return set(self.PROBED) | branch_probed()
 
     def test_the_route_walk_sees_routes_mounted_from_routers(self):
         """FastAPI 0.141 puts each included router on `app.routes` as one
@@ -1685,22 +1650,6 @@ class TestCoverage:
         assert "/api/trust/findings" in paths  # trust_routes, a router
         assert "/api/invoices/{case_id}" in paths  # defined on the app
         assert len(paths) > 100
-
-    def test_a_built_stub_hands_over_to_its_branch_probe(self, monkeypatch):
-        import sys  # noqa: PLC0415
-        import types  # noqa: PLC0415
-
-        fake = types.ModuleType("tests.test_trust_score_routes")
-        fake.PROBED = {"/api/trust/posture"}
-        monkeypatch.setitem(sys.modules, "tests.test_trust_score_routes", fake)
-        assert "/api/trust/posture" in branch_probed()
-        assert "/api/trust/readiness" not in branch_probed()
-
-    def test_a_stub_is_covered_only_while_it_is_a_stub(self):
-        """Listing a stub statically too would outlive it: once its branch
-        deleted the STUBS entry, nothing would demand a real probe."""
-        stubs = {t for _, t, _ in TestWave3StubsIsolation.STUBS}
-        assert not stubs & set(self.PROBED)
 
     def test_every_route_is_covered(self):
         """A new endpoint cannot ship without an isolation probe.
