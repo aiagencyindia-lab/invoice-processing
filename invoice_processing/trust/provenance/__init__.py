@@ -320,16 +320,17 @@ def _ledger(
     invoice_node: str | None,
     data: bytes | None = None,
     versions: dict | None = None,
-) -> list[FindingSpec]:
-    """Score one document and record its `document_version` node. An invoice
-    document (`invoice_node`) is judged against the vendor's other invoices;
-    a KYC document or proof against the vendor's documents of its kind."""
+) -> tuple[str | None, list[FindingSpec]]:
+    """Score one document and record its `document_version` node: (its id,
+    the findings). An invoice document (`invoice_node`) is judged against
+    the vendor's other invoices; a KYC document or proof against the
+    vendor's documents of its kind. (None, []) when it is not a PDF."""
     facts = pdfmeta.facts(
         ectx.blobs.get(doc["storage_key"]) if data is None else data
     )
     if facts is None:
         logger.info("provenance_skipped", extra={"reason": "not_pdf"})
-        return []
+        return None, []
     if invoice_node is not None:
         attrs = tenant.invoices[invoice_node]["attrs"]
         keep = {"sender_domain": attrs.get("document_sender_domain")}
@@ -418,8 +419,9 @@ def _ledger(
     )
     if invoice_node is None:
         if doc["kind"] != "kyc" or not low:
-            return []  # a proof's score reaches the reality engine via its node
-        return [
+            # a proof's score reaches the reality engine through its node
+            return vid, []
+        return vid, [
             FindingSpec(
                 type=KYC_SUSPECT,
                 transaction_node=vendor or vid,
@@ -446,8 +448,8 @@ def _ledger(
         e for e in [_edited(ectx, doc, vid, facts, invoice_node, attrs)] if e
     ]
     if not low:
-        return specs
-    return [
+        return vid, specs
+    return vid, [
         *specs,
         FindingSpec(
             type=SUSPECT,
@@ -577,21 +579,28 @@ def _batch_ledger(ectx, tenant) -> list[FindingSpec]:
         except Exception:  # local, GCS and test stores raise differently
             missing += 1
             continue
-        specs += _ledger(ectx, tenant, doc, node, data, versions)
+        specs += _ledger(ectx, tenant, doc, node, data, versions)[1]
     if missing:
         logger.info("provenance_batch_skipped", extra={"missing": missing})
     return specs
+
+
+def score(ectx: EngineContext) -> str | None:
+    """Score `ectx.document` now and return its `document_version` node id
+    (None when it is not a readable PDF). Writes the node, never findings:
+    those come from `trust.evaluate` under the tenant's mode."""
+    return _ledger(ectx, _Tenant(ectx), ectx.document, ectx.invoice_node)[0]
 
 
 def run(ectx: EngineContext) -> list[FindingSpec]:
     doc = ectx.document
     if doc is not None and ectx.invoice_node is None:
         if doc.get("kind") in ("kyc", "proof"):
-            return _ledger(ectx, _Tenant(ectx), doc, None)
+            return _ledger(ectx, _Tenant(ectx), doc, None)[1]
         return []  # a contract or other non-invoice document
     tenant = _Tenant(ectx)
     if doc is None:
         specs = _batch_ledger(ectx, tenant)
         return specs + _tamper(ectx, tenant, sorted(tenant.invoices))
-    specs = _ledger(ectx, tenant, doc, ectx.invoice_node)
+    _, specs = _ledger(ectx, tenant, doc, ectx.invoice_node)
     return specs + _tamper(ectx, tenant, [ectx.invoice_node])
