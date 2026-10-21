@@ -295,7 +295,7 @@ invoice-processing/
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - [uv](https://docs.astral.sh/uv/) for dependency management
 - Google Cloud project with Vertex AI API enabled
 - [Google ADK](https://google.github.io/adk-docs/)
