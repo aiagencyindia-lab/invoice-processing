@@ -550,6 +550,15 @@ def _sso_services():
 auth.set_sso_services(_sso_services)
 
 
+def _api_key(token: str):
+    from ..trust import apikeys  # noqa: PLC0415 - optional layer
+
+    return apikeys.resolve(token)
+
+
+auth.set_api_key_resolver(_api_key)
+
+
 def get_graph_store():
     """The v2 Evidence Graph. `None` without a database."""
     global _graph_store
