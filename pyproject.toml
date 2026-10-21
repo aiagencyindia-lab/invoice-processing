@@ -2,7 +2,7 @@
 name = "invoice-processing"
 version = "1.0.0"
 description = "Invoice Processing -- Unified inference and learning agent for invoice processing"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 keywords = ['agent-catalog', 'adk', 'agent']
 readme = "README.md"
@@ -71,6 +71,8 @@ default = true
 # that repo, so the previous `extend = "../../../pyproject.toml"` resolved to a
 # path that does not exist and broke every ruff invocation.
 line-length = 80
+# Below requires-python on purpose: py311 rewrites every timezone.utc to
+# UTC (128 files), a diff for its own change, not a dependency bump.
 target-version = "py310"
 # The dataset generator is vendored evidence of how the benchmark corpus was
 # produced. It is never imported and never edited, so formatting it would only
