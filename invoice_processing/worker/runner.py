@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
 # ponytail: a poll-loop timer; a scheduler when there is one.
 ESCALATION_SCAN_SECONDS = 60
+# How often the worker sends due trust webhooks (the outbox's backoff lives
+# in its rows, so a coarse sweep only delays a retry by up to this much).
+WEBHOOK_SCAN_SECONDS = 60
 
 DOCUMENT_INGESTED = "document.ingested"
 # A goods receipt arrived for a PO a held case quotes; see rematch.py.
@@ -862,6 +865,7 @@ class Worker:
         # None without a database: no tenants rows, nothing to close.
         self.tenant_status = tenant_status
         self._last_scan: float | None = None
+        self._last_webhook_scan: float | None = None
         self.queue = queue
         self.claims = claims
         self.handler = handler or self._default_handler
@@ -1262,6 +1266,7 @@ class Worker:
                 outcomes = []
             write_heartbeat()
             self._escalate_if_due()
+            self._deliver_webhooks_if_due()
             if not outcomes:
                 sleep(poll_seconds)
 
@@ -1286,6 +1291,21 @@ class Worker:
                 )
         except Exception:
             logger.exception("Overdue-approval scan failed; continuing.")
+
+    def _deliver_webhooks_if_due(self) -> None:
+        now = self.clock()
+        if (
+            self._last_webhook_scan is not None
+            and now - self._last_webhook_scan < WEBHOOK_SCAN_SECONDS
+        ):
+            return
+        self._last_webhook_scan = now
+        try:
+            from ..trust.webhooks import deliver  # noqa: PLC0415
+
+            deliver.due(datetime.now(timezone.utc))
+        except Exception:
+            logger.exception("Webhook delivery sweep failed; continuing.")
 
     def _default_handler(self, message: Message) -> dict:
         from ..api import service  # noqa: PLC0415

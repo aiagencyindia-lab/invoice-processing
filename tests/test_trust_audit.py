@@ -397,6 +397,7 @@ def test_assemble_reconciles_with_the_ledger_and_groups(graph_db):
         "payment",
         "provenance",
         "gst_itc",
+        "reality",
     ]
     pay = out["prevention"][1]
     assert pay["count"] == 2 and pay["impact"] == "80.00"
@@ -620,6 +621,7 @@ def test_lifted_settings_raise_requested_off_engines_to_advisory_only():
         "payment": "enforcing",
         "provenance": "advisory",
         "gst_itc": "off",  # not requested: does not run in this batch
+        "reality": "off",
     }
     assert out["other"] == 1
     assert batch.lifted(inner, []).get(T)["trust_engine_modes"] == {
@@ -627,6 +629,7 @@ def test_lifted_settings_raise_requested_off_engines_to_advisory_only():
         "payment": "enforcing",
         "provenance": "advisory",
         "gst_itc": "shadow",
+        "reality": "advisory",
     }
 
 

@@ -292,6 +292,29 @@ def get_verifier() -> TokenVerifier:
     return _verifier
 
 
+# Machine credentials for the /v2 API (trust/apikeys.py). Registered by
+# `api.service`; None until it is, which refuses every key.
+API_KEY_HEADER = "X-API-Key"
+API_KEY_PREFIX = "ik_"
+_api_key_resolver = None
+
+
+def set_api_key_resolver(resolver) -> None:
+    """`resolver(token) -> Principal | None`; None means no such key."""
+    global _api_key_resolver
+    _api_key_resolver = resolver
+
+
+def api_key_token(request: Request, bearer: str | None) -> str | None:
+    """The API key this request presents, if it presents one instead of a
+    user's token. A signed-in user's bearer always wins: a key header next
+    to it is ignored, so a key can never move a user to another tenant."""
+    if bearer:
+        return bearer if bearer.startswith(API_KEY_PREFIX) else None
+    key = (request.headers.get(API_KEY_HEADER) or "").strip()
+    return key or None
+
+
 def bearer_token(request: Request) -> str | None:
     header = request.headers.get("authorization") or ""
     scheme, _, token = header.partition(" ")
@@ -335,6 +358,13 @@ def current_principal(request: Request) -> Principal:
 
 def _resolve_principal(request: Request) -> Principal:
     token = bearer_token(request)
+    key = api_key_token(request, token)
+    if key is not None:
+        resolver = _api_key_resolver
+        principal = resolver(key) if resolver is not None else None
+        if principal is None:
+            raise AuthError("Invalid API key.")
+        return principal
     if token:
         from .. import sso  # noqa: PLC0415
 

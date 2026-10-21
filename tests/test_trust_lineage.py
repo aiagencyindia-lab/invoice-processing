@@ -151,3 +151,19 @@ def test_quantities_come_from_lines_on_a_synced_graph(graph):
     out = lineage(T, inv, graph=graph)
     grn = next(link for link in out if link.stage == "grn")
     assert grn.status == "contradicts" and "4" in grn.note and "10" in grn.note
+
+
+def test_an_imported_receipt_counts_by_its_quantity(graph):
+    """A history GRN carries `quantity`, not v1's `qty_received`."""
+    inv = build(graph, grn=False)
+    po = graph.open_node(T, "po", "po")["id"]
+    line = graph.upsert_node(
+        CTX, kind="invoice_line", natural_key="il", attrs={"quantity": "10"}
+    )
+    edge(graph, line, inv, "part_of")
+    g = graph.upsert_node(
+        CTX, kind="grn", natural_key="hgrn", attrs={"quantity": "4"}
+    )
+    edge(graph, g, po, "fulfils")
+    [grn] = [x for x in lineage(T, inv, graph=graph) if x.stage == "grn"]
+    assert grn.status == "contradicts" and "Received 4" in grn.note

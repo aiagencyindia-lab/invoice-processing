@@ -63,6 +63,21 @@ CLAIMS = {
 }
 
 
+def held(*codes):
+    """A gate that holds on these findings (ids = codes, for reading)."""
+    detail = {
+        "held": True,
+        "message": f"Payment is held: {'; '.join(codes)}.",
+        "holds": [
+            {"finding_id": c, "type": c, "engine": "payment", "summary": c}
+            for c in codes
+        ],
+        "waiting": [],
+        "transaction_node": "n-1",
+    }
+    return lambda t, c, **k: detail
+
+
 class FakeVerifier:
     def verify(self, token):
         if token not in CLAIMS:
@@ -522,9 +537,7 @@ class TestPaymentHold:
     ):
         from invoice_processing.trust import gate  # noqa: PLC0415
 
-        monkeypatch.setattr(
-            gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
-        )
+        monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-X"))
         r = approve(client)
         assert r.status_code == 409 and "PAY-X" in r.json()["detail"]
 
@@ -532,9 +545,7 @@ class TestPaymentHold:
         from invoice_processing.trust import gate  # noqa: PLC0415
 
         assert approve(client).status_code == 200
-        monkeypatch.setattr(
-            gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
-        )
+        monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-X"))
         r = client.post("/api/invoices/case_002/export", json={"target": "csv"})
         assert r.status_code == 409 and "PAY-X" in r.json()["detail"]
 
@@ -543,9 +554,7 @@ class TestPaymentHold:
     ):
         from invoice_processing.trust import gate  # noqa: PLC0415
 
-        monkeypatch.setattr(
-            gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
-        )
+        monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-X"))
         monkeypatch.setitem(CLAIMS["boss"], "role", "admin")
         r = client.post(
             "/api/invoices/case_002/actions",
@@ -566,9 +575,7 @@ class TestPaymentHold:
         from invoice_processing.trust import gate  # noqa: PLC0415
 
         monkeypatch.setitem(CLAIMS["boss"], "role", "admin")
-        monkeypatch.setattr(
-            gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
-        )
+        monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-X"))
         client.post(
             "/api/invoices/case_002/actions",
             json={
@@ -576,10 +583,54 @@ class TestPaymentHold:
                 "override_reason": "Called the vendor on file",
             },
         )
-        monkeypatch.setattr(
-            gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-Y."
-        )
+        monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-Y"))
         out = client.post(
             "/api/invoices/case_002/export", json={"target": "csv"}
         )
         assert out.status_code == 409 and "PAY-Y" in out.json()["detail"]
+
+    def test_the_invoice_says_whether_and_why_it_is_held(
+        self, client, monkeypatch
+    ):
+        from invoice_processing.trust import gate  # noqa: PLC0415
+
+        body = client.get("/api/invoices/case_002").json()
+        assert body["hold"]["held"] is False and body["trust_node"] is None
+        monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-X"))
+        body = client.get("/api/invoices/case_002").json()
+        assert body["hold"]["held"] is True
+        assert [h["type"] for h in body["hold"]["holds"]] == ["PAY-X"]
+
+
+class TestOverrideCovers:
+    """Export lets through the holds an administrator overrode, by finding."""
+
+    def detail(self, *ids, waiting=()):
+        return {
+            "held": True,
+            "message": "m",
+            "holds": [{"finding_id": i} for i in ids],
+            "waiting": list(waiting),
+        }
+
+    def test_the_overridden_findings_pass(self):
+        from invoice_processing.api import service  # noqa: PLC0415
+
+        stored = {"message": "m", "finding_ids": ["a", "b"]}
+        assert service._override_covers(stored, self.detail("a"))
+        assert service._override_covers(stored, self.detail("a", "b"))
+
+    def test_a_new_finding_or_a_pending_check_does_not(self):
+        from invoice_processing.api import service  # noqa: PLC0415
+
+        stored = {"message": "m", "finding_ids": ["a"]}
+        assert not service._override_covers(stored, self.detail("a", "c"))
+        assert not service._override_covers(
+            stored, self.detail("a", waiting=["payment"])
+        )
+
+    def test_a_pre_wave3_override_message_covers_nothing(self):
+        from invoice_processing.api import service  # noqa: PLC0415
+
+        assert not service._override_covers("m", self.detail("a"))
+        assert not service._override_covers(None, self.detail("a"))

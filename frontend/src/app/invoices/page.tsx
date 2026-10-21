@@ -919,7 +919,7 @@ function BankChangeShortcut({
     return (
       <div className="muted" style={{ fontSize: 12.5 }}>
         A bank change for this vendor is awaiting approval.{" "}
-        <a href="/vendors">Open vendors</a>
+        <Link href="/vendors">Open vendors</Link>
       </div>
     );
   }

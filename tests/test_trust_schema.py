@@ -141,3 +141,35 @@ def test_one_rating_per_rater_per_finding(url):
                 useful=True,
             )
         )
+
+
+WAVE3_TABLES = (
+    "trust_holds",
+    "trust_evidence_requests",
+    "api_keys",
+    "webhook_endpoints",
+    "webhook_outbox",
+)
+
+
+def test_the_wave3_tables_are_tenant_tables(url):
+    from sqlalchemy import inspect  # noqa: PLC0415
+
+    from invoice_processing.db.session import get_engine  # noqa: PLC0415
+
+    names = set(inspect(get_engine(url)).get_table_names())
+    for name in WAVE3_TABLES:
+        assert name in TENANT_TABLES, name
+        assert name in names, name
+
+
+def test_an_api_key_prefix_is_unique_per_tenant(url):
+    def key():
+        return models.ApiKey(
+            tenant_id=T, name="ci", key_prefix="abcd1234", key_hash="0" * 64
+        )
+
+    with tenant_session(T, url) as s:
+        s.add(key())
+    with pytest.raises(IntegrityError), tenant_session(T, url) as s:
+        s.add(key())

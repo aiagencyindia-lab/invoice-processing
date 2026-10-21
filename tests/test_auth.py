@@ -486,3 +486,59 @@ class TestRefusalsAreRecorded:
         )
         assert app.post("/approve", headers=bearer("boss")).status_code == 200
         assert audit.events == []
+
+
+# ---------------------------------------------------------------------------
+# API keys (Wave 3): a second way in, never a way to change tenant
+# ---------------------------------------------------------------------------
+
+
+class TestApiKeys:
+    KEY = "ik_abcd1234_secret"
+    MACHINE = Principal(
+        user_id="api-key:k1",
+        email="ci@api-key.tenant-globex",
+        tenant_id="tenant-globex",
+        role="viewer",
+    )
+
+    @pytest.fixture
+    def keyed(self, app, monkeypatch):
+        calls = []
+
+        def resolve(token):
+            calls.append(token)
+            return self.MACHINE if token == self.KEY else None
+
+        monkeypatch.setattr(auth, "_api_key_resolver", resolve)
+        return app, calls
+
+    def test_the_key_header_identifies_the_machine(self, keyed):
+        app, calls = keyed
+        body = app.get("/whoami", headers={"X-API-Key": self.KEY}).json()
+        assert body["tenant_id"] == "tenant-globex" and calls == [self.KEY]
+
+    def test_a_key_as_a_bearer_token_works_too(self, keyed):
+        app, _ = keyed
+        body = app.get("/whoami", headers=bearer(self.KEY)).json()
+        assert body["email"] == "ci@api-key.tenant-globex"
+
+    def test_a_signed_in_user_is_never_turned_into_a_key(self, keyed):
+        app, calls = keyed
+        headers = {**bearer("acme-token"), "X-API-Key": self.KEY}
+        assert app.get("/whoami", headers=headers).json()["tenant_id"] == (
+            "tenant-acme"
+        )
+        assert calls == []
+
+    def test_an_unknown_key_is_refused(self, keyed):
+        app, _ = keyed
+        r = app.get("/whoami", headers={"X-API-Key": "ik_nope_x"})
+        assert r.status_code == 401
+
+    def test_a_key_with_no_resolver_installed_is_refused(
+        self, app, monkeypatch
+    ):
+        monkeypatch.setattr(auth, "_api_key_resolver", None)
+        r = app.get("/whoami", headers=bearer(self.KEY))
+        assert r.status_code == 401

@@ -423,3 +423,90 @@ def test_on_progress_is_not_called_when_every_engine_is_off(env):
     seen = []
     run(env, modes={}, on_progress=seen.append)
     assert seen == []
+
+
+# -- the hold ledger (Wave 3) ---------------------------------------------------
+
+
+def _held(url) -> list[tuple[str, bool]]:
+    with tenant_session(T, url) as s:
+        return [
+            (r.type, r.lifted_at is None) for r in s.query(models.TrustHold)
+        ]
+
+
+def test_only_an_enforcing_engine_places_a_hold(env):
+    url, _, _ = env
+    finding_model.register_type("T-HOLD5", "hold", engine="payment", hold=True)
+    ev.RUNNERS["payment"] = lambda ectx: [finding_for(ectx, "T-HOLD5")]
+    run(env, modes={"payment": "advisory"})
+    assert _held(url) == []
+    run(env, modes={"payment": "enforcing"})
+    assert _held(url) == [("T-HOLD5", True)]
+
+
+def test_an_insight_never_places_a_hold(env):
+    url, _, _ = env
+    finding_model.register_type("T-NOTE5", "note", engine="payment")
+    ev.RUNNERS["payment"] = lambda ectx: [finding_for(ectx, "T-NOTE5")]
+    run(env, modes={"payment": "enforcing"})
+    assert _held(url) == []
+
+
+def test_a_failing_enforcing_engine_is_held_in_the_ledger(env):
+    url, _, _ = env
+
+    def boom(ectx):
+        raise RuntimeError("down")
+
+    ev.RUNNERS["payment"] = boom
+    run(env, modes={"payment": "enforcing"})
+    assert _held(url) == [(finding_model.ENGINE_FAILED, True)]
+
+
+def test_a_clean_run_that_releases_a_finding_lifts_its_hold(env):
+    url, _, _ = env
+    finding_model.register_type("T-HOLD6", "hold", engine="payment", hold=True)
+    state = {"emit": True}
+    ev.RUNNERS["payment"] = lambda ectx: (
+        [finding_for(ectx, "T-HOLD6")] if state["emit"] else []
+    )
+    run(env, modes={"payment": "enforcing"})
+    state["emit"] = False
+    run(env, modes={"payment": "enforcing"})
+    assert _held(url) == [("T-HOLD6", False)]
+
+
+# -- the score hook (Wave 3) ------------------------------------------------------
+
+
+def test_the_score_is_computed_after_the_engines_ran(env, monkeypatch):
+    from invoice_processing.trust import score  # noqa: PLC0415
+
+    seen = []
+    monkeypatch.setattr(
+        score, "compute", lambda ectx, report: seen.append(report)
+    )
+    ev.RUNNERS["payment"] = lambda ectx: []
+    run(env, modes={"payment": "advisory"})
+    assert seen == [
+        {
+            "leakage": "off",
+            "payment": {"mode": "advisory", "findings": 0},
+            "provenance": "off",
+            "gst_itc": "off",
+            "reality": "off",
+        }
+    ]
+
+
+def test_a_failing_score_never_fails_the_run(env, monkeypatch):
+    from invoice_processing.trust import score  # noqa: PLC0415
+
+    def boom(ectx, report):
+        raise RuntimeError("score down")
+
+    monkeypatch.setattr(score, "compute", boom)
+    ev.RUNNERS["payment"] = lambda ectx: []
+    out = run(env, modes={"payment": "advisory"})
+    assert out["engines"]["payment"] == {"mode": "advisory", "findings": 0}

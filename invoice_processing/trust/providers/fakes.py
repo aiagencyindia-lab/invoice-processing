@@ -24,7 +24,7 @@ class FakeProvider:
             raise value
         return value
 
-    verify = lookup = check = fetch = search = hours = track = _answer
+    verify = lookup = check = fetch = search = hours = track = seats = _answer
 
 
 def install(registry) -> None:

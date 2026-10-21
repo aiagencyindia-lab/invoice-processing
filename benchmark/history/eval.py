@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import sys
 import tempfile
@@ -49,6 +50,18 @@ def _explain_module():
     except ImportError:
         return None
     return explain
+
+
+def _measure_modules() -> dict:
+    """benchmark/history/{reality,score}.py, each once its Wave 3 branch has
+    landed: `measure(...)` returns its measures and a `gates` dict."""
+    found = {}
+    for name in ("reality", "score"):
+        try:
+            found[name] = importlib.import_module(f"{__package__}.{name}")
+        except ImportError:
+            continue
+    return found
 
 
 def _ratio(num: int, den: int) -> float:
@@ -184,6 +197,10 @@ def run(
         measured = explain.measure(tenant_id, graph, findings, manifest, url)
         out["gates"].update(measured.pop("gates", {}) or {})
         out["explain"] = measured
+    for name, module in _measure_modules().items():
+        measured = module.measure(tenant_id, graph, findings, manifest, url)
+        out["gates"].update(measured.pop("gates", {}) or {})
+        out[name] = measured
     out["passed"] = all(out["gates"].values())
     return out
 

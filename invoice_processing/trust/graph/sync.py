@@ -42,8 +42,14 @@ _HISTORY_ORDER = {
     "payment": 4,
     "bank_line": 5,
     "vendor_statement_line": 6,
+    "ticket": 7,
+    "timesheet": 8,
+    "shipment": 9,
+    "seat_count": 10,
 }
 _HISTORY_KIND = {"ap_invoice": "invoice"}
+# History kinds that evidence an order being delivered or worked.
+_FULFILS = frozenset({"grn", "shipment", "ticket", "timesheet"})
 
 
 def _money(v) -> str | None:
@@ -374,6 +380,13 @@ def _sync_v1_invoices(ctx, s, graph, vendors, po_nodes, at, bump, document_id):
             "vendor_tax_id": inv.vendor_tax_id,
             "decision": inv.decision,
             "case_id": inv.case_id,
+            # What the reality checks match services against (FR-23.2).
+            "service_period_start": extracted.get("service_period_start"),
+            "service_period_end": extracted.get("service_period_end"),
+            "work_authorization_reference": extracted.get(
+                "work_authorization_reference"
+            ),
+            "project": extracted.get("project"),
         }
         iid = graph.upsert_node(
             ctx,
@@ -427,6 +440,7 @@ def _sync_v1_invoices(ctx, s, graph, vendors, po_nodes, at, bump, document_id):
                     "amount": _money(line.amount_ex_tax),
                     "hsn_sac": ext.get("hsn_sac"),
                     "line_discount": _maybe_money(ext.get("line_discount")),
+                    "unit": ext.get("unit"),
                 },
                 at=at,
             )
@@ -566,7 +580,8 @@ def _sync_history(ctx, s, graph, vendors, po_nodes, at, bump):
         )
         if kind == "po" and rec.doc_number:
             po_nodes[po_matching.normalize_po_number(rec.doc_number)] = nid
-        elif kind == "grn" and po_key in po_nodes:
+        elif kind in _FULFILS and po_key in po_nodes:
+            # A receipt, shipment or the logged work against a known order.
             _edge(graph, ctx, nid, po_nodes[po_key], "fulfils", source, at, 0.9)
         elif kind == "invoice":
             if rec.doc_number:

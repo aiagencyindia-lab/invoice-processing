@@ -37,6 +37,21 @@ TENANT = "tenant-acme"
 CASE = "case_005"
 
 
+def held(*codes):
+    """A gate that holds on these findings (ids = codes, for reading)."""
+    detail = {
+        "held": True,
+        "message": f"Payment is held: {'; '.join(codes)}.",
+        "holds": [
+            {"finding_id": c, "type": c, "engine": "payment", "summary": c}
+            for c in codes
+        ],
+        "waiting": [],
+        "transaction_node": "n-1",
+    }
+    return lambda t, c, **k: detail
+
+
 class FakeVerifier:
     def verify(self, token):
         role, _, who = token.partition(":")
@@ -1485,9 +1500,7 @@ def test_an_unchecked_hold_refuses_on_any_live_hold_not_only_quantity(po_env):
 def test_final_approval_is_refused_while_payment_is_held(env, monkeypatch):
     from invoice_processing.trust import gate  # noqa: PLC0415
 
-    monkeypatch.setattr(
-        gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
-    )
+    monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-X"))
     two_tier(env)
     first = act(env, "approver:a")
     assert first.status_code == 200 and first.json()["completed"] is False
@@ -1499,8 +1512,6 @@ def test_final_approval_is_refused_while_payment_is_held(env, monkeypatch):
 def test_admin_override_with_reason_passes_a_payment_hold(env, monkeypatch):
     from invoice_processing.trust import gate  # noqa: PLC0415
 
-    monkeypatch.setattr(
-        gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
-    )
+    monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-X"))
     r = act(env, "admin:boss", override_reason="Called the vendor on file")
     assert r.status_code == 200 and r.json()["completed"] is True

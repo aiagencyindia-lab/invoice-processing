@@ -204,6 +204,61 @@ def seed_finding() -> None:
             citations=(Citation(node, "Line 1: 250 x INR 55.00"),),
         ),
     )
+    # Wave 3: a reality insight and a trust score, so the workbench's trust
+    # panel and the finding pages render without a worker or an engine run.
+    FindingStore().upsert(
+        ctx,
+        FindingSpec(
+            type="REAL-NO-EVIDENCE",
+            transaction_node=node,
+            dedupe_key=f"REAL-NO-EVIDENCE:invoices:{invoice_id}",
+            impact=None,
+            currency="INR",
+            confidence=0.6,
+            engine_version="reality-0",
+            rule_version="FR-23-v1",
+            model_version="none",
+            summary="No goods receipt or delivery corroborates the invoice",
+            details={
+                "engine": "reality",
+                "hold": False,
+                "mode": "advisory",
+                "result": "NO_EVIDENCE",
+                "kind": "goods",
+            },
+            citations=(Citation(node, "Invoice quantity 250"),),
+        ),
+    )
+    graph.upsert_node(
+        ctx,
+        kind="trust_score",
+        natural_key=f"trust_score:invoices:{invoice_id}",
+        attrs=_seed_score(),
+    )
+
+
+def _seed_score() -> dict:
+    """A trust_score node in the shape the score branch writes."""
+
+    def dim(value, note, hold=False):
+        return {"value": value, "hold": hold, "drivers": [], "note": note}
+
+    return {
+        "score_version": "score-1",
+        "computed_at": "2026-10-21T09:00:00+00:00",
+        "composite": 0.72,
+        "dimensions": {
+            "identity": dim(1.0, "Bank account verified."),
+            "authorization": dim(0.5, "Approval pending."),
+            "reality": dim(0.4, "No delivery evidence on record."),
+            "price": dim(0.55, "Line 1 billed above the contract rate."),
+            "authenticity": dim(0.9, "Known channel and template."),
+            "consistency": dim(0.95, "Amount in line with history."),
+        },
+        "versions": {"engines": {"leakage": "leakage-1"}},
+        "holds": [],
+        "mode": {"leakage": "advisory", "reality": "advisory"},
+    }
 
 
 def _golden_invoice() -> dict:

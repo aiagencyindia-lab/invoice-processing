@@ -40,6 +40,7 @@ from invoice_processing.api import (
     auth,
     config_routes,
     gl_routes,
+    integration_routes,
     kpi_routes,
     po_routes,
     service,
@@ -47,7 +48,11 @@ from invoice_processing.api import (
     system,
     trust_audit_routes,
     trust_explain_routes,
+    trust_provenance_routes,
+    trust_reality_routes,
     trust_routes,
+    trust_score_routes,
+    v2_routes,
     vendor_routes,
 )
 from invoice_processing.api.service import app
@@ -1493,6 +1498,51 @@ class TestTrustFindingsIsolation:
         assert kept["params"] == {"price": "1"} and kept["reviewed"] is False
 
 
+def app_paths() -> set[str]:
+    """Every path the app serves, through included routers."""
+
+    def walk(routes, prefix: str = ""):
+        for route in routes:
+            if hasattr(route, "path"):
+                yield prefix + route.path
+            elif hasattr(route, "original_router"):  # an included router
+                yield from walk(
+                    route.original_router.routes,
+                    prefix + route.include_context.prefix,
+                )
+
+    return set(walk(app.routes))
+
+
+class TestWave3StubsIsolation:
+    """The scaffold's route stubs answer 503 to every tenant: nothing to leak
+    until a branch builds them, and then that branch's own module carries the
+    real two-tenant probe (its PROBED replaces these paths)."""
+
+    # (method, route template, role). Each entry counts as this route's
+    # probe; a branch that builds a route deletes its entry here and lists the
+    # route in its own module's PROBED, or TestCoverage fails.
+    STUBS: ClassVar[list[tuple[str, str, str]]] = [
+        ("get", "/api/trust/transactions/{node_id}/trust", "viewer"),
+        ("get", "/api/trust/vendors/{node_id}/trust", "viewer"),
+        ("get", "/api/trust/posture", "viewer"),
+        ("get", "/api/trust/readiness", "admin"),
+        ("post", "/api/trust/engines/{engine}/mode", "admin"),
+        ("post", "/api/trust/findings/{finding_id}/evidence-request", "clerk"),
+        ("get", "/api/trust/evidence-requests", "viewer"),
+        ("post", "/api/trust/evidence-requests/{request_id}/proof", "clerk"),
+        ("post", "/api/vendors/{vendor_id}/documents", "clerk"),
+        ("post", "/api/trust/documents/{document_id}/authenticity", "viewer"),
+    ]
+
+    @pytest.mark.parametrize(("method", "template", "role"), STUBS)
+    def test_a_stub_answers_no_tenant(self, clients, method, template, role):
+        path = re.sub(r"\{[^}]+\}", "x1", template)
+        for slug in ("acme", "globex"):
+            r = getattr(clients(slug, role), method)(path)
+            assert r.status_code == 503, (slug, path, r.status_code)
+
+
 class TestCoverage:
     # Routes that legitimately serve no tenant data, with the reason each is
     # exempt. Anything not listed must be probed above.
@@ -1596,12 +1646,19 @@ class TestCoverage:
     EXTRA_PROBE_MODULES: ClassVar[tuple] = (
         "tests.test_trust_audit_routes",
         "tests.test_trust_explain_routes",
+        # Wave 3 branches (absent until each lands).
+        "tests.test_trust_reality_routes",
+        "tests.test_trust_provenance_routes",
+        "tests.test_trust_score_routes",
+        "tests.test_trust_api_routes",
     )
 
     def _probed(self) -> set:
         import importlib  # noqa: PLC0415
 
         probed = set(self.PROBED)
+        # The Wave 3 stubs, while they are stubs (TestWave3StubsIsolation).
+        probed |= {t for _, t, _ in TestWave3StubsIsolation.STUBS}
         for name in self.EXTRA_PROBE_MODULES:
             try:
                 probed |= set(importlib.import_module(name).PROBED)
@@ -1609,14 +1666,28 @@ class TestCoverage:
                 continue
         return probed
 
+    def test_the_route_walk_sees_routes_mounted_from_routers(self):
+        """FastAPI 0.141 puts each included router on `app.routes` as one
+        entry with no path; a walk that skips it checks only the handful of
+        routes defined on the app itself."""
+        paths = app_paths()
+        assert "/api/trust/findings" in paths  # trust_routes, a router
+        assert "/api/invoices/{case_id}" in paths  # defined on the app
+        assert len(paths) > 100
+
+    def test_a_stub_is_covered_only_while_it_is_a_stub(self):
+        """Listing a stub statically too would outlive it: once its branch
+        deleted the STUBS entry, nothing would demand a real probe."""
+        stubs = {t for _, t, _ in TestWave3StubsIsolation.STUBS}
+        assert not stubs & set(self.PROBED)
+
     def test_every_route_is_covered(self):
         """A new endpoint cannot ship without an isolation probe.
 
         This is the test that keeps the file honest: without it, coverage here
         decays silently as endpoints are added.
         """
-        routes = {r.path for r in app.routes if hasattr(r, "path")}
-        uncovered = routes - self._probed() - set(self.EXEMPT)
+        uncovered = app_paths() - self._probed() - set(self.EXEMPT)
         assert not uncovered, (
             f"These routes have no cross-tenant test: {sorted(uncovered)}. "
             "Add a probe above, or list it in EXEMPT with a reason."
@@ -1630,10 +1701,9 @@ class TestCoverage:
         `/api/{tenant_id}/...` -- a value the caller supplies.
         """
         offenders = [
-            r.path
-            for r in app.routes
-            if hasattr(r, "path")
-            and re.search(r"\{[^}]*tenant[^}]*\}", r.path, re.IGNORECASE)
+            path
+            for path in sorted(app_paths())
+            if re.search(r"\{[^}]*tenant[^}]*\}", path, re.IGNORECASE)
         ]
         assert not offenders, f"Routes taking a tenant in the path: {offenders}"
 
@@ -1644,13 +1714,18 @@ class TestCoverage:
             approval_routes,
             config_routes,
             gl_routes,
+            integration_routes,
             kpi_routes,
             po_routes,
             supporting_routes,
             system,
             trust_audit_routes,
             trust_explain_routes,
+            trust_provenance_routes,
+            trust_reality_routes,
             trust_routes,
+            trust_score_routes,
+            v2_routes,
             vendor_routes,
         ):
             source = pathlib.Path(module.__file__).read_text(encoding="utf-8")
