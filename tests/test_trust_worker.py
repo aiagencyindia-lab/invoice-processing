@@ -160,3 +160,43 @@ def test_a_failing_batch_run_is_retried_then_dead_lettered(env, monkeypatch):
     assert outcomes[0] == ["retry"] and outcomes[-1] == [
         "dead-lettered:exhausted"
     ]
+
+
+def test_the_webhook_sweep_runs_once_per_interval(tmp_path, monkeypatch):
+    from invoice_processing.trust.webhooks import deliver  # noqa: PLC0415
+    from invoice_processing.worker import runner  # noqa: PLC0415
+
+    calls = []
+    monkeypatch.setattr(
+        deliver, "due", lambda now, **kw: calls.append(now) or 0
+    )
+    now = {"t": 1000.0}
+    worker = Worker(
+        queue=LocalQueue(tmp_path / "q"),
+        claims=ClaimStore(tmp_path / "claims"),
+        handler=lambda m: {},
+        clock=lambda: now["t"],
+    )
+    worker._deliver_webhooks_if_due()
+    worker._deliver_webhooks_if_due()
+    assert len(calls) == 1
+    now["t"] += runner.WEBHOOK_SCAN_SECONDS + 1
+    worker._deliver_webhooks_if_due()
+    assert len(calls) == 2
+
+
+def test_a_failing_webhook_sweep_does_not_stop_the_worker(
+    tmp_path, monkeypatch
+):
+    from invoice_processing.trust.webhooks import deliver  # noqa: PLC0415
+
+    def boom(now, **kw):
+        raise RuntimeError("smtp? no, http")
+
+    monkeypatch.setattr(deliver, "due", boom)
+    worker = Worker(
+        queue=LocalQueue(tmp_path / "q"),
+        claims=ClaimStore(tmp_path / "claims"),
+        handler=lambda m: {},
+    )
+    worker._deliver_webhooks_if_due()  # logged, not raised
