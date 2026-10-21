@@ -30,18 +30,38 @@ HELD_UNTIL = "rejected"
 def payment_hold(
     tenant_id: str, case_id: str, *, url: str | None = None, settings_store=None
 ) -> str | None:
+    """Why this payment is held, as one sentence, or None."""
+    return payment_hold_detail(
+        tenant_id, case_id, url=url, settings_store=settings_store
+    )["message"]
+
+
+def payment_hold_detail(
+    tenant_id: str, case_id: str, *, url: str | None = None, settings_store=None
+) -> dict:
+    """The hold and what it is made of: {held, message, holds: [{finding_id,
+    type, engine, summary}], waiting: [engine], transaction_node}. An
+    override names the finding ids it covered, so export can tell a hold
+    raised later from the one an administrator let through."""
     from ..api import service  # noqa: PLC0415 - the gate is asked from the API
 
+    none = {
+        "held": False,
+        "message": None,
+        "holds": [],
+        "waiting": [],
+        "transaction_node": None,
+    }
     graph = service.get_graph_store()
     if graph is None:
-        return None
+        return none
     enforcing = {
         name
         for name in ENGINES
         if engine_mode(tenant_id, name, settings_store) == "enforcing"
     }
     if not enforcing:
-        return None
+        return none
     with tenant_session(tenant_id, url) as s:
         row = s.execute(
             select(Invoice.id, Invoice.created_at)
@@ -49,7 +69,7 @@ def payment_hold(
             .order_by(Invoice.created_at.desc())
         ).first()
     if row is None:
-        return None
+        return none
     invoice_id, created_at = row
     waiting = sorted(
         (enforcing & HOLD_ENGINES)
@@ -58,10 +78,10 @@ def payment_hold(
     node = graph.nodes_by_ref(tenant_id, "invoices", [invoice_id]).get(
         invoice_id
     )
-    if node is None:
-        return _message([], waiting)
     holding = []
-    for f in FindingStore(url).list(tenant_id, transaction_node=node):
+    for f in (
+        FindingStore(url).list(tenant_id, transaction_node=node) if node else []
+    ):
         if f["status"] == HELD_UNTIL:
             continue
         # evaluate() stamps engine and hold on every finding, so this process
@@ -72,8 +92,25 @@ def payment_hold(
             f["type"]
         )
         if holds and engine in enforcing:
-            holding.append(f"{f['type']} ({f['summary']})")
-    return _message(holding, waiting)
+            holding.append(
+                {
+                    "finding_id": f["id"],
+                    "type": f["type"],
+                    "engine": engine,
+                    "summary": f["summary"],
+                }
+            )
+    holding.sort(key=lambda h: (h["type"], h["finding_id"]))
+    message = _message(
+        [f"{h['type']} ({h['summary']})" for h in holding], waiting
+    )
+    return {
+        "held": message is not None,
+        "message": message,
+        "holds": holding,
+        "waiting": waiting,
+        "transaction_node": node,
+    }
 
 
 def _checked(graph, tenant_id, invoice_id, created_at) -> set[str]:
