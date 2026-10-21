@@ -475,3 +475,38 @@ def test_a_clean_run_that_releases_a_finding_lifts_its_hold(env):
     state["emit"] = False
     run(env, modes={"payment": "enforcing"})
     assert _held(url) == [("T-HOLD6", False)]
+
+
+# -- the score hook (Wave 3) ------------------------------------------------------
+
+
+def test_the_score_is_computed_after_the_engines_ran(env, monkeypatch):
+    from invoice_processing.trust import score  # noqa: PLC0415
+
+    seen = []
+    monkeypatch.setattr(
+        score, "compute", lambda ectx, report: seen.append(report)
+    )
+    ev.RUNNERS["payment"] = lambda ectx: []
+    run(env, modes={"payment": "advisory"})
+    assert seen == [
+        {
+            "leakage": "off",
+            "payment": {"mode": "advisory", "findings": 0},
+            "provenance": "off",
+            "gst_itc": "off",
+            "reality": "off",
+        }
+    ]
+
+
+def test_a_failing_score_never_fails_the_run(env, monkeypatch):
+    from invoice_processing.trust import score  # noqa: PLC0415
+
+    def boom(ectx, report):
+        raise RuntimeError("score down")
+
+    monkeypatch.setattr(score, "compute", boom)
+    ev.RUNNERS["payment"] = lambda ectx: []
+    out = run(env, modes={"payment": "advisory"})
+    assert out["engines"]["payment"] == {"mode": "advisory", "findings": 0}

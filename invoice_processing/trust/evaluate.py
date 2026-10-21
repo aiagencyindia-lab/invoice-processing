@@ -83,6 +83,19 @@ def _document(s, tenant_id: str, document_id: str) -> dict | None:
     }
 
 
+def _score(ectx: EngineContext, report: dict) -> None:
+    """The trust score after the engines ran. Never fails the run: a score
+    is a report on the findings, and the findings are already written."""
+    from . import score  # noqa: PLC0415
+
+    try:
+        score.compute(ectx, report)
+    except Exception as exc:
+        logger.warning(
+            "trust_score_failed", extra={"error": type(exc).__name__}
+        )
+
+
 def _owns_holds(name: str) -> bool:
     return name in HOLD_ENGINES or any(
         finding_model.TYPE_ENGINE.get(code) == name
@@ -332,6 +345,8 @@ def evaluate(
         report[name] = {"mode": mode, "findings": len(specs)}
         found += len(specs)
         progress(name)
+    if any(isinstance(r, dict) for r in report.values()):
+        _score(base, report)
     if document_id is None or invoice_node is not None:
         # A contract's run checks no invoice; a batch run checks them all.
         _record_checked(

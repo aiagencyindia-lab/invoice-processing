@@ -40,6 +40,7 @@ from invoice_processing.api import (
     auth,
     config_routes,
     gl_routes,
+    integration_routes,
     kpi_routes,
     po_routes,
     service,
@@ -47,7 +48,11 @@ from invoice_processing.api import (
     system,
     trust_audit_routes,
     trust_explain_routes,
+    trust_provenance_routes,
+    trust_reality_routes,
     trust_routes,
+    trust_score_routes,
+    v2_routes,
     vendor_routes,
 )
 from invoice_processing.api.service import app
@@ -1493,6 +1498,31 @@ class TestTrustFindingsIsolation:
         assert kept["params"] == {"price": "1"} and kept["reviewed"] is False
 
 
+class TestWave3StubsIsolation:
+    """The scaffold's route stubs answer 503 to every tenant: nothing to leak
+    until a branch builds them, and then that branch's own module carries the
+    real two-tenant probe (its PROBED replaces these paths)."""
+
+    STUBS: ClassVar[list[tuple[str, str, str]]] = [
+        ("get", "/api/trust/transactions/n1/trust", "viewer"),
+        ("get", "/api/trust/vendors/n1/trust", "viewer"),
+        ("get", "/api/trust/posture", "viewer"),
+        ("get", "/api/trust/readiness", "admin"),
+        ("post", "/api/trust/engines/payment/mode", "admin"),
+        ("post", "/api/trust/findings/f1/evidence-request", "clerk"),
+        ("get", "/api/trust/evidence-requests", "viewer"),
+        ("post", "/api/trust/evidence-requests/r1/proof", "clerk"),
+        ("post", "/api/vendors/v1/documents", "clerk"),
+        ("post", "/api/trust/documents/d1/authenticity", "viewer"),
+    ]
+
+    @pytest.mark.parametrize(("method", "path", "role"), STUBS)
+    def test_a_stub_answers_no_tenant(self, clients, method, path, role):
+        for slug in ("acme", "globex"):
+            r = getattr(clients(slug, role), method)(path)
+            assert r.status_code == 503, (slug, path, r.status_code)
+
+
 class TestCoverage:
     # Routes that legitimately serve no tenant data, with the reason each is
     # exempt. Anything not listed must be probed above.
@@ -1589,6 +1619,18 @@ class TestCoverage:
         "/api/trust/contracts/{document_id}/file",
         "/api/trust/contracts/{document_id}/clauses",
         "/api/trust/clauses/{node_id}",
+        # Wave 3 scaffold stubs (TestWave3StubsIsolation); each branch's
+        # module lists its built routes in its own PROBED.
+        "/api/trust/transactions/{node_id}/trust",
+        "/api/trust/vendors/{node_id}/trust",
+        "/api/trust/posture",
+        "/api/trust/readiness",
+        "/api/trust/engines/{engine}/mode",
+        "/api/trust/findings/{finding_id}/evidence-request",
+        "/api/trust/evidence-requests",
+        "/api/trust/evidence-requests/{request_id}/proof",
+        "/api/vendors/{vendor_id}/documents",
+        "/api/trust/documents/{document_id}/authenticity",
     }
 
     # Sibling test modules that own routes and carry their own two-tenant
@@ -1596,6 +1638,11 @@ class TestCoverage:
     EXTRA_PROBE_MODULES: ClassVar[tuple] = (
         "tests.test_trust_audit_routes",
         "tests.test_trust_explain_routes",
+        # Wave 3 branches (absent until each lands).
+        "tests.test_trust_reality_routes",
+        "tests.test_trust_provenance_routes",
+        "tests.test_trust_score_routes",
+        "tests.test_trust_api_routes",
     )
 
     def _probed(self) -> set:
@@ -1644,13 +1691,18 @@ class TestCoverage:
             approval_routes,
             config_routes,
             gl_routes,
+            integration_routes,
             kpi_routes,
             po_routes,
             supporting_routes,
             system,
             trust_audit_routes,
             trust_explain_routes,
+            trust_provenance_routes,
+            trust_reality_routes,
             trust_routes,
+            trust_score_routes,
+            v2_routes,
             vendor_routes,
         ):
             source = pathlib.Path(module.__file__).read_text(encoding="utf-8")
