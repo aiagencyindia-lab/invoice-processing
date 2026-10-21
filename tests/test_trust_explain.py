@@ -91,7 +91,6 @@ from invoice_processing.trust.explain import counterfactual as cf  # noqa: E402
 from invoice_processing.trust.explain import engine  # noqa: E402
 from invoice_processing.trust.explain.templates import TEMPLATES  # noqa: E402
 from invoice_processing.trust.findings import model as finding_model  # noqa: E402
-from invoice_processing.trust.types import TABLE  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures" / "trust_explain"
 T = "tenant-acme"
@@ -145,23 +144,7 @@ class FakeGraph:
         ]
 
 
-# The Wave 3 codes the scaffold registered before their engines exist. Each
-# skips until its branch (v2/w3-reality, v2/w3-provenance) adds the fixture
-# and the template; the wave closes with this set empty.
-WAVE3_PENDING = {
-    code
-    for code, t in TABLE.items()
-    if code.startswith("REAL-") or code in ("PROV-KYC-SUSPECT", "PROV-EDITED")
-}
-
-
-def _pending(code: str) -> bool:
-    return code in WAVE3_PENDING and not (FIXTURES / f"{code}.json").exists()
-
-
 def load(code: str) -> tuple[dict, FakeGraph, dict]:
-    if _pending(code):
-        pytest.skip(f"{code}: its Wave 3 branch adds the fixture")
     data = json.loads((FIXTURES / f"{code}.json").read_text())
     f = {
         "owner_id": None,
@@ -180,14 +163,11 @@ ENGINE_TYPES = {
     t
     for t, e in finding_model.TYPE_ENGINE.items()
     if e in ("leakage", "payment", "provenance", "gst_itc", "reality")
-    and not _pending(t)
 }
 
 
 @pytest.mark.parametrize("code", ALL_TYPES)
 def test_every_type_has_a_fixture(code):
-    if _pending(code):
-        pytest.skip(f"{code}: its Wave 3 branch adds the fixture")
     assert (FIXTURES / f"{code}.json").exists()
 
 

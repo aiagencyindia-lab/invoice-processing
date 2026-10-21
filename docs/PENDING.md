@@ -127,20 +127,32 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   - [ ] Engagement scope is a filter, not a FK: overlapping engagements
         count a recovery twice. Add `audit_id` to finding events if it bites.
   - [ ] `categories` scoping is keyword-weak (no category master in v1).
-- [ ] **Wave 3 (Always-on)** — program plan
+- [x] **Wave 3 (Always-on)** — program plan
       `docs/superpowers/plans/2026-10-21-v2-wave3-program.md`; specs
-      `docs/superpowers/specs/2026-10-21-v2-wave3-*-design.md`.
-  - [ ] Scaffold (`v2/w3-scaffold`): hold ledger + webhook outbox, gate
+      `docs/superpowers/specs/2026-10-21-v2-wave3-*-design.md`. Merged
+      2026-10-21/22: scaffold (#70), dependency floor (#71), stub-probe
+      hand-over (#77), reality (#78), provenance v2 (#76), trust score
+      (#75), API keys + `/v2` + webhooks (#74), frontend (#73), close-out
+      (this PR).
+  - [x] Scaffold (`v2/w3-scaffold`): hold ledger + webhook outbox, gate
         detail (override by finding id), static type registry, mode writer
         with readiness clock, API-key hook, evidence history kinds, route
         stubs, worker sweep, benchmark hooks, frontend shell.
-  - [ ] Reality checks (`v2/w3-reality`) · [ ] Provenance v2
-        (`v2/w3-provenance`) · [ ] Trust Score (`v2/w3-score`) · [ ] API keys,
-        `/v2`, webhooks (`v2/w3-api`) · [ ] Frontend (`v2/w3-frontend`).
-  - [ ] Wave close: `WAVE3_PENDING` in `tests/test_trust_explain.py` is empty
-        (every Wave 3 code has its explain fixture and template, no skips).
-  - [ ] The API key resolver must refuse keys of a closed tenant
-        (`sso.enforce_active` does this for users; keys bypass it).
+  - [x] Reality checks (`v2/w3-reality`) · [x] Provenance v2
+        (`v2/w3-provenance`) · [x] Trust Score (`v2/w3-score`) · [x] API keys,
+        `/v2`, webhooks (`v2/w3-api`) · [x] Frontend (`v2/w3-frontend`).
+  - [x] Wave close: every Wave 3 code has its explain fixture and template
+        (the `WAVE3_PENDING` skips are gone), and the stub-isolation class is
+        gone (each built route is probed in its branch's own test module).
+  - [x] The API key resolver refuses keys of a tenant that is not `active`
+        (`suspended`/`purged`), tested in `tests/test_trust_api_keys.py`.
+  - [ ] An API key request costs one query per active tenant (FORCE RLS on
+        `api_keys` blocks a cross-tenant prefix lookup). Put the tenant in
+        the key (`ik_{tenant_slug}_{prefix}_{secret}`) or add a lookup
+        policy before tenants number in the hundreds.
+  - [ ] Ruff's `target-version` stays `py310` below `requires-python >=3.11`;
+        moving it to `py311` rewrites every `timezone.utc` to `UTC` (~128
+        sites): a change of its own.
   - [ ] Deferred from Wave 3: webhook outbox retention sweep; Slack /
         WhatsApp / email notifications; public evidence-upload links;
         copy-move and ML forensics; live connectors (OAuth); rate limiting
