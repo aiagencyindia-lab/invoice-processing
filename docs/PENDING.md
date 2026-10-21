@@ -127,7 +127,27 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   - [ ] Engagement scope is a filter, not a FK: overlapping engagements
         count a recovery twice. Add `audit_id` to finding events if it bites.
   - [ ] `categories` scoping is keyword-weak (no category master in v1).
-- [ ] Waves 3–4 per the spec §2.
+- [ ] **Wave 3 (Always-on)** — program plan
+      `docs/superpowers/plans/2026-10-21-v2-wave3-program.md`; specs
+      `docs/superpowers/specs/2026-10-21-v2-wave3-*-design.md`.
+  - [ ] Scaffold (`v2/w3-scaffold`): hold ledger + webhook outbox, gate
+        detail (override by finding id), static type registry, mode writer
+        with readiness clock, API-key hook, evidence history kinds, route
+        stubs, worker sweep, benchmark hooks, frontend shell.
+  - [ ] Reality checks (`v2/w3-reality`) · [ ] Provenance v2
+        (`v2/w3-provenance`) · [ ] Trust Score (`v2/w3-score`) · [ ] API keys,
+        `/v2`, webhooks (`v2/w3-api`) · [ ] Frontend (`v2/w3-frontend`).
+  - [ ] Wave close: `WAVE3_PENDING` in `tests/test_trust_explain.py` is empty
+        (every Wave 3 code has its explain fixture and template, no skips).
+  - [ ] The API key resolver must refuse keys of a closed tenant
+        (`sso.enforce_active` does this for users; keys bypass it).
+  - [ ] Deferred from Wave 3: webhook outbox retention sweep; Slack /
+        WhatsApp / email notifications; public evidence-upload links;
+        copy-move and ML forensics; live connectors (OAuth); rate limiting
+        and idempotency keys on `/v2`; `/v2/agents*` (Wave 4).
+  - [ ] Partner gates: AC-23 reviewer agreement on reality checks, ≥ 70 %
+        of findings before payment, cost per transaction ≤ ₹6.
+- [ ] Wave 4 per the spec §2.
 - [ ] Remove the Postgres TCP proxy before the trust routes go live (it was
       added for bootstrap only).
 

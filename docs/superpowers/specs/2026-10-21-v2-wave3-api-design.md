@@ -7,7 +7,7 @@
 ## API keys (`apikeys.py`)
 
 - `create(ctx, name, role) -> (row_dict, plaintext)`; plaintext `ik_{prefix}_{secret}` with `secrets.token_urlsafe(32)`; `key_hash = sha256(secret)`; `role ≤ approver` (admin keys refused). Audit `api_key_created {name, role, prefix}`.
-- `resolve(token) -> Principal | None`: parse the prefix, look the row up through an engine-level session (never a tenant session — the prefix lookup is cross-tenant by nature, as `_read_heartbeat_row` does), `hmac.compare_digest` on the hash, refuse `revoked_at`, touch `last_used_at` best-effort; `Principal(user_id=f"api-key:{id}", email=f"{name}@api-key.{tenant_id}", tenant_id, role)`. A malformed or unknown key → `AuthError` (401). A bearer token that is not `ik_…` → `None` (falls through).
+- `resolve(token) -> Principal | None`: parse the prefix, look the row up through an engine-level session (never a tenant session — the prefix lookup is cross-tenant by nature, as `_read_heartbeat_row` does), `hmac.compare_digest` on the hash, refuse `revoked_at`, touch `last_used_at` best-effort; `Principal(user_id=f"api-key:{id}", email=f"{name}@api-key.{tenant_id}", tenant_id, role)`. A malformed or unknown key, or a key of a closed tenant (`Tenant.status != "active"`, the rule `sso.enforce_active` applies to users) → `None`, which `auth` turns into a 401. A signed-in user's bearer always wins over a key header (scaffold).
 - `revoke(ctx, key_id)`; audit `api_key_revoked`.
 - Routes (admin): `GET /api/integrations/api-keys`, `POST` `{name, role}` → 201 with `key` shown once, `DELETE /api/integrations/api-keys/{id}`. A key-made principal (`user_id` starting `api-key:`) gets 403 on every `/api/integrations/*` route.
 

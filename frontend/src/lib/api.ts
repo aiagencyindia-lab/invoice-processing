@@ -369,6 +369,9 @@ export type Workflow = {
   decided_at?: string;
   reason?: string | null;
   reason_category?: string;
+  /** The trust hold an administrator overrode at approval, and the findings
+   *  it covered; a finding raised later holds export again. */
+  hold_overridden?: { message: string; finding_ids: string[] } | null;
 };
 
 export type InvoiceDetail = InvoiceSummary & {
@@ -388,6 +391,11 @@ export type InvoiceDetail = InvoiceSummary & {
   lock: RecordLock | null;
   /** Per-line GL coding; absent on a case coded before GL coding existed. */
   gl_coding?: GlCoding | null;
+  /** Whether the trust layer holds this payment, and on which findings.
+   *  Absent from an API older than Wave 3. */
+  hold?: HoldDetail | null;
+  /** The invoice's Evidence Graph node (for the trust score), or null. */
+  trust_node?: string | null;
 };
 
 /** A tenant rule that codes invoice lines to a GL account. At least one of
@@ -1166,4 +1174,151 @@ export type LedgerExport = {
     capped: string;
     due: string;
   };
+};
+
+
+// Wave 3 (always-on trust): holds, the Transaction Trust Score, posture,
+// engine readiness, evidence requests, API keys and webhooks. The shapes the
+// scaffold fixed in docs/superpowers/specs/2026-10-21-v2-wave3-*-design.md.
+
+export type HoldDetail = {
+  held: boolean;
+  message: string | null;
+  holds: { finding_id: string; type: string; engine: string; summary: string }[];
+  /** Enforcing engines that have not checked this invoice yet. */
+  waiting: string[];
+  transaction_node: string | null;
+};
+
+export type TrustHold = {
+  id: string;
+  finding_id: string;
+  type: string;
+  engine: string;
+  placed_at: string;
+};
+
+export type Dimension =
+  | "identity"
+  | "authorization"
+  | "reality"
+  | "price"
+  | "authenticity"
+  | "consistency";
+
+export type DimensionScore = {
+  /** 0..1, or null when there is nothing to judge it by. */
+  value: number | null;
+  /** An open hold-type finding in this dimension from an enforcing engine. */
+  hold: boolean;
+  drivers: string[];
+  note: string;
+};
+
+export type TrustScore = {
+  score_version: string;
+  computed_at: string;
+  /** Advisory only: the dimensions drive holds, never the composite. */
+  composite: number | null;
+  dimensions: Record<Dimension, DimensionScore>;
+  versions: Record<string, unknown>;
+  holds: string[];
+  mode: Record<string, string>;
+};
+
+export type TransactionTrust = TrustScore & {
+  hold: HoldDetail;
+  findings: Record<Dimension, TrustFinding[]>;
+};
+
+export type VendorTrustProfile = {
+  vendor: TrustVendor;
+  dimensions: Record<Dimension, number | null>;
+  findings_by_type: Record<string, { open: number; decided: number }>;
+  gst: { status: string | null; missed_periods: number | null; observed_at: string | null } | null;
+  bank_verified: boolean | null;
+  kyc: { document_id: string; subkind: string; score: number | null; at: string | null }[];
+  network: { node: string; name: string | null; shared: string[] }[];
+  timeline: { month: string; composite: number | null }[];
+};
+
+export type TrustPosture = {
+  found: string;
+  prevented: string;
+  recovered: string;
+  written_off: string;
+  open_exposure: string;
+  by_type: Record<string, { count: number; impact: string }>;
+  by_vendor: { node: string; name: string | null; count: number; impact: string }[];
+  pre_payment_share: number | null;
+  provenance_distribution: Record<string, number>;
+  verification_coverage: { identity: number | null; reality: number | null; authenticity: number | null };
+  holds: { open: number; placed: number; lifted: number };
+};
+
+export type EngineReadiness = {
+  engine: string;
+  mode: string;
+  since: string | null;
+  days_in_mode: number | null;
+  findings: number;
+  would_have_held: number;
+  held: number;
+  open_holds: number;
+  triage: { decided: number; accepted: number; rejected: number; precision: number | null };
+  failures: number;
+  recommendation: string;
+};
+
+export type Readiness = { engines: EngineReadiness[] };
+
+export type EvidenceRequest = {
+  id: string;
+  finding_id: string;
+  owner: string;
+  due_date: string | null;
+  note: string | null;
+  status: "open" | "fulfilled" | "cancelled";
+  proof_document_id: string | null;
+  requested_by: string | null;
+  fulfilled_at: string | null;
+  overdue: boolean;
+  created_at: string | null;
+};
+
+export type ApiKey = {
+  id: string;
+  name: string;
+  prefix: string;
+  role: string;
+  created_by: string | null;
+  created_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+};
+
+/** Returned once, at creation: the only time the full key is shown. */
+export type ApiKeyCreated = ApiKey & { key: string };
+
+export type WebhookEndpoint = {
+  id: string;
+  url: string;
+  events: string[];
+  active: boolean;
+  description: string | null;
+  /** Masked except in the creation response. */
+  secret: string;
+  created_at: string | null;
+};
+
+export type WebhookDelivery = {
+  id: string;
+  event: string;
+  attempts: number;
+  next_attempt_at: string | null;
+  delivered_at: string | null;
+  last_status: number | null;
+  last_error: string | null;
+  dead_at: string | null;
+  payload: Record<string, unknown>;
 };

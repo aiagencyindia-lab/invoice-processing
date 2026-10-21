@@ -14,7 +14,7 @@ The scaffold owns every shared file and lands first. It adds no behaviour a tena
 
 **`Decision.hold_overridden`** → `{"message": str, "finding_ids": [..]} | None`; stored on the workflow artifact; export passes when `set(detail.holds ids) <= set(hold_overridden.finding_ids)` and `waiting == []`.
 
-**`GET /api/invoices/{case_id}`** gains `hold` (the detail above, `None` without a graph store) and `trust_node` (invoice graph node id or `None`).
+**`GET /api/invoices/{case_id}`** gains `hold` (the detail above; `held: false` without a graph store) and `trust_node` (invoice graph node id or `None`).
 
 **`trust/types.py`**: `Type(engine, hold, dimension, description)`; `TABLE: dict[code, Type]` for every code of Waves 1–3; `DIMENSIONS = ("identity", "authorization", "reality", "price", "authenticity", "consistency")`. `findings/model.py` registers `TABLE` at import; `register_type(..., dimension=None)` fills `TYPE_DIMENSION`; a test asserts each engine's own `register_type` calls agree with `TABLE`.
 
@@ -44,7 +44,7 @@ The scaffold owns every shared file and lands first. It adds no behaviour a tena
 
 **Frontend types** (`lib/api.ts`): `TrustHold`, `HoldDetail`, `TrustScore {score_version, computed_at, composite, dimensions: Record<Dimension, {value: number | null, hold: boolean, drivers: string[], note: string}>, versions, holds, mode}`, `VendorTrustProfile`, `TrustPosture`, `Readiness`, `EvidenceRequest`, `ApiKey`, `ApiKeyCreated`, `WebhookEndpoint`, `WebhookDelivery`; `InvoiceDetail.hold`, `InvoiceDetail.trust_node`; `Workflow.hold_overridden`. NAV: Trust posture (`/trust-posture`), Trust engines (`/trust-engines`, admin), Integrations (`/integrations`, admin); placeholder pages with the `h1`; `vendors/[id]` placeholder.
 
-**e2e seed** (`scripts/e2e_api.py`): one `REAL-NO-EVIDENCE` finding, one `trust_score` node (the shape above, all six dimensions present) and one open `trust_holds` row for `case_005`, so the frontend branch's e2e runs without a worker.
+**e2e seed** (`scripts/e2e_api.py`): one `REAL-NO-EVIDENCE` finding and one `trust_score` node (the shape above, all six dimensions present) for `case_005`, so the frontend branch's e2e runs without a worker. No `trust_holds` row: the banner reads the gate, which holds only with an enforcing engine; the frontend e2e sets a mode itself to drive it.
 
 ## Deliverables S1–S9
 

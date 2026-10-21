@@ -225,6 +225,9 @@ test("every sidebar view opens", async ({ page }) => {
     "Vendors",
     "Findings",
     "Trust audit",
+    "Trust posture",
+    "Trust engines",
+    "Integrations",
     "Settings",
     "Admin",
   ]) {

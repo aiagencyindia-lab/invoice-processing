@@ -44,6 +44,9 @@ const NAV = [
   { href: "/vendors", label: "Vendors", glyph: "◆", min: "clerk" },
   { href: "/findings", label: "Findings", glyph: "⚑" },
   { href: "/trust-audit", label: "Trust audit", glyph: "◎", min: "approver" },
+  { href: "/trust-posture", label: "Trust posture", glyph: "◉" },
+  { href: "/trust-engines", label: "Trust engines", glyph: "◐", min: "admin" },
+  { href: "/integrations", label: "Integrations", glyph: "⇄", min: "admin" },
   { href: "/settings", label: "Settings", glyph: "⚙", min: "admin" },
   { href: "/admin", label: "Admin", glyph: "✦", min: "admin" },
 ];

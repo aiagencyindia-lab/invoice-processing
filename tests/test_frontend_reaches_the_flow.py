@@ -31,6 +31,9 @@ VIEWS = (
     "admin",
     "findings",
     "trust-audit",
+    "trust-posture",
+    "trust-engines",
+    "integrations",
 )
 
 pytestmark = pytest.mark.skipif(
