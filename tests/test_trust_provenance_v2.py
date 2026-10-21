@@ -138,3 +138,48 @@ def test_fonts_family(names, value):
 
 def test_fonts_is_zero_without_a_text_layer():
     assert forensics.fonts(_facts(has_text=False)) == 0.0
+
+
+# -- explain -------------------------------------------------------------------
+
+
+def _explain(code, **details):
+    from invoice_processing.trust.explain import engine  # noqa: PLC0415
+    from tests.test_trust_explain import T, load  # noqa: PLC0415
+
+    f, graph, _ = load(code)
+    f["details"] = {**f["details"], **details}
+    x = engine.build(T, f, graph=graph)
+    return x, " ".join(s.text for s in x.why)
+
+
+def test_kyc_explanation_names_the_document_and_its_weak_families():
+    x, why = _explain("PROV-KYC-SUSPECT")
+    assert "gst certificate" in why and "0.29" in why
+    assert "producer 0.30" in why and "fonts 0.00" in why
+    assert "channel" not in why.split("Weakest")[1]
+    assert "registry" in x.next_action
+    assert any(a.kind == "vendor" and a.node_id == "n-ven" for a in x.caused_by)
+
+
+def test_edited_explanation_gives_saves_and_dates():
+    x, why = _explain("PROV-EDITED")
+    assert "2 times" in why
+    assert "2026-03-14" in why and "2026-03-10" in why
+    assert "PDF-XChange Editor 9.5" in why
+    assert "as first generated" in x.next_action
+
+
+def test_edited_explanation_without_dates():
+    _, why = _explain("PROV-EDITED", mod_date=None, invoice_date=None)
+    assert "2 times" in why and "None" not in why
+
+
+def test_suspect_explanation_names_weak_v2_families_and_reads_v1():
+    _, why = _explain(
+        "PROV-SUSPECT",
+        components={"channel": 1.0, "producer": 0.3, "edits": 0.2},
+    )
+    assert "Weakest: edits 0.20, producer 0.30." in why
+    _, v1 = _explain("PROV-SUSPECT")  # v1 components only
+    assert "Components:" in v1
