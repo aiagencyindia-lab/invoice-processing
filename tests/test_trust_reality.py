@@ -665,3 +665,49 @@ def test_a_proof_never_outweighs_contrary_evidence(env):
     proof(env, inv, "REAL-CONTRADICTED")
     [f] = env.run(inv)
     assert f.type == "REAL-CONTRADICTED"
+
+
+# -- explanations --------------------------------------------------------------
+
+from invoice_processing.trust.explain import engine as explain  # noqa: E402
+from invoice_processing.trust.explain.templates import TEMPLATES  # noqa: E402
+from tests.test_trust_explain import load  # noqa: E402
+
+REAL_CODES = (
+    "REAL-CONTRADICTED",
+    "REAL-PARTIAL",
+    "REAL-NO-EVIDENCE",
+    "REAL-PRICE-JUMP",
+    "REAL-VOLUME-SPIKE",
+    "REAL-SHUTDOWN",
+)
+
+
+def explained(code):
+    f, graph, _ = load(code)
+    return explain.build(T, f, graph=graph)
+
+
+@pytest.mark.parametrize("code", REAL_CODES)
+def test_every_code_has_a_template_that_passes_check(code):
+    assert code in TEMPLATES
+    x = explained(code)  # build() runs check()
+    assert "evidence request" in x.next_action.lower()
+
+
+def test_contradicted_names_expected_and_found_with_the_unit():
+    x = explained("REAL-CONTRADICTED")
+    assert "100 units" in x.what_happened and "80" in x.what_happened
+    assert any("GRN" in w and "POD" in w for w in x.would_change)
+    assert any(s.node_id == "n-grn" for s in x.why)
+
+
+@pytest.mark.parametrize(
+    ("kind", "words"),
+    [("services", "timesheet"), ("subscription", "seat report")],
+)
+def test_would_change_names_the_missing_document(kind, words):
+    f, graph, _ = load("REAL-NO-EVIDENCE")
+    graph._nodes["n-real"]["attrs"]["kind"] = kind
+    x = explain.build(T, f, graph=graph)
+    assert any(words in w.lower() for w in x.would_change)
