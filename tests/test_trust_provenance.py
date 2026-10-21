@@ -913,3 +913,39 @@ def test_tamper_summary_is_symmetric_when_both_copies_are_approved(world):
     batch = provenance.run(world.ectx())
     assert len(batch) == 2
     assert all(s.summary.startswith("Two approved copies") for s in batch)
+
+
+# -- benchmark planting (v2) ---------------------------------------------------
+
+
+def test_benchmark_plants_edited_pdfs_and_decoys(world, tmp_path):
+    import random  # noqa: PLC0415
+
+    from benchmark.history.faults import provenance as fault  # noqa: PLC0415
+    from invoice_processing.adapters import LocalBlobStore  # noqa: PLC0415
+
+    rows = {
+        "vendor": [{"vendor_key": "Acme Supplies"}, {"vendor_key": "Other Co"}]
+    }
+    faults: list = []
+    fault.inject(random.Random(7), rows, faults, start=None, months=12)  # noqa: S311
+    edited = {f["doc_number"] for f in faults if f["type"] == "PROV-EDITED"}
+    assert len(edited) == fault.EDITED_CASES
+    assert fault.GATES["PROV-EDITED"] == {"precision": 1.0, "recall": 0.9}
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"seed": 7, "faults": faults})
+    )
+    fault.seed_graph(CTX, world.graph, tmp_path)
+    world.blobs = LocalBlobStore(tmp_path / "blobs")
+    specs = provenance.run(world.ectx())
+    found = {
+        world.graph.node(T, s.transaction_node)["attrs"]["invoice_number"]
+        for s in specs
+        if s.type == "PROV-EDITED"
+    }
+    assert found == edited
+    # the decoys were scored too, and none of them is edited
+    versions = world.graph.nodes(T, kind="document_version")
+    assert sum(1 for v in versions if v["attrs"].get("engine_version")) > len(
+        edited
+    )
