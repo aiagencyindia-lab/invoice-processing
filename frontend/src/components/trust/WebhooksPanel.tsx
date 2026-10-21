@@ -58,6 +58,8 @@ export function WebhooksPanel() {
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Bumped by Test so an already-open deliveries list fetches again.
+  const [nonce, setNonce] = useState(0);
   const https = /^https:\/\/[^\s/]+/i.test(url.trim());
 
   async function create() {
@@ -85,13 +87,14 @@ export function WebhooksPanel() {
       await api(`/api/integrations/webhooks/${encodeURIComponent(endpoint.id)}/test`, { method: "POST" });
       setNotice(`Queued a ping to ${endpoint.url}.`);
       setOpen(endpoint.id);
+      setNonce((n) => n + 1);
     } catch (caught) {
       setProblem(caught instanceof ApiError ? caught.friendly : String(caught));
     }
   }
 
   return (
-    <div className="panel stack" style={{ padding: 16, gap: 10 }} aria-label="Webhooks">
+    <div className="panel stack" style={{ padding: 16, gap: 10 }} role="region" aria-label="Webhooks">
       <h2 style={{ margin: 0 }}>Webhooks</h2>
       {error ? (
         <div className="empty-state">{error}</div>
@@ -187,13 +190,19 @@ export function WebhooksPanel() {
                         <td>{endpoint.active ? "yes" : "no"}</td>
                         <td>
                           <div className="row" style={{ gap: 4 }}>
-                            <button type="button" className="btn-chip" onClick={() => test(endpoint)}>
+                            <button
+                              type="button"
+                              className="btn-chip"
+                              aria-label={`Test ${endpoint.url}`}
+                              onClick={() => test(endpoint)}
+                            >
                               Test
                             </button>
                             <button
                               type="button"
                               className="btn-chip"
                               aria-expanded={open === endpoint.id}
+                              aria-label={`Deliveries to ${endpoint.url}`}
                               onClick={() => setOpen(open === endpoint.id ? null : endpoint.id)}
                             >
                               Deliveries
@@ -204,7 +213,7 @@ export function WebhooksPanel() {
                       {open === endpoint.id ? (
                         <tr>
                           <td colSpan={4}>
-                            <Deliveries endpoint={endpoint} />
+                            <Deliveries key={nonce} endpoint={endpoint} />
                           </td>
                         </tr>
                       ) : null}

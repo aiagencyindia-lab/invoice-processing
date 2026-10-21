@@ -11,7 +11,9 @@ export default function IntegrationsPage() {
   return (
     <section className="stack" style={{ gap: 16 }}>
       <h1>Integrations</h1>
-      {me && !can(me, "admin") ? (
+      {!me ? (
+        <div className="empty-state">Loading…</div>
+      ) : !can(me, "admin") ? (
         <div className="empty-state">Integrations are for administrators.</div>
       ) : (
         <>

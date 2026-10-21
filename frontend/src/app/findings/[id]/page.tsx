@@ -25,9 +25,10 @@ import { DIMENSION_LABELS, ENGINE_LABELS, MONEY_STATUSES, STATUS_LABELS, money, 
 const TABS = ["Why", "Evidence", "Lineage", "History"] as const;
 type Tab = (typeof TABS)[number];
 
-/** Statuses from which asking for evidence still makes sense: the request
- *  moves the finding to "needs vendor input" (the server has the last word). */
-const REQUESTABLE = new Set(["detected", "triaged", "needs_vendor_input"]);
+/** Statuses from which asking for evidence makes sense: the request moves a
+ *  triaged finding to "needs vendor input" (detected must be triaged first,
+ *  per TRANSITIONS); a further request may follow while it waits. */
+const REQUESTABLE = new Set(["triaged", "needs_vendor_input"]);
 
 /** The Trust Score dimension a finding counts against. The engine may name it
  *  in the details; otherwise the type family decides (trust/types.py TABLE). */
@@ -173,7 +174,7 @@ export default function FindingDetailPage() {
       </header>
 
       {requests.length ? (
-        <div className="panel table-scroll" style={{ padding: 8 }} aria-label="Evidence requests">
+        <div className="panel table-scroll" style={{ padding: 8 }} role="region" aria-label="Evidence requests">
           <table className="data-table">
             <thead>
               <tr>

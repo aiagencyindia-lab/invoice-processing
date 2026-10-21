@@ -592,7 +592,8 @@ function InvoicesWorkbench() {
                   }}
                 />
                 <Findings findings={detail.findings} />
-                <TrustPanel node={detail.trust_node} />
+                {/* Keyed so the last invoice's score never shows under the next one. */}
+                <TrustPanel key={detail.trust_node ?? detail.case_id} node={detail.trust_node} />
                 {chain && chain.steps.length > 0 ? (
                   <ApprovalPanel chain={chain} />
                 ) : null}

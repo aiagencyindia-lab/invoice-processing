@@ -24,14 +24,22 @@ function sinceDate(days: number): string {
 
 function PostureView() {
   const params = useSearchParams();
-  const router = useRouter();
-  const raw = Number(params.get("days") ?? "90");
+  // Empty or unknown ?days= falls back to 90 rather than meaning "all time".
+  const raw = Number(params.get("days") || "90");
   const days = WINDOWS.some((w) => w.days === raw) ? raw : 90;
+  // Keyed by the window: usePoll keeps the last answer across a path change,
+  // and the response does not name its window, so a remount is the only way
+  // not to show 90 days of money under the "30 days" chip.
+  return <PostureBody key={days} days={days} />;
+}
+
+function PostureBody({ days }: { days: number }) {
+  const router = useRouter();
   const since = days ? sinceDate(days) : null;
   const { data: latest, error } = usePoll<TrustPosture>(
     since ? `/api/trust/posture?since=${since}` : "/api/trust/posture",
   );
-  // usePoll keeps the last answer through a failed fetch; an error wins.
+  // usePoll keeps the last answer through a later failed fetch; an error wins.
   const data = error ? null : latest;
 
   const types = Object.entries(data?.by_type ?? {}).sort((a, b) => b[1].count - a[1].count);
@@ -97,7 +105,7 @@ function PostureView() {
             </span>
           </div>
 
-          <div className="panel stack" style={{ padding: 16, gap: 10 }} aria-label="Verification coverage">
+          <div className="panel stack" style={{ padding: 16, gap: 10 }} role="region" aria-label="Verification coverage">
             <div className="eyebrow">Verification coverage</div>
             {(["identity", "reality", "authenticity"] as const).map((name) => (
               <DimensionMeter key={name} name={name} score={data.verification_coverage[name]} />
@@ -167,7 +175,7 @@ function PostureView() {
             </div>
           </div>
 
-          <div className="panel stack" style={{ padding: 16, gap: 6 }} aria-label="Document authenticity">
+          <div className="panel stack" style={{ padding: 16, gap: 6 }} role="region" aria-label="Document authenticity">
             <div className="eyebrow">Document authenticity scores</div>
             {buckets.length ? (
               buckets.map(([bucket, count]) => (

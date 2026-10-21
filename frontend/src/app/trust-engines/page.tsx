@@ -19,7 +19,9 @@ export default function TrustEnginesPage() {
         Engines move off → shadow → advisory → enforcing only when an administrator moves them. Each row shows the
         evidence for the next step.
       </p>
-      {me && !can(me, "admin") ? (
+      {!me ? (
+        <div className="empty-state">Loading…</div>
+      ) : !can(me, "admin") ? (
         <div className="empty-state">Engine modes are for administrators.</div>
       ) : error ? (
         <div className="empty-state" role="alert">

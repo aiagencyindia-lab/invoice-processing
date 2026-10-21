@@ -64,6 +64,12 @@ test("a clerk requests evidence on a reality finding", async ({ page }) => {
   // The reality type counts against the Reality dimension.
   await expect(page.locator("header .badge", { hasText: "Reality" })).toBeVisible();
 
+  // Evidence is asked for on a triaged finding (detected → triaged first).
+  await expect(page.getByRole("button", { name: "Request evidence" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Triaged" }).first().click();
+  await page.getByRole("dialog").getByRole("button", { name: "Triaged" }).click();
+  await expect(page.locator("header .badge").filter({ hasText: "Triaged" })).toBeVisible();
+
   await page.getByRole("button", { name: "Request evidence" }).click();
   const dialog = page.getByRole("dialog", { name: "Request evidence" });
   await dialog.getByLabel("Owner").fill("stores@e2e.test");

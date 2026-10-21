@@ -59,7 +59,7 @@ export function ApiKeysPanel() {
   }
 
   return (
-    <div className="panel stack" style={{ padding: 16, gap: 10 }} aria-label="API keys">
+    <div className="panel stack" style={{ padding: 16, gap: 10 }} role="region" aria-label="API keys">
       <h2 style={{ margin: 0 }}>API keys</h2>
       {error ? (
         <div className="empty-state">{error}</div>

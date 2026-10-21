@@ -27,6 +27,11 @@ function Fact({ label, value }: { label: string; value: string }) {
 
 export default function VendorPage() {
   const { id } = useParams<{ id: string }>();
+  // Keyed so one vendor's profile never shows under another's name.
+  return <VendorView key={id} id={id} />;
+}
+
+function VendorView({ id }: { id: string }) {
   const { data: me } = usePoll<Me>("/api/me");
   const { data: list, error: listError } = usePoll<VendorList>("/api/vendors");
   const vendor = list?.vendors.find((row) => row.id === id) ?? null;
@@ -80,7 +85,7 @@ export default function VendorPage() {
       </Link>
       <h1>{vendor.name}</h1>
 
-      <div className="tiles" aria-label="Vendor profile">
+      <div className="tiles" role="region" aria-label="Vendor profile">
         <Fact label="Tax ID" value={vendor.tax_id || "—"} />
         <Fact label="Kind" value={vendor.kind || "—"} />
         <Fact label="Bank" value={vendor.bank_status} />
@@ -98,7 +103,7 @@ export default function VendorPage() {
         <div className="empty-state">Loading the trust profile…</div>
       ) : (
         <>
-          <div className="panel stack" style={{ padding: 16, gap: 10 }} aria-label="Trust dimensions">
+          <div className="panel stack" style={{ padding: 16, gap: 10 }} role="region" aria-label="Trust dimensions">
             <div className="eyebrow">Trust dimensions · mean of recent invoices</div>
             {Object.keys(DIMENSION_LABELS).map((name) => (
               <DimensionMeter
@@ -158,7 +163,7 @@ export default function VendorPage() {
             )}
           </div>
 
-          <div className="panel stack" style={{ padding: 16, gap: 6 }} aria-label="Monthly composite">
+          <div className="panel stack" style={{ padding: 16, gap: 6 }} role="region" aria-label="Monthly composite">
             <div className="eyebrow">Monthly composite · advisory</div>
             {profile.timeline.length ? (
               profile.timeline.map((point) => (
@@ -187,7 +192,7 @@ export default function VendorPage() {
         </>
       )}
 
-      <div className="panel stack" style={{ padding: 16, gap: 8 }} aria-label="KYC documents">
+      <div className="panel stack" style={{ padding: 16, gap: 8 }} role="region" aria-label="KYC documents">
         <div className="eyebrow">KYC documents</div>
         {docsError ? (
           <span className="muted" style={{ fontSize: 12.5 }}>

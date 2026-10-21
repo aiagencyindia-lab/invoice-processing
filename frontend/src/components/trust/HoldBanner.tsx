@@ -12,7 +12,7 @@ export function HoldBanner({ hold, isAdmin }: { hold: HoldDetail | null | undefi
       className="panel stack"
       role="alert"
       aria-label="Payment hold"
-      style={{ padding: "12px 14px", gap: 6, borderLeft: "3px solid var(--warning)" }}
+      style={{ padding: "12px 14px", gap: 6, borderColor: "var(--warning)" }}
     >
       <strong style={{ fontSize: 13 }}>⚠ {hold.held ? "Payment on hold" : "Waiting on trust checks"}</strong>
       {hold.message ? (

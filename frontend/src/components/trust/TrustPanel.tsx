@@ -12,7 +12,7 @@ export function TrustPanel({ node }: { node: string | null | undefined }) {
     node ? `/api/trust/transactions/${encodeURIComponent(node)}/trust` : null,
   );
   return (
-    <div className="panel stack" style={{ padding: 16, gap: 10 }} aria-label="Trust score">
+    <div className="panel stack" style={{ padding: 16, gap: 10 }} role="region" aria-label="Trust score">
       <div className="row-between">
         <div className="eyebrow">Trust score</div>
         {data && !error ? (
@@ -39,7 +39,13 @@ export function TrustPanel({ node }: { node: string | null | undefined }) {
             data.dimensions[name] ? <DimensionMeter key={name} name={name} score={data.dimensions[name]} /> : null,
           )}
           <span className="faint" style={{ fontSize: 11.5 }}>
-            {data.score_version} · {new Date(data.computed_at).toLocaleString()}
+            {[
+              data.score_version,
+              ...Object.entries((data.versions.engines ?? {}) as Record<string, string>).map(
+                ([engine, version]) => `${engine} ${version}`,
+              ),
+            ].join(" · ")}{" "}
+            · {new Date(data.computed_at).toLocaleString()}
           </span>
         </>
       )}
