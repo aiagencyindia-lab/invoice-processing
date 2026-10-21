@@ -467,3 +467,201 @@ def test_service_period_overlapping_a_shutdown_counts(env):
     )
     periods = {"trust_shutdown_periods": [["2026-03-20", "2026-03-22"]]}
     assert [f.type for f in env.run(inv, settings=periods)] == ["REAL-SHUTDOWN"]
+
+
+# -- through evaluate: modes and holds ----------------------------------------
+
+from datetime import date  # noqa: E402
+
+from invoice_processing.trust import evaluate as ev  # noqa: E402
+from invoice_processing.trust import holds  # noqa: E402
+from invoice_processing.trust.findings.model import (  # noqa: E402
+    Citation,
+    FindingSpec,
+)
+from invoice_processing.trust.findings.store import FindingStore  # noqa: E402
+from invoice_processing.trust.graph.sync import sync_tenant  # noqa: E402
+from invoice_processing.trust.reality.requests import (  # noqa: E402
+    RequestClosed,
+    RequestStore,
+)
+
+
+class Store:
+    def __init__(self, settings):
+        self.settings = settings
+
+    def get(self, tenant_id):
+        return self.settings
+
+
+def evaluate(env, mode, document_id=None):
+    return ev.evaluate(
+        CTX,
+        document_id,
+        graph=env.graph,
+        links=env.links,
+        url=env.url,
+        settings_store=Store({"trust_engine_modes": {"reality": mode}}),
+        providers=env.ectx().providers,
+        decider=FakeDecider({}, fail=True),
+        blobs=object(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "held"), [("enforcing", True), ("advisory", False)]
+)
+def test_contradiction_holds_only_when_enforcing(env, mode, held):
+    _ven, inv, po = goods(env)
+    env.evidence("grn", po, quantity="50", invoice_date="2026-02-08")
+    evaluate(env, mode)
+    evaluate(env, mode)  # a re-run refreshes, never doubles
+    store = FindingStore(env.url)
+    [f] = store.list(T, type="REAL-CONTRADICTED")
+    assert f["details"]["hold"] is True and f["details"]["mode"] == mode
+    assert len(env.graph.nodes(T, kind="reality_check")) == 1
+    assert bool(holds.open_for(T, inv, url=env.url)) is held
+
+
+def test_evidence_arriving_releases_the_hold(env):
+    with tenant_session(T, env.url) as s:
+        s.add(
+            models.Document(
+                tenant_id=T, id="doc-1", sha256="a" * 64, storage_key="k"
+            )
+        )
+        s.flush()
+        s.add(
+            models.Invoice(
+                tenant_id=T,
+                id="inv-1",
+                document_id="doc-1",
+                case_id="case-1",
+                invoice_number="INV-1",
+                invoice_date=date(2026, 2, 10),
+                vendor_name="Acme",
+                po_number="PO-1",
+                total_inc_tax=D("1000"),
+                status="done",
+            )
+        )
+        s.flush()
+        s.add(
+            models.InvoiceLine(
+                tenant_id=T,
+                invoice_id="inv-1",
+                line_number=1,
+                description="Steel rod",
+                quantity=D("100"),
+                unit_price=D("10"),
+            )
+        )
+    po = env.node("po", {"po_number": "PO-1"}, "po:PO-1")
+    env.evidence("grn", po, quantity="50", invoice_date="2026-02-08")
+    sync_tenant(CTX, env.graph, env.links, url=env.url, document_id="doc-1")
+    evaluate(env, "enforcing", "doc-1")
+    store = FindingStore(env.url)
+    [f] = store.list(T, type="REAL-CONTRADICTED")
+    assert f["status"] == "detected" and D(f["impact"]) == D("500")
+    env.evidence("grn", po, quantity="50", invoice_date="2026-02-09")
+    evaluate(env, "enforcing", "doc-1")
+    [f] = store.list(T, type="REAL-CONTRADICTED")
+    assert f["status"] == "rejected"
+
+
+# -- evidence requests ---------------------------------------------------------
+
+
+def finding_on(env, inv, code="REAL-NO-EVIDENCE"):
+    fid, _ = FindingStore(env.url).upsert(
+        CTX,
+        FindingSpec(
+            type=code,
+            transaction_node=inv,
+            dedupe_key=f"{code}:x:{inv}",
+            impact=None,
+            currency="INR",
+            confidence=0.5,
+            engine_version="reality-1",
+            rule_version="FR-23-v1",
+            model_version="none",
+            summary="s",
+            citations=(Citation(inv),),
+        ),
+    )
+    return fid
+
+
+def test_request_lifecycle(env):
+    _ven, inv, _po = goods(env)
+    fid = finding_on(env, inv)
+    store = RequestStore(env.url)
+    row = store.create(
+        CTX,
+        fid,
+        owner="ops@acme.test",
+        due_date=date(2026, 2, 1),
+        note="POD please",
+        requested_by="clerk@acme.test",
+    )
+    assert row["status"] == "open" and row["due_date"] == "2026-02-01"
+    assert (
+        store.list(T, overdue=True, today=date(2026, 2, 2))[0]["id"]
+        == row["id"]
+    )
+    assert store.list(T, overdue=True, today=date(2026, 1, 31)) == []
+    assert store.list(T, status="fulfilled") == []
+    done = store.fulfil(CTX, row["id"], "doc-p", at=NOW)
+    assert (
+        done["status"] == "fulfilled" and done["proof_document_id"] == "doc-p"
+    )
+    assert done["overdue"] is False
+    assert store.proofs(T) == {inv: ["doc-p"]}
+    with pytest.raises(RequestClosed):
+        store.cancel(CTX, row["id"])
+    other = store.create(
+        CTX, fid, owner="o", due_date=None, note=None, requested_by="c"
+    )
+    assert store.cancel(CTX, other["id"])["status"] == "cancelled"
+    with pytest.raises(KeyError):
+        store.get(T, "nope") or store.cancel(CTX, "nope")
+    assert store.get("tenant-other", row["id"]) is None
+
+
+def proof(env, inv, code):
+    store = RequestStore(env.url)
+    row = store.create(
+        CTX,
+        finding_on(env, inv, code),
+        owner="o",
+        due_date=None,
+        note=None,
+        requested_by="c",
+    )
+    store.fulfil(CTX, row["id"], "doc-p", at=NOW)
+    return env.graph.upsert_node(
+        CTX,
+        kind="document_version",
+        natural_key="documents:doc-p:abc",
+        ref_table="documents",
+        ref_id="doc-p",
+        attrs={"kind": "proof"},
+        at=AT,
+    )
+
+
+def test_a_proof_corroborates_an_invoice_with_no_evidence(env):
+    _ven, inv, _po = goods(env)
+    node = proof(env, inv, "REAL-NO-EVIDENCE")
+    assert env.run(inv) == []
+    check = env.check(inv)["attrs"]
+    assert check["result"] == "CORROBORATED" and node in check["evidence"]
+
+
+def test_a_proof_never_outweighs_contrary_evidence(env):
+    _ven, inv, po = goods(env)
+    env.evidence("grn", po, quantity="50", invoice_date="2026-02-08")
+    proof(env, inv, "REAL-CONTRADICTED")
+    [f] = env.run(inv)
+    assert f.type == "REAL-CONTRADICTED"
