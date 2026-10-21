@@ -8,7 +8,7 @@ The scaffold owns every shared file and lands first. It adds no behaviour a tena
 
 **`trust_holds` row** `{id, tenant_id, finding_id, transaction_node, engine, type, placed_at, placed_by, lifted_at, lifted_by, lift_reason}`. Open = `lifted_at IS NULL`; at most one open row per finding (`HoldStore.place` is a no-op on an open row).
 
-**Webhook payload** (one outbox row per subscribed active endpoint): `{"event", "tenant", "occurred_at", "data"}`. `data` for `hold.placed`/`hold.lifted`: `{finding_id, type, engine, transaction_node, case_id, summary, impact, currency}`; for `finding.created`/`finding.decided`: the finding store dict without citation excerpts; `ping`: `{}`.
+**Webhook payload** (one outbox row per subscribed active endpoint): `{"event", "tenant", "occurred_at", "data"}`. `data` for `hold.placed`/`hold.lifted`: `{finding_id, type, engine, transaction_node, summary, impact, currency}` (plus `lifted_by`, `reason` on lift); for `finding.created`/`finding.decided`: the finding store dict without citation excerpts; `ping`: `{}`.
 
 **`payment_hold_detail()`** → `{"held": bool, "message": str | None, "holds": [{finding_id, type, engine, summary}], "waiting": [engine, ...], "transaction_node": str | None}`. `payment_hold()` keeps its signature and returns `detail["message"]`.
 
