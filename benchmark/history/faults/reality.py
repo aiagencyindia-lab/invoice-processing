@@ -369,10 +369,10 @@ def seed_graph(ctx, graph, data_dir: Path) -> None:
         for kind in ("grn", "shipment")
         for r in _rows(data_dir, kind)
     }
-    worked: dict[str, int] = defaultdict(int)
+    worked: dict[str, Decimal] = defaultdict(Decimal)
     for kind in ("timesheet", "ticket"):
         for r in _rows(data_dir, kind):
-            worked[r["project"]] += int(r["hours"])
+            worked[r["project"]] += Decimal(r["hours"])
     counted = {
         r["product"]: r["quantity"] for r in _rows(data_dir, "seat_count")
     }

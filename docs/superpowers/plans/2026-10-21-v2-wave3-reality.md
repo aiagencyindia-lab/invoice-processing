@@ -21,13 +21,14 @@
 
 ## Builder's calls (recorded here)
 
-- **Tolerances are fractions**: `reality.qty_tolerance_pct 0.02` = 2 %. (Leakage divides its pct by 100; 0.02 % on integer quantities would mean "exact", which the spec's ×3 PARTIAL band contradicts.)
+- **Tolerances are fractions**: `reality.qty_tolerance_pct 0.02` = 2 %. (Leakage divides its pct by 100; 0.02 % on integer quantities would mean "exact", which the spec's ×3 PARTIAL band contradicts.) A value ≥ 1 was typed as a percent and is read as one (review fix 4).
 - **Band**: E = invoiced, F = found. No evidence node at all → NO_EVIDENCE. F ≥ E·(1−t) → CORROBORATED (over-delivery corroborates). F > 0 and E−F ≤ 3t·E → PARTIAL. Else CONTRADICTED. Evidence that exists but is excluded (late delivery, undelivered shipment) counts as present with 0.
 - **Classification order**: services (WA ref or a time unit) → subscription (seat/user/licence/subscription description) → goods (PO ref, or qty > 1 with a non-time unit) → other. One kind per invoice; only that kind's lines are summed. Time units = `wa_matching.HOUR_UNITS` ∪ {day, days, md}; a day is 8 hours.
 - **Unit price** for impact = Σ(qty×price)/Σqty over the summed lines.
-- **Goods evidence** is per PO (Σ over every GRN/shipment fulfilling it). ponytail: no allocation across several invoices on one PO.
+- **Goods evidence** is per PO (Σ over every GRN/shipment fulfilling it). ponytail: no allocation across several invoices on one PO. PO-backed services count only dated work inside the period (review fix 6).
+- **Proofs** count only on supply findings (CONTRADICTED / PARTIAL / NO-EVIDENCE) (review fix 2).
 - **Proofs**: a fulfilled evidence request's proof turns NO_EVIDENCE into CORROBORATED (cited `document_version` node); it never overrides PARTIAL/CONTRADICTED — a clerk's upload must not lift a hold an approver must reject. The engine finds proofs through its own table (`RequestStore.proofs`), since provenance re-versions the `document_version` node and closes its edges.
-- **Price-jump clause rule**: explained when a contract governing the invoice (`governed_by`) or its vendor (`governs`) has a `rate`/`escalator` clause node written after the vendor's price history began — the contract owns that price and leakage judges it.
+- **Price-jump clause rule**: explained when a contract governing the invoice (`governed_by`) or its vendor (`governs`) has a `rate`/`escalator` clause — the contract owns that price and leakage judges it. Upload time is not asked (review fix 1).
 - **REAL-SHUTDOWN is not gated**: it needs `trust_shutdown_periods`, which the eval's settings do not carry (as leakage's DUP-SPLIT).
 - **Benchmark volume spikes**: the spec gates REAL-VOLUME-SPIKE but plants none; the family plants 10 so the gate measures something.
 

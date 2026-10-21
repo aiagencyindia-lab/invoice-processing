@@ -14,6 +14,9 @@ from ...db.session import tenant_session
 from ...ports import RunContext
 
 STATUSES = ("open", "fulfilled", "cancelled")
+# The findings whose proof speaks to what was supplied; a proof asked for on
+# a price jump or a bank check says nothing about delivery.
+SUPPLY_CODES = ("REAL-CONTRADICTED", "REAL-PARTIAL", "REAL-NO-EVIDENCE")
 
 
 class RequestClosed(ValueError):
@@ -152,7 +155,8 @@ class RequestStore:
         return self._close(ctx, request_id, status="cancelled")
 
     def proofs(self, tenant_id: str) -> dict[str, list[str]]:
-        """Invoice node -> proof document ids of its fulfilled requests."""
+        """Invoice node -> proof document ids of its fulfilled requests on
+        supply findings."""
         with tenant_session(tenant_id, self.url) as s:
             rows = s.execute(
                 select(
@@ -166,6 +170,7 @@ class RequestStore:
                 .where(
                     TrustEvidenceRequest.tenant_id == tenant_id,
                     TrustFinding.tenant_id == tenant_id,
+                    TrustFinding.type.in_(SUPPLY_CODES),
                     TrustEvidenceRequest.status == "fulfilled",
                     TrustEvidenceRequest.proof_document_id.is_not(None),
                 )

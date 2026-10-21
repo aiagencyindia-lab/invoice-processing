@@ -248,6 +248,22 @@ def test_proof_must_be_a_pdf_and_not_bytes_of_another_document(env):
     assert no_file.status_code == 400
 
 
+def test_a_lost_race_leaves_no_proof_in_the_graph(env, monkeypatch):
+    """Review 3: the request closes between the check and the fulfil."""
+    from invoice_processing.trust.reality import requests  # noqa: PLC0415
+
+    fid, _ = env["finding"](ACME)
+    rid = ask(env, "acme:clerk", fid).json()["id"]
+
+    def closed(*a, **k):
+        raise requests.RequestClosed("gone")
+
+    monkeypatch.setattr(requests.RequestStore, "fulfil", closed)
+    assert upload(env, "acme:clerk", rid).status_code == 409
+    assert env["graph"].nodes(ACME, kind="document_version") == []
+    assert env["queue"].published == []
+
+
 def test_cancel_once(env):
     fid, _ = env["finding"](ACME)
     rid = ask(env, "acme:clerk", fid).json()["id"]

@@ -173,6 +173,12 @@ def _store_proof(
         )
     ctx = principal.context(request_id)
     at = datetime.now(timezone.utc)
+    # Close the request first: a clerk who lost a race to cancel or to
+    # another upload leaves no proof in the graph that no request accepted.
+    try:
+        out = _requests().fulfil(ctx, request_id, document_id, at=at)
+    except RequestClosed:
+        raise HTTPException(409, "The request closed meanwhile.") from None
     natural_key = f"documents:{document_id}:{sha256}"
     # Provenance scores the same node later and keeps richer attrs; never
     # overwrite them with these.
@@ -198,10 +204,6 @@ def _store_proof(
         observed_at=at,
         at=at,
     )
-    try:
-        out = _requests().fulfil(ctx, request_id, document_id, at=at)
-    except RequestClosed:
-        raise HTTPException(409, "The request closed meanwhile.") from None
     _audit(
         ctx,
         "trust_evidence_fulfilled",

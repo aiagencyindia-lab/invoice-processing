@@ -2,16 +2,15 @@
 vendor's own history, and was the invoice for a time the business was shut?
 
 A price jump is explained, and not raised, when a contract governing the
-invoice or its vendor has a rate or escalator clause written after the
-vendor's price history began: that contract owns the price, and leakage
-judges the invoice against it.
+invoice or its vendor has a rate or escalator clause: that contract owns the
+price, and leakage judges the invoice against it. When the clause was
+uploaded says nothing about the price, so it is not asked.
 """
 
 from __future__ import annotations
 
 import re
 from collections import defaultdict
-from datetime import date, datetime
 from decimal import Decimal
 from functools import cached_property
 from statistics import median
@@ -58,20 +57,15 @@ class History:
         return out
 
     @cached_property
-    def clauses(self) -> dict[str, list[date]]:
-        """Contract id -> when each of its rate/escalator clauses was written."""
+    def priced(self) -> set[str]:
+        """Contracts with a rate or escalator clause."""
         r = self.r
-        kinds = {
-            n["id"]: n
+        clauses = {
+            n["id"]
             for n in r.ectx.graph.nodes(r.tid, kind="contract_clause")
             if n["attrs"].get("type") in ("rate", "escalator")
         }
-        out: dict[str, list[date]] = defaultdict(list)
-        for e in r._edges("part_of"):
-            if e["src"] in kinds:
-                written = datetime.fromisoformat(kinds[e["src"]]["valid_from"])
-                out[e["dst"]].append(written.date())
-        return out
+        return {e["dst"] for e in r._edges("part_of") if e["src"] in clauses}
 
     @cached_property
     def contracts(self) -> tuple[dict[str, set], dict[str, set]]:
@@ -84,17 +78,13 @@ class History:
             by_vendor[r.canon(e["dst"])].add(e["src"])
         return by_invoice, by_vendor
 
-    def explained(self, invoice: dict, since: date | None) -> bool:
+    def explained(self, invoice: dict) -> bool:
         by_invoice, by_vendor = self.contracts
         vendor = self.r.vendor_of.get(invoice["id"])
         contracts = by_invoice.get(invoice["id"], set()) | by_vendor.get(
             vendor, set()
         )
-        return any(
-            since is None or written > since
-            for c in contracts
-            for written in self.clauses.get(c, [])
-        )
+        return bool(contracts & self.priced)
 
 
 def findings(r, invoice: dict, history: History) -> list:
@@ -105,7 +95,7 @@ def findings(r, invoice: dict, history: History) -> list:
     need = r.ectx.threshold("reality.min_history")
     price_z = r.ectx.threshold("reality.price_jump_zscore")
     volume_z = r.ectx.threshold("reality.volume_zscore")
-    for line in r.lines(invoice) if vendor else []:
+    for position, line in enumerate(r.lines(invoice) if vendor else [], 1):
         a = line["attrs"]
         price, qty = dec(a.get("unit_price")), dec(a.get("quantity"))
         if price is None or qty is None:
@@ -117,17 +107,12 @@ def findings(r, invoice: dict, history: History) -> list:
         ]
         if len(others) < need:
             continue
-        number = a.get("line_number") or 1
+        number = a.get("line_number") or position
         cites = [invoice["id"], line["id"]]
         prices = [h[2] for h in others]
         z = robust_z(price, prices)
         mid = median(prices)
-        since = min((h[1] for h in others if h[1]), default=None)
-        if (
-            z > price_z
-            and price > mid
-            and not history.explained(invoice, since)
-        ):
+        if z > price_z and price > mid and not history.explained(invoice):
             out.append(
                 spec(
                     PRICE_JUMP,

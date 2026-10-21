@@ -411,11 +411,11 @@ def test_a_contract_rate_written_during_the_history_explains_the_jump(env):
     assert of_type(env.run(inv), "REAL-PRICE-JUMP") == []
 
 
-def test_a_clause_older_than_the_history_does_not(env):
+def test_a_contract_without_a_rate_clause_does_not_explain(env):
     ven = env.vendor()
     contract = env.node("contract", {"filename": "msa.pdf"})
     env.edge(contract, ven, "governs")
-    clause = env.node("contract_clause", {"type": "rate"})
+    clause = env.node("contract_clause", {"type": "discount"})
     env.edge(clause, contract, "part_of")
     for k in range(5):
         env.invoice(
@@ -425,6 +425,69 @@ def test_a_clause_older_than_the_history_does_not(env):
         ven, [("100", "30.00", "kg", "Steel Rod")], day="2026-07-10"
     )
     assert len(of_type(env.run(inv), "REAL-PRICE-JUMP")) == 1
+
+
+def test_a_rate_clause_explains_whenever_it_was_uploaded(env):
+    """Review 1: upload order is not evidence about the price."""
+    ven = env.vendor()
+    contract = env.node("contract", {"filename": "msa.pdf"})
+    env.edge(contract, ven, "governs")
+    clause = env.node("contract_clause", {"type": "rate"})  # before history
+    env.edge(clause, contract, "part_of")
+    for k in range(5):
+        env.invoice(
+            ven, [("100", "10.00", "kg", "Steel Rod")], day=f"2026-0{k + 2}-10"
+        )
+    inv = env.invoice(
+        ven, [("100", "30.00", "kg", "Steel Rod")], day="2026-07-10"
+    )
+    assert of_type(env.run(inv), "REAL-PRICE-JUMP") == []
+
+
+def test_lines_without_numbers_get_their_own_findings(env):
+    """Review 5: two unnumbered lines must not share a dedupe key."""
+    ven = history(env)
+    inv = env.invoice(ven, [])
+    for _ in range(2):
+        line = env.node(
+            "invoice_line",
+            {
+                "quantity": "100",
+                "unit_price": "30.00",
+                "description": "Steel Rod",
+            },
+        )
+        env.edge(line, inv, "part_of")
+    jumps = of_type(env.run(inv), "REAL-PRICE-JUMP")
+    assert len({f.dedupe_key for f in jumps}) == 2
+
+
+@pytest.mark.parametrize(
+    ("tol", "result"),
+    [(2, "CONTRADICTED"), (-1, "CONTRADICTED"), (50, "CORROBORATED")],
+)
+def test_a_tolerance_entered_as_a_percent_is_read_as_one(env, tol, result):
+    """Review 4: `2` means 2 %, never "everything corroborates"."""
+    _ven, inv, po = goods(env)
+    env.evidence("grn", po, quantity="60", invoice_date="2026-02-08")
+    env.run(
+        inv, settings={"trust_thresholds": {"reality.qty_tolerance_pct": tol}}
+    )
+    assert env.check(inv)["attrs"]["result"] == result
+
+
+def test_po_backed_services_count_only_work_in_the_period(env):
+    """Review 6: last month's timesheets on the PO do not cover this month."""
+    ven = env.vendor()
+    inv = env.invoice(
+        ven, [("40", "50.00", "hr", "Consulting")], po_number="PO-1"
+    )
+    po = env.po(inv)
+    env.evidence("timesheet", po, hours="40", invoice_date="2026-01-15")
+    env.evidence("timesheet", po, hours="20", invoice_date="2026-02-15")
+    env.evidence("ticket", po, hours="20")  # undated: counted
+    assert env.run(inv) == []
+    assert env.check(inv)["attrs"]["found"] == "40"
 
 
 def test_volume_spike(env):
@@ -657,6 +720,14 @@ def test_a_proof_corroborates_an_invoice_with_no_evidence(env):
     assert env.run(inv) == []
     check = env.check(inv)["attrs"]
     assert check["result"] == "CORROBORATED" and node in check["evidence"]
+
+
+def test_a_proof_on_a_non_reality_finding_is_not_evidence(env):
+    """Review 2: a price justification says nothing about delivery."""
+    _ven, inv, _po = goods(env)
+    proof(env, inv, "REAL-PRICE-JUMP")
+    [f] = env.run(inv)
+    assert f.type == "REAL-NO-EVIDENCE"
 
 
 def test_a_proof_never_outweighs_contrary_evidence(env):

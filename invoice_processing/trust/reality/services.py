@@ -33,7 +33,18 @@ def check(r, invoice: dict, lines: list[dict]) -> bands.Check | None:
     period = r.period(invoice)
     po = r.po_of.get(invoice["id"])
     if po:
-        work = [n for n in r.fulfils.get(po, []) if n["kind"] in KINDS]
+        # Work on the PO counts when it falls in the period; undated work
+        # cannot be placed, so it counts.
+        work = [
+            n
+            for n in r.fulfils.get(po, [])
+            if n["kind"] in KINDS
+            and (
+                period is None
+                or (d := iso_date(n["attrs"].get("invoice_date"))) is None
+                or period[0] <= d <= period[1]
+            )
+        ]
     else:
         vendor = r.vendor_of.get(invoice["id"])
         work = [

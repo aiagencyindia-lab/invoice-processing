@@ -280,7 +280,7 @@ class Run:
             check.present = True
             check.found = check.expected
             check.evidence.extend(self.proofs[invoice["id"]])
-        tol = Decimal(str(self.ectx.threshold(TOLERANCE[kind])))
+        tol = tolerance(self.ectx.threshold(TOLERANCE[kind]))
         result = bands.band(check.expected, check.found, check.present, tol)
         node = self.record(invoice, check, result)
         if result == bands.CORROBORATED:
@@ -315,6 +315,16 @@ class Run:
             window_days=self.window,
             reality_node=node,
         )
+
+
+def tolerance(value) -> Decimal:
+    """A fraction (0.02 = 2 %). A value of 1 or more was entered as a
+    percent, as leakage's `rate_tolerance_pct` is, and is read as one: `2`
+    must never mean "anything within 200 %", which corroborates everything."""
+    out = Decimal(str(value))
+    if out >= 1:
+        out /= 100
+    return min(max(out, Decimal(0)), Decimal("0.99"))
 
 
 def spec(

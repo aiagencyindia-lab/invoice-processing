@@ -5,6 +5,11 @@ evidence decided the question (CORROBORATED or CONTRADICTED). Gates: goods
 >= 0.70, services >= 0.50; a kind with nothing checked has nothing to
 measure and passes (None), as eval scores a type nothing was planted for.
 Reviewer agreement (AC-23 at a partner) stays a partner gate.
+
+Partly true by construction: the family plants an uncontested invoice's line
+from its own evidence, so this measures that the evidence reached the
+invoice (GRN -> PO, vendor + month), not the engine's judgment; the
+REAL-CONTRADICTED precision and recall gates measure that.
 """
 
 from __future__ import annotations
