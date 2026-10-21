@@ -24,9 +24,7 @@ class Check:
     unit_price: Decimal | None = None
 
 
-def band(
-    expected: Decimal, found: Decimal, present: bool, tol: Decimal
-) -> str:
+def band(expected: Decimal, found: Decimal, present: bool, tol: Decimal) -> str:
     """`tol` is a fraction (0.02 = 2 %). Over-delivery corroborates."""
     if not present:
         return NO_EVIDENCE
@@ -35,3 +33,12 @@ def band(
     if found > 0 and expected - found <= expected * 3 * tol:
         return PARTIAL
     return CONTRADICTED
+
+
+def unit_price(pairs: list[tuple[Decimal, Decimal | None]]) -> Decimal | None:
+    """Σ(qty x price) / Σ qty over the priced lines; None when none is."""
+    priced = [(q, p) for q, p in pairs if p is not None and q > 0]
+    total = sum((q for q, _ in priced), Decimal(0))
+    if not total:
+        return None
+    return sum((q * p for q, p in priced), Decimal(0)) / total

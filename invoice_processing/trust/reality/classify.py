@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from ...wa_matching import HOUR_UNITS
@@ -22,6 +23,15 @@ def dec(value) -> Decimal | None:
     except InvalidOperation:
         return None
     return out if out.is_finite() else None
+
+
+def iso_date(value) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
 
 
 def _unit(attrs: dict) -> str:
