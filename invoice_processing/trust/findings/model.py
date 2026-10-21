@@ -76,13 +76,20 @@ class FindingSpec:
 # UI and the eval harness enumerate.
 TYPES: dict[str, str] = {}
 # Which engine owns each type (its per-tenant mode decides whether a hold
-# gates), and which types are holds rather than insights.
+# gates), which types are holds rather than insights, and the trust dimension
+# each speaks to.
 TYPE_ENGINE: dict[str, str] = {}
 HOLD_TYPES: set[str] = set()
+TYPE_DIMENSION: dict[str, str | None] = {}
 
 
 def register_type(
-    code: str, description: str, *, engine: str = "bench", hold: bool = False
+    code: str,
+    description: str,
+    *,
+    engine: str = "bench",
+    hold: bool = False,
+    dimension: str | None = None,
 ) -> None:
     TYPES[code] = description
     TYPE_ENGINE[code] = engine
@@ -90,18 +97,31 @@ def register_type(
         HOLD_TYPES.add(code)
     else:
         HOLD_TYPES.discard(code)
+    # An engine's own call may omit the dimension; the static table set it.
+    TYPE_DIMENSION[code] = dimension or TYPE_DIMENSION.get(code)
 
 
 register_type(
     "BENCH-IMPORT",
     "Benchmark harness: a record the import round-trip could not link",
 )
-# Registered here, not where it is written, so every process that asks the
-# payment gate knows it is a hold (the API server never imports evaluate).
 ENGINE_FAILED = "TRUST-ENGINE-FAILED"
-register_type(
-    ENGINE_FAILED,
-    "An engine that can hold payment failed in enforcing mode; held until it runs",
-    engine="trust",
-    hold=True,
-)
+
+
+def _register_table() -> None:
+    # Here, not where each type is written, so every process that asks the
+    # payment gate knows which types hold (the API server never imports
+    # the engines).
+    from ..types import TABLE  # noqa: PLC0415
+
+    for code, t in TABLE.items():
+        register_type(
+            code,
+            t.description,
+            engine=t.engine,
+            hold=t.hold,
+            dimension=t.dimension,
+        )
+
+
+_register_table()

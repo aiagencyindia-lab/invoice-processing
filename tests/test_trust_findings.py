@@ -337,3 +337,52 @@ def test_the_store_refuses_a_non_finite_or_negative_ledger_amount(env):
                 HUMAN, fid, "triaged", actor="c@x.test", amount=amount
             )
     assert store.get(T, fid)["status"] == "detected"
+
+
+def test_every_engine_registration_agrees_with_the_static_table():
+    import invoice_processing.trust.gst_itc  # noqa: PLC0415
+    import invoice_processing.trust.leakage  # noqa: PLC0415
+    import invoice_processing.trust.payment  # noqa: PLC0415
+    import invoice_processing.trust.provenance  # noqa: PLC0415
+    import invoice_processing.trust.reality  # noqa: F401, PLC0415
+    from invoice_processing.trust import types  # noqa: PLC0415
+
+    for code, t in types.TABLE.items():
+        assert finding_model.TYPE_ENGINE[code] == t.engine, code
+        assert (code in finding_model.HOLD_TYPES) == t.hold, code
+        assert finding_model.TYPE_DIMENSION[code] == t.dimension, code
+        assert t.dimension is None or t.dimension in types.DIMENSIONS, code
+    registered = {c for c in finding_model.TYPES if not c.startswith("BENCH")}
+    # Types other tests register for themselves.
+    registered -= {c for c in registered if c[:2] in ("T-", "X-")}
+    assert registered == set(types.TABLE)
+
+
+def test_the_api_process_knows_every_hold_type_without_the_engines():
+    import subprocess  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    out = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys;"
+            "from invoice_processing.trust.findings import model as m;"
+            "print(sorted(m.HOLD_TYPES));"
+            "print(any(k.startswith('invoice_processing.trust.payment')"
+            " for k in sys.modules))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    assert "PAY-BEC" in out[-2] and "REAL-CONTRADICTED" in out[-2]
+    assert out[-1] == "False"
+
+
+def test_reality_is_an_engine_that_can_hold():
+    from invoice_processing.trust import modes  # noqa: PLC0415
+
+    assert modes.ENGINES[-1] == "reality"
+    assert "reality" in modes.HOLD_ENGINES
+    assert "usage" in modes.CAPABILITIES

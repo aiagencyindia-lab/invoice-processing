@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-ENGINES = ("leakage", "payment", "provenance", "gst_itc")
+ENGINES = ("leakage", "payment", "provenance", "gst_itc", "reality")
 # Only `enforcing` places holds; the rest observe (spec §3.1.5).
 MODES = ("off", "shadow", "advisory", "enforcing")
 # Engines that can hold payment: they fail closed even when their package
 # never imported far enough to register its hold types.
-HOLD_ENGINES = frozenset({"payment", "provenance", "gst_itc"})
+HOLD_ENGINES = frozenset({"payment", "provenance", "gst_itc", "reality"})
 CAPABILITIES = (
     "bank_verification",
     "gstin",
@@ -18,6 +18,7 @@ CAPABILITIES = (
     "tickets",
     "timesheets",
     "logistics",
+    "usage",
 )
 
 

@@ -88,7 +88,8 @@ NON_ENGINE_DEFAULTS: dict[str, Any] = {
 # setting does without reading the rulebook.
 DESCRIPTIONS: dict[str, str] = {
     "trust_engine_modes": (
-        "Per engine (leakage, payment, provenance, gst_itc): off, shadow, "
+        "Per engine (leakage, payment, provenance, gst_itc, reality): off, "
+        "shadow, "
         "advisory or enforcing. Only enforcing places holds."
     ),
     "trust_thresholds": (

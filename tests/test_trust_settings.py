@@ -60,7 +60,7 @@ def test_settings_are_settable_and_described():
         assert key in tenant_settings.NON_ENGINE_DEFAULTS
 
 
-WAVE1_THRESHOLDS = {
+THRESHOLDS = {
     "leakage.desc_match": 0.6,
     "leakage.dup_window_days": 7,
     "leakage.split_window_days": 3,
@@ -84,11 +84,23 @@ WAVE1_THRESHOLDS = {
     "gst.risk_nonfiler": 0.5,
     "gst.risk_shared": 0.3,
     "gst.risk_new": 0.2,
+    "reality.qty_tolerance_pct": 0.02,
+    "reality.hours_tolerance_pct": 0.10,
+    "reality.seats_tolerance_pct": 0.05,
+    "reality.evidence_window_days": 45,
+    "reality.price_jump_zscore": 3.0,
+    "reality.volume_zscore": 3.0,
+    "reality.min_history": 5,
+    "provenance.edits_suspect": 2,
+    "readiness.min_days": 14,
+    "readiness.min_findings": 20,
+    "readiness.min_decided": 10,
+    "readiness.min_precision": 0.8,
 }
 
 
-def test_threshold_defaults_cover_every_wave1_name():
-    assert thresholds.DEFAULTS == WAVE1_THRESHOLDS
+def test_threshold_defaults_cover_every_name():
+    assert thresholds.DEFAULTS == THRESHOLDS
 
 
 def test_trust_thresholds_rejects_unknown_name_and_bool():

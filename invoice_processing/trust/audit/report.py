@@ -64,6 +64,12 @@ PREVENTION = (
             "GST-ITC-RISK",
         ),
     ),
+    (
+        "reality",
+        "enforcing",
+        "reality.",
+        ("REAL-CONTRADICTED", "REAL-PARTIAL", "REAL-NO-EVIDENCE"),
+    ),
 )
 _ENGINE_OF = {t: engine for engine, _, _, types in PREVENTION for t in types}
 
