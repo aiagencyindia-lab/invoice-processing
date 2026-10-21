@@ -86,7 +86,7 @@ test("a vendor opens from the vendor list with its profile", async ({ page }) =>
   const vendor = (list.vendors as { id: string; name: string; node: string | null }[]).find(
     (row) => row.name === "QuickFix HVAC Repairs" && row.node,
   );
-  test.skip(!vendor, "no seeded vendor with a graph node (scripts/e2e_api.py follow-up)");
+  expect(vendor, "the seed puts case_005's supplier in the vendor master").toBeTruthy();
   const profiled = await built(page, `/api/trust/vendors/${vendor!.node}/trust`);
 
   await goto(page, "/vendors");
