@@ -574,3 +574,22 @@ class TestTheCountrySettings:
         assert fields["organization_tax_ids"] == "list"
         assert fields["require_tax_breakup"] == "bool"
         assert fields["tax_rate_tolerance"] == "number"
+
+
+class TestEngineModes:
+    def test_a_mode_change_through_settings_starts_its_clock(self, env):
+        from invoice_processing.trust import modes  # noqa: PLC0415
+
+        response = env["client"]().put(
+            "/api/settings",
+            json={"settings": {"trust_engine_modes": {"payment": "shadow"}}},
+        )
+        assert response.status_code == 200, response.text
+        settings = response.json()["settings"]
+        assert settings["trust_engine_modes"] == {"payment": "shadow"}
+        assert modes.mode_since(TENANT, "payment", env["store"]) is not None
+        kinds = [
+            json.loads(line)["event_type"]
+            for line in (env["tmp"] / "audit.jsonl").read_text().splitlines()
+        ]
+        assert "trust_engine_mode_changed" in kinds

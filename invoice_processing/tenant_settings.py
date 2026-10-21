@@ -68,6 +68,9 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     # Engine thresholds by name (see trust/thresholds.py); unset names keep
     # their defaults.
     "trust_thresholds": dict,
+    # Date ranges the organisation was shut down ([from, to] ISO dates): a
+    # service billed for one is implausible (reality checks, FR-23.4).
+    "trust_shutdown_periods": list,
 }
 
 # Settings the validation engine knows nothing about, with their defaults.
@@ -82,6 +85,7 @@ NON_ENGINE_DEFAULTS: dict[str, Any] = {
     "trust_engine_modes": {},
     "trust_providers": {},
     "trust_thresholds": {},
+    "trust_shutdown_periods": [],
 }
 
 # Shown alongside each field in the UI so an administrator can tell what a
@@ -95,6 +99,11 @@ DESCRIPTIONS: dict[str, str] = {
     "trust_thresholds": (
         "Per threshold name (e.g. payment.amount_zscore): a number that "
         "overrides the engine default; names not set keep their default."
+    ),
+    "trust_shutdown_periods": (
+        "Date ranges the organisation was shut down, as [from, to] pairs "
+        '(e.g. [["2026-12-24", "2027-01-02"]]); services billed for '
+        "them are flagged."
     ),
     "trust_providers": (
         "Per capability (bank_verification, gstin, ...): the adapter name; "
@@ -187,6 +196,22 @@ class SettingsError(ValueError):
     """The submitted settings were refused. Carries a reviewer-readable why."""
 
 
+def _shutdown_period(pair) -> list[str]:
+    from datetime import date  # noqa: PLC0415
+
+    if isinstance(pair, str):  # one line of the settings form: "from, to"
+        pair = [p for p in pair.replace(",", " ").split() if p]
+    try:
+        start, end = (date.fromisoformat(str(d)) for d in pair)
+    except (TypeError, ValueError):
+        raise SettingsError(
+            "Each shutdown period is [from, to] as ISO dates."
+        ) from None
+    if end < start:
+        raise SettingsError("A shutdown period cannot end before it starts.")
+    return [start.isoformat(), end.isoformat()]
+
+
 def validate(payload: dict) -> dict:
     """Return the accepted subset, or raise with the first problem found."""
     if not isinstance(payload, dict):
@@ -266,6 +291,8 @@ def validate(payload: dict) -> dict:
                 ):
                     raise SettingsError(f"{name} must be a number.")
                 cleaned[key][name] = number
+        elif key == "trust_shutdown_periods":
+            cleaned[key] = [_shutdown_period(p) for p in value]
         elif key == "trust_providers":
             from .trust.modes import CAPABILITIES  # noqa: PLC0415
 

@@ -33,6 +33,7 @@ from .. import (
     tenant_settings,
     wa_matching,
 )
+from ..trust import modes
 from .auth import Principal, current_principal, require_role
 
 logger = logging.getLogger(__name__)
@@ -138,8 +139,22 @@ def update_settings(
 
     store = service.get_tenant_settings()
     before = dict(store.get(principal.tenant_id) or {})
+    rest = {k: v for k, v in cleaned.items() if k != "trust_engine_modes"}
     try:
-        store.put(principal.tenant_id, cleaned)
+        # Modes go through the one writer that stamps when each engine
+        # entered its mode and places or lifts holds across enforcing.
+        for engine, mode in (cleaned.get("trust_engine_modes") or {}).items():
+            modes.set_engine_mode(
+                principal.context(),
+                engine,
+                mode,
+                store=store,
+                audit=service.get_audit(),
+                reason="settings",
+                holds=service.get_hold_store(),
+            )
+        if rest:
+            store.put(principal.tenant_id, rest)
     except tenant_settings.SettingsError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
