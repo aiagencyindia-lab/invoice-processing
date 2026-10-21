@@ -1,13 +1,16 @@
 """Provenance v1: PDF facts, the ledger and score, and tamper after approval."""
 
+import json
 import logging
 import sys
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from fresh_schema import fresh_schema
 
+from benchmark.history.faults.provenance import make_pdf
 from invoice_processing.api import service
 from invoice_processing.db import models
 from invoice_processing.db.session import tenant_session
@@ -26,71 +29,6 @@ from invoice_processing.trust.provenance import pdfmeta
 T = "tenant-acme"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="worker")
 NOW = datetime(2026, 10, 15, tzinfo=timezone.utc)
-
-WORDS = " ".join(f"word{i}" for i in range(40))
-
-
-def make_pdf(
-    *,
-    producer: str | None = "Tally",
-    creator: str | None = "TallyPrime",
-    created: str | None = "D:20250101100000+05'30'",
-    modified: str | None = "D:20250101100000+05'30'",
-    pages: int = 1,
-    size: tuple = (595.28, 841.89),
-    font: str = "Helvetica",
-    text: str = WORDS,
-) -> bytes:
-    """A small, valid PDF built by hand: no writer library is a dependency."""
-    info = {
-        "Producer": producer,
-        "Creator": creator,
-        "CreationDate": created,
-        "ModDate": modified,
-    }
-    info_body = "".join(f"/{k} ({v})" for k, v in info.items() if v is not None)
-    lines = [text[i : i + 60] for i in range(0, len(text), 60)] if text else []
-    stream = (
-        "BT /F1 10 Tf 12 TL 40 780 Td "
-        + " ".join(f"({line}) Tj T*" for line in lines)
-        + " ET"
-    )
-    n_fixed = 4  # catalog, pages, font, info
-    page_ids = [n_fixed + 1 + 2 * i for i in range(pages)]
-    objs = {
-        1: "<< /Type /Catalog /Pages 2 0 R >>",
-        2: "<< /Type /Pages /Kids ["
-        + " ".join(f"{p} 0 R" for p in page_ids)
-        + f"] /Count {pages} >>",
-        3: f"<< /Type /Font /Subtype /Type1 /BaseFont /{font} /FontDescriptor"
-        f" << /Type /FontDescriptor /FontName /{font} /Flags 32"
-        " /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200"
-        " /CapHeight 700 /StemV 80 >> >>",
-        4: f"<< {info_body} >>",
-    }
-    for p in page_ids:
-        objs[p] = (
-            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {size[0]} {size[1]}]"
-            f" /Resources << /Font << /F1 3 0 R >> >> /Contents {p + 1} 0 R >>"
-        )
-        objs[p + 1] = (
-            f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream"
-        )
-    out = b"%PDF-1.4\n"
-    offsets = {}
-    for num in sorted(objs):
-        offsets[num] = len(out)
-        out += f"{num} 0 obj\n{objs[num]}\nendobj\n".encode("latin-1")
-    xref = len(out)
-    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
-    for num in sorted(objs):
-        out += f"{offsets[num]:010d} 00000 n \n".encode()
-    out += (
-        f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R /Info 4 0 R >>\n"
-        f"startxref\n{xref}\n%%EOF\n"
-    ).encode()
-    return out
-
 
 # -- PDF facts ---------------------------------------------------------------
 
@@ -199,10 +137,55 @@ class World:
             CTX,
             kind="vendor",
             natural_key=f"vendors:{name}",
+            ref_table="vendors",
+            ref_id=f"v-{name}",
             attrs={"name": name, "email_domain": domain},
         )
         self.vendors[name] = nid
         return nid
+
+    def vendor_document(
+        self,
+        doc_id,
+        pdf=None,
+        *,
+        kind="kyc",
+        subkind="gst_certificate",
+        vendor="Acme Supplies",
+        role="clerk",
+        settings=None,
+    ):
+        """What the upload route plants for a KYC document, then a run."""
+        sha = doc_id.ljust(64, "0")
+        provenance.plant_vendor_document(
+            CTX,
+            self.graph,
+            document_id=doc_id,
+            sha256=sha,
+            vendor_id=f"v-{vendor}",
+            subkind=subkind,
+            filename=f"{doc_id}.pdf",
+            role=role,
+        )
+        return self.run_document(doc_id, pdf, kind=kind, settings=settings)
+
+    def run_document(self, doc_id, pdf=None, *, kind, settings=None):
+        sha = doc_id.ljust(64, "0")
+        self.blobs[f"documents/{doc_id}.pdf"] = (
+            make_pdf() if pdf is None else pdf
+        )
+        doc = {
+            "id": doc_id,
+            "kind": kind,
+            "sha256": sha,
+            "storage_key": f"documents/{doc_id}.pdf",
+            "source": "upload",
+            "source_ref": None,
+            "sender": None,
+            "reply_to": None,
+            "filename": f"{doc_id}.pdf",
+        }
+        return provenance.run(self.ectx(None, doc, settings))
 
     def invoice(
         self,
@@ -215,6 +198,7 @@ class World:
         amount="1180.00",
         source="email",
         sender_domain="acme.in",
+        invoice_date=None,
     ):
         nid = self.graph.upsert_node(
             CTX,
@@ -229,6 +213,7 @@ class World:
                 "amount": amount,
                 "currency": "INR",
                 "decision": decision,
+                **({"invoice_date": invoice_date} if invoice_date else {}),
             },
         )
         ven = self.vendors.get(vendor) or self.vendor(vendor)
@@ -301,7 +286,7 @@ def world(scratch_db):
 
 
 def test_types_are_registered_and_tamper_is_a_hold():
-    assert provenance.ENGINE_VERSION == "provenance-1"
+    assert provenance.ENGINE_VERSION == "provenance-2"
     assert finding_model.TYPE_ENGINE["PROV-TAMPER"] == "provenance"
     assert "PROV-TAMPER" in finding_model.HOLD_TYPES
     assert "PROV-SUSPECT" not in finding_model.HOLD_TYPES
@@ -323,8 +308,13 @@ def test_ledger_node_and_evidences_edge(world):
         "template": 1.0,
         "text": 1.0,
         "meta": 1.0,
+        "producer": 0.8,  # a known renderer, no history yet
+        "edits": 1.0,
+        "fonts": 1.0,
     }
-    assert a["score"] == 1.0
+    assert a["score"] == 0.97
+    assert a["engine_version"] == "provenance-2"
+    assert a["incremental_updates"] == 0
     [edge] = world.graph.edges(T, src=v["id"], kind="evidences")
     assert edge["dst"] == node and edge["provenance"] == "system_record"
     assert edge["confidence"] == 1.0
@@ -418,21 +408,22 @@ def test_suspect_below_threshold_cites_the_version(world):
     )
     [spec] = specs
     v = world.version("d1")
-    # 0.4*0.3 + 0.3*0 + 0.2*0 + 0.1*0
-    assert v["attrs"]["score"] == 0.12
+    # .3*.3 channel + .15*.6 empty producer + .1*1 edits; template, text,
+    # meta and fonts all 0
+    assert v["attrs"]["score"] == 0.28
     assert spec.type == "PROV-SUSPECT" and spec.transaction_node == node
     assert spec.dedupe_key == "PROV-SUSPECT:d1"
-    assert spec.impact is None and spec.engine_version == "provenance-1"
+    assert spec.impact is None and spec.engine_version == "provenance-2"
     assert [c.node_id for c in spec.citations] == [v["id"]]
     assert spec.details["components"] == v["attrs"]["components"]
 
 
 def test_score_at_threshold_is_not_suspect(world):
-    # upload 0.6 -> 0.24 + template 0.3 + text 0 + meta 0 = 0.54
+    # upload .3*.6 + template .2 + empty producer .15*.6 + edits .1 = 0.57
     _, specs = world.ingest(
         "d1", source="upload", pdf=make_pdf(producer=None, text="")
     )
-    assert world.version("d1")["attrs"]["score"] == 0.54
+    assert world.version("d1")["attrs"]["score"] == 0.57
     assert specs == []
     _, specs = world.ingest(
         "d2",
@@ -442,6 +433,45 @@ def test_score_at_threshold_is_not_suspect(world):
         settings={"trust_thresholds": {"provenance.suspect_below": 0.6}},
     )
     assert [s.type for s in specs] == ["PROV-SUSPECT"]
+
+
+def test_weights_sum_to_one_over_seven_families():
+    assert set(provenance.WEIGHTS) == {
+        "channel",
+        "template",
+        "text",
+        "meta",
+        "producer",
+        "edits",
+        "fonts",
+    }
+    assert sum(provenance.WEIGHTS.values()) == pytest.approx(1.0)
+
+
+V1 = json.loads(
+    (
+        Path(__file__).parent / "fixtures/trust_provenance/v1_scores.json"
+    ).read_text()
+)["variants"]
+
+
+@pytest.mark.parametrize("variant", V1, ids=[v["name"] for v in V1])
+def test_v1_fixtures_keep_their_verdict_and_score(world, variant):
+    """v1 scores were frozen before v2. Every variant keeps its suspect
+    verdict at the default threshold and moves by at most 0.05, except
+    where v1 already charged a missing producer through `meta`: v2 charges
+    it again through `producer`, by design, for at most 0.07."""
+    world.ingest(
+        "d1",
+        pdf=make_pdf(**variant["pdf"]),
+        source=variant["source"],
+        sender_domain=variant["sender_domain"],
+    )
+    score = world.version("d1")["attrs"]["score"]
+    v1 = variant["v1_score"]
+    assert (score < 0.5) == (v1 < 0.5)
+    allowed = 0.07 if "producer" in variant["pdf"] else 0.05
+    assert abs(score - v1) <= allowed + 1e-9, (score, v1)
 
 
 def test_non_pdf_document_is_skipped_and_logged(world, caplog):
@@ -456,6 +486,201 @@ def test_contract_document_is_ignored(world):
     node, specs = world.ingest("c1", kind="contract")
     assert node is None and specs == []
     assert world.version("c1") is None
+
+
+# -- edited after issue (v2) -------------------------------------------------
+
+
+def test_edited_after_issue_cites_the_version(world):
+    node, specs = world.ingest(
+        "d1",
+        invoice_date="2025-01-01",
+        pdf=make_pdf(saves=("D:20250110", "D:20250112")),
+    )
+    [spec] = [s for s in specs if s.type == "PROV-EDITED"]
+    v = world.version("d1")
+    assert spec.transaction_node == node
+    assert spec.dedupe_key == "PROV-EDITED:d1"
+    assert spec.impact is None and spec.currency is None
+    assert spec.engine_version == "provenance-2"
+    assert [c.node_id for c in spec.citations] == [v["id"]]
+    assert spec.details == {
+        "incremental_updates": 2,
+        "mod_date": "2025-01-12T00:00:00+00:00",
+        "invoice_date": "2025-01-01",
+        "producer": "Tally",
+    }
+    assert "2 times" in spec.summary
+    assert finding_model.TYPE_ENGINE["PROV-EDITED"] == "provenance"
+    assert "PROV-EDITED" not in finding_model.HOLD_TYPES
+
+
+@pytest.mark.parametrize(
+    "saves,invoice_date,settings,raised",
+    [
+        (("D:20250110",), "2025-01-01", None, False),  # one save: a signature
+        (("D:20250101", "D:20250101"), "2025-01-01", None, False),  # issue day
+        (("D:20250110", "D:20250112"), None, None, True),  # no date to excuse
+        (
+            ("D:20250110", "D:20250112"),
+            "2025-01-01",
+            {"trust_thresholds": {"provenance.edits_suspect": 3}},
+            False,
+        ),
+        ((), "2025-01-01", None, False),
+    ],
+)
+def test_edited_needs_enough_saves_after_the_issue_date(
+    world, saves, invoice_date, settings, raised
+):
+    _, specs = world.ingest(
+        "d1",
+        invoice_date=invoice_date,
+        settings=settings,
+        pdf=make_pdf(saves=saves),
+    )
+    assert any(s.type == "PROV-EDITED" for s in specs) is raised
+
+
+def test_a_whole_rewrite_later_lowers_edits_but_is_not_edited(world):
+    _, specs = world.ingest(
+        "d1",
+        invoice_date="2025-01-01",
+        pdf=make_pdf(created="D:20250101", modified="D:20250301"),
+    )
+    assert world.version("d1")["attrs"]["components"]["edits"] == 0.7
+    assert not any(s.type == "PROV-EDITED" for s in specs)
+
+
+# -- KYC and proofs (v2) -----------------------------------------------------
+
+
+def test_kyc_document_is_scored_and_keeps_its_vendor_edge(world):
+    planted = world.version("k1")
+    assert planted is None
+    specs = world.vendor_document("k1")
+    v = world.version("k1")
+    a = v["attrs"]
+    assert specs == []
+    assert a["kind"] == "kyc" and a["subkind"] == "gst_certificate"
+    assert a["vendor_id"] == "v-Acme Supplies" and a["filename"] == "k1.pdf"
+    assert a["engine_version"] == "provenance-2"
+    assert a["components"]["channel"] == 0.6  # a clerk's upload
+    assert a["components"]["template"] == 1.0
+    [edge] = world.graph.edges(T, src=v["id"], kind="evidences")
+    assert edge["dst"] == world.vendors["Acme Supplies"]
+
+
+def test_an_approvers_upload_is_a_better_channel(world):
+    world.vendor_document("k1", role="approver")
+    assert world.version("k1")["attrs"]["components"]["channel"] == 0.8
+
+
+def test_kyc_template_is_against_the_same_subkind_of_the_same_vendor(world):
+    for i in range(3):
+        world.vendor_document(f"g{i}")
+    world.vendor_document("p0", make_pdf(font="Courier"), subkind="pan")
+    world.vendor("Other Co", "other.in")
+    world.vendor_document("o1", make_pdf(font="Courier"), vendor="Other Co")
+    world.ingest("inv1", number="INV-1", pdf=make_pdf(font="Courier"))
+    world.vendor_document("k1", make_pdf(font="Courier"))
+    a = world.version("k1")["attrs"]
+    assert a["template"] == {"prior": 3, "matching": 0}
+    assert a["components"]["template"] == 0.0
+    # and a KYC document is never an invoice's template history
+    world.ingest("inv2", number="INV-2")
+    assert world.version("inv2")["attrs"]["template"]["prior"] == 1
+
+
+def test_low_kyc_score_flags_the_vendor(world):
+    for i in range(3):
+        world.vendor_document(f"g{i}")
+    [spec] = world.vendor_document(
+        "k1",
+        make_pdf(
+            producer=None, font="Courier", text="", saves=("D:20250110",) * 2
+        ),
+    )
+    v = world.version("k1")
+    assert spec.type == "PROV-KYC-SUSPECT"
+    assert spec.transaction_node == world.vendors["Acme Supplies"]
+    assert spec.dedupe_key == "PROV-KYC-SUSPECT:k1"
+    assert spec.impact is None and spec.engine_version == "provenance-2"
+    assert [c.node_id for c in spec.citations] == [v["id"]]
+    assert spec.details["subkind"] == "gst_certificate"
+    assert spec.details["score"] == v["attrs"]["score"] < 0.5
+    assert finding_model.TYPE_ENGINE["PROV-KYC-SUSPECT"] == "provenance"
+    assert "PROV-KYC-SUSPECT" not in finding_model.HOLD_TYPES
+
+
+def test_kyc_for_a_vendor_without_a_node_flags_the_version(world):
+    [spec] = world.vendor_document(
+        "k1",
+        make_pdf(producer=None, text=""),
+        vendor="Not Synced Ltd",
+        settings={"trust_thresholds": {"provenance.suspect_below": 0.99}},
+    )
+    v = world.version("k1")
+    assert spec.transaction_node == v["id"]
+    assert world.graph.edges(T, src=v["id"], kind="evidences") == []
+
+
+def test_proof_keeps_the_edge_to_its_invoice_and_raises_nothing(world):
+    """The reality branch writes the proof's node and its edge to the
+    invoice; scoring re-versions the node and must keep that edge."""
+    inv = world.invoice("i1", number="INV-1")
+    vid = world.graph.upsert_node(
+        CTX,
+        kind="document_version",
+        natural_key=f"documents:pr1:{'pr1'.ljust(64, '0')}",
+        ref_table="documents",
+        ref_id="pr1",
+        attrs={"kind": "proof", "filename": "pod.pdf"},
+    )
+    world.graph.upsert_edge(
+        CTX,
+        src=vid,
+        dst=inv,
+        kind="evidences",
+        source_system="reality",
+        provenance="human_assertion",
+        confidence=1.0,
+        observed_at=NOW,
+    )
+    request = world.graph.upsert_node(
+        CTX, kind="evidence_request", natural_key="evidence_requests:r1"
+    )
+    world.graph.upsert_edge(
+        CTX,
+        src=request,
+        dst=vid,
+        kind="fulfilled_by",
+        source_system="reality",
+        provenance="human_assertion",
+        confidence=1.0,
+        observed_at=NOW,
+    )
+    specs = world.run_document(
+        "pr1", make_pdf(producer=None, text=""), kind="proof"
+    )
+    v = world.version("pr1")
+    assert specs == []
+    assert v["id"] != vid and v["attrs"]["kind"] == "proof"
+    assert v["attrs"]["filename"] == "pod.pdf"
+    assert v["attrs"]["vendor_id"] == "v-Acme Supplies"
+    [edge] = world.graph.edges(T, src=v["id"], kind="evidences")
+    assert edge["dst"] == inv and edge["source_system"] == "reality"
+    assert edge["provenance"] == "human_assertion"
+    # an edge into the node, of another kind, survives the re-version too
+    [into] = world.graph.edges(T, dst=v["id"], kind="fulfilled_by")
+    assert into["src"] == request
+
+
+def test_kyc_is_never_edited_or_tamper(world):
+    specs = world.vendor_document(
+        "k1", make_pdf(saves=("D:20990110", "D:20990112"))
+    )
+    assert specs == []
 
 
 # -- tamper ------------------------------------------------------------------
@@ -536,6 +761,80 @@ def test_batch_run_finds_tamper_across_the_tenant(world):
     ]
     assert {c.node_id for c in specs[0].citations} == {new, old}
     assert world.graph.nodes(T, kind="document_version") == []
+
+
+# -- batch ledger (v2) --------------------------------------------------------
+
+
+class CountingBlobs(Blobs):
+    def __init__(self):
+        super().__init__()
+        self.reads = []
+
+    def get(self, key):
+        self.reads.append(key)
+        return self[key]
+
+
+def test_batch_ledgers_unscored_documents_from_their_content_address(world):
+    world.blobs = CountingBlobs()
+    sha = "e" * 64
+    node = world.invoice("d1", sha=sha, invoice_date="2025-01-01")
+    world.blobs[f"documents/{sha}.pdf"] = make_pdf(
+        saves=("D:20250110", "D:20250112")
+    )
+    world.invoice("d2", number="INV-2")  # no bytes stored: skipped
+    specs = provenance.run(world.ectx())
+    assert [(s.type, s.transaction_node) for s in specs] == [
+        ("PROV-EDITED", node)
+    ]
+    v = world.graph.open_node(T, "document_version", f"documents:d1:{sha}")
+    assert v["attrs"]["engine_version"] == "provenance-2"
+    assert v["attrs"]["components"]["channel"] == 1.0  # email, own domain
+    [edge] = world.graph.edges(T, src=v["id"], kind="evidences")
+    assert edge["dst"] == node
+    # a second batch reads nothing already at provenance-2
+    world.blobs.reads.clear()
+    provenance.run(world.ectx())
+    assert world.blobs.reads == [f"documents/{'d2'.ljust(64, '0')}.pdf"]
+
+
+def test_batch_logs_a_failing_blob_store_louder_than_a_missing_blob(
+    world, caplog
+):
+    class Failing(Blobs):
+        def get(self, key):
+            raise RuntimeError("quota exceeded")
+
+    world.invoice("d1")
+    world.blobs = Failing()
+    with caplog.at_level(logging.INFO):
+        assert provenance.run(world.ectx()) == []
+    [rec] = [
+        r for r in caplog.records if r.msg == "provenance_batch_blob_failed"
+    ]
+    assert rec.levelno == logging.WARNING and rec.error == "RuntimeError"
+    world.blobs = Blobs()  # a KeyError: simply not stored
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        provenance.run(world.ectx())
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_batch_upgrades_a_v1_version_node(world):
+    world.ingest("d1")
+    v = world.version("d1")
+    world.graph.upsert_node(
+        CTX,
+        kind="document_version",
+        natural_key=v["natural_key"],
+        ref_table="documents",
+        ref_id="d1",
+        attrs={"score": 1.0, "components": {"channel": 1.0}},
+    )
+    world.blobs[f"documents/{'d1'.ljust(64, '0')}.pdf"] = make_pdf()
+    provenance.run(world.ectx())
+    assert world.version("d1")["attrs"]["engine_version"] == "provenance-2"
 
 
 # -- end to end ----------------------------------------------------------------
@@ -652,3 +951,39 @@ def test_tamper_summary_is_symmetric_when_both_copies_are_approved(world):
     batch = provenance.run(world.ectx())
     assert len(batch) == 2
     assert all(s.summary.startswith("Two approved copies") for s in batch)
+
+
+# -- benchmark planting (v2) ---------------------------------------------------
+
+
+def test_benchmark_plants_edited_pdfs_and_decoys(world, tmp_path):
+    import random  # noqa: PLC0415
+
+    from benchmark.history.faults import provenance as fault  # noqa: PLC0415
+    from invoice_processing.adapters import LocalBlobStore  # noqa: PLC0415
+
+    rows = {
+        "vendor": [{"vendor_key": "Acme Supplies"}, {"vendor_key": "Other Co"}]
+    }
+    faults: list = []
+    fault.inject(random.Random(7), rows, faults, start=None, months=12)  # noqa: S311
+    edited = {f["doc_number"] for f in faults if f["type"] == "PROV-EDITED"}
+    assert len(edited) == fault.EDITED_CASES
+    assert fault.GATES["PROV-EDITED"] == {"precision": 1.0, "recall": 0.9}
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"seed": 7, "faults": faults})
+    )
+    fault.seed_graph(CTX, world.graph, tmp_path)
+    world.blobs = LocalBlobStore(tmp_path / "blobs")
+    specs = provenance.run(world.ectx())
+    found = {
+        world.graph.node(T, s.transaction_node)["attrs"]["invoice_number"]
+        for s in specs
+        if s.type == "PROV-EDITED"
+    }
+    assert found == edited
+    # the decoys were scored too, and none of them is edited
+    versions = world.graph.nodes(T, kind="document_version")
+    assert sum(1 for v in versions if v["attrs"].get("engine_version")) > len(
+        edited
+    )

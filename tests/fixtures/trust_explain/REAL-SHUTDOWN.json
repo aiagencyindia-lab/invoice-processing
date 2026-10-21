@@ -1,0 +1,65 @@
+{
+ "finding": {
+  "id": "f-real-shutdown",
+  "type": "REAL-SHUTDOWN",
+  "transaction_node": "n-inv",
+  "status": "detected",
+  "impact": "1000.00",
+  "currency": "INR",
+  "confidence": 0.9,
+  "engine_version": "reality-1",
+  "rule_version": "FR-23-v1",
+  "model_version": "none",
+  "summary": "Billed for 2026-02-10 to 2026-02-10, which overlaps a shutdown (2026-02-01 to 2026-02-15).",
+  "details": {
+   "shutdown": [
+    "2026-02-01",
+    "2026-02-15"
+   ],
+   "billed": [
+    "2026-02-10",
+    "2026-02-10"
+   ]
+  },
+  "citations": [
+   {
+    "node_id": "n-inv",
+    "excerpt": null
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-02-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ]
+ ],
+ "expect": {
+  "payable_now": "1000.00",
+  "payable_correct": "1000.00",
+  "delta": "1000.00"
+ }
+}
