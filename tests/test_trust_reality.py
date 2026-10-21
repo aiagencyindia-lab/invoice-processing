@@ -711,3 +711,66 @@ def test_would_change_names_the_missing_document(kind, words):
     graph._nodes["n-real"]["attrs"]["kind"] = kind
     x = explain.build(T, f, graph=graph)
     assert any(words in w.lower() for w in x.would_change)
+
+
+# -- benchmark family ----------------------------------------------------------
+
+import json  # noqa: E402
+from collections import Counter  # noqa: E402
+
+from benchmark.history import eval as history_eval  # noqa: E402
+from benchmark.history.faults import reality as family  # noqa: E402
+from benchmark.history.generate import generate  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def generated(tmp_path_factory):
+    data = tmp_path_factory.mktemp("bench") / "data"
+    generate(7, data)
+    return data
+
+
+def test_family_plants_the_spec_counts_with_exact_prices(generated):
+    manifest = json.loads((generated / "manifest.json").read_text())
+    mine = [f for f in manifest["faults"] if f["type"].startswith("REAL-")]
+    by_kind = Counter(
+        (f["type"], f.get("kind"))
+        for f in mine
+        if f["type"] != "REAL-NO-EVIDENCE"
+    )
+    assert by_kind == {
+        ("REAL-CONTRADICTED", "goods"): 30,
+        ("REAL-CONTRADICTED", "services"): 15,
+        ("REAL-CONTRADICTED", "subscription"): 10,
+        ("REAL-PRICE-JUMP", "goods"): 20,
+        ("REAL-VOLUME-SPIKE", "goods"): 10,
+        # Leakage's contract lines the payment family billed at 5x.
+        ("REAL-VOLUME-SPIKE", None): by_kind[("REAL-VOLUME-SPIKE", None)],
+    }
+    assert by_kind[("REAL-VOLUME-SPIKE", None)] > 0
+    for f in mine:
+        if f["type"] == "REAL-NO-EVIDENCE":
+            assert f["expected_impact"] is None
+        else:
+            assert D(f["expected_impact"]) > 0
+    again = generated.parent / "again"
+    generate(7, again)
+    assert (again / "manifest.json").read_text() == (
+        generated / "manifest.json"
+    ).read_text()
+    assert (again / "timesheet.csv").read_bytes() == (
+        generated / "timesheet.csv"
+    ).read_bytes()
+
+
+def test_eval_meets_the_reality_gates(generated, scratch_db):
+    out = history_eval.run(scratch_db("bench-reality.db"), generated)
+    gates = out["gates"]
+    for code in family.GATES:
+        for metric in family.GATES[code]:
+            assert gates[f"{code}.{metric}"], (code, metric, out["types"][code])
+    assert (
+        gates["reality_coverage_goods"] and gates["reality_coverage_services"]
+    )
+    assert out["reality"]["reality_coverage_goods"] >= 0.70
+    assert out["passed"], {k: v for k, v in gates.items() if not v}
