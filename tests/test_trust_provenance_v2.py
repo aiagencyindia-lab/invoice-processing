@@ -134,3 +134,7 @@ def test_edits_threshold_is_the_tenants():
 )
 def test_fonts_family(names, value):
     assert forensics.fonts(_facts(font_names=names)) == value
+
+
+def test_fonts_is_zero_without_a_text_layer():
+    assert forensics.fonts(_facts(has_text=False)) == 0.0

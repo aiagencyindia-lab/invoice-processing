@@ -19,10 +19,10 @@ from decimal import Decimal, InvalidOperation
 from ...duplicates import normalize_number
 from ..engine import EngineContext
 from ..findings.model import Citation, FindingSpec, register_type
-from . import pdfmeta
+from . import forensics, pdfmeta
 
-ENGINE_VERSION = "provenance-1"
-RULE_VERSION = "FR-22-v1"
+ENGINE_VERSION = "provenance-2"
+RULE_VERSION = "FR-22-v2"
 SUSPECT = "PROV-SUSPECT"
 TAMPER = "PROV-TAMPER"
 register_type(
@@ -43,7 +43,15 @@ logger = logging.getLogger(__name__)
 # counts as "other".
 CHANNEL = {"api": 0.8, "upload": 0.6}
 OTHER = 0.3
-WEIGHTS = {"channel": 0.4, "template": 0.3, "text": 0.2, "meta": 0.1}
+WEIGHTS = {
+    "channel": 0.3,
+    "template": 0.2,
+    "text": 0.1,
+    "meta": 0.1,
+    "producer": 0.15,
+    "edits": 0.1,
+    "fonts": 0.05,
+}
 
 
 class _Tenant:
@@ -114,10 +122,10 @@ def _meta(facts: dict, now: datetime) -> float:
     return 1.0 if created <= modified <= now else 0.0
 
 
-def _prior_fingerprints(ectx, tenant, doc_id: str) -> list[str]:
-    """The vendor's other documents' fingerprints. Found through the invoice's
-    `document_id` attr: a sync that re-versions an invoice node closes its
-    `evidences` edge until that document is evaluated again."""
+def _prior(ectx, tenant, doc_id: str) -> list[dict]:
+    """The vendor's other documents' version attrs. Found through the
+    invoice's `document_id` attr: a sync that re-versions an invoice node
+    closes its `evidences` edge until that document is evaluated again."""
     vendor = tenant.vendor(ectx.invoice_node)
     invoice_of_doc = {
         n["attrs"].get("document_id"): i for i, n in tenant.invoices.items()
@@ -129,7 +137,7 @@ def _prior_fingerprints(ectx, tenant, doc_id: str) -> list[str]:
         other = v["natural_key"].split(":")[1]
         inv = invoice_of_doc.get(other)
         if other != doc_id and inv and tenant.vendor(inv) == vendor:
-            out.append(v["attrs"].get("fingerprint"))
+            out.append(v["attrs"])
     return out
 
 
@@ -141,8 +149,8 @@ def _ledger(ectx: EngineContext, tenant: _Tenant) -> list[FindingSpec]:
         return []
     attrs = tenant.invoices[ectx.invoice_node]["attrs"]
     fp = pdfmeta.fingerprint(facts)
-    prior = _prior_fingerprints(ectx, tenant, doc["id"])
-    matching = sum(1 for p in prior if p == fp)
+    prior = _prior(ectx, tenant, doc["id"])
+    matching = sum(1 for p in prior if p.get("fingerprint") == fp)
     min_history = ectx.threshold("provenance.template_min_history")
     components = {
         "channel": _channel(ectx, tenant, attrs),
@@ -151,6 +159,13 @@ def _ledger(ectx: EngineContext, tenant: _Tenant) -> list[FindingSpec]:
         else round(matching / len(prior), 4),
         "text": 1.0 if facts["has_text"] else 0.0,
         "meta": _meta(facts, ectx.now),
+        "producer": forensics.producer(
+            facts, [p.get("producer") for p in prior]
+        ),
+        "edits": forensics.edits(
+            facts, int(ectx.threshold("provenance.edits_suspect"))
+        ),
+        "fonts": forensics.fonts(facts),
     }
     score = round(sum(WEIGHTS[k] * v for k, v in components.items()), 4)
     key = f"documents:{doc['id']}:{doc['sha256']}"
@@ -173,8 +188,11 @@ def _ledger(ectx: EngineContext, tenant: _Tenant) -> list[FindingSpec]:
                     "mod_date",
                     "page_count",
                     "has_text",
+                    "incremental_updates",
+                    "font_names",
                 )
             },
+            "engine_version": ENGINE_VERSION,
             "fingerprint": fp,
             "channel": doc.get("source"),
             "template": {"prior": len(prior), "matching": matching},

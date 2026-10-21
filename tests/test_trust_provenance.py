@@ -1,9 +1,11 @@
 """Provenance v1: PDF facts, the ledger and score, and tamper after approval."""
 
+import json
 import logging
 import sys
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from fresh_schema import fresh_schema
@@ -237,7 +239,7 @@ def world(scratch_db):
 
 
 def test_types_are_registered_and_tamper_is_a_hold():
-    assert provenance.ENGINE_VERSION == "provenance-1"
+    assert provenance.ENGINE_VERSION == "provenance-2"
     assert finding_model.TYPE_ENGINE["PROV-TAMPER"] == "provenance"
     assert "PROV-TAMPER" in finding_model.HOLD_TYPES
     assert "PROV-SUSPECT" not in finding_model.HOLD_TYPES
@@ -259,8 +261,13 @@ def test_ledger_node_and_evidences_edge(world):
         "template": 1.0,
         "text": 1.0,
         "meta": 1.0,
+        "producer": 0.8,  # a known renderer, no history yet
+        "edits": 1.0,
+        "fonts": 1.0,
     }
-    assert a["score"] == 1.0
+    assert a["score"] == 0.97
+    assert a["engine_version"] == "provenance-2"
+    assert a["incremental_updates"] == 0
     [edge] = world.graph.edges(T, src=v["id"], kind="evidences")
     assert edge["dst"] == node and edge["provenance"] == "system_record"
     assert edge["confidence"] == 1.0
@@ -354,21 +361,22 @@ def test_suspect_below_threshold_cites_the_version(world):
     )
     [spec] = specs
     v = world.version("d1")
-    # 0.4*0.3 + 0.3*0 + 0.2*0 + 0.1*0
-    assert v["attrs"]["score"] == 0.12
+    # .3*.3 channel + .15*.6 empty producer + .1*1 edits; template, text,
+    # meta and fonts all 0
+    assert v["attrs"]["score"] == 0.28
     assert spec.type == "PROV-SUSPECT" and spec.transaction_node == node
     assert spec.dedupe_key == "PROV-SUSPECT:d1"
-    assert spec.impact is None and spec.engine_version == "provenance-1"
+    assert spec.impact is None and spec.engine_version == "provenance-2"
     assert [c.node_id for c in spec.citations] == [v["id"]]
     assert spec.details["components"] == v["attrs"]["components"]
 
 
 def test_score_at_threshold_is_not_suspect(world):
-    # upload 0.6 -> 0.24 + template 0.3 + text 0 + meta 0 = 0.54
+    # upload .3*.6 + template .2 + empty producer .15*.6 + edits .1 = 0.57
     _, specs = world.ingest(
         "d1", source="upload", pdf=make_pdf(producer=None, text="")
     )
-    assert world.version("d1")["attrs"]["score"] == 0.54
+    assert world.version("d1")["attrs"]["score"] == 0.57
     assert specs == []
     _, specs = world.ingest(
         "d2",
@@ -378,6 +386,45 @@ def test_score_at_threshold_is_not_suspect(world):
         settings={"trust_thresholds": {"provenance.suspect_below": 0.6}},
     )
     assert [s.type for s in specs] == ["PROV-SUSPECT"]
+
+
+def test_weights_sum_to_one_over_seven_families():
+    assert set(provenance.WEIGHTS) == {
+        "channel",
+        "template",
+        "text",
+        "meta",
+        "producer",
+        "edits",
+        "fonts",
+    }
+    assert sum(provenance.WEIGHTS.values()) == pytest.approx(1.0)
+
+
+V1 = json.loads(
+    (
+        Path(__file__).parent / "fixtures/trust_provenance/v1_scores.json"
+    ).read_text()
+)["variants"]
+
+
+@pytest.mark.parametrize("variant", V1, ids=[v["name"] for v in V1])
+def test_v1_fixtures_keep_their_verdict_and_score(world, variant):
+    """v1 scores were frozen before v2. Every variant keeps its suspect
+    verdict at the default threshold and moves by at most 0.05, except
+    where v1 already charged a missing producer through `meta`: v2 charges
+    it again through `producer`, by design, for at most 0.07."""
+    world.ingest(
+        "d1",
+        pdf=make_pdf(**variant["pdf"]),
+        source=variant["source"],
+        sender_domain=variant["sender_domain"],
+    )
+    score = world.version("d1")["attrs"]["score"]
+    v1 = variant["v1_score"]
+    assert (score < 0.5) == (v1 < 0.5)
+    allowed = 0.07 if "producer" in variant["pdf"] else 0.05
+    assert abs(score - v1) <= allowed + 1e-9, (score, v1)
 
 
 def test_non_pdf_document_is_skipped_and_logged(world, caplog):

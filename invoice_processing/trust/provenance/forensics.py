@@ -110,7 +110,10 @@ def fonts(facts: dict) -> float:
     """Mixed subsets on amount lines: the same base font embedded under two
     subset prefixes, one of them on a line holding an amount, is what an
     editor leaves when it re-types digits. A bold totals font is another
-    base font and does not count."""
+    base font and does not count. Without a text layer there is nothing to
+    read, which scores as v1's `text` does."""
+    if facts.get("has_text") is False:
+        return 0.0
     names = facts.get("font_names") or {}
     prefixes: dict[str, set] = {}
     for name in [*names.get("body", ()), *names.get("amounts", ())]:
