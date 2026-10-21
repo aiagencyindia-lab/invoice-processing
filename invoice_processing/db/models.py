@@ -1221,6 +1221,121 @@ class TrustExplanationRating(Base, TenantMixin, TimestampMixin):
     note: Mapped[str | None] = mapped_column(String(500))
 
 
+class TrustHold(Base, TenantMixin, TimestampMixin):
+    """A payment hold placed or lifted: the ledger behind hold.placed and
+    hold.lifted. The gate still decides from the open findings; this records
+    when each hold began and ended."""
+
+    __tablename__ = "trust_holds"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_findings.id"), nullable=False, index=True
+    )
+    transaction_node: Mapped[str] = mapped_column(
+        String(36), nullable=False, index=True
+    )
+    engine: Mapped[str] = mapped_column(String(32), nullable=False)
+    type: Mapped[str] = mapped_column(String(64), nullable=False)
+    placed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+    placed_by: Mapped[str | None] = mapped_column(String(320))
+    lifted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lifted_by: Mapped[str | None] = mapped_column(String(320))
+    lift_reason: Mapped[str | None] = mapped_column(String(500))
+
+
+class TrustEvidenceRequest(Base, TenantMixin, TimestampMixin):
+    """Proof asked of a vendor or an internal owner for a finding (FR-23.5)."""
+
+    __tablename__ = "trust_evidence_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_findings.id"), nullable=False, index=True
+    )
+    owner: Mapped[str] = mapped_column(String(320), nullable=False)
+    due_date: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(String(500))
+    # open | fulfilled | cancelled
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="open"
+    )
+    proof_document_id: Mapped[str | None] = mapped_column(String(36))
+    requested_by: Mapped[str | None] = mapped_column(String(320))
+    fulfilled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+
+class ApiKey(Base, TenantMixin, TimestampMixin):
+    """A machine credential for the /v2 API. Only a hash of the secret is
+    kept; the prefix finds the row."""
+
+    __tablename__ = "api_keys"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "key_prefix", name="uq_api_keys_prefix"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    key_prefix: Mapped[str] = mapped_column(
+        String(12), nullable=False, index=True
+    )
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="viewer"
+    )
+    created_by: Mapped[str | None] = mapped_column(String(320))
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WebhookEndpoint(Base, TenantMixin, TimestampMixin):
+    """Where a tenant wants trust events sent, and which ones."""
+
+    __tablename__ = "webhook_endpoints"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    # Kept in the clear: it signs every delivery. Masked in every response.
+    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    events: Mapped[list] = mapped_column(JSONType, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    description: Mapped[str | None] = mapped_column(String(256))
+    created_by: Mapped[str | None] = mapped_column(String(320))
+
+
+class WebhookOutbox(Base, TenantMixin, TimestampMixin):
+    """One event for one endpoint, written with the change that caused it and
+    delivered by the worker's sweep."""
+
+    __tablename__ = "webhook_outbox"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    endpoint_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("webhook_endpoints.id"),
+        nullable=False,
+        index=True,
+    )
+    event: Mapped[str] = mapped_column(String(48), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONType, default=dict)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, index=True
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_status: Mapped[int | None] = mapped_column(Integer)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    dead_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 TENANT_TABLES = (
     "users",
     "record_locks",
@@ -1260,4 +1375,9 @@ TENANT_TABLES = (
     "trust_audit_runs",
     "trust_audit_samples",
     "trust_explanation_ratings",
+    "trust_holds",
+    "trust_evidence_requests",
+    "api_keys",
+    "webhook_endpoints",
+    "webhook_outbox",
 )
