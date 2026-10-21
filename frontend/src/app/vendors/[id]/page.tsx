@@ -4,18 +4,9 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { DimensionMeter, percent } from "@/components/trust/DimensionMeter";
-import { api, ApiError, can, type Me, type VendorList, type VendorTrustProfile } from "@/lib/api";
+import { api, ApiError, can, type Me, type VendorDocumentList, type VendorList, type VendorTrustProfile } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { DIMENSION_LABELS } from "@/lib/trust";
-
-/** A KYC document on file and its latest authenticity score. */
-type VendorDocument = {
-  document_id: string;
-  subkind: string;
-  filename: string | null;
-  score: number | null;
-  uploaded_at: string | null;
-};
 
 const SUBKINDS: Record<string, string> = {
   gst_certificate: "GST certificate",
@@ -45,7 +36,7 @@ export default function VendorPage() {
     vendor?.node ? `/api/trust/vendors/${encodeURIComponent(vendor.node)}/trust` : null,
   );
   const docsPath = `/api/vendors/${encodeURIComponent(id)}/documents`;
-  const { data: docs, error: docsError, reload: reloadDocs } = usePoll<{ documents: VendorDocument[] }>(
+  const { data: docs, error: docsError, reload: reloadDocs } = usePoll<VendorDocumentList>(
     vendor ? docsPath : null,
   );
   const [subkind, setSubkind] = useState("gst_certificate");

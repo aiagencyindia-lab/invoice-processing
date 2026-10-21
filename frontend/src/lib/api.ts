@@ -1322,3 +1322,19 @@ export type WebhookDelivery = {
   dead_at: string | null;
   payload: Record<string, unknown>;
 };
+
+// List envelopes for the Wave 3 routes (agreed with the backend branches).
+export type EvidenceRequestList = { requests: EvidenceRequest[] };
+
+/** A KYC document on file and its latest authenticity score. */
+export type VendorDocument = {
+  document_id: string;
+  subkind: string;
+  filename: string | null;
+  score: number | null;
+  uploaded_at: string | null;
+};
+export type VendorDocumentList = { documents: VendorDocument[] };
+export type ApiKeyList = { keys: ApiKey[] };
+export type WebhookEndpointList = { endpoints: WebhookEndpoint[] };
+export type WebhookDeliveryList = { deliveries: WebhookDelivery[] };

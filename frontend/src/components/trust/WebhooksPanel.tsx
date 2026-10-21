@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useState } from "react";
-import { api, ApiError, type WebhookDelivery, type WebhookEndpoint } from "@/lib/api";
+import { api, ApiError, type WebhookDeliveryList, type WebhookEndpoint, type WebhookEndpointList } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { copy } from "./ApiKeysPanel";
 
@@ -10,7 +10,7 @@ import { copy } from "./ApiKeysPanel";
 const EVENTS = ["finding.created", "finding.decided", "hold.placed", "hold.lifted"];
 
 function Deliveries({ endpoint }: { endpoint: WebhookEndpoint }) {
-  const { data, error } = usePoll<{ deliveries: WebhookDelivery[] }>(
+  const { data, error } = usePoll<WebhookDeliveryList>(
     `/api/integrations/webhooks/${encodeURIComponent(endpoint.id)}/deliveries`,
   );
   if (error) return <span className="muted">{error}</span>;
@@ -49,7 +49,7 @@ function Deliveries({ endpoint }: { endpoint: WebhookEndpoint }) {
 /** Outbound webhooks, HMAC-signed per endpoint. Like an API key, the signing
  *  secret is readable once, in the creation response. */
 export function WebhooksPanel() {
-  const { data, error, reload } = usePoll<{ endpoints: WebhookEndpoint[] }>("/api/integrations/webhooks");
+  const { data, error, reload } = usePoll<WebhookEndpointList>("/api/integrations/webhooks");
   const [url, setUrl] = useState("");
   const [events, setEvents] = useState<string[]>(["hold.placed", "hold.lifted"]);
   const [description, setDescription] = useState("");

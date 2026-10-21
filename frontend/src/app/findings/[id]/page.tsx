@@ -14,6 +14,7 @@ import {
   can,
   downloadFile,
   type EvidenceRequest,
+  type EvidenceRequestList,
   type Explanation,
   type Me,
   type TrustFindingDetail,
@@ -59,7 +60,7 @@ export default function FindingDetailPage() {
   const [requesting, setRequesting] = useState(false);
   // Unavailable (a 503 before the reality engine ships) reads as "none yet":
   // the section only appears once a request exists.
-  const { data: requestList, reload: reloadRequests } = usePoll<{ requests: EvidenceRequest[] }>(
+  const { data: requestList, reload: reloadRequests } = usePoll<EvidenceRequestList>(
     `/api/trust/evidence-requests?finding_id=${encodeURIComponent(id)}`,
   );
   const requests = (requestList?.requests ?? []).filter((request) => request.finding_id === id);

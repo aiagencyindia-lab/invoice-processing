@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { api, ApiError, type ApiKey, type ApiKeyCreated } from "@/lib/api";
+import { api, ApiError, type ApiKey, type ApiKeyCreated, type ApiKeyList } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 
 /** Roles a key may carry: never admin, so a leaked key cannot mint more keys. */
@@ -20,7 +20,7 @@ export async function copy(text: string): Promise<boolean> {
 /** Per-tenant API keys for /v2. The full key exists in this component's state
  *  once, right after creation, and is gone when the admin dismisses it. */
 export function ApiKeysPanel() {
-  const { data, error, reload } = usePoll<{ keys: ApiKey[] }>("/api/integrations/api-keys");
+  const { data, error, reload } = usePoll<ApiKeyList>("/api/integrations/api-keys");
   const [name, setName] = useState("");
   const [role, setRole] = useState("viewer");
   const [created, setCreated] = useState<ApiKeyCreated | null>(null);
