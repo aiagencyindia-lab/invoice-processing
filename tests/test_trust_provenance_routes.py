@@ -1,6 +1,7 @@
 """Vendor KYC documents and on-demand authenticity scores (FR-22.3)."""
 
 import json
+from datetime import datetime
 from decimal import Decimal
 
 import pytest
@@ -177,10 +178,20 @@ def test_list_shows_each_document_with_its_latest_score(env):
     upload(c, data=make_pdf(font="Courier"), subkind="pan", name="pan.pdf")
     rows = env["client"]("acme:viewer").get("/api/vendors/v1/documents")
     assert rows.status_code == 200
-    assert [(r["subkind"], r["filename"], r["score"]) for r in rows.json()] == [
+    docs = rows.json()["documents"]
+    assert [(r["subkind"], r["filename"], r["score"]) for r in docs] == [
         ("gst_certificate", "gst.pdf", None),
         ("pan", "pan.pdf", None),
     ]
+    # the frontend's VendorDocument shape, and nothing else
+    assert set(docs[0]) == {
+        "document_id",
+        "subkind",
+        "filename",
+        "score",
+        "uploaded_at",
+    }
+    assert datetime.fromisoformat(docs[0]["uploaded_at"])
     scored = env["client"]("acme:viewer").post(
         f"/api/trust/documents/{doc}/authenticity"
     )
@@ -189,11 +200,11 @@ def test_list_shows_each_document_with_its_latest_score(env):
         r
         for r in env["client"]("acme:viewer")
         .get("/api/vendors/v1/documents")
-        .json()
+        .json()["documents"]
         if r["document_id"] == doc
     ]
     assert gst["score"] == scored.json()["attrs"]["score"] > 0.5
-    assert gst["components"]["channel"] == 0.6
+    assert gst["uploaded_at"] == docs[0]["uploaded_at"]  # not the scoring time
 
 
 def test_authenticity_scores_now_and_writes_no_finding(env):
@@ -299,7 +310,11 @@ def test_a_tenant_cannot_list_another_tenants_vendor_documents(env):
     )
     r = env["client"]("globex:viewer").get("/api/vendors/v1/documents")
     assert r.status_code == 404
-    mine = env["client"]("acme:viewer").get("/api/vendors/v1/documents").json()
+    mine = (
+        env["client"]("acme:viewer")
+        .get("/api/vendors/v1/documents")
+        .json()["documents"]
+    )
     assert len(mine) == 1 and mine[0]["filename"] == "gst.pdf"
 
 

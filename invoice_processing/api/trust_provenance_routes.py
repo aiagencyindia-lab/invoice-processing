@@ -151,25 +151,48 @@ async def upload_vendor_document(
 def list_vendor_documents(
     vendor_id: str,
     principal: Annotated[Principal, Depends(require_role("viewer"))],
-) -> list[dict]:
+) -> dict:
+    """{"documents": [{document_id, subkind, filename, score, uploaded_at}]}:
+    the vendor's KYC documents with their latest authenticity score (None
+    until scored). `uploaded_at` is the document's, not the score's."""
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from ..db.models import Document  # noqa: PLC0415
+    from ..db.session import tenant_session  # noqa: PLC0415
+
     graph = _graph()
-    if not _vendor_exists(principal.tenant_id, vendor_id):
+    tenant_id = principal.tenant_id
+    if not _vendor_exists(tenant_id, vendor_id):
         raise HTTPException(404, "Unknown vendor.")
+    nodes = [
+        n
+        for n in graph.nodes(tenant_id, kind="document_version")
+        if n["attrs"].get("kind") == "kyc"
+        and n["attrs"].get("vendor_id") == vendor_id
+    ]
+    with tenant_session(tenant_id) as s:
+        uploaded = dict(
+            s.execute(
+                select(Document.id, Document.created_at).where(
+                    Document.tenant_id == tenant_id,
+                    Document.id.in_([n["ref_id"] for n in nodes]),
+                )
+            ).all()
+        )
     rows = [
         {
             "document_id": n["ref_id"],
             "subkind": n["attrs"].get("subkind"),
             "filename": n["attrs"].get("filename"),
             "score": n["attrs"].get("score"),
-            "components": n["attrs"].get("components"),
-            "engine_version": n["attrs"].get("engine_version"),
-            "as_of": n["valid_from"],
+            "uploaded_at": uploaded[n["ref_id"]].isoformat()
+            if uploaded.get(n["ref_id"])
+            else None,
         }
-        for n in graph.nodes(principal.tenant_id, kind="document_version")
-        if n["attrs"].get("kind") == "kyc"
-        and n["attrs"].get("vendor_id") == vendor_id
+        for n in nodes
     ]
-    return sorted(rows, key=lambda r: (r["subkind"] or "", r["filename"] or ""))
+    rows.sort(key=lambda r: (r["subkind"] or "", r["filename"] or ""))
+    return {"documents": rows}
 
 
 @router.post("/api/trust/documents/{document_id}/authenticity")
