@@ -2,8 +2,9 @@
 
 `reality_coverage_<kind>`: the share of that kind's checked invoices whose
 evidence decided the question (CORROBORATED or CONTRADICTED). Gates: goods
->= 0.70, services >= 0.50. Reviewer agreement (AC-23 at a partner) stays a
-partner gate.
+>= 0.70, services >= 0.50; a kind with nothing checked has nothing to
+measure and passes (None), as eval scores a type nothing was planted for.
+Reviewer agreement (AC-23 at a partner) stays a partner gate.
 """
 
 from __future__ import annotations
@@ -24,9 +25,9 @@ def measure(tenant_id, graph, findings, manifest, url) -> dict:
         counts = results.get(kind, Counter())
         total = sum(counts.values())
         share = (
-            round(sum(counts[r] for r in DECIDED) / total, 4) if total else 0.0
+            round(sum(counts[r] for r in DECIDED) / total, 4) if total else None
         )
         out[f"reality_coverage_{kind}"] = share
-        gates[f"reality_coverage_{kind}"] = share >= floor
+        gates[f"reality_coverage_{kind}"] = share is None or share >= floor
     out["gates"] = gates
     return out

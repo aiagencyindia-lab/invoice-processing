@@ -774,3 +774,14 @@ def test_eval_meets_the_reality_gates(generated, scratch_db):
     )
     assert out["reality"]["reality_coverage_goods"] >= 0.70
     assert out["passed"], {k: v for k, v in gates.items() if not v}
+
+
+def test_coverage_with_nothing_checked_is_not_a_failure(env):
+    from benchmark.history import reality as measure_module  # noqa: PLC0415
+
+    out = measure_module.measure(T, env.graph, None, {}, env.url)
+    assert out["reality_coverage_goods"] is None
+    assert out["gates"] == {
+        "reality_coverage_goods": True,
+        "reality_coverage_services": True,
+    }
