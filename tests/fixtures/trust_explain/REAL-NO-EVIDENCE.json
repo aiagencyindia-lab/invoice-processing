@@ -1,0 +1,95 @@
+{
+ "finding": {
+  "id": "f-real-no-evidence",
+  "type": "REAL-NO-EVIDENCE",
+  "transaction_node": "n-inv",
+  "status": "detected",
+  "impact": null,
+  "currency": "INR",
+  "confidence": 0.5,
+  "engine_version": "reality-1",
+  "rule_version": "FR-23-v1",
+  "model_version": "none",
+  "summary": "Invoiced 100 units; no evidence on record corroborates it.",
+  "details": {
+   "result": "NO_EVIDENCE",
+   "kind": "goods",
+   "expected": "100",
+   "found": "0",
+   "unit": "units",
+   "unit_price": "10.00",
+   "window_days": 45,
+   "reality_node": "n-real"
+  },
+  "citations": [
+   {
+    "node_id": "n-inv",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-real",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-prov",
+    "excerpt": null
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-02-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-real": {
+   "kind": "reality_check",
+   "attrs": {
+    "result": "NO_EVIDENCE",
+    "kind": "goods",
+    "expected": "100",
+    "found": "0",
+    "unit": "units",
+    "evidence": [],
+    "window_days": 45,
+    "engine_version": "reality-1"
+   }
+  },
+  "n-prov": {
+   "kind": "provider_evidence",
+   "attrs": {
+    "capability": "logistics",
+    "provider": "fake",
+    "status": "ok",
+    "data": {
+     "result": "unknown"
+    }
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ]
+ ],
+ "expect": {
+  "note": "no money is computed for this finding"
+ }
+}
