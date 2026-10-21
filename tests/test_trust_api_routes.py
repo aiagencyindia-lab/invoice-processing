@@ -5,6 +5,7 @@ coverage check, and `TestIsolation` below probes each one across tenants with
 a bearer and with the other tenant's API key.
 """
 
+import hashlib
 import re
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 from fresh_schema import fresh_schema
 from sqlalchemy import select
 
+from benchmark.history.faults.provenance import make_pdf
 from invoice_processing.adapters import JsonlAuditSink, LocalBlobStore
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
@@ -22,9 +24,11 @@ from invoice_processing.db.repositories import PgDocumentRepository
 from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.tenant_settings import JsonTenantSettings
-from invoice_processing.trust import apikeys
+from invoice_processing.trust import apikeys, score
+from invoice_processing.trust.engine import EngineContext
 from invoice_processing.trust.findings.model import Citation, FindingSpec
 from invoice_processing.trust.findings.store import FindingStore
+from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
 from invoice_processing.worker.queue import LocalQueue
 
@@ -164,6 +168,44 @@ def _seed(graph, findings, tid, vendor_name):
     return {"vendor": vendor, "invoice": invoice, "finding": fid}
 
 
+def _scorable(graph, findings, tid, tmp_path, url):
+    """What the score and provenance routes read: the invoice's
+    `trust_score` node, written by the score engine itself, and a stored
+    PDF the authenticity route can score. Returns the document id."""
+    ctx = RunContext(tenant_id=tid, case_id="", run_id="r", actor="engine")
+    score.compute(
+        EngineContext(
+            ctx=ctx,
+            mode="advisory",
+            document=None,
+            invoice_node=None,
+            graph=graph,
+            links=LinkStore(url),
+            findings=findings,
+            providers=None,
+            settings={},
+            decider=None,
+            blobs=None,
+            url=url,
+        ),
+        {},
+    )
+    pdf = make_pdf()
+    key = f"documents/{tid}.pdf"
+    LocalBlobStore(tmp_path / "b").put(key, pdf)
+    with tenant_session(tid, url) as s:
+        s.add(
+            models.Document(
+                tenant_id=tid,
+                id=f"kyc-{tid}",
+                sha256=hashlib.sha256(pdf).hexdigest(),
+                storage_key=key,
+                kind="kyc",
+            )
+        )
+    return f"kyc-{tid}"
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch, scratch_db):
     url = scratch_db("api_routes.db")
@@ -195,6 +237,7 @@ def env(tmp_path, monkeypatch, scratch_db):
         (GLOBEX, "globex", "Globex"),
     ):
         data = _seed(graph, findings, tid, name)
+        data["document"] = _scorable(graph, findings, tid, tmp_path, url)
         ctx = RunContext(
             tenant_id=tid, case_id="", run_id="r", actor=f"admin@{slug}"
         )
@@ -278,6 +321,9 @@ def test_each_v2_read_answers_what_its_api_route_answers(env, via):
     )
     for method, v2, api in _pairs(d):
         a, b = getattr(client, method)(v2), getattr(client, method)(api)
+        if v2.endswith("/trust"):
+            # The real handlers, seeded: parity of two 404s would prove little.
+            assert a.status_code == 200, (v2, a.text)
         assert (a.status_code, _stable(a.json())) == (
             b.status_code,
             _stable(b.json()),
@@ -586,9 +632,19 @@ def _calls(d):
         "endpoint_id": d["endpoint"],
         "node_id": d["invoice"],
         "finding_id": d["finding"],
-        "document_id": f"doc-{ACME}",
+        "document_id": d["document"],
         "audit_id": d["audit"],
     }
+
+    def filled(template):
+        # A vendor route names the vendor's node, not the invoice's.
+        values = (
+            {**fill, "node_id": d["vendor"]}
+            if template.startswith("/v2/vendors/")
+            else fill
+        )
+        return re.sub(r"\{(\w+)\}", lambda g: values[g.group(1)], template)
+
     rows = [
         ("get", "/api/integrations/api-keys", None),
         ("post", "/api/integrations/api-keys", {"name": "x", "role": "viewer"}),
@@ -623,10 +679,7 @@ def _calls(d):
         ("post", "/v2/trust-audits/{audit_id}/runs", {"engines": []}),
         ("get", "/v2/trust-audits/{audit_id}/report", None),
     ]
-    return [
-        (m, t, re.sub(r"\{(\w+)\}", lambda g: fill[g.group(1)], t), body)
-        for m, t, body in rows
-    ]
+    return [(m, t, filled(t), body) for m, t, body in rows]
 
 
 def _send(client, method, path, body):
@@ -640,7 +693,16 @@ def test_every_probed_route_is_exercised():
         t
         for _, t, _, _ in _calls(
             dict.fromkeys(
-                ("key_id", "endpoint", "invoice", "finding", "audit"), "x"
+                (
+                    "key_id",
+                    "endpoint",
+                    "invoice",
+                    "vendor",
+                    "document",
+                    "finding",
+                    "audit",
+                ),
+                "x",
             )
         )
     } == PROBED
@@ -648,8 +710,8 @@ def test_every_probed_route_is_exercised():
 
 class TestIsolation:
     """Globex, by bearer and by key, aimed at Acme's rows: never Acme's data.
-    Acme itself, the same call, gets through (or 503 from a stub), so each
-    probe would notice a leak rather than pass on a refusal."""
+    Acme itself, the same call, gets through, so each probe would notice a
+    leak rather than pass on a refusal."""
 
     @pytest.mark.parametrize("via", ["bearer", "key"])
     @pytest.mark.parametrize("i", range(20))
@@ -681,14 +743,14 @@ class TestIsolation:
         if via == "key" and integration:
             assert r.status_code == 403, (template, r.status_code)
         elif "{" in template:
-            # Aimed at an Acme id: not found (or a 503 stub), never done.
-            assert r.status_code in (404, 503), (template, via, r.status_code)
+            # Aimed at an Acme id: not found, never done.
+            assert r.status_code == 404, (template, via, r.status_code)
 
         mine = _send(own, method, path, body)
         if via == "key" and integration:
             assert mine.status_code == 403
         else:
-            assert mine.status_code in (200, 201, 202, 503), (
+            assert mine.status_code in (200, 201, 202), (
                 template,
                 via,
                 mine.status_code,
