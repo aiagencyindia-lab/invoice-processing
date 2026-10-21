@@ -693,3 +693,38 @@ class TestIsolation:
                 mine.status_code,
                 mine.text,
             )
+
+
+def test_the_doc_lists_every_v2_route_and_nothing_else():
+    from pathlib import Path  # noqa: PLC0415
+
+    from invoice_processing.api.v2_routes import router  # noqa: PLC0415
+
+    doc = (Path(__file__).parent.parent / "docs" / "API_V2.md").read_text()
+    documented = set(re.findall(r"\| (GET|POST) \| `(/v2/[^`]+)`", doc))
+    routed = {
+        (method, route.path)
+        for route in router.routes
+        for method in route.methods
+    }
+    assert documented == routed
+
+
+def test_the_doc_recipe_verifies_a_real_signature():
+    from pathlib import Path  # noqa: PLC0415
+
+    from invoice_processing.trust.webhooks.deliver import sign  # noqa: PLC0415
+
+    doc = (Path(__file__).parent.parent / "docs" / "API_V2.md").read_text()
+    recipe = re.search(r"```python\n(.*?)```", doc, re.S).group(1)
+    scope: dict = {}
+    exec(recipe, scope)  # noqa: S102 - our own doc
+    import time  # noqa: PLC0415
+
+    ts, body = str(int(time.time())), '{"event":"ping"}'
+    headers = {
+        "X-Trust-Timestamp": ts,
+        "X-Trust-Signature": sign("s", ts, body),
+    }
+    assert scope["verify"]("s", headers, body.encode())
+    assert not scope["verify"]("t", headers, body.encode())
