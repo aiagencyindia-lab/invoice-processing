@@ -241,6 +241,7 @@ _purchase_orders = None
 _supporting_documents = None
 _graph_store = None
 _finding_store = None
+_hold_store = None
 _history_importer = None
 _rules = None
 _tenant_settings = None
@@ -561,6 +562,20 @@ def get_graph_store():
 
         _graph_store = GraphStore()
     return _graph_store
+
+
+def get_hold_store():
+    """The hold ledger module (trust layer). `None` without the table."""
+    global _hold_store
+    if (
+        _hold_store is None
+        and _database_configured()
+        and _table_exists("trust_holds", "Hold ledger", raise_on_error=True)
+    ):
+        from ..trust import holds  # noqa: PLC0415
+
+        _hold_store = holds
+    return _hold_store
 
 
 def get_finding_store():

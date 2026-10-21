@@ -386,3 +386,121 @@ def test_reality_is_an_engine_that_can_hold():
     assert modes.ENGINES[-1] == "reality"
     assert "reality" in modes.HOLD_ENGINES
     assert "usage" in modes.CAPABILITIES
+
+
+# -- the hold ledger and the webhook outbox (Wave 3) ---------------------------
+
+
+def _endpoint(url, events=("*",)):
+    with tenant_session(T, url) as s:
+        s.add(
+            models.WebhookEndpoint(
+                tenant_id=T,
+                url="https://hooks.example.test/trust",
+                secret="s3cret",
+                events=list(events),
+            )
+        )
+
+
+def _outbox(url) -> list[str]:
+    with tenant_session(T, url) as s:
+        return [
+            r.event
+            for r in s.query(models.WebhookOutbox).order_by(
+                models.WebhookOutbox.created_at
+            )
+        ]
+
+
+def _holds(url) -> list:
+    with tenant_session(T, url) as s:
+        return [
+            (r.finding_id, r.lifted_at is not None, r.lifted_by)
+            for r in s.query(models.TrustHold)
+        ]
+
+
+def hold_spec(node, **over):
+    return spec(
+        node,
+        **{
+            "type": "PAY-UNVERIFIED",
+            "dedupe_key": "PAY-UNVERIFIED:i1",
+            "details": {"engine": "payment", "mode": "enforcing", "hold": True},
+            **over,
+        },
+    )
+
+
+def test_a_hold_is_placed_once_and_each_change_is_an_event(env):
+    url, store, node = env
+    _endpoint(url)
+    fid, _ = store.upsert(CTX, hold_spec(node), hold=True)
+    store.upsert(CTX, hold_spec(node, impact="120.00"), hold=True)
+    assert _holds(url) == [(fid, False, None)]
+    assert _outbox(url) == ["finding.created", "hold.placed"]
+
+
+def test_ruling_a_finding_wrong_lifts_its_hold(env):
+    url, store, node = env
+    _endpoint(url)
+    fid, _ = store.upsert(CTX, hold_spec(node), hold=True)
+    store.transition(HUMAN, fid, "triaged", actor="controller@x.test")
+    store.transition(
+        HUMAN, fid, "rejected", actor="controller@x.test", reason="verified"
+    )
+    assert _holds(url) == [(fid, True, "controller@x.test")]
+    assert _outbox(url)[-2:] == ["finding.decided", "hold.lifted"]
+
+
+def test_a_rejected_finding_found_again_is_not_held_again(env):
+    url, store, node = env
+    fid, _ = store.upsert(CTX, hold_spec(node), hold=True)
+    store.transition(HUMAN, fid, "triaged", actor="x")
+    store.transition(HUMAN, fid, "rejected", actor="x", reason="verified")
+    assert store.upsert(CTX, hold_spec(node), hold=True) == (fid, "untouched")
+    assert _holds(url) == [(fid, True, "x")]
+
+
+def test_reconcile_places_and_lifts_every_hold_of_an_engine(env):
+    from invoice_processing.trust import holds  # noqa: PLC0415
+
+    url, store, node = env
+    _endpoint(url)
+    a, _ = store.upsert(CTX, hold_spec(node))
+    b, _ = store.upsert(CTX, hold_spec(node, dedupe_key="PAY-UNVERIFIED:i2"))
+    store.upsert(  # an insight never holds
+        CTX,
+        spec(node, details={"engine": "payment", "hold": False}),
+    )
+    assert holds.reconcile(CTX, "payment", enforcing=True, url=url) == {
+        "placed": 2,
+        "lifted": 0,
+    }
+    assert holds.reconcile(CTX, "payment", enforcing=True, url=url) == {
+        "placed": 0,
+        "lifted": 0,
+    }
+    assert {h[0] for h in _holds(url)} == {a, b}
+    assert holds.reconcile(CTX, "payment", enforcing=False, url=url) == {
+        "placed": 0,
+        "lifted": 2,
+    }
+    assert all(lifted for _, lifted, _ in _holds(url))
+    assert _outbox(url).count("hold.lifted") == 2
+
+
+def test_an_endpoint_gets_only_the_events_it_subscribed_to(env):
+    url, store, node = env
+    _endpoint(url, events=("finding.created",))
+    store.upsert(CTX, hold_spec(node), hold=True)
+    assert _outbox(url) == ["finding.created"]
+
+
+def test_an_unknown_event_is_refused(env):
+    from invoice_processing.trust.webhooks import outbox  # noqa: PLC0415
+
+    url, _, _ = env
+    with pytest.raises(ValueError), tenant_session(T, url) as s:
+        outbox.emit(s, T, "finding.exploded", {})

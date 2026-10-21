@@ -91,6 +91,7 @@ def resolve_adapters_afresh(monkeypatch):
         "_claims_writer",
         "_graph_store",
         "_history_importer",
+        "_hold_store",
     ):
         monkeypatch.setattr(service, name, None, raising=False)
 

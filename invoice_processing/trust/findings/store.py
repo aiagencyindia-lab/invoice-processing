@@ -16,6 +16,8 @@ from ...db.models import (
 from ...db.repositories import audit_event_row
 from ...db.session import tenant_session
 from ...ports import RunContext, StatusChanged
+from .. import holds
+from ..webhooks import outbox
 from .model import (
     DECIDED,
     REASON_REQUIRED,
@@ -76,11 +78,15 @@ class FindingStore:
     def __init__(self, url: str | None = None):
         self.url = url
 
-    def upsert(self, ctx: RunContext, spec: FindingSpec) -> tuple[str, str]:
+    def upsert(
+        self, ctx: RunContext, spec: FindingSpec, *, hold: bool = False
+    ) -> tuple[str, str]:
         """Create or refresh by dedupe_key. A refresh updates the money,
         confidence, versions and citations in place and writes no event: the
         ledger records status changes (spec §4.4), and the audit of a
-        changed amount is the engine's own run log."""
+        changed amount is the engine's own run log. `hold` (an enforcing
+        engine's hold type) opens a hold in the ledger unless the finding is
+        decided or already held."""
         if not spec.citations:
             raise ValueError("A finding needs at least one citation.")
         with tenant_session(ctx.tenant_id, self.url) as s:
@@ -134,6 +140,12 @@ class FindingStore:
                         actor=ctx.actor or "engine",
                     )
                 )
+                s.flush()
+                outbox.emit(
+                    s, ctx.tenant_id, "finding.created", _finding_dict(row)
+                )
+            if hold:
+                holds.place(s, ctx, row)
             return row.id, "created" if created else "refreshed"
 
     def transition(
@@ -214,7 +226,17 @@ class FindingStore:
             )
             s.flush()
             s.refresh(row)
-            return {**_finding_dict(row), "previous": was}
+            out = _finding_dict(row)
+            if to_status in DECIDED:
+                outbox.emit(
+                    s,
+                    ctx.tenant_id,
+                    "finding.decided",
+                    {**out, "previous": was, "reason": reason},
+                )
+            if to_status == holds.LIFTS:
+                holds.lift(s, ctx, finding_id, by=actor, reason=reason)
+            return {**out, "previous": was}
 
     def get(self, tenant_id: str, finding_id: str) -> dict | None:
         with tenant_session(tenant_id, self.url) as s:

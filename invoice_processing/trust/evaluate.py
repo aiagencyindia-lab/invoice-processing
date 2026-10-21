@@ -305,11 +305,14 @@ def evaluate(
             # logged.
             if mode == "enforcing" and _owns_holds(name) and invoice_node:
                 base.findings.upsert(
-                    ctx, _engine_failed(name, invoice_node, f"{name}-?")
+                    ctx,
+                    _engine_failed(name, invoice_node, f"{name}-?"),
+                    hold=True,
                 )
             progress(name)
             continue
         for spec in specs:
+            holds = spec.type in finding_model.HOLD_TYPES
             base.findings.upsert(
                 ctx,
                 dataclasses.replace(
@@ -318,9 +321,11 @@ def evaluate(
                         **spec.details,
                         "mode": mode,
                         "engine": name,
-                        "hold": spec.type in finding_model.HOLD_TYPES,
+                        "hold": holds,
                     },
                 ),
+                # Only enforcing places the hold (§3.1.5); the gate agrees.
+                hold=holds and mode == "enforcing",
             )
         if _owns_holds(name):
             _release_cleared(ectx, name, {spec.dedupe_key for spec in specs})
