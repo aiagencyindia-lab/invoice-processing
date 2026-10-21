@@ -1,0 +1,165 @@
+{
+ "engine_version": "provenance-1",
+ "variants": [
+  {
+   "name": "clean-email-own-domain",
+   "pdf": {},
+   "source": "email",
+   "sender_domain": "acme.in",
+   "v1_score": 1.0,
+   "v1_components": {
+    "channel": 1.0,
+    "template": 1.0,
+    "text": 1.0,
+    "meta": 1.0
+   }
+  },
+  {
+   "name": "clean-api",
+   "pdf": {},
+   "source": "api",
+   "sender_domain": null,
+   "v1_score": 0.92,
+   "v1_components": {
+    "channel": 0.8,
+    "template": 1.0,
+    "text": 1.0,
+    "meta": 1.0
+   }
+  },
+  {
+   "name": "clean-upload",
+   "pdf": {},
+   "source": "upload",
+   "sender_domain": null,
+   "v1_score": 0.84,
+   "v1_components": {
+    "channel": 0.6,
+    "template": 1.0,
+    "text": 1.0,
+    "meta": 1.0
+   }
+  },
+  {
+   "name": "email-other-domain",
+   "pdf": {},
+   "source": "email",
+   "sender_domain": "gmail.com",
+   "v1_score": 0.72,
+   "v1_components": {
+    "channel": 0.3,
+    "template": 1.0,
+    "text": 1.0,
+    "meta": 1.0
+   }
+  },
+  {
+   "name": "no-producer",
+   "pdf": {
+    "producer": null
+   },
+   "source": "email",
+   "sender_domain": "acme.in",
+   "v1_score": 0.9,
+   "v1_components": {
+    "channel": 1.0,
+    "template": 1.0,
+    "text": 1.0,
+    "meta": 0.0
+   }
+  },
+  {
+   "name": "no-text-layer",
+   "pdf": {
+    "text": ""
+   },
+   "source": "email",
+   "sender_domain": "acme.in",
+   "v1_score": 0.8,
+   "v1_components": {
+    "channel": 1.0,
+    "template": 1.0,
+    "text": 0.0,
+    "meta": 1.0
+   }
+  },
+  {
+   "name": "dates-out-of-order",
+   "pdf": {
+    "created": "D:20250201",
+    "modified": "D:20250101"
+   },
+   "source": "email",
+   "sender_domain": "acme.in",
+   "v1_score": 0.9,
+   "v1_components": {
+    "channel": 1.0,
+    "template": 1.0,
+    "text": 1.0,
+    "meta": 0.0
+   }
+  },
+  {
+   "name": "no-mod-date",
+   "pdf": {
+    "modified": null
+   },
+   "source": "email",
+   "sender_domain": "acme.in",
+   "v1_score": 1.0,
+   "v1_components": {
+    "channel": 1.0,
+    "template": 1.0,
+    "text": 1.0,
+    "meta": 1.0
+   }
+  },
+  {
+   "name": "other-font",
+   "pdf": {
+    "font": "Courier"
+   },
+   "source": "upload",
+   "sender_domain": null,
+   "v1_score": 0.84,
+   "v1_components": {
+    "channel": 0.6,
+    "template": 1.0,
+    "text": 1.0,
+    "meta": 1.0
+   }
+  },
+  {
+   "name": "suspect-gmail-no-producer-no-text",
+   "pdf": {
+    "producer": null,
+    "text": ""
+   },
+   "source": "email",
+   "sender_domain": "gmail.com",
+   "v1_score": 0.42,
+   "v1_components": {
+    "channel": 0.3,
+    "template": 1.0,
+    "text": 0.0,
+    "meta": 0.0
+   }
+  },
+  {
+   "name": "upload-no-producer-no-text",
+   "pdf": {
+    "producer": null,
+    "text": ""
+   },
+   "source": "upload",
+   "sender_domain": null,
+   "v1_score": 0.54,
+   "v1_components": {
+    "channel": 0.6,
+    "template": 1.0,
+    "text": 0.0,
+    "meta": 0.0
+   }
+  }
+ ]
+}

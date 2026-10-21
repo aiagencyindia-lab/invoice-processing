@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 from fresh_schema import fresh_schema
 
+from benchmark.history.faults.provenance import make_pdf
 from invoice_processing.api import service
 from invoice_processing.db import models
 from invoice_processing.db.session import tenant_session
@@ -26,71 +27,6 @@ from invoice_processing.trust.provenance import pdfmeta
 T = "tenant-acme"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="worker")
 NOW = datetime(2026, 10, 15, tzinfo=timezone.utc)
-
-WORDS = " ".join(f"word{i}" for i in range(40))
-
-
-def make_pdf(
-    *,
-    producer: str | None = "Tally",
-    creator: str | None = "TallyPrime",
-    created: str | None = "D:20250101100000+05'30'",
-    modified: str | None = "D:20250101100000+05'30'",
-    pages: int = 1,
-    size: tuple = (595.28, 841.89),
-    font: str = "Helvetica",
-    text: str = WORDS,
-) -> bytes:
-    """A small, valid PDF built by hand: no writer library is a dependency."""
-    info = {
-        "Producer": producer,
-        "Creator": creator,
-        "CreationDate": created,
-        "ModDate": modified,
-    }
-    info_body = "".join(f"/{k} ({v})" for k, v in info.items() if v is not None)
-    lines = [text[i : i + 60] for i in range(0, len(text), 60)] if text else []
-    stream = (
-        "BT /F1 10 Tf 12 TL 40 780 Td "
-        + " ".join(f"({line}) Tj T*" for line in lines)
-        + " ET"
-    )
-    n_fixed = 4  # catalog, pages, font, info
-    page_ids = [n_fixed + 1 + 2 * i for i in range(pages)]
-    objs = {
-        1: "<< /Type /Catalog /Pages 2 0 R >>",
-        2: "<< /Type /Pages /Kids ["
-        + " ".join(f"{p} 0 R" for p in page_ids)
-        + f"] /Count {pages} >>",
-        3: f"<< /Type /Font /Subtype /Type1 /BaseFont /{font} /FontDescriptor"
-        f" << /Type /FontDescriptor /FontName /{font} /Flags 32"
-        " /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200"
-        " /CapHeight 700 /StemV 80 >> >>",
-        4: f"<< {info_body} >>",
-    }
-    for p in page_ids:
-        objs[p] = (
-            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {size[0]} {size[1]}]"
-            f" /Resources << /Font << /F1 3 0 R >> >> /Contents {p + 1} 0 R >>"
-        )
-        objs[p + 1] = (
-            f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream"
-        )
-    out = b"%PDF-1.4\n"
-    offsets = {}
-    for num in sorted(objs):
-        offsets[num] = len(out)
-        out += f"{num} 0 obj\n{objs[num]}\nendobj\n".encode("latin-1")
-    xref = len(out)
-    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
-    for num in sorted(objs):
-        out += f"{offsets[num]:010d} 00000 n \n".encode()
-    out += (
-        f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R /Info 4 0 R >>\n"
-        f"startxref\n{xref}\n%%EOF\n"
-    ).encode()
-    return out
-
 
 # -- PDF facts ---------------------------------------------------------------
 

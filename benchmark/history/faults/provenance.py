@@ -38,6 +38,106 @@ def inject(rng, rows, faults, *, start, months) -> None:
         )
 
 
+WORDS = " ".join(f"word{i}" for i in range(40))
+
+
+def make_pdf(
+    *,
+    producer: str | None = "Tally",
+    creator: str | None = "TallyPrime",
+    created: str | None = "D:20250101100000+05'30'",
+    modified: str | None = "D:20250101100000+05'30'",
+    pages: int = 1,
+    size: tuple = (595.28, 841.89),
+    font: str = "Helvetica",
+    text: str = WORDS,
+    amount_line: str | None = None,
+    amount_font: str | None = None,
+    saves: tuple = (),
+) -> bytes:
+    """A small, valid PDF built by hand: no writer library is a dependency.
+
+    `amount_line` is written on its own line in `amount_font` (default: the
+    body font); each date in `saves` appends an incremental update whose new
+    Info dictionary carries that ModDate, as an editor's "save" does."""
+    info = {
+        "Producer": producer,
+        "Creator": creator,
+        "CreationDate": created,
+        "ModDate": modified,
+    }
+
+    def info_body(values) -> str:
+        return "".join(
+            f"/{k} ({v})" for k, v in values.items() if v is not None
+        )
+
+    lines = [text[i : i + 60] for i in range(0, len(text), 60)] if text else []
+    stream = (
+        "BT /F1 10 Tf 12 TL 40 780 Td "
+        + " ".join(f"({line}) Tj T*" for line in lines)
+        + (f" /F2 10 Tf ({amount_line}) Tj T*" if amount_line else "")
+        + " ET"
+    )
+
+    def font_obj(name: str) -> str:
+        return (
+            f"<< /Type /Font /Subtype /Type1 /BaseFont /{name} /FontDescriptor"
+            f" << /Type /FontDescriptor /FontName /{name} /Flags 32"
+            " /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800"
+            " /Descent -200 /CapHeight 700 /StemV 80 >> >>"
+        )
+
+    n_fixed = 5  # catalog, pages, body font, info, amount font
+    page_ids = [n_fixed + 1 + 2 * i for i in range(pages)]
+    objs = {
+        1: "<< /Type /Catalog /Pages 2 0 R >>",
+        2: "<< /Type /Pages /Kids ["
+        + " ".join(f"{p} 0 R" for p in page_ids)
+        + f"] /Count {pages} >>",
+        3: font_obj(font),
+        4: f"<< {info_body(info)} >>",
+        5: font_obj(amount_font or font),
+    }
+    for p in page_ids:
+        objs[p] = (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {size[0]} {size[1]}]"
+            " /Resources << /Font << /F1 3 0 R /F2 5 0 R >> >>"
+            f" /Contents {p + 1} 0 R >>"
+        )
+        objs[p + 1] = (
+            f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream"
+        )
+    out = b"%PDF-1.4\n"
+    offsets = {}
+    for num in sorted(objs):
+        offsets[num] = len(out)
+        out += f"{num} 0 obj\n{objs[num]}\nendobj\n".encode("latin-1")
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
+    for num in sorted(objs):
+        out += f"{offsets[num]:010d} 00000 n \n".encode()
+    size_n = len(objs) + 1
+    out += (
+        f"trailer\n<< /Size {size_n} /Root 1 0 R /Info 4 0 R >>\n"
+        f"startxref\n{xref}\n%%EOF\n"
+    ).encode()
+    for when in saves:
+        num, at = size_n, len(out)
+        out += (
+            f"{num} 0 obj\n<< {info_body({**info, 'ModDate': when})} >>\n"
+            "endobj\n"
+        ).encode("latin-1")
+        prev, xref = xref, len(out)
+        size_n += 1
+        out += (
+            f"xref\n{num} 1\n{at:010d} 00000 n \n"
+            f"trailer\n<< /Size {size_n} /Root 1 0 R /Info {num} 0 R"
+            f" /Prev {prev} >>\nstartxref\n{xref}\n%%EOF\n"
+        ).encode()
+    return out
+
+
 def _sha(*parts) -> str:
     return hashlib.sha256(":".join(map(str, parts)).encode()).hexdigest()
 
