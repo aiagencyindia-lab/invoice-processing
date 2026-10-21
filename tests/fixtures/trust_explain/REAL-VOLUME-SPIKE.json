@@ -1,0 +1,76 @@
+{
+ "finding": {
+  "id": "f-real-volume-spike",
+  "type": "REAL-VOLUME-SPIKE",
+  "transaction_node": "n-inv",
+  "status": "detected",
+  "impact": "9000.00",
+  "currency": "INR",
+  "confidence": 0.6,
+  "engine_version": "reality-1",
+  "rule_version": "FR-23-v1",
+  "model_version": "none",
+  "summary": "Line 1 bills a quantity of 1000 against the vendor's usual 100.",
+  "details": {
+   "line_number": 1,
+   "unit_price": "10.00",
+   "median": "100",
+   "quantity": "1000",
+   "z": "inf",
+   "history": 6
+  },
+  "citations": [
+   {
+    "node_id": "n-inv",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-line",
+    "excerpt": null
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-02-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-line": {
+   "kind": "invoice_line",
+   "attrs": {
+    "line_number": 1,
+    "description": "Steel rod",
+    "quantity": "1000",
+    "unit_price": "10.00"
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ]
+ ],
+ "expect": {
+  "payable_now": "1000.00",
+  "payable_correct": "1000.00",
+  "delta": "9000.00"
+ }
+}
