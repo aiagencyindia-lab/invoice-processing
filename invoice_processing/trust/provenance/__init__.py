@@ -137,23 +137,27 @@ def _meta(facts: dict, now: datetime) -> float:
     return 1.0 if created <= modified <= now else 0.0
 
 
-def _prior(ectx, tenant, doc_id: str, invoice_node: str) -> list[dict]:
-    """The vendor's other documents' version attrs. Found through the
-    invoice's `document_id` attr: a sync that re-versions an invoice node
-    closes its `evidences` edge until that document is evaluated again."""
-    vendor = tenant.vendor(invoice_node)
+def _invoice_versions(ectx, tenant) -> dict:
+    """Every invoice document's version attrs, by canonical vendor:
+    {vendor: [(document_id, attrs)]}. Found through the invoice's
+    `document_id` attr: a sync that re-versions an invoice node closes its
+    `evidences` edge until that document is evaluated again."""
     invoice_of_doc = {
         n["attrs"].get("document_id"): i for i, n in tenant.invoices.items()
     }
-    # ponytail: scans every version node per document; index by vendor when a
-    # tenant passes ~50k documents.
-    out = []
+    out: dict = defaultdict(list)
     for v in ectx.graph.nodes(ectx.ctx.tenant_id, kind="document_version"):
-        other = v["natural_key"].split(":")[1]
-        inv = invoice_of_doc.get(other)
-        if other != doc_id and inv and tenant.vendor(inv) == vendor:
-            out.append(v["attrs"])
+        doc_id = v["natural_key"].split(":")[1]
+        inv = invoice_of_doc.get(doc_id)
+        if inv and tenant.vendor(inv):
+            out[tenant.vendor(inv)].append((doc_id, v["attrs"]))
     return out
+
+
+def _prior(tenant, versions, doc_id: str, invoice_node: str) -> list[dict]:
+    """The vendor's other invoice documents' version attrs."""
+    vendor = tenant.vendor(invoice_node)
+    return [a for d, a in versions.get(vendor, ()) if d != doc_id]
 
 
 def _edited(ectx, doc, vid, facts, invoice_node, attrs) -> FindingSpec | None:
@@ -310,12 +314,19 @@ def _vendor_document(ectx, tenant, doc):
 
 
 def _ledger(
-    ectx: EngineContext, tenant: _Tenant, doc: dict, invoice_node: str | None
+    ectx: EngineContext,
+    tenant: _Tenant,
+    doc: dict,
+    invoice_node: str | None,
+    data: bytes | None = None,
+    versions: dict | None = None,
 ) -> list[FindingSpec]:
     """Score one document and record its `document_version` node. An invoice
     document (`invoice_node`) is judged against the vendor's other invoices;
     a KYC document or proof against the vendor's documents of its kind."""
-    facts = pdfmeta.facts(ectx.blobs.get(doc["storage_key"]))
+    facts = pdfmeta.facts(
+        ectx.blobs.get(doc["storage_key"]) if data is None else data
+    )
     if facts is None:
         logger.info("provenance_skipped", extra={"reason": "not_pdf"})
         return []
@@ -323,7 +334,9 @@ def _ledger(
         attrs = tenant.invoices[invoice_node]["attrs"]
         keep = {"sender_domain": attrs.get("document_sender_domain")}
         channel = _channel(tenant, doc, invoice_node)
-        prior = _prior(ectx, tenant, doc["id"], invoice_node)
+        if versions is None:
+            versions = _invoice_versions(ectx, tenant)
+        prior = _prior(tenant, versions, doc["id"], invoice_node)
         edges = [
             {
                 "dst": invoice_node,
@@ -531,6 +544,45 @@ def _tamper(ectx, tenant, targets) -> list[FindingSpec]:
     return specs
 
 
+def _batch_ledger(ectx, tenant) -> list[FindingSpec]:
+    """A batch run scores every invoice document not yet at this engine
+    version (new ones, and v1 nodes once), reading the bytes at their
+    content address. Documents whose bytes are not stored are skipped."""
+    specs, missing = [], 0
+    # Loaded once: documents scored earlier in this run are not each other's
+    # history until the next run.
+    versions = _invoice_versions(ectx, tenant)
+    current = {
+        v["natural_key"]
+        for v in ectx.graph.nodes(ectx.ctx.tenant_id, kind="document_version")
+        if v["attrs"].get("engine_version") == ENGINE_VERSION
+    }
+    for node in sorted(tenant.invoices):
+        a = tenant.invoices[node]["attrs"]
+        doc_id, sha = a.get("document_id"), a.get("document_sha256")
+        if not (doc_id and sha):
+            continue
+        doc = {
+            "id": doc_id,
+            "kind": None,
+            "sha256": sha,
+            # The ingest's content-addressed key (api.ingest.storage_key_for).
+            "storage_key": f"documents/{sha}.pdf",
+            "source": a.get("document_source"),
+        }
+        if _key(doc) in current:
+            continue
+        try:
+            data = ectx.blobs.get(doc["storage_key"])
+        except Exception:  # local, GCS and test stores raise differently
+            missing += 1
+            continue
+        specs += _ledger(ectx, tenant, doc, node, data, versions)
+    if missing:
+        logger.info("provenance_batch_skipped", extra={"missing": missing})
+    return specs
+
+
 def run(ectx: EngineContext) -> list[FindingSpec]:
     doc = ectx.document
     if doc is not None and ectx.invoice_node is None:
@@ -539,6 +591,7 @@ def run(ectx: EngineContext) -> list[FindingSpec]:
         return []  # a contract or other non-invoice document
     tenant = _Tenant(ectx)
     if doc is None:
-        return _tamper(ectx, tenant, sorted(tenant.invoices))
+        specs = _batch_ledger(ectx, tenant)
+        return specs + _tamper(ectx, tenant, sorted(tenant.invoices))
     specs = _ledger(ectx, tenant, doc, ectx.invoice_node)
     return specs + _tamper(ectx, tenant, [ectx.invoice_node])

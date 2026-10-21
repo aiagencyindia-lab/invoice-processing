@@ -747,6 +747,58 @@ def test_batch_run_finds_tamper_across_the_tenant(world):
     assert world.graph.nodes(T, kind="document_version") == []
 
 
+# -- batch ledger (v2) --------------------------------------------------------
+
+
+class CountingBlobs(Blobs):
+    def __init__(self):
+        super().__init__()
+        self.reads = []
+
+    def get(self, key):
+        self.reads.append(key)
+        return self[key]
+
+
+def test_batch_ledgers_unscored_documents_from_their_content_address(world):
+    world.blobs = CountingBlobs()
+    sha = "e" * 64
+    node = world.invoice("d1", sha=sha, invoice_date="2025-01-01")
+    world.blobs[f"documents/{sha}.pdf"] = make_pdf(
+        saves=("D:20250110", "D:20250112")
+    )
+    world.invoice("d2", number="INV-2")  # no bytes stored: skipped
+    specs = provenance.run(world.ectx())
+    assert [(s.type, s.transaction_node) for s in specs] == [
+        ("PROV-EDITED", node)
+    ]
+    v = world.graph.open_node(T, "document_version", f"documents:d1:{sha}")
+    assert v["attrs"]["engine_version"] == "provenance-2"
+    assert v["attrs"]["components"]["channel"] == 1.0  # email, own domain
+    [edge] = world.graph.edges(T, src=v["id"], kind="evidences")
+    assert edge["dst"] == node
+    # a second batch reads nothing already at provenance-2
+    world.blobs.reads.clear()
+    provenance.run(world.ectx())
+    assert world.blobs.reads == [f"documents/{'d2'.ljust(64, '0')}.pdf"]
+
+
+def test_batch_upgrades_a_v1_version_node(world):
+    world.ingest("d1")
+    v = world.version("d1")
+    world.graph.upsert_node(
+        CTX,
+        kind="document_version",
+        natural_key=v["natural_key"],
+        ref_table="documents",
+        ref_id="d1",
+        attrs={"score": 1.0, "components": {"channel": 1.0}},
+    )
+    world.blobs[f"documents/{'d1'.ljust(64, '0')}.pdf"] = make_pdf()
+    provenance.run(world.ectx())
+    assert world.version("d1")["attrs"]["engine_version"] == "provenance-2"
+
+
 # -- end to end ----------------------------------------------------------------
 
 
