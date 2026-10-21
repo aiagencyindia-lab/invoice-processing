@@ -90,7 +90,10 @@ export function ReadinessTable({ engines, onChanged }: { engines: EngineReadines
                   <td>{row.triage.decided}</td>
                   <td>{percent(row.triage.precision)}</td>
                   <td>{row.failures}</td>
-                  <td data-recommendation={row.engine}>{row.recommendation}</td>
+                  <td data-recommendation={row.engine}>
+                    {row.recommendation.to ? <strong>→ {row.recommendation.to}. </strong> : null}
+                    {row.recommendation.reason}
+                  </td>
                   <td>
                     <div className="row" style={{ gap: 4 }}>
                       {up ? (

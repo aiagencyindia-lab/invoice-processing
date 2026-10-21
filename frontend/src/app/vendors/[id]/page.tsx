@@ -151,8 +151,8 @@ function VendorView({ id }: { id: string }) {
             {profile.network.length ? (
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
                 {profile.network.map((link) => (
-                  <li key={link.node}>
-                    {link.name ?? link.node} · shares {link.shared.join(", ")}
+                  <li key={link.vendor.node}>
+                    {link.vendor.name ?? link.vendor.node} · shares {link.shared.join(", ")}
                   </li>
                 ))}
               </ul>

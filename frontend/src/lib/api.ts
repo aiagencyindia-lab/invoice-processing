@@ -1226,24 +1226,36 @@ export type TrustScore = {
   mode: Record<string, string>;
 };
 
+/** A finding as the score route lists it under its dimension. */
+export type TransactionTrustFinding = Pick<
+  TrustFinding,
+  "id" | "type" | "status" | "summary" | "impact" | "currency" | "engine" | "hold"
+>;
+
 export type TransactionTrust = TrustScore & {
+  /** The trust_score node, and the invoice node it scores. */
+  node: string;
+  valid_from: string;
+  transaction_node: string;
   hold: HoldDetail;
-  findings: Record<Dimension, TrustFinding[]>;
+  /** Keyed by dimension, plus "other" for types with none. */
+  findings: Record<Dimension | "other", TransactionTrustFinding[]>;
 };
 
 export type VendorTrustProfile = {
-  vendor: TrustVendor;
+  vendor: TrustVendor & { invoices: number; scored: number };
   dimensions: Record<Dimension, number | null>;
   findings_by_type: Record<string, { open: number; decided: number }>;
   gst: { status: string | null; missed_periods: number | null; observed_at: string | null } | null;
   bank_verified: boolean | null;
-  kyc: { document_id: string; subkind: string; score: number | null; at: string | null }[];
-  network: { node: string; name: string | null; shared: string[] }[];
+  kyc: { node: string; document_id: string; subkind: string | null; score: number | null; observed_at: string | null }[];
+  network: { vendor: TrustVendor; shared: string[] }[];
   timeline: { month: string; composite: number | null }[];
 };
 
 export type TrustPosture = {
-  found: string;
+  since: string | null;
+  found: { count: number; impact: string };
   prevented: string;
   recovered: string;
   written_off: string;
@@ -1267,7 +1279,8 @@ export type EngineReadiness = {
   open_holds: number;
   triage: { decided: number; accepted: number; rejected: number; precision: number | null };
   failures: number;
-  recommendation: string;
+  /** The suggested next mode (null = stay), and why. */
+  recommendation: { to: string | null; reason: string };
 };
 
 export type Readiness = { engines: EngineReadiness[] };
@@ -1308,6 +1321,7 @@ export type WebhookEndpoint = {
   description: string | null;
   /** Masked except in the creation response. */
   secret: string;
+  created_by: string | null;
   created_at: string | null;
 };
 
@@ -1320,6 +1334,7 @@ export type WebhookDelivery = {
   last_status: number | null;
   last_error: string | null;
   dead_at: string | null;
+  created_at: string | null;
   payload: Record<string, unknown>;
 };
 

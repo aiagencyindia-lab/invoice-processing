@@ -76,7 +76,12 @@ function PostureBody({ days }: { days: number }) {
       {data ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
-            <Tile label="Found" value={money(data.found)} testId="found" />
+            <Tile
+              label="Found"
+              value={money(data.found.impact)}
+              hint={`${data.found.count} finding${data.found.count === 1 ? "" : "s"}`}
+              testId="found"
+            />
             <Tile label="Prevented" value={money(data.prevented)} testId="prevented" />
             <Tile label="Recovered" value={money(data.recovered)} testId="recovered" />
             <Tile label="Written off" value={money(data.written_off)} testId="written_off" />
