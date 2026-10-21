@@ -3,23 +3,43 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Fragment, useState } from "react";
+import { EvidenceRequestDialog } from "@/components/trust/EvidenceRequestDialog";
 import { EvidenceViewer } from "@/components/trust/EvidenceViewer";
 import { LineageChain } from "@/components/trust/LineageChain";
 import { RatingButtons } from "@/components/trust/RatingButtons";
 import { TransitionDialog } from "@/components/trust/TransitionDialog";
 import {
+  api,
   ApiError,
   can,
   downloadFile,
+  type EvidenceRequest,
   type Explanation,
   type Me,
   type TrustFindingDetail,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
-import { ENGINE_LABELS, MONEY_STATUSES, STATUS_LABELS, money, statusBadge } from "@/lib/trust";
+import { DIMENSION_LABELS, ENGINE_LABELS, MONEY_STATUSES, STATUS_LABELS, money, statusBadge } from "@/lib/trust";
 
 const TABS = ["Why", "Evidence", "Lineage", "History"] as const;
 type Tab = (typeof TABS)[number];
+
+/** Statuses from which asking for evidence still makes sense: the request
+ *  moves the finding to "needs vendor input" (the server has the last word). */
+const REQUESTABLE = new Set(["detected", "triaged", "needs_vendor_input"]);
+
+/** The Trust Score dimension a finding counts against. The engine may name it
+ *  in the details; otherwise the type family decides (trust/types.py TABLE). */
+function dimensionOf(type: string, details: Record<string, unknown>): string | null {
+  if (typeof details.dimension === "string") return details.dimension;
+  if (type === "REAL-PRICE-JUMP") return "price";
+  if (type === "REAL-VOLUME-SPIKE" || type === "PAY-ANOMALY") return "consistency";
+  if (type.startsWith("REAL-")) return "reality";
+  if (type.startsWith("PROV-")) return "authenticity";
+  if (type.startsWith("PAY-") || type.startsWith("GST-")) return "identity";
+  if (type.startsWith("LEAK-")) return "price";
+  return null;
+}
 
 function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString() : "—";
@@ -36,6 +56,13 @@ export default function FindingDetailPage() {
   const [citation, setCitation] = useState(0);
   const [moving, setMoving] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [requesting, setRequesting] = useState(false);
+  // Unavailable (a 503 before the reality engine ships) reads as "none yet":
+  // the section only appears once a request exists.
+  const { data: requestList, reload: reloadRequests } = usePoll<{ requests: EvidenceRequest[] }>(
+    `/api/trust/evidence-requests?finding_id=${encodeURIComponent(id)}`,
+  );
+  const requests = (requestList?.requests ?? []).filter((request) => request.finding_id === id);
 
   if (error) return <div className="empty-state">{error}</div>;
   if (!detail) return <div className="empty-state">Loading…</div>;
@@ -43,6 +70,25 @@ export default function FindingDetailPage() {
   const transitions = detail.allowed_transitions.filter((to) =>
     can(me, MONEY_STATUSES.has(to) ? "approver" : "clerk"),
   );
+
+  async function attachProof(request: EvidenceRequest, file: File) {
+    setNotice(null);
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      await api(`/api/trust/evidence-requests/${encodeURIComponent(request.id)}/proof`, {
+        method: "POST",
+        body: form,
+      });
+      setNotice(`Attached ${file.name}; the finding will be re-checked.`);
+      reloadRequests();
+      reload();
+    } catch (caught) {
+      setNotice(caught instanceof ApiError ? caught.friendly : String(caught));
+    }
+  }
+
+  const dimension = dimensionOf(detail.type, detail.details);
 
   async function pack(format: "html" | "json") {
     setNotice(null);
@@ -88,6 +134,14 @@ export default function FindingDetailPage() {
           <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <span className={`badge ${statusBadge(detail.status)}`}>{STATUS_LABELS[detail.status] ?? detail.status}</span>
             {detail.hold ? <span className="badge badge-warn">hold</span> : null}
+            {dimension ? (
+              <span className="badge badge-neutral" title="Trust Score dimension">
+                {DIMENSION_LABELS[dimension] ?? dimension}
+              </span>
+            ) : null}
+            {requests.some((request) => request.status === "open" && request.overdue) ? (
+              <span className="badge badge-error">evidence overdue</span>
+            ) : null}
             <span className="muted" style={{ fontSize: 12.5 }}>
               {detail.vendor?.name ?? "Unknown vendor"} · {detail.engine ? (ENGINE_LABELS[detail.engine] ?? detail.engine) : "—"}
               {detail.confidence !== null ? ` · ${Math.round(detail.confidence * 100)}% confidence` : ""}
@@ -103,6 +157,11 @@ export default function FindingDetailPage() {
               {STATUS_LABELS[to] ?? to}
             </button>
           ))}
+          {REQUESTABLE.has(detail.status) && can(me, "clerk") ? (
+            <button type="button" className="btn-secondary" onClick={() => setRequesting(true)}>
+              Request evidence
+            </button>
+          ) : null}
           <button type="button" className="btn-secondary" onClick={() => pack("html")}>
             Evidence pack (HTML)
           </button>
@@ -111,6 +170,56 @@ export default function FindingDetailPage() {
           </button>
         </div>
       </header>
+
+      {requests.length ? (
+        <div className="panel table-scroll" style={{ padding: 8 }} aria-label="Evidence requests">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Owner</th>
+                <th>Due</th>
+                <th>Status</th>
+                <th>Note</th>
+                <th>Proof</th>
+              </tr>
+            </thead>
+            <tbody>
+              {requests.map((request) => (
+                <tr key={request.id}>
+                  <td>{request.owner}</td>
+                  <td>
+                    {request.due_date ?? "—"}
+                    {request.status === "open" && request.overdue ? (
+                      <span className="badge badge-error" style={{ marginLeft: 6 }}>
+                        overdue
+                      </span>
+                    ) : null}
+                  </td>
+                  <td>{request.status}</td>
+                  <td>{request.note ?? "—"}</td>
+                  <td>
+                    {request.status === "open" && can(me, "clerk") ? (
+                      <input
+                        type="file"
+                        aria-label={`Attach proof for ${request.owner}`}
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          if (file) void attachProof(request, file);
+                          event.target.value = "";
+                        }}
+                      />
+                    ) : request.proof_document_id ? (
+                      "attached"
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
 
       <div role="tablist" className="row" style={{ gap: 6 }}>
         {TABS.map((name) => (
@@ -257,6 +366,19 @@ export default function FindingDetailPage() {
           onMoved={(current) => {
             setMoving(null);
             setNotice(`This finding moved to ${STATUS_LABELS[current] ?? current}; reloaded.`);
+            reload();
+          }}
+        />
+      ) : null}
+
+      {requesting ? (
+        <EvidenceRequestDialog
+          finding={detail}
+          onCancel={() => setRequesting(false)}
+          onDone={(request) => {
+            setRequesting(false);
+            setNotice(`Evidence requested from ${request.owner}.`);
+            reloadRequests();
             reload();
           }}
         />
