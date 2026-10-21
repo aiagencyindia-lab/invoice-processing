@@ -143,7 +143,11 @@ def test_the_same_bytes_again_are_a_duplicate_not_a_new_document(env):
     assert again.status_code == 200
     assert again.json()["document_id"] == first["document_id"]
     assert again.json()["duplicate"] is True
-    assert len(env["queued"]) == 1
+    # queued again: the first enqueue may have failed
+    assert [q["document_id"] for q in env["queued"]] == [
+        first["document_id"]
+    ] * 2
+    assert upload(c, subkind="pan").status_code == 409
     with tenant_session(ACME, env["url"]) as s:
         s.add(
             models.Vendor(
@@ -155,6 +159,27 @@ def test_the_same_bytes_again_are_a_duplicate_not_a_new_document(env):
             )
         )
     assert upload(c, vendor="v2").status_code == 409
+
+
+def test_a_kyc_row_left_without_its_node_is_planted_on_reupload(env):
+    import hashlib  # noqa: PLC0415
+
+    with tenant_session(ACME, env["url"]) as s:
+        s.add(
+            models.Document(
+                tenant_id=ACME,
+                id="k-orphan",
+                sha256=hashlib.sha256(PDF).hexdigest(),
+                storage_key="documents/x.pdf",
+                kind="kyc",
+            )
+        )
+    r = upload(env["client"]("acme:clerk"))
+    assert r.status_code == 200, r.text
+    assert r.json()["document_id"] == "k-orphan"
+    v = env["graph"].node(ACME, r.json()["version_node"])
+    assert v["attrs"]["vendor_id"] == "v1"
+    assert v["attrs"]["subkind"] == "gst_certificate"
 
 
 def test_bytes_received_as_an_invoice_are_refused(env):

@@ -3,10 +3,22 @@ edits after issue and vendor onboarding documents."""
 
 from __future__ import annotations
 
+from datetime import date
+
 from ..model import Actor
 from . import Context, register
 
 WEAK = 0.5
+
+
+def _after(modified, issued) -> bool:
+    """The last save is dated after a readable invoice date."""
+    try:
+        return date.fromisoformat(str(modified)[:10]) > date.fromisoformat(
+            str(issued)[:10]
+        )
+    except ValueError:
+        return False
 
 
 def _numbers(comps) -> dict:
@@ -153,7 +165,7 @@ def edited(ctx: Context) -> dict:
             version,
         )
     ]
-    if modified and issued:
+    if modified and issued and _after(modified, issued):
         why.append(
             ctx.step(
                 f"Last saved {str(modified)[:10]}, after the invoice date {issued}.",

@@ -269,33 +269,53 @@ def _vendor_key(graph, tenant_id: str, node_id: str | None) -> str | None:
     )
 
 
+_EDGE_FIELDS = ("kind", "source_system", "provenance", "confidence")
+
+
+def _evidences(dst: str) -> dict:
+    return {
+        "src": None,
+        "dst": dst,
+        "kind": "evidences",
+        "source_system": "provenance",
+        "provenance": "system_record",
+        "confidence": 1.0,
+    }
+
+
 def _vendor_document(ectx, tenant, doc):
     """(attrs to keep, channel, prior attrs, edges, vendor node) for a KYC
     document or a proof. The upload (or the reality branch, for a proof)
-    planted its node; scoring re-versions it, which closes its edges, so
-    they are drawn again as they were."""
+    planted its node; scoring re-versions it, which closes every edge into
+    or out of it, so they are drawn again as they were (None marks the
+    version node)."""
     t, g = ectx.ctx.tenant_id, ectx.graph
     planted = g.open_node(t, "document_version", _key(doc))
     keep = dict((planted or {}).get("attrs") or {})
     keep["kind"] = doc["kind"]
-    edges = g.edges(t, src=planted["id"], kind="evidences") if planted else []
+    edges = []
+    if planted:
+        for e in g.edges(t, src=planted["id"]) + g.edges(t, dst=planted["id"]):
+            edges.append(
+                {
+                    **{k: e[k] for k in _EDGE_FIELDS},
+                    "src": None if e["src"] == planted["id"] else e["src"],
+                    "dst": None if e["dst"] == planted["id"] else e["dst"],
+                }
+            )
+    evidences = [
+        e["dst"] for e in edges if e["src"] is None and e["kind"] == "evidences"
+    ]
     vendor = None
     if doc["kind"] == "kyc":
         vid = keep.get("vendor_id")
         vendor = g.nodes_by_ref(t, "vendors", [vid]).get(vid) if vid else None
-        if vendor and all(e["dst"] != vendor for e in edges):
-            edges.append(
-                {
-                    "dst": vendor,
-                    "source_system": "provenance",
-                    "provenance": "system_record",
-                    "confidence": 1.0,
-                }
-            )
+        if vendor and vendor not in evidences:
+            edges.append(_evidences(vendor))
     else:  # a proof: its vendor is its invoice's
-        for e in edges:
-            if e["dst"] in tenant.issuer:
-                vendor = tenant.issuer[e["dst"]][0]
+        for dst in evidences:
+            if dst in tenant.issuer:
+                vendor = tenant.issuer[dst][0]
                 keep["vendor_id"] = _vendor_key(g, t, vendor)
                 break
     # ponytail: scans every version node, as `_prior` does.
@@ -338,14 +358,7 @@ def _ledger(
         if versions is None:
             versions = _invoice_versions(ectx, tenant)
         prior = _prior(tenant, versions, doc["id"], invoice_node)
-        edges = [
-            {
-                "dst": invoice_node,
-                "source_system": "provenance",
-                "provenance": "system_record",
-                "confidence": 1.0,
-            }
-        ]
+        edges = [_evidences(invoice_node)]
     else:
         keep, channel, prior, edges, vendor = _vendor_document(
             ectx, tenant, doc
@@ -404,9 +417,9 @@ def _ledger(
     for e in edges:
         ectx.graph.upsert_edge(
             ectx.ctx,
-            src=vid,
-            dst=e["dst"],
-            kind="evidences",
+            src=e["src"] or vid,
+            dst=e["dst"] or vid,
+            kind=e["kind"],
             source_system=e["source_system"],
             provenance=e["provenance"],
             confidence=e["confidence"],
@@ -550,7 +563,7 @@ def _batch_ledger(ectx, tenant) -> list[FindingSpec]:
     """A batch run scores every invoice document not yet at this engine
     version (new ones, and v1 nodes once), reading the bytes at their
     content address. Documents whose bytes are not stored are skipped."""
-    specs, missing = [], 0
+    specs, missing, failed, error = [], 0, 0, None
     # Loaded once: documents scored earlier in this run are not each other's
     # history until the next run.
     versions = _invoice_versions(ectx, tenant)
@@ -576,12 +589,22 @@ def _batch_ledger(ectx, tenant) -> list[FindingSpec]:
             continue
         try:
             data = ectx.blobs.get(doc["storage_key"])
-        except Exception:  # local, GCS and test stores raise differently
-            missing += 1
+        except Exception as exc:  # local, GCS and test stores raise differently
+            if isinstance(exc, (KeyError, FileNotFoundError)) or (
+                type(exc).__name__ == "NotFound"
+            ):
+                missing += 1
+            else:  # the store itself is failing: say so, never fail the run
+                failed, error = failed + 1, type(exc).__name__
             continue
         specs += _ledger(ectx, tenant, doc, node, data, versions)[1]
     if missing:
         logger.info("provenance_batch_skipped", extra={"missing": missing})
+    if failed:
+        logger.warning(
+            "provenance_batch_blob_failed",
+            extra={"failed": failed, "error": error},
+        )
     return specs
 
 

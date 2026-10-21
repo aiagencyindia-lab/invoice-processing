@@ -647,6 +647,19 @@ def test_proof_keeps_the_edge_to_its_invoice_and_raises_nothing(world):
         confidence=1.0,
         observed_at=NOW,
     )
+    request = world.graph.upsert_node(
+        CTX, kind="evidence_request", natural_key="evidence_requests:r1"
+    )
+    world.graph.upsert_edge(
+        CTX,
+        src=request,
+        dst=vid,
+        kind="fulfilled_by",
+        source_system="reality",
+        provenance="human_assertion",
+        confidence=1.0,
+        observed_at=NOW,
+    )
     specs = world.run_document(
         "pr1", make_pdf(producer=None, text=""), kind="proof"
     )
@@ -658,6 +671,9 @@ def test_proof_keeps_the_edge_to_its_invoice_and_raises_nothing(world):
     [edge] = world.graph.edges(T, src=v["id"], kind="evidences")
     assert edge["dst"] == inv and edge["source_system"] == "reality"
     assert edge["provenance"] == "human_assertion"
+    # an edge into the node, of another kind, survives the re-version too
+    [into] = world.graph.edges(T, dst=v["id"], kind="fulfilled_by")
+    assert into["src"] == request
 
 
 def test_kyc_is_never_edited_or_tamper(world):
@@ -781,6 +797,28 @@ def test_batch_ledgers_unscored_documents_from_their_content_address(world):
     world.blobs.reads.clear()
     provenance.run(world.ectx())
     assert world.blobs.reads == [f"documents/{'d2'.ljust(64, '0')}.pdf"]
+
+
+def test_batch_logs_a_failing_blob_store_louder_than_a_missing_blob(
+    world, caplog
+):
+    class Failing(Blobs):
+        def get(self, key):
+            raise RuntimeError("quota exceeded")
+
+    world.invoice("d1")
+    world.blobs = Failing()
+    with caplog.at_level(logging.INFO):
+        assert provenance.run(world.ectx()) == []
+    [rec] = [
+        r for r in caplog.records if r.msg == "provenance_batch_blob_failed"
+    ]
+    assert rec.levelno == logging.WARNING and rec.error == "RuntimeError"
+    world.blobs = Blobs()  # a KeyError: simply not stored
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        provenance.run(world.ectx())
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 def test_batch_upgrades_a_v1_version_node(world):

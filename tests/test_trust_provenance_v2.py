@@ -183,3 +183,24 @@ def test_suspect_explanation_names_weak_v2_families_and_reads_v1():
     assert "Weakest: edits 0.20, producer 0.30." in why
     _, v1 = _explain("PROV-SUSPECT")  # v1 components only
     assert "Components:" in v1
+
+
+# -- review fixes ----------------------------------------------------------------
+
+
+def test_creator_counts_for_the_editor_and_renderer_lists():
+    f = _facts(producer="Skia/PDF m120", creator="Canva")
+    assert forensics.producer(f, []) == 0.3
+    # history still matches on the producer alone
+    assert forensics.producer(f, ["Skia/PDF m120"]) == 1.0
+
+
+def test_startxref_in_page_text_is_not_a_save():
+    data = make_pdf(text="startxref " * 5)
+    assert pdfmeta.facts(data)["incremental_updates"] == 0
+
+
+def test_edited_wording_when_the_invoice_date_is_unreadable():
+    _, why = _explain("PROV-EDITED", invoice_date="10/03/2026")
+    assert "after the invoice date" not in why
+    assert "2 times" in why

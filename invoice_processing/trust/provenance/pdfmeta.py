@@ -23,6 +23,9 @@ _DATE = re.compile(
 )
 # A subset-embedded font is named "ABCDEF+Arial"; the prefix changes per file.
 _SUBSET = re.compile(r"^[A-Z]{6}\+")
+# A trailer: the keyword, the xref offset, then end-of-file. The bare word
+# can appear in page text or an embedded file.
+_TRAILER = re.compile(rb"startxref\s+\d+\s+%%EOF")
 # A line holding an amount: a number with two decimals ("1,180.00").
 _AMOUNT = re.compile(r"\d[\d,]*\.\d{2}\b")
 
@@ -67,7 +70,7 @@ def incremental_updates(data: bytes) -> int:
     """How many times the file was saved on top of itself: every save
     appends a section ending in its own `startxref`. A linearised file's
     first-page section carries one more that is not a save."""
-    sections = data.count(b"startxref")
+    sections = len(_TRAILER.findall(data))
     if b"/Linearized" in data[:1024]:
         sections -= 1
     return max(sections - 1, 0)

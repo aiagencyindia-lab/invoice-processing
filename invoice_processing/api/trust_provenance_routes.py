@@ -47,58 +47,70 @@ def _store(
     documents = service.get_documents()
     sha256 = hashlib.sha256(data).hexdigest()
     existing = documents.find_by_sha(tenant_id, sha256)
-    if existing is not None:
+    duplicate, version = existing is not None, None
+    if duplicate:
         document_id = existing["id"]
         stored = documents.get(tenant_id, document_id) or {}
-        node = graph.open_node(
-            tenant_id, "document_version", f"documents:{document_id}:{sha256}"
-        )
-        attrs = (node or {}).get("attrs") or {}
-        if stored.get("kind") != "kyc" or attrs.get("vendor_id") != vendor_id:
+        if stored.get("kind") != "kyc":
             raise HTTPException(
                 409, "These bytes were already received as another document."
             )
-        return {
-            "document_id": document_id,
-            "vendor_id": vendor_id,
-            "subkind": attrs.get("subkind"),
-            "version_node": node["id"],
-            "duplicate": True,
-        }
-    key = storage_key_for(sha256)
-    service.get_blobs(tenant_id).put(key, data, content_type="application/pdf")
-    document_id = documents.create(
-        tenant_id=tenant_id,
-        storage_key=key,
-        sha256=sha256,
-        filename=filename,
-        mime_type="application/pdf",
-        byte_size=len(data),
-        source="upload",
-        source_ref=principal.email,
-        kind="kyc",
-    )
+        node = graph.open_node(
+            tenant_id, "document_version", f"documents:{document_id}:{sha256}"
+        )
+        if node is not None:  # None: the first upload stopped before its node
+            attrs = node["attrs"]
+            if attrs.get("vendor_id") != vendor_id:
+                raise HTTPException(
+                    409,
+                    "This document was already uploaded for another vendor.",
+                )
+            if attrs.get("subkind") != subkind:
+                raise HTTPException(
+                    409,
+                    f"This document was already uploaded as {attrs.get('subkind')}.",
+                )
+            version = node["id"]
+    else:
+        key = storage_key_for(sha256)
+        service.get_blobs(tenant_id).put(
+            key, data, content_type="application/pdf"
+        )
+        document_id = documents.create(
+            tenant_id=tenant_id,
+            storage_key=key,
+            sha256=sha256,
+            filename=filename,
+            mime_type="application/pdf",
+            byte_size=len(data),
+            source="upload",
+            source_ref=principal.email,
+            kind="kyc",
+        )
     ctx = principal.context(document_id)
-    version = provenance.plant_vendor_document(
-        ctx,
-        graph,
-        document_id=document_id,
-        sha256=sha256,
-        vendor_id=vendor_id,
-        subkind=subkind,
-        filename=filename,
-        role=principal.role,
-    )
-    service.get_audit().emit(
-        ctx,
-        "trust_vendor_document_uploaded",
-        {
-            "document_id": document_id,
-            "vendor_id": vendor_id,
-            "subkind": subkind,
-            "sha256": sha256,
-        },
-    )
+    if version is None:
+        version = provenance.plant_vendor_document(
+            ctx,
+            graph,
+            document_id=document_id,
+            sha256=sha256,
+            vendor_id=vendor_id,
+            subkind=subkind,
+            filename=filename,
+            role=principal.role,
+        )
+    if not duplicate:
+        service.get_audit().emit(
+            ctx,
+            "trust_vendor_document_uploaded",
+            {
+                "document_id": document_id,
+                "vendor_id": vendor_id,
+                "subkind": subkind,
+                "sha256": sha256,
+            },
+        )
+    # Queued on a duplicate too: the first upload's enqueue may have failed.
     try:
         enqueue_trust_evaluate(
             service.get_queue(), tenant_id, document_id, ctx.run_id
@@ -110,7 +122,7 @@ def _store(
         "vendor_id": vendor_id,
         "subkind": subkind,
         "version_node": version,
-        "duplicate": False,
+        "duplicate": duplicate,
     }
 
 

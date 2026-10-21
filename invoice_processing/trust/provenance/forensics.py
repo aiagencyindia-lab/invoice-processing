@@ -71,9 +71,12 @@ def producer(facts: dict, prior_producers) -> float:
         return EMPTY
     if name in {_norm(p) for p in prior_producers if p}:
         return MATCHES_HISTORY
-    if any(e in name for e in EDITORS):
+    # An editor often names itself in /Creator over a generic library's
+    # /Producer ("Canva" over "Skia/PDF").
+    both = f"{name} {_norm(facts.get('creator'))}"
+    if any(e in both for e in EDITORS):
         return EDITOR
-    if any(r in name for r in RENDERERS):
+    if any(r in both for r in RENDERERS):
         return RENDERER
     return UNKNOWN
 
