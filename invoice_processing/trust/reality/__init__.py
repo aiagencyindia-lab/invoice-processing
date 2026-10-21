@@ -24,7 +24,7 @@ from ... import masking
 from ..engine import EngineContext
 from ..findings.model import Citation, FindingSpec, register_type
 from ..types import TABLE
-from . import bands, classify, goods, services, subscriptions
+from . import bands, classify, goods, plausibility, services, subscriptions
 from .classify import iso_date
 
 logger = logging.getLogger(__name__)
@@ -349,6 +349,7 @@ def run(ectx: EngineContext) -> list[FindingSpec]:
     r = Run(ectx)
     out: list[FindingSpec] = []
     kinds: dict[str, int] = defaultdict(int)
+    history = plausibility.History(r)
     for invoice in invoices:
         kind = classify.classify(invoice, r.lines(invoice))
         kinds[kind] += 1
@@ -356,6 +357,8 @@ def run(ectx: EngineContext) -> list[FindingSpec]:
             found = r.check(invoice, kind)
             if found is not None:
                 out.append(found)
+        out.extend(plausibility.findings(r, invoice, history))
+        out.extend(plausibility.shutdown(r, invoice))
     logger.info(
         "reality_checked",
         extra={"engine": ENGINE, "invoices": len(invoices), **kinds},

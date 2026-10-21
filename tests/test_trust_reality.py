@@ -368,3 +368,102 @@ def test_logs_carry_no_ids(env, caplog):
     for rec in caplog.records:
         extra = {k: v for k, v in rec.__dict__.items() if isinstance(v, str)}
         assert inv not in extra.values()
+
+
+# -- plausibility --------------------------------------------------------------
+
+
+def history(env, n=5, price="10.00", qty="100", desc="Steel Rod"):
+    ven = env.vendor()
+    for k in range(n):
+        env.invoice(ven, [(qty, price, "kg", desc)], day=f"2025-0{k + 1}-10")
+    return ven
+
+
+def of_type(specs, code):
+    return [s for s in specs if s.type == code]
+
+
+def test_price_jump_against_the_vendors_history(env):
+    ven = history(env)
+    inv = env.invoice(ven, [("100", "30.00", "kg", "steel  rod")])
+    [f] = of_type(env.run(inv), "REAL-PRICE-JUMP")
+    assert f.impact == D("2000.00")
+    key = env.graph.node(T, inv)["natural_key"]
+    assert f.dedupe_key == f"REAL-PRICE-JUMP:{key}:1"
+    assert f.details["median"] == "10.00" and f.details["z"] == "inf"
+    assert inv in [c.node_id for c in f.citations]
+
+
+def test_too_little_history_is_quiet(env):
+    ven = history(env, n=4)
+    inv = env.invoice(ven, [("100", "30.00", "kg", "Steel Rod")])
+    assert of_type(env.run(inv), "REAL-PRICE-JUMP") == []
+
+
+def test_a_contract_rate_written_during_the_history_explains_the_jump(env):
+    ven = history(env)
+    contract = env.node("contract", {"filename": "msa.pdf"})
+    env.edge(contract, ven, "governs")
+    clause = env.node("contract_clause", {"type": "rate"})
+    env.edge(clause, contract, "part_of")
+    inv = env.invoice(ven, [("100", "30.00", "kg", "Steel Rod")])
+    assert of_type(env.run(inv), "REAL-PRICE-JUMP") == []
+
+
+def test_a_clause_older_than_the_history_does_not(env):
+    ven = env.vendor()
+    contract = env.node("contract", {"filename": "msa.pdf"})
+    env.edge(contract, ven, "governs")
+    clause = env.node("contract_clause", {"type": "rate"})
+    env.edge(clause, contract, "part_of")
+    for k in range(5):
+        env.invoice(
+            ven, [("100", "10.00", "kg", "Steel Rod")], day=f"2026-0{k + 2}-10"
+        )
+    inv = env.invoice(
+        ven, [("100", "30.00", "kg", "Steel Rod")], day="2026-07-10"
+    )
+    assert len(of_type(env.run(inv), "REAL-PRICE-JUMP")) == 1
+
+
+def test_volume_spike(env):
+    ven = history(env)
+    inv = env.invoice(ven, [("1000", "10.00", "kg", "Steel Rod")])
+    [f] = of_type(env.run(inv), "REAL-VOLUME-SPIKE")
+    assert f.impact == D("9000.00")
+    assert of_type(env.run(inv), "REAL-PRICE-JUMP") == []
+
+
+def test_cheaper_or_smaller_is_not_a_jump_or_spike(env):
+    ven = history(env)
+    inv = env.invoice(ven, [("10", "5.00", "kg", "Steel Rod")])
+    out = env.run(inv)
+    assert (
+        of_type(out, "REAL-PRICE-JUMP")
+        == of_type(out, "REAL-VOLUME-SPIKE")
+        == []
+    )
+
+
+def test_shutdown_period_overlap(env):
+    ven = env.vendor()
+    inv = env.invoice(ven, [("1", "10.00", None, "Fee")])
+    periods = {"trust_shutdown_periods": [["2026-02-01", "2026-02-15"]]}
+    [f] = env.run(inv, settings=periods)
+    assert f.type == "REAL-SHUTDOWN" and f.impact == D("1000.00")
+    later = {"trust_shutdown_periods": [["2026-03-01", "2026-03-15"]]}
+    assert env.run(inv, settings=later) == []
+
+
+def test_service_period_overlapping_a_shutdown_counts(env):
+    ven = env.vendor()
+    inv = env.invoice(
+        ven,
+        [("1", "10.00", None, "Fee")],
+        day="2026-04-02",
+        service_period_start="2026-03-01",
+        service_period_end="2026-03-31",
+    )
+    periods = {"trust_shutdown_periods": [["2026-03-20", "2026-03-22"]]}
+    assert [f.type for f in env.run(inv, settings=periods)] == ["REAL-SHUTDOWN"]
