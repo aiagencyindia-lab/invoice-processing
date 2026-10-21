@@ -153,6 +153,7 @@ class World:
         amount="1180.00",
         source="email",
         sender_domain="acme.in",
+        invoice_date=None,
     ):
         nid = self.graph.upsert_node(
             CTX,
@@ -167,6 +168,7 @@ class World:
                 "amount": amount,
                 "currency": "INR",
                 "decision": decision,
+                **({"invoice_date": invoice_date} if invoice_date else {}),
             },
         )
         ven = self.vendors.get(vendor) or self.vendor(vendor)
@@ -439,6 +441,70 @@ def test_contract_document_is_ignored(world):
     node, specs = world.ingest("c1", kind="contract")
     assert node is None and specs == []
     assert world.version("c1") is None
+
+
+# -- edited after issue (v2) -------------------------------------------------
+
+
+def test_edited_after_issue_cites_the_version(world):
+    node, specs = world.ingest(
+        "d1",
+        invoice_date="2025-01-01",
+        pdf=make_pdf(saves=("D:20250110", "D:20250112")),
+    )
+    [spec] = [s for s in specs if s.type == "PROV-EDITED"]
+    v = world.version("d1")
+    assert spec.transaction_node == node
+    assert spec.dedupe_key == "PROV-EDITED:d1"
+    assert spec.impact is None and spec.currency is None
+    assert spec.engine_version == "provenance-2"
+    assert [c.node_id for c in spec.citations] == [v["id"]]
+    assert spec.details == {
+        "incremental_updates": 2,
+        "mod_date": "2025-01-12T00:00:00+00:00",
+        "invoice_date": "2025-01-01",
+        "producer": "Tally",
+    }
+    assert "2 times" in spec.summary
+    assert finding_model.TYPE_ENGINE["PROV-EDITED"] == "provenance"
+    assert "PROV-EDITED" not in finding_model.HOLD_TYPES
+
+
+@pytest.mark.parametrize(
+    "saves,invoice_date,settings,raised",
+    [
+        (("D:20250110",), "2025-01-01", None, False),  # one save: a signature
+        (("D:20250101", "D:20250101"), "2025-01-01", None, False),  # issue day
+        (("D:20250110", "D:20250112"), None, None, True),  # no date to excuse
+        (
+            ("D:20250110", "D:20250112"),
+            "2025-01-01",
+            {"trust_thresholds": {"provenance.edits_suspect": 3}},
+            False,
+        ),
+        ((), "2025-01-01", None, False),
+    ],
+)
+def test_edited_needs_enough_saves_after_the_issue_date(
+    world, saves, invoice_date, settings, raised
+):
+    _, specs = world.ingest(
+        "d1",
+        invoice_date=invoice_date,
+        settings=settings,
+        pdf=make_pdf(saves=saves),
+    )
+    assert any(s.type == "PROV-EDITED" for s in specs) is raised
+
+
+def test_a_whole_rewrite_later_lowers_edits_but_is_not_edited(world):
+    _, specs = world.ingest(
+        "d1",
+        invoice_date="2025-01-01",
+        pdf=make_pdf(created="D:20250101", modified="D:20250301"),
+    )
+    assert world.version("d1")["attrs"]["components"]["edits"] == 0.7
+    assert not any(s.type == "PROV-EDITED" for s in specs)
 
 
 # -- tamper ------------------------------------------------------------------

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from ...duplicates import normalize_number
@@ -25,6 +25,7 @@ ENGINE_VERSION = "provenance-2"
 RULE_VERSION = "FR-22-v2"
 SUSPECT = "PROV-SUSPECT"
 TAMPER = "PROV-TAMPER"
+EDITED = "PROV-EDITED"
 register_type(
     SUSPECT,
     "Low authenticity score: channel, template, text layer or metadata",
@@ -35,6 +36,11 @@ register_type(
     "An approved invoice re-submitted with different document bytes",
     engine="provenance",
     hold=True,
+)
+register_type(
+    EDITED,
+    "The invoice document was edited and re-saved after it was issued",
+    engine="provenance",
 )
 
 logger = logging.getLogger(__name__)
@@ -141,6 +147,47 @@ def _prior(ectx, tenant, doc_id: str) -> list[dict]:
     return out
 
 
+def _edited(ectx, doc, vid, facts, attrs) -> FindingSpec | None:
+    """Saved on top of itself at least `provenance.edits_suspect` times,
+    unless the last save is dated on or before the invoice's own date (a
+    generator's or signer's saves on the day of issue)."""
+    saves = facts["incremental_updates"]
+    if saves < int(ectx.threshold("provenance.edits_suspect")):
+        return None
+    issued, modified = attrs.get("invoice_date"), facts["mod_date"]
+    if issued and modified:
+        try:
+            on_issue = datetime.fromisoformat(modified).date() <= (
+                date.fromisoformat(str(issued)[:10])
+            )
+        except ValueError:
+            on_issue = False
+        if on_issue:
+            return None
+    return FindingSpec(
+        type=EDITED,
+        transaction_node=ectx.invoice_node,
+        dedupe_key=f"{EDITED}:{doc['id']}",
+        impact=None,
+        currency=None,
+        confidence=0.9,
+        engine_version=ENGINE_VERSION,
+        rule_version=RULE_VERSION,
+        model_version="none",
+        summary=(
+            f"The invoice document was saved on top of itself {saves} times"
+            + (" after its issue date." if issued and modified else ".")
+        ),
+        details={
+            "incremental_updates": saves,
+            "mod_date": modified,
+            "invoice_date": issued,
+            "producer": facts["producer"],
+        },
+        citations=(Citation(vid, f"{saves} incremental saves"),),
+    )
+
+
 def _ledger(ectx: EngineContext, tenant: _Tenant) -> list[FindingSpec]:
     doc = ectx.document
     facts = pdfmeta.facts(ectx.blobs.get(doc["storage_key"]))
@@ -211,10 +258,12 @@ def _ledger(ectx: EngineContext, tenant: _Tenant) -> list[FindingSpec]:
         confidence=1.0,
         observed_at=ectx.now,
     )
+    specs = [e for e in [_edited(ectx, doc, vid, facts, attrs)] if e]
     threshold = ectx.threshold("provenance.suspect_below")
     if score >= threshold:
-        return []
+        return specs
     return [
+        *specs,
         FindingSpec(
             type=SUSPECT,
             transaction_node=ectx.invoice_node,
@@ -232,7 +281,7 @@ def _ledger(ectx: EngineContext, tenant: _Tenant) -> list[FindingSpec]:
                 "fingerprint": fp[:16],
             },
             citations=(Citation(vid, f"authenticity score {score:.2f}"),),
-        )
+        ),
     ]
 
 
