@@ -593,3 +593,29 @@ class TestEngineModes:
             for line in (env["tmp"] / "audit.jsonl").read_text().splitlines()
         ]
         assert "trust_engine_mode_changed" in kinds
+
+    def test_an_engine_left_out_of_the_modes_turns_off(self, env):
+        from invoice_processing.trust import modes  # noqa: PLC0415
+
+        client = env["client"]()
+        client.put(
+            "/api/settings",
+            json={
+                "settings": {
+                    "trust_engine_modes": {
+                        "payment": "enforcing",
+                        "leakage": "shadow",
+                    }
+                }
+            },
+        )
+        client.put(
+            "/api/settings",
+            json={"settings": {"trust_engine_modes": {"leakage": "shadow"}}},
+        )
+        assert modes.engine_mode(TENANT, "payment", env["store"]) == "off"
+        assert modes.engine_mode(TENANT, "leakage", env["store"]) == "shadow"
+        client.put(
+            "/api/settings", json={"settings": {"trust_engine_modes": {}}}
+        )
+        assert modes.engine_mode(TENANT, "leakage", env["store"]) == "off"

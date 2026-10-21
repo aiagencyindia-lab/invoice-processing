@@ -36,7 +36,9 @@ The scaffold owns every shared file and lands first. It adds no behaviour a tena
 
 **`FindingStore`**: `upsert` emits `finding.created` when the result is `"created"`; `transition` emits `finding.decided` when `to_status in DECIDED`, and when `to_status == "rejected"` lifts the open hold (emits `hold.lifted`). Emission and hold writes share the finding's session.
 
-**Auth**: `api_key_token(request)` reads `X-API-Key`, else a bearer starting `ik_`; `set_api_key_resolver(fn)`; `_resolve_principal` tries the resolver first — `None` falls through to the token path, an `AuthError` is a 401. The scaffold's `trust/apikeys.resolve` returns `None`.
+**Auth**: `api_key_token(request, bearer) -> str | None`: a bearer starting `ik_` is a key; any other bearer wins and the `X-API-Key` header is ignored; with no bearer, the header. `set_api_key_resolver(fn)`; a presented key goes to the resolver, and `None` (unknown, revoked, closed tenant) or no resolver is a 401. The scaffold's `trust/apikeys.resolve` returns `None`.
+
+**Modes** (after review): `set_engine_mode` reconciles through `service.get_hold_store()` unless `holds` is passed (none without the ledger table); an unchanged mode is not audited or re-clocked. `PUT /api/settings` treats the submitted `trust_engine_modes` as the whole set: an engine left out goes `off`.
 
 **Route stubs** (fixed function names; every stub returns 503 `"Not built yet"`): `api/trust_score_routes.py` `transaction_trust(node_id)`, `vendor_trust(node_id)`, `posture(since)`, `readiness()`, `set_mode(engine, body)`; `api/trust_reality_routes.py` `create_evidence_request(finding_id, body)`, `list_evidence_requests(status, overdue)`, `fulfil_evidence_request(request_id, file)`; `api/trust_provenance_routes.py` `upload_vendor_document(vendor_id, …)`, `score_document(document_id)`; `api/integration_routes.py` (`router` only); `api/v2_routes.py` (`APIRouter(prefix="/v2")`, empty).
 

@@ -143,16 +143,21 @@ def update_settings(
     try:
         # Modes go through the one writer that stamps when each engine
         # entered its mode and places or lifts holds across enforcing.
-        for engine, mode in (cleaned.get("trust_engine_modes") or {}).items():
-            modes.set_engine_mode(
-                principal.context(),
-                engine,
-                mode,
-                store=store,
-                audit=service.get_audit(),
-                reason="settings",
-                holds=service.get_hold_store(),
-            )
+        # The submitted dict is the whole of it: an engine left out is off.
+        if "trust_engine_modes" in cleaned:
+            wanted = cleaned["trust_engine_modes"]
+            current = before.get("trust_engine_modes") or {}
+            for engine in modes.ENGINES:
+                mode = wanted.get(engine, "off")
+                if mode != current.get(engine, "off"):
+                    modes.set_engine_mode(
+                        principal.context(),
+                        engine,
+                        mode,
+                        store=store,
+                        audit=service.get_audit(),
+                        reason="settings",
+                    )
         if rest:
             store.put(principal.tenant_id, rest)
     except tenant_settings.SettingsError as exc:

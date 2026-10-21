@@ -81,7 +81,9 @@ def set_engine_mode(
 
     Stamps when the engine entered the mode, audits the change, and when it
     crosses `enforcing` in either direction has `holds.reconcile` place or
-    lift that engine's holds (the hold ledger module; None skips it)."""
+    lift that engine's holds (`holds` defaults to the deployment's ledger;
+    none is reconciled where there is no ledger table). An unchanged mode
+    writes nothing new and is not audited."""
     if engine not in ENGINES:
         raise ValueError(f"No such engine: {engine}")
     if mode not in MODES:
@@ -96,12 +98,24 @@ def set_engine_mode(
     if was != mode or engine not in since:
         since[engine] = now.isoformat()
     store.put(ctx.tenant_id, {"trust_engine_modes": modes, SINCE_KEY: since})
+    if was == mode:
+        return {
+            "engine": engine,
+            "from": was,
+            "to": mode,
+            "since": since[engine],
+        }
     if audit is not None:
         audit.emit(
             ctx,
             "trust_engine_mode_changed",
             {"engine": engine, "from": was, "to": mode, "reason": reason},
         )
-    if holds is not None and was != mode and "enforcing" in (was, mode):
-        holds.reconcile(ctx, engine, enforcing=mode == "enforcing", url=url)
+    if "enforcing" in (was, mode):
+        if holds is None:
+            from ..api import service  # noqa: PLC0415
+
+            holds = service.get_hold_store()  # None without the ledger table
+        if holds is not None:
+            holds.reconcile(ctx, engine, enforcing=mode == "enforcing", url=url)
     return {"engine": engine, "from": was, "to": mode, "since": since[engine]}

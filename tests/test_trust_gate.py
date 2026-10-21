@@ -329,3 +329,18 @@ def test_detail_when_nothing_is_enforcing(env, evaluated):
         "waiting": [],
         "transaction_node": None,
     }
+
+
+def test_the_gate_reads_tenant_settings_once(env, evaluated):
+    url, _, _ = env
+    reads = []
+
+    class Counting(Store):
+        def get(self, tenant_id):
+            reads.append(tenant_id)
+            return super().get(tenant_id)
+
+    gate.payment_hold_detail(
+        T, "case-1", url=url, settings_store=Counting({"payment": "enforcing"})
+    )
+    assert len(reads) == 1

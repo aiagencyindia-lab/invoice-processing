@@ -22,7 +22,7 @@ from ..db.models import Invoice
 from ..db.session import tenant_session
 from .findings import model as finding_model
 from .findings.store import FindingStore
-from .modes import ENGINES, HOLD_ENGINES, engine_mode
+from .modes import ENGINES, HOLD_ENGINES
 
 HELD_UNTIL = "rejected"
 
@@ -55,10 +55,17 @@ def payment_hold_detail(
     graph = service.get_graph_store()
     if graph is None:
         return none
+    from .. import tenant_settings  # noqa: PLC0415 - avoids an import cycle
+
+    # One settings read: the workbench asks this on every invoice it opens.
+    modes = (
+        tenant_settings.effective(tenant_id, settings_store).get(
+            "trust_engine_modes"
+        )
+        or {}
+    )
     enforcing = {
-        name
-        for name in ENGINES
-        if engine_mode(tenant_id, name, settings_store) == "enforcing"
+        name for name in ENGINES if modes.get(name, "off") == "enforcing"
     }
     if not enforcing:
         return none

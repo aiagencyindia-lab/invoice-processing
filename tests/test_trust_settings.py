@@ -245,3 +245,35 @@ def test_a_shutdown_period_may_be_one_line_of_the_settings_form():
             ["2027-03-01", "2027-03-02"],
         ]
     }
+
+
+def test_a_mode_change_reconciles_the_ledger_by_default(monkeypatch):
+    from invoice_processing.api import service  # noqa: PLC0415
+
+    holds = Holds()
+    monkeypatch.setattr(service, "get_hold_store", lambda: holds)
+    store = Store({"t": {"trust_engine_modes": {"payment": "advisory"}}})
+    modes.set_engine_mode(CTX, "payment", "enforcing", store=store, now=T0)
+    assert holds.calls == [("payment", True)]
+
+
+def test_without_a_ledger_a_mode_change_still_succeeds(monkeypatch):
+    from invoice_processing.api import service  # noqa: PLC0415
+
+    monkeypatch.setattr(service, "get_hold_store", lambda: None)
+    out = modes.set_engine_mode(
+        CTX, "payment", "enforcing", store=Store(), now=T0
+    )
+    assert out["to"] == "enforcing"
+
+
+def test_an_unchanged_mode_is_not_audited_or_reclocked():
+    store, audit = Store(), Audit()
+    modes.set_engine_mode(
+        CTX, "payment", "shadow", store=store, audit=audit, now=T0
+    )
+    later = T0.replace(day=22)
+    out = modes.set_engine_mode(
+        CTX, "payment", "shadow", store=store, audit=audit, now=later
+    )
+    assert len(audit.events) == 1 and out["since"] == T0.isoformat()
