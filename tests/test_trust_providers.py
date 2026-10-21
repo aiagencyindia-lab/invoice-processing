@@ -136,3 +136,13 @@ def test_a_provider_error_echoing_an_account_is_stored_masked(registry):
     assert "HDFC0001234" not in stored
     assert "…5678" in stored and "…1234" in stored
     assert "50100012345678" not in str(out.data)
+
+
+def test_the_fake_answers_the_usage_capability(registry):
+    registry.register(
+        "usage",
+        "fake",
+        lambda: fakes.FakeProvider({"acme": {"seats": 25}}),
+    )
+    out = registry.call(CTX, "usage", "acme", "2026-01", settings_store=Store())
+    assert out.status == "ok" and out.data == {"seats": 25}
