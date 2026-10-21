@@ -27,6 +27,11 @@ KINDS = (
     "payment",
     "bank_line",
     "vendor_statement_line",
+    # Reality-check evidence: no base rows; the reality fault family adds them.
+    "ticket",
+    "timesheet",
+    "shipment",
+    "seat_count",
 )
 HEADERS = {
     "vendor": [
@@ -87,6 +92,43 @@ HEADERS = {
         "currency",
         "record_date",
         "bank_reference",
+    ],
+    "ticket": [
+        "external_id",
+        "vendor_key",
+        "doc_number",
+        "record_date",
+        "status",
+        "hours",
+        "project",
+        "po_number",
+    ],
+    "timesheet": [
+        "external_id",
+        "vendor_key",
+        "record_date",
+        "hours",
+        "rate",
+        "project",
+        "po_number",
+        "approved_by",
+    ],
+    "shipment": [
+        "external_id",
+        "doc_number",
+        "po_number",
+        "vendor_key",
+        "record_date",
+        "quantity",
+        "status",
+        "carrier",
+    ],
+    "seat_count": [
+        "external_id",
+        "vendor_key",
+        "record_date",
+        "product",
+        "quantity",
     ],
 }
 TAX_RATE = Decimal("0.18")
