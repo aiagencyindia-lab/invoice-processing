@@ -120,11 +120,17 @@ def _engine_failed(name: str, node: str, version: str) -> FindingSpec:
     )
 
 
+# Waiting on proof is not a verdict (FR-23.5): the evidence decides it.
+AWAITING_EVIDENCE = "needs_vendor_input"
+
+
 def _release(ectx: EngineContext, f: dict, reason: str) -> None:
     if f["status"] == "detected":
         ectx.findings.transition(ectx.ctx, f["id"], "triaged", actor="system")
         f["status"] = "triaged"
-    if f["status"] == "triaged":
+    if f["status"] == AWAITING_EVIDENCE:
+        reason = f"Cleared by the evidence now on record. {reason}"
+    if f["status"] in ("triaged", AWAITING_EVIDENCE):
         ectx.findings.transition(
             ectx.ctx, f["id"], "rejected", actor="system", reason=reason
         )
@@ -134,12 +140,14 @@ def _release_cleared(ectx: EngineContext, name: str, emitted: set) -> None:
     """After a clean per-document run of an engine that can hold: lift its
     undecided findings on the invoice that it no longer finds (holds and the
     insights priced from them, e.g. ITC at risk), and its engine-failed hold.
-    A finding a person has decided is theirs and is left alone."""
+    A finding a person has decided is theirs and is left alone; one they
+    sent for vendor evidence is still open, so the evidence clearing it
+    releases it the same way (else the hold outlives its proof)."""
     node = ectx.invoice_node
     if node is None:
         return
     for f in ectx.findings.list(ectx.ctx.tenant_id, transaction_node=node):
-        if f["status"] not in ("detected", "triaged"):
+        if f["status"] not in ("detected", "triaged", AWAITING_EVIDENCE):
             continue
         if f["dedupe_key"] == f"{ENGINE_FAILED}:{name}:{node}":
             _release(ectx, f, "The engine ran cleanly.")

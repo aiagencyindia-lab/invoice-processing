@@ -153,6 +153,27 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   - [ ] Ruff's `target-version` stays `py310` below `requires-python >=3.11`;
         moving it to `py311` rewrites every `timezone.utc` to `UTC` (~128
         sites): a change of its own.
+  - [ ] Webhook hosts given as DNS names that resolve to internal
+        addresses are accepted (literal internal IPs and localhost are
+        refused). Resolve and re-check at delivery time before any endpoint
+        is pointed outside our own network (SSRF; deferred in #74).
+  - [ ] `GET /api/trust/transactions/{node_id}/trust?as_of` scans the
+        score node's versions; it needs an `as_of` filter in `GraphStore`
+        (deferred in #75).
+  - [ ] PRD §9 endpoints not built in Wave 3 and not otherwise listed:
+        `POST /v2/bank-accounts/{id}/verify` and `POST /v2/evidence/sources`
+        (registering a live connector, which waits on real connectors).
+  - [ ] The `reality_coverage_*` benchmark gates are partly true by
+        construction (the reality fault family plants invoice lines from its
+        own evidence; a kind with nothing checked passes). Real coverage is
+        the AC-23 partner gate below.
+  - [ ] Evidence requests stay `open` when a finding is released by other
+        evidence (e.g. a GRN import) rather than by its uploaded proof;
+        cancel them on release if the open list gets noisy.
+  - [ ] A clean run in `shadow` or `advisory` releases an engine's open
+        findings too, including holds placed while it was enforcing and ones
+        a clerk sent for vendor evidence. Decide whether release should need
+        `enforcing` (the gate already ignores non-enforcing engines).
   - [ ] Deferred from Wave 3: webhook outbox retention sweep; Slack /
         WhatsApp / email notifications; public evidence-upload links;
         copy-move and ML forensics; live connectors (OAuth); rate limiting

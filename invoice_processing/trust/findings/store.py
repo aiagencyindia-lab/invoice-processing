@@ -26,6 +26,8 @@ from .model import (
     can_transition,
 )
 
+# The actor evaluate() releases findings as; its rejections are not rulings.
+SYSTEM = "system"
 # trust_finding_events.amount is Numeric(18, 4): fourteen integer digits.
 MAX_AMOUNT = Decimal("1e14")
 
@@ -96,7 +98,31 @@ class FindingStore:
                     TrustFinding.dedupe_key == spec.dedupe_key,
                 )
             ).first()
-            if row is not None and row.status in DECIDED:
+            if (
+                row is not None
+                and row.status == "rejected"
+                and (row.owner_id == SYSTEM)
+            ):
+                # The engine released it and now finds it again (evidence
+                # withdrawn, an engine failing again): it reopens and holds
+                # again. Only a person's ruling is final.
+                s.add(
+                    TrustFindingEvent(
+                        tenant_id=ctx.tenant_id,
+                        finding_id=row.id,
+                        from_status="rejected",
+                        to_status="detected",
+                        amount=spec.impact,
+                        actor=ctx.actor or "engine",
+                        reason="Found again by a later run.",
+                    )
+                )
+                row.status, row.owner_id, row.decided_at = (
+                    "detected",
+                    None,
+                    None,
+                )
+            elif row is not None and row.status in DECIDED:
                 return row.id, "untouched"
             created = row is None
             if created:
