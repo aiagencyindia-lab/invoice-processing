@@ -169,3 +169,14 @@ def test_a_key_resolves_as_the_production_app_role(monkeypatch):
             assert (
                 c.execute(text("select count(*) from api_keys")).scalar() == 0
             )
+
+
+def test_a_failed_use_stamp_does_not_refuse_the_key(env, monkeypatch):
+    url, audit, _ = env
+    _, key = apikeys.create(ADMIN, "erp", "viewer", audit=audit, url=url)
+
+    def broken(*a, **kw):
+        raise RuntimeError("stamp failed")
+
+    monkeypatch.setattr(apikeys, "_stamp", broken)
+    assert apikeys.resolve(key).tenant_id == ACME

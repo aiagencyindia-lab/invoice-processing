@@ -6,6 +6,7 @@ one or point the tenant's events somewhere new.
 
 from __future__ import annotations
 
+import ipaddress
 import secrets
 from datetime import datetime, timezone
 from typing import Annotated
@@ -118,6 +119,23 @@ def _get(s, tenant_id: str, endpoint_id: str) -> WebhookEndpoint:
     return ep
 
 
+def _internal(host: str) -> bool:
+    """Loopback, private, link-local or reserved: the worker must not be
+    pointed into its own network.
+
+    ponytail: literal addresses and localhost names only; a public name that
+    resolves inward (or rebinds) still passes. Resolve and pin per delivery
+    if that matters.
+    """
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return not ip.is_global
+
+
 class WebhookCreate(BaseModel):
     url: str = Field(max_length=1024)
     events: list[str] = Field(max_length=len(EVENTS))
@@ -147,6 +165,8 @@ def create_webhook(body: WebhookCreate, principal: Admin):
     parts = urlsplit(body.url.strip())
     if parts.scheme != "https" or not parts.hostname:
         raise HTTPException(400, "url must be an https:// address.")
+    if _internal(parts.hostname):
+        raise HTTPException(400, "url must be a public address.")
     events = _events(body.events)
     secret = f"whsec_{secrets.token_urlsafe(24)}"
     t = principal.tenant_id
@@ -218,6 +238,10 @@ def ping_webhook(endpoint_id: str, principal: Admin):
     now = datetime.now(timezone.utc)
     with tenant_session(t) as s:
         ep = _get(s, t, endpoint_id)
+        if not ep.active:
+            raise HTTPException(
+                409, "This webhook is paused; activate it first."
+            )
         row = WebhookOutbox(
             tenant_id=t,
             endpoint_id=ep.id,

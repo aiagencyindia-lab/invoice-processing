@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
@@ -26,6 +27,8 @@ logger = logging.getLogger(__name__)
 TIMEOUT_SECONDS = 10
 MAX_ATTEMPTS = 8
 MAX_BACKOFF_MINUTES = 64
+# One tenant's backlog cannot fill a whole sweep and starve the others.
+PER_TENANT = 10
 
 
 def sign(secret: str, ts: str, body: str) -> str:
@@ -54,7 +57,7 @@ def due(
             break
         try:
             tried += _sweep_tenant(
-                tenant_id, now, post, limit - tried, audit, url
+                tenant_id, now, post, min(limit - tried, PER_TENANT), audit, url
             )
         except Exception:
             logger.exception("Webhook sweep failed for a tenant; continuing.")
@@ -70,6 +73,7 @@ def _sweep_tenant(tenant_id, now, post, limit, audit, url) -> int:
             )
             .where(
                 WebhookOutbox.tenant_id == tenant_id,
+                WebhookEndpoint.tenant_id == tenant_id,
                 WebhookEndpoint.active.is_(True),
                 WebhookOutbox.delivered_at.is_(None),
                 WebhookOutbox.dead_at.is_(None),
@@ -83,10 +87,18 @@ def _sweep_tenant(tenant_id, now, post, limit, audit, url) -> int:
             for r, target, secret in due_rows
         ]
     # The POSTs run outside any transaction: ten slow endpoints must not hold
-    # a database connection for minutes.
+    # a database connection for minutes. The sweep runs inside the worker's
+    # loop, so an endpoint that cannot be reached is tried once per sweep:
+    # its other rows wait for the next one rather than cost ten seconds each.
+    unreachable: set[str] = set()
+    tried = 0
     for row_id, event, payload, target, secret in batch:
+        if target in unreachable:
+            continue
+        tried += 1
         body = json.dumps(payload, default=str, separators=(",", ":"))
-        ts = str(int(now.timestamp()))
+        # The moment it is sent, not the sweep's: receivers check freshness.
+        ts = str(int(time.time()))
         status, error = None, None
         try:
             response = post(
@@ -100,20 +112,26 @@ def _sweep_tenant(tenant_id, now, post, limit, audit, url) -> int:
                     "X-Trust-Signature": sign(secret, ts, body),
                 },
                 timeout=TIMEOUT_SECONDS,
+                # A redirect would re-send the signed body to wherever it
+                # points, http:// included; a 3xx is a failed attempt.
+                allow_redirects=False,
             )
             status = response.status_code
             if not 200 <= status < 300:
                 error = f"HTTP {status}"
         except Exception as exc:
+            unreachable.add(target)
             error = mask_text(f"{type(exc).__name__}: {exc}")[:500]
         _record(tenant_id, row_id, now, status, error, audit, url)
-    return len(batch)
+    return tried
 
 
 def _record(tenant_id, row_id, now, status, error, audit, url) -> None:
     dead = None
     with tenant_session(tenant_id, url) as s:
         row = s.get(WebhookOutbox, row_id)
+        if row is None:  # its endpoint was deleted mid-sweep
+            return
         row.last_status = status
         if error is None:
             row.delivered_at = now

@@ -14,6 +14,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from ..trust.findings.model import REASON_REQUIRED
 from . import (
     trust_audit_routes,
     trust_explain_routes,
@@ -133,6 +134,10 @@ def decide_finding(finding_id: str, body: Decision, principal: Clerk):
     if not principal.can(trust_routes._role_for(to_status)):
         raise HTTPException(
             403, f"Marking a finding {to_status} needs an approver."
+        )
+    if to_status in REASON_REQUIRED and not (body.reason or "").strip():
+        raise HTTPException(
+            400, f"A reason is required to mark a finding {to_status}."
         )
     current = trust_routes._findings().get(principal.tenant_id, finding_id)
     if current is None:

@@ -35,7 +35,7 @@ A transaction id is the invoice's evidence-graph node id. It is the `transaction
 | GET | `/v2/transactions/{node_id}/explanation` | viewer | `{transaction, findings: [{finding, explanation}]}`: each open finding with `GET /api/trust/findings/{id}/explanation` |
 | GET | `/v2/transactions/{node_id}/lineage` | viewer | `GET /api/trust/lineage/{node_id}` (`?as_of=`) |
 | GET | `/v2/findings` | viewer | `GET /api/trust/findings` (same filters: `status`, `open`, `type`, `engine`, `vendor`, `hold`, `since`, `until`, `limit`, `offset`) |
-| POST | `/v2/findings/{finding_id}/decision` | clerk; approver for `accept`/`reject` | `POST /api/trust/findings/{id}/transition`. The body is `{decision: accept\|reject\|needs_vendor_input, reason}`. A `detected` finding is triaged first. |
+| POST | `/v2/findings/{finding_id}/decision` | clerk; approver for `accept`/`reject` | `POST /api/trust/findings/{id}/transition`. The body is `{decision: accept\|reject\|needs_vendor_input, reason}`. A `detected` finding is triaged first. `reject` needs a `reason`. |
 | GET | `/v2/vendors/{node_id}/trust` | viewer | `GET /api/trust/vendors/{node_id}/trust` |
 | POST | `/v2/documents/{document_id}/authenticity` | viewer | `POST /api/trust/documents/{document_id}/authenticity` |
 | GET | `/v2/evidence/{node_id}` | viewer | `GET /api/trust/nodes/{node_id}` |
@@ -47,15 +47,17 @@ A transaction id is the invoice's evidence-graph node id. It is the `transaction
 
 An admin registers an endpoint with `POST /api/integrations/webhooks {url, events, description}`:
 
-- `url` must be `https://`.
+- `url` must be a public `https://` address. Loopback, private and link-local hosts are refused.
 - `events` is `["*"]` or a non-empty subset of the events below.
 
 The response shows the signing secret (`whsec_…`) once; later reads mask it. The other endpoint routes are:
 
 - `PATCH /api/integrations/webhooks/{id}`: change `active`, `events` or `description`.
 - `DELETE /api/integrations/webhooks/{id}`: remove the endpoint.
-- `POST /api/integrations/webhooks/{id}/test`: queue a `ping` to this endpoint.
+- `POST /api/integrations/webhooks/{id}/test`: queue a `ping` to this endpoint (409 while it is paused).
 - `GET /api/integrations/webhooks/{id}/deliveries`: the last 50 deliveries.
+
+Lists answer as `{"keys": […]}`, `{"endpoints": […]}` and `{"deliveries": […]}`.
 
 | Event | When | `data` |
 |---|---|---|
@@ -74,7 +76,7 @@ X-Trust-Timestamp: <unix seconds>
 X-Trust-Signature: sha256=<hex HMAC-SHA256(secret, "{timestamp}.{body}")>
 ```
 
-**Retries.** Ledgerly checks for due deliveries every minute. A 2xx response counts as delivered. A failed attempt is retried after 2, 4, 8, 16, 32, 64 and then 64 minutes. The eighth failure dead-letters the delivery, and the dead-letter is audited (`webhook_dead_lettered`). A paused endpoint's deliveries wait until it is active again.
+**Retries.** Ledgerly checks for due deliveries every minute. A 2xx response counts as delivered. Redirects are not followed, so a 3xx response is a failed attempt. A failed attempt is retried after 2, 4, 8, 16, 32, 64 and then 64 minutes. The eighth failure dead-letters the delivery, and the dead-letter is audited (`webhook_dead_lettered`). A paused endpoint's deliveries wait until it is active again.
 
 ### Verifying a signature
 

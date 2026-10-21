@@ -383,7 +383,8 @@ def test_a_viewer_cannot_decide_and_a_bad_decision_is_refused(env):
     bad = keyed(d["keys"]["approver"]).post(path, json={"decision": "approve"})
     assert bad.status_code == 422
     unknown = keyed(d["keys"]["approver"]).post(
-        "/v2/findings/nope/decision", json={"decision": "reject"}
+        "/v2/findings/nope/decision",
+        json={"decision": "reject", "reason": "dup"},
     )
     assert unknown.status_code == 404
 
@@ -728,3 +729,53 @@ def test_the_doc_recipe_verifies_a_real_signature():
     }
     assert scope["verify"]("s", headers, body.encode())
     assert not scope["verify"]("t", headers, body.encode())
+
+
+def test_a_reject_without_a_reason_moves_nothing(env):
+    d = env["acme"]
+    r = keyed(d["keys"]["approver"]).post(
+        f"/v2/findings/{d['finding']}/decision", json={"decision": "reject"}
+    )
+    assert r.status_code == 400
+    got = (
+        bearer("acme:viewer").get(f"/api/trust/findings/{d['finding']}").json()
+    )
+    assert got["status"] == "detected"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "https://localhost/h",
+        "https://api.localhost/h",
+        "https://127.0.0.1/h",
+        "https://10.0.0.5/h",
+        "https://169.254.169.254/latest",
+        "https://[::1]/h",
+        "https://192.168.1.1/h",
+    ],
+)
+def test_an_internal_webhook_target_is_refused(env, target):
+    r = bearer("acme:admin").post(
+        "/api/integrations/webhooks", json={"url": target, "events": ["*"]}
+    )
+    assert r.status_code == 400, r.text
+
+
+def test_a_ping_to_a_paused_endpoint_is_refused(env):
+    ep = env["acme"]["endpoint"]
+    admin = bearer("acme:admin")
+    admin.patch(f"/api/integrations/webhooks/{ep}", json={"active": False})
+    assert (
+        admin.post(f"/api/integrations/webhooks/{ep}/test").status_code == 409
+    )
+
+
+def test_a_foreign_patch_changes_nothing(env):
+    ep = env["acme"]["endpoint"]
+    r = bearer("globex:admin").patch(
+        f"/api/integrations/webhooks/{ep}", json={"description": "pwned"}
+    )
+    assert r.status_code == 404
+    listed = bearer("acme:admin").get("/api/integrations/webhooks").json()
+    assert all(e["description"] != "pwned" for e in listed["endpoints"])

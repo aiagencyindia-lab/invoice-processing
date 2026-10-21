@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -35,9 +36,11 @@ class FakePost:
         self.statuses = list(statuses)
         self.calls = []
 
-    def __call__(self, url, *, data, headers, timeout):
+    def __call__(self, url, *, data, headers, timeout, allow_redirects):
         self.calls.append({"url": url, "data": data, "headers": headers})
         assert timeout == 10
+        # A redirect would re-send the signed body wherever it points.
+        assert allow_redirects is False
         status = self.statuses.pop(0) if self.statuses else 200
         if isinstance(status, Exception):
             raise status
@@ -160,8 +163,8 @@ def test_the_eighth_failure_dead_letters_and_audits(env):
 def test_a_raising_post_is_a_failed_attempt_with_a_masked_error(env):
     url, audit, _ = env
     endpoint(url)
-    emit(url)
-    emit(url)
+    endpoint(url, target="https://ok.example/h")
+    emit(url)  # one row for each endpoint
     boom = requests.ConnectionError(
         "refused for account 123456789012 " + "x" * 600
     )
@@ -263,3 +266,69 @@ def test_sign_matches_the_documented_recipe():
 
 def _aware(dt):
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def test_a_redirect_is_a_failed_attempt(env):
+    url, audit, _ = env
+    endpoint(url)
+    emit(url)
+    deliver.due(NOW, post=FakePost(307), audit=audit, url=url)
+    row = rows(url)[0]
+    assert row.delivered_at is None and row.attempts == 1
+    assert row.last_status == 307
+
+
+def test_each_post_is_signed_with_the_time_it_is_sent(env):
+    url, audit, _ = env
+    endpoint(url)
+    emit(url, now=NOW - timedelta(hours=2))
+    post = FakePost()
+    deliver.due(NOW - timedelta(hours=1), post=post, audit=audit, url=url)
+    ts = int(post.calls[0]["headers"]["X-Trust-Timestamp"])
+    assert abs(ts - time.time()) < 60
+
+
+def test_an_endpoint_that_times_out_is_skipped_for_the_rest_of_the_sweep(env):
+    url, audit, _ = env
+    endpoint(url)
+    endpoint(url, target="https://ok.example/h")
+    for _ in range(3):
+        emit(url)  # three rows for each endpoint
+    calls = []
+
+    def post(target, **kw):
+        calls.append(target)
+        if "acme" in target:
+            raise requests.Timeout("slow")
+        return Response(200)
+
+    assert deliver.due(NOW, post=post, audit=audit, url=url) == 4
+    assert calls.count(f"https://{ACME}.example/hook") == 1
+    assert calls.count("https://ok.example/h") == 3
+
+
+def test_one_tenants_backlog_does_not_starve_the_next(env):
+    url, audit, _ = env
+    endpoint(url, ACME)
+    endpoint(url, GLOBEX)
+    for _ in range(deliver.PER_TENANT + 5):
+        emit(url, ACME)
+    emit(url, GLOBEX)
+    post = FakePost()
+    deliver.due(NOW, post=post, audit=audit, url=url)
+    assert any(c["url"].startswith(f"https://{GLOBEX}") for c in post.calls)
+
+
+def test_a_row_deleted_mid_sweep_is_skipped(env):
+    url, audit, _ = env
+    endpoint(url)
+    emit(url)
+    emit(url)
+
+    def post(target, **kw):
+        with tenant_session(ACME, url) as s:
+            for r in s.scalars(select(models.WebhookOutbox)):
+                s.delete(r)
+        return Response(200)
+
+    assert deliver.due(NOW, post=post, audit=audit, url=url) == 2

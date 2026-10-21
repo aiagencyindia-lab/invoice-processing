@@ -134,6 +134,7 @@ def resolve(token: str, url=None):
             tenants = s.scalars(
                 select(Tenant.id).where(Tenant.status == "active")
             ).all()
+        found = None
         for tenant_id in tenants:
             with tenant_session(tenant_id, url) as s:
                 for key in s.scalars(
@@ -144,13 +145,15 @@ def resolve(token: str, url=None):
                     )
                 ):
                     if hmac.compare_digest(key.key_hash, digest):
-                        key.last_used_at = datetime.now(timezone.utc)
-                        return Principal(
+                        found = Principal(
                             user_id=f"api-key:{key.id}",
                             email=f"{key.name}@api-key.{tenant_id}",
                             tenant_id=tenant_id,
                             role=key.role,
                         )
+                        break
+            if found is not None:
+                break
     except Exception as exc:
         logger.error("API key lookup failed: %s", type(exc).__name__)
         raise AuthError(
@@ -158,4 +161,16 @@ def resolve(token: str, url=None):
             "shortly.",
             status_code=503,
         ) from exc
-    return None
+    if found is not None:
+        try:
+            _stamp(found.tenant_id, found.user_id.removeprefix("api-key:"), url)
+        except Exception as exc:  # best effort: a stamp never refuses a key
+            logger.warning("API key use not stamped: %s", type(exc).__name__)
+    return found
+
+
+def _stamp(tenant_id: str, key_id: str, url=None) -> None:
+    with tenant_session(tenant_id, url) as s:
+        key = s.get(ApiKey, key_id)
+        if key is not None:
+            key.last_used_at = datetime.now(timezone.utc)
