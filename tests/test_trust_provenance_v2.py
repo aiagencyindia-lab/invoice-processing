@@ -3,7 +3,7 @@
 import pytest
 
 from benchmark.history.faults.provenance import make_pdf
-from invoice_processing.trust.provenance import pdfmeta
+from invoice_processing.trust.provenance import forensics, pdfmeta
 
 # -- PDF facts: incremental saves and fonts ----------------------------------
 
@@ -59,3 +59,78 @@ def test_an_amount_line_in_the_body_font_is_not_mixed():
         make_pdf(font="ABCDEF+Helvetica", amount_line="Total 1,180.00")
     )
     assert facts["font_names"]["amounts"] == ["ABCDEF+Helvetica"]
+
+
+# -- forensic families -------------------------------------------------------
+
+
+def _facts(**kw):
+    base = {
+        "producer": "Tally",
+        "creation_date": "2025-01-01T10:00:00+05:30",
+        "mod_date": "2025-01-01T10:00:00+05:30",
+        "incremental_updates": 0,
+        "font_names": {"body": ["Helvetica"], "amounts": ["Helvetica"]},
+    }
+    return {**base, **kw}
+
+
+@pytest.mark.parametrize(
+    "producer,prior,value",
+    [
+        ("iLovePDF", [], 0.3),
+        ("PDF-XChange Editor 9.5", [], 0.3),
+        ("Canva", [], 0.3),
+        ("Skia/PDF m120", [], 0.8),
+        ("wkhtmltopdf 0.12.6", [], 0.8),
+        ("Tally", [], 0.8),
+        (None, [], 0.6),
+        ("Some Unknown Writer", [], 0.6),
+        ("Canva", ["canva "], 1.0),  # the vendor always uses it
+        ("iLovePDF", ["Tally", None], 0.3),
+        ("Tally", ["TALLY"], 1.0),
+    ],
+)
+def test_producer_family(producer, prior, value):
+    assert forensics.producer(_facts(producer=producer), prior) == value
+
+
+@pytest.mark.parametrize(
+    "kw,saves,value",
+    [
+        ({}, 0, 1.0),
+        ({"incremental_updates": 1}, 1, 0.7),
+        ({"incremental_updates": 2}, 2, 0.2),
+        ({"incremental_updates": 5}, 5, 0.2),
+        # a full rewrite on a later day counts as one save
+        ({"mod_date": "2025-01-03T10:00:00+05:30"}, 1, 0.7),
+        ({"mod_date": "2025-01-01T18:00:00+05:30"}, 0, 1.0),
+        ({"mod_date": None}, 0, 1.0),
+        ({"creation_date": None, "mod_date": "2025-03-01T00:00:00"}, 0, 1.0),
+    ],
+)
+def test_edits_family(kw, saves, value):
+    f = _facts(**kw)
+    assert forensics.saves(f) == saves
+    assert forensics.edits(f, 2) == value
+
+
+def test_edits_threshold_is_the_tenants():
+    assert forensics.edits(_facts(incremental_updates=2), 3) == 0.7
+
+
+@pytest.mark.parametrize(
+    "names,value",
+    [
+        ({"body": ["ABCDEF+Arial"], "amounts": ["GHIJKL+Arial"]}, 0.3),
+        ({"body": ["ABCDEF+Arial"], "amounts": ["ABCDEF+Arial"]}, 1.0),
+        # bold totals: another font, not another subset of the same one
+        ({"body": ["ABCDEF+Arial"], "amounts": ["GHIJKL+Arial-Bold"]}, 1.0),
+        ({"body": [], "amounts": ["ABCDEF+Arial", "GHIJKL+Arial"]}, 0.3),
+        ({"body": ["Arial"], "amounts": ["Arial"]}, 1.0),
+        ({"body": ["ABCDEF+Arial", "GHIJKL+Arial"], "amounts": []}, 1.0),
+        (None, 1.0),  # a v1 facts dict
+    ],
+)
+def test_fonts_family(names, value):
+    assert forensics.fonts(_facts(font_names=names)) == value
