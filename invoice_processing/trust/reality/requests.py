@@ -91,6 +91,7 @@ class RequestStore:
         *,
         status: str | None = None,
         overdue: bool = False,
+        finding_id: str | None = None,
         today: date | None = None,
     ) -> list[dict]:
         today = today or _today()
@@ -100,6 +101,8 @@ class RequestStore:
             )
             if status:
                 q = q.where(TrustEvidenceRequest.status == status)
+            if finding_id:
+                q = q.where(TrustEvidenceRequest.finding_id == finding_id)
             if overdue:
                 q = q.where(
                     TrustEvidenceRequest.status == "open",

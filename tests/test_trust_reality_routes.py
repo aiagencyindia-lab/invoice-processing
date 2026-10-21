@@ -187,6 +187,21 @@ def test_list_filters_and_overdue_on_read(env):
     assert bad.status_code == 400
 
 
+def test_list_filters_by_finding(env):
+    fid, _ = env["finding"](ACME)
+    rid = ask(env, "acme:clerk", fid).json()["id"]
+    viewer = env["client"]("acme:viewer")
+    mine = viewer.get(f"/api/trust/evidence-requests?finding_id={fid}").json()
+    assert [r["id"] for r in mine["requests"]] == [rid]
+    assert set(mine["requests"][0]) == {
+        "id", "finding_id", "owner", "due_date", "note", "status",
+        "proof_document_id", "requested_by", "fulfilled_at", "overdue",
+        "created_at",
+    }  # fmt: skip
+    other = viewer.get("/api/trust/evidence-requests?finding_id=nope").json()
+    assert other["requests"] == []
+
+
 def test_proof_is_stored_linked_and_re_evaluated(env):
     fid, invoice = env["finding"](ACME)
     rid = ask(env, "acme:clerk", fid).json()["id"]

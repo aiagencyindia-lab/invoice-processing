@@ -103,12 +103,18 @@ def list_evidence_requests(
     principal: Annotated[Principal, Depends(require_role("viewer"))],
     status: str | None = None,
     overdue: bool = False,
+    finding_id: str | None = None,
 ) -> dict:
     if status and status not in STATUSES:
         raise HTTPException(
             400, f"status must be one of {', '.join(STATUSES)}."
         )
-    rows = _requests().list(principal.tenant_id, status=status, overdue=overdue)
+    rows = _requests().list(
+        principal.tenant_id,
+        status=status,
+        overdue=overdue,
+        finding_id=finding_id,
+    )
     return {"requests": rows}
 
 
