@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from ...duplicates import normalize_number
@@ -26,6 +26,7 @@ RULE_VERSION = "FR-22-v2"
 SUSPECT = "PROV-SUSPECT"
 TAMPER = "PROV-TAMPER"
 EDITED = "PROV-EDITED"
+KYC_SUSPECT = "PROV-KYC-SUSPECT"
 register_type(
     SUSPECT,
     "Low authenticity score: channel, template, text layer or metadata",
@@ -36,6 +37,11 @@ register_type(
     "An approved invoice re-submitted with different document bytes",
     engine="provenance",
     hold=True,
+)
+register_type(
+    KYC_SUSPECT,
+    "A vendor's onboarding document scores low on authenticity",
+    engine="provenance",
 )
 register_type(
     EDITED,
@@ -49,6 +55,8 @@ logger = logging.getLogger(__name__)
 # counts as "other".
 CHANNEL = {"api": 0.8, "upload": 0.6}
 OTHER = 0.3
+# KYC documents and proofs are uploads; who uploaded them is the channel.
+ROLE_CHANNEL = {"clerk": 0.6, "approver": 0.8, "admin": 0.8}
 WEIGHTS = {
     "channel": 0.3,
     "template": 0.2,
@@ -105,13 +113,14 @@ class _Tenant:
         return domains
 
 
-def _channel(ectx, tenant, attrs) -> float:
-    source = (ectx.document or {}).get("source")
+def _channel(tenant, doc, invoice_node) -> float:
+    source = doc.get("source")
     if source == "email":
+        attrs = tenant.invoices[invoice_node]["attrs"]
         sender = (attrs.get("document_sender_domain") or "").strip().lower()
         return (
             1.0
-            if sender and sender in tenant.vendor_domains(ectx.invoice_node)
+            if sender and sender in tenant.vendor_domains(invoice_node)
             else OTHER
         )
     return CHANNEL.get(source, OTHER)
@@ -128,11 +137,11 @@ def _meta(facts: dict, now: datetime) -> float:
     return 1.0 if created <= modified <= now else 0.0
 
 
-def _prior(ectx, tenant, doc_id: str) -> list[dict]:
+def _prior(ectx, tenant, doc_id: str, invoice_node: str) -> list[dict]:
     """The vendor's other documents' version attrs. Found through the
     invoice's `document_id` attr: a sync that re-versions an invoice node
     closes its `evidences` edge until that document is evaluated again."""
-    vendor = tenant.vendor(ectx.invoice_node)
+    vendor = tenant.vendor(invoice_node)
     invoice_of_doc = {
         n["attrs"].get("document_id"): i for i, n in tenant.invoices.items()
     }
@@ -147,7 +156,7 @@ def _prior(ectx, tenant, doc_id: str) -> list[dict]:
     return out
 
 
-def _edited(ectx, doc, vid, facts, attrs) -> FindingSpec | None:
+def _edited(ectx, doc, vid, facts, invoice_node, attrs) -> FindingSpec | None:
     """Saved on top of itself at least `provenance.edits_suspect` times,
     unless the last save is dated on or before the invoice's own date (a
     generator's or signer's saves on the day of issue)."""
@@ -166,7 +175,7 @@ def _edited(ectx, doc, vid, facts, attrs) -> FindingSpec | None:
             return None
     return FindingSpec(
         type=EDITED,
-        transaction_node=ectx.invoice_node,
+        transaction_node=invoice_node,
         dedupe_key=f"{EDITED}:{doc['id']}",
         impact=None,
         currency=None,
@@ -188,19 +197,150 @@ def _edited(ectx, doc, vid, facts, attrs) -> FindingSpec | None:
     )
 
 
-def _ledger(ectx: EngineContext, tenant: _Tenant) -> list[FindingSpec]:
-    doc = ectx.document
+def _key(doc: dict) -> str:
+    return f"documents:{doc['id']}:{doc['sha256']}"
+
+
+def plant_vendor_document(
+    ctx,
+    graph,
+    *,
+    document_id: str,
+    sha256: str,
+    vendor_id: str,
+    subkind: str,
+    filename: str,
+    role: str,
+    at: datetime | None = None,
+) -> str:
+    """The node a KYC upload writes before the document is scored: what it
+    is, whose, and who uploaded it, with `evidences` to the vendor's node
+    when the vendor has one. The run keeps all of it."""
+    at = at or datetime.now(timezone.utc)
+    vid = graph.upsert_node(
+        ctx,
+        kind="document_version",
+        natural_key=f"documents:{document_id}:{sha256}",
+        ref_table="documents",
+        ref_id=document_id,
+        attrs={
+            "kind": "kyc",
+            "subkind": subkind,
+            "vendor_id": vendor_id,
+            "filename": filename,
+            "sha256": sha256,
+            "source": "upload",
+            "uploaded_by_role": role,
+        },
+        at=at,
+    )
+    vendor = graph.nodes_by_ref(ctx.tenant_id, "vendors", [vendor_id]).get(
+        vendor_id
+    )
+    if vendor:
+        graph.upsert_edge(
+            ctx,
+            src=vid,
+            dst=vendor,
+            kind="evidences",
+            source_system="upload",
+            provenance="human_assertion",
+            confidence=1.0,
+            observed_at=at,
+            at=at,
+        )
+    return vid
+
+
+def _vendor_key(graph, tenant_id: str, node_id: str | None) -> str | None:
+    """A vendor node's master id (what the upload route names), its natural
+    key when the sync synthesised it from invoices."""
+    node = graph.node(tenant_id, node_id) if node_id else None
+    if node is None:
+        return None
+    return (
+        node["ref_id"]
+        if node["ref_table"] == "vendors"
+        else node["natural_key"]
+    )
+
+
+def _vendor_document(ectx, tenant, doc):
+    """(attrs to keep, channel, prior attrs, edges, vendor node) for a KYC
+    document or a proof. The upload (or the reality branch, for a proof)
+    planted its node; scoring re-versions it, which closes its edges, so
+    they are drawn again as they were."""
+    t, g = ectx.ctx.tenant_id, ectx.graph
+    planted = g.open_node(t, "document_version", _key(doc))
+    keep = dict((planted or {}).get("attrs") or {})
+    keep["kind"] = doc["kind"]
+    edges = g.edges(t, src=planted["id"], kind="evidences") if planted else []
+    vendor = None
+    if doc["kind"] == "kyc":
+        vid = keep.get("vendor_id")
+        vendor = g.nodes_by_ref(t, "vendors", [vid]).get(vid) if vid else None
+        if vendor and all(e["dst"] != vendor for e in edges):
+            edges.append(
+                {
+                    "dst": vendor,
+                    "source_system": "provenance",
+                    "provenance": "system_record",
+                    "confidence": 1.0,
+                }
+            )
+    else:  # a proof: its vendor is its invoice's
+        for e in edges:
+            if e["dst"] in tenant.issuer:
+                vendor = tenant.issuer[e["dst"]][0]
+                keep["vendor_id"] = _vendor_key(g, t, vendor)
+                break
+    # ponytail: scans every version node, as `_prior` does.
+    prior = [
+        v["attrs"]
+        for v in g.nodes(t, kind="document_version")
+        if keep.get("vendor_id")
+        and v["ref_id"] != doc["id"]
+        and v["attrs"].get("fingerprint")
+        and v["attrs"].get("kind") == doc["kind"]
+        and v["attrs"].get("subkind") == keep.get("subkind")
+        and v["attrs"].get("vendor_id") == keep["vendor_id"]
+    ]
+    channel = ROLE_CHANNEL.get(keep.get("uploaded_by_role"), CHANNEL["upload"])
+    return keep, channel, prior, edges, vendor
+
+
+def _ledger(
+    ectx: EngineContext, tenant: _Tenant, doc: dict, invoice_node: str | None
+) -> list[FindingSpec]:
+    """Score one document and record its `document_version` node. An invoice
+    document (`invoice_node`) is judged against the vendor's other invoices;
+    a KYC document or proof against the vendor's documents of its kind."""
     facts = pdfmeta.facts(ectx.blobs.get(doc["storage_key"]))
     if facts is None:
         logger.info("provenance_skipped", extra={"reason": "not_pdf"})
         return []
-    attrs = tenant.invoices[ectx.invoice_node]["attrs"]
+    if invoice_node is not None:
+        attrs = tenant.invoices[invoice_node]["attrs"]
+        keep = {"sender_domain": attrs.get("document_sender_domain")}
+        channel = _channel(tenant, doc, invoice_node)
+        prior = _prior(ectx, tenant, doc["id"], invoice_node)
+        edges = [
+            {
+                "dst": invoice_node,
+                "source_system": "provenance",
+                "provenance": "system_record",
+                "confidence": 1.0,
+            }
+        ]
+    else:
+        keep, channel, prior, edges, vendor = _vendor_document(
+            ectx, tenant, doc
+        )
     fp = pdfmeta.fingerprint(facts)
-    prior = _prior(ectx, tenant, doc["id"])
     matching = sum(1 for p in prior if p.get("fingerprint") == fp)
     min_history = ectx.threshold("provenance.template_min_history")
     components = {
-        "channel": _channel(ectx, tenant, attrs),
+        "channel": channel,
         "template": 1.0
         if len(prior) < min_history
         else round(matching / len(prior), 4),
@@ -215,17 +355,16 @@ def _ledger(ectx: EngineContext, tenant: _Tenant) -> list[FindingSpec]:
         "fonts": forensics.fonts(facts),
     }
     score = round(sum(WEIGHTS[k] * v for k, v in components.items()), 4)
-    key = f"documents:{doc['id']}:{doc['sha256']}"
     vid = ectx.graph.upsert_node(
         ectx.ctx,
         kind="document_version",
-        natural_key=key,
+        natural_key=_key(doc),
         ref_table="documents",
         ref_id=doc["id"],
         attrs={
+            **keep,
             "sha256": doc["sha256"],
             "source": doc.get("source"),
-            "sender_domain": attrs.get("document_sender_domain"),
             **{
                 k: facts[k]
                 for k in (
@@ -248,25 +387,58 @@ def _ledger(ectx: EngineContext, tenant: _Tenant) -> list[FindingSpec]:
             "actor": ectx.ctx.actor,
         },
     )
-    ectx.graph.upsert_edge(
-        ectx.ctx,
-        src=vid,
-        dst=ectx.invoice_node,
-        kind="evidences",
-        source_system="provenance",
-        provenance="system_record",
-        confidence=1.0,
-        observed_at=ectx.now,
-    )
-    specs = [e for e in [_edited(ectx, doc, vid, facts, attrs)] if e]
+    for e in edges:
+        ectx.graph.upsert_edge(
+            ectx.ctx,
+            src=vid,
+            dst=e["dst"],
+            kind="evidences",
+            source_system=e["source_system"],
+            provenance=e["provenance"],
+            confidence=e["confidence"],
+            observed_at=ectx.now,
+        )
     threshold = ectx.threshold("provenance.suspect_below")
-    if score >= threshold:
+    low = score < threshold
+    summary = (
+        f"Document authenticity score {score:.2f} is below {threshold:.2f}."
+    )
+    if invoice_node is None:
+        if doc["kind"] != "kyc" or not low:
+            return []  # a proof's score reaches the reality engine via its node
+        return [
+            FindingSpec(
+                type=KYC_SUSPECT,
+                transaction_node=vendor or vid,
+                dedupe_key=f"{KYC_SUSPECT}:{doc['id']}",
+                impact=None,
+                currency=None,
+                confidence=round(1 - score, 4),
+                engine_version=ENGINE_VERSION,
+                rule_version=RULE_VERSION,
+                model_version="none",
+                summary=f"Vendor {keep.get('subkind') or 'onboarding'} "
+                f"document: authenticity score {score:.2f} is below "
+                f"{threshold:.2f}.",
+                details={
+                    "score": score,
+                    "components": components,
+                    "subkind": keep.get("subkind"),
+                    "fingerprint": fp[:16],
+                },
+                citations=(Citation(vid, f"authenticity score {score:.2f}"),),
+            )
+        ]
+    specs = [
+        e for e in [_edited(ectx, doc, vid, facts, invoice_node, attrs)] if e
+    ]
+    if not low:
         return specs
     return [
         *specs,
         FindingSpec(
             type=SUSPECT,
-            transaction_node=ectx.invoice_node,
+            transaction_node=invoice_node,
             dedupe_key=f"{SUSPECT}:{doc['id']}",
             impact=None,
             currency=None,
@@ -274,7 +446,7 @@ def _ledger(ectx: EngineContext, tenant: _Tenant) -> list[FindingSpec]:
             engine_version=ENGINE_VERSION,
             rule_version=RULE_VERSION,
             model_version="none",
-            summary=f"Document authenticity score {score:.2f} is below {threshold:.2f}.",
+            summary=summary,
             details={
                 "score": score,
                 "components": components,
@@ -360,10 +532,13 @@ def _tamper(ectx, tenant, targets) -> list[FindingSpec]:
 
 
 def run(ectx: EngineContext) -> list[FindingSpec]:
-    if ectx.document is not None and ectx.invoice_node is None:
+    doc = ectx.document
+    if doc is not None and ectx.invoice_node is None:
+        if doc.get("kind") in ("kyc", "proof"):
+            return _ledger(ectx, _Tenant(ectx), doc, None)
         return []  # a contract or other non-invoice document
     tenant = _Tenant(ectx)
-    if ectx.document is None:
+    if doc is None:
         return _tamper(ectx, tenant, sorted(tenant.invoices))
-    specs = _ledger(ectx, tenant)
+    specs = _ledger(ectx, tenant, doc, ectx.invoice_node)
     return specs + _tamper(ectx, tenant, [ectx.invoice_node])

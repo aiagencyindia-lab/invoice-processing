@@ -137,10 +137,55 @@ class World:
             CTX,
             kind="vendor",
             natural_key=f"vendors:{name}",
+            ref_table="vendors",
+            ref_id=f"v-{name}",
             attrs={"name": name, "email_domain": domain},
         )
         self.vendors[name] = nid
         return nid
+
+    def vendor_document(
+        self,
+        doc_id,
+        pdf=None,
+        *,
+        kind="kyc",
+        subkind="gst_certificate",
+        vendor="Acme Supplies",
+        role="clerk",
+        settings=None,
+    ):
+        """What the upload route plants for a KYC document, then a run."""
+        sha = doc_id.ljust(64, "0")
+        provenance.plant_vendor_document(
+            CTX,
+            self.graph,
+            document_id=doc_id,
+            sha256=sha,
+            vendor_id=f"v-{vendor}",
+            subkind=subkind,
+            filename=f"{doc_id}.pdf",
+            role=role,
+        )
+        return self.run_document(doc_id, pdf, kind=kind, settings=settings)
+
+    def run_document(self, doc_id, pdf=None, *, kind, settings=None):
+        sha = doc_id.ljust(64, "0")
+        self.blobs[f"documents/{doc_id}.pdf"] = (
+            make_pdf() if pdf is None else pdf
+        )
+        doc = {
+            "id": doc_id,
+            "kind": kind,
+            "sha256": sha,
+            "storage_key": f"documents/{doc_id}.pdf",
+            "source": "upload",
+            "source_ref": None,
+            "sender": None,
+            "reply_to": None,
+            "filename": f"{doc_id}.pdf",
+        }
+        return provenance.run(self.ectx(None, doc, settings))
 
     def invoice(
         self,
@@ -505,6 +550,121 @@ def test_a_whole_rewrite_later_lowers_edits_but_is_not_edited(world):
     )
     assert world.version("d1")["attrs"]["components"]["edits"] == 0.7
     assert not any(s.type == "PROV-EDITED" for s in specs)
+
+
+# -- KYC and proofs (v2) -----------------------------------------------------
+
+
+def test_kyc_document_is_scored_and_keeps_its_vendor_edge(world):
+    planted = world.version("k1")
+    assert planted is None
+    specs = world.vendor_document("k1")
+    v = world.version("k1")
+    a = v["attrs"]
+    assert specs == []
+    assert a["kind"] == "kyc" and a["subkind"] == "gst_certificate"
+    assert a["vendor_id"] == "v-Acme Supplies" and a["filename"] == "k1.pdf"
+    assert a["engine_version"] == "provenance-2"
+    assert a["components"]["channel"] == 0.6  # a clerk's upload
+    assert a["components"]["template"] == 1.0
+    [edge] = world.graph.edges(T, src=v["id"], kind="evidences")
+    assert edge["dst"] == world.vendors["Acme Supplies"]
+
+
+def test_an_approvers_upload_is_a_better_channel(world):
+    world.vendor_document("k1", role="approver")
+    assert world.version("k1")["attrs"]["components"]["channel"] == 0.8
+
+
+def test_kyc_template_is_against_the_same_subkind_of_the_same_vendor(world):
+    for i in range(3):
+        world.vendor_document(f"g{i}")
+    world.vendor_document("p0", make_pdf(font="Courier"), subkind="pan")
+    world.vendor("Other Co", "other.in")
+    world.vendor_document("o1", make_pdf(font="Courier"), vendor="Other Co")
+    world.ingest("inv1", number="INV-1", pdf=make_pdf(font="Courier"))
+    world.vendor_document("k1", make_pdf(font="Courier"))
+    a = world.version("k1")["attrs"]
+    assert a["template"] == {"prior": 3, "matching": 0}
+    assert a["components"]["template"] == 0.0
+    # and a KYC document is never an invoice's template history
+    world.ingest("inv2", number="INV-2")
+    assert world.version("inv2")["attrs"]["template"]["prior"] == 1
+
+
+def test_low_kyc_score_flags_the_vendor(world):
+    for i in range(3):
+        world.vendor_document(f"g{i}")
+    [spec] = world.vendor_document(
+        "k1",
+        make_pdf(
+            producer=None, font="Courier", text="", saves=("D:20250110",) * 2
+        ),
+    )
+    v = world.version("k1")
+    assert spec.type == "PROV-KYC-SUSPECT"
+    assert spec.transaction_node == world.vendors["Acme Supplies"]
+    assert spec.dedupe_key == "PROV-KYC-SUSPECT:k1"
+    assert spec.impact is None and spec.engine_version == "provenance-2"
+    assert [c.node_id for c in spec.citations] == [v["id"]]
+    assert spec.details["subkind"] == "gst_certificate"
+    assert spec.details["score"] == v["attrs"]["score"] < 0.5
+    assert finding_model.TYPE_ENGINE["PROV-KYC-SUSPECT"] == "provenance"
+    assert "PROV-KYC-SUSPECT" not in finding_model.HOLD_TYPES
+
+
+def test_kyc_for_a_vendor_without_a_node_flags_the_version(world):
+    [spec] = world.vendor_document(
+        "k1",
+        make_pdf(producer=None, text=""),
+        vendor="Not Synced Ltd",
+        settings={"trust_thresholds": {"provenance.suspect_below": 0.99}},
+    )
+    v = world.version("k1")
+    assert spec.transaction_node == v["id"]
+    assert world.graph.edges(T, src=v["id"], kind="evidences") == []
+
+
+def test_proof_keeps_the_edge_to_its_invoice_and_raises_nothing(world):
+    """The reality branch writes the proof's node and its edge to the
+    invoice; scoring re-versions the node and must keep that edge."""
+    inv = world.invoice("i1", number="INV-1")
+    vid = world.graph.upsert_node(
+        CTX,
+        kind="document_version",
+        natural_key=f"documents:pr1:{'pr1'.ljust(64, '0')}",
+        ref_table="documents",
+        ref_id="pr1",
+        attrs={"kind": "proof", "filename": "pod.pdf"},
+    )
+    world.graph.upsert_edge(
+        CTX,
+        src=vid,
+        dst=inv,
+        kind="evidences",
+        source_system="reality",
+        provenance="human_assertion",
+        confidence=1.0,
+        observed_at=NOW,
+    )
+    specs = world.run_document(
+        "pr1", make_pdf(producer=None, text=""), kind="proof"
+    )
+    v = world.version("pr1")
+    assert specs == []
+    assert v["id"] != vid and v["attrs"]["kind"] == "proof"
+    assert v["attrs"]["filename"] == "pod.pdf"
+    assert v["attrs"]["vendor_id"] == "v-Acme Supplies"
+    [edge] = world.graph.edges(T, src=v["id"], kind="evidences")
+    assert edge["dst"] == inv and edge["source_system"] == "reality"
+    assert edge["provenance"] == "human_assertion"
+
+
+def test_kyc_is_never_edited_or_tamper(world):
+    specs = world.vendor_document(
+        "k1", make_pdf(saves=("D:20990110", "D:20990112"))
+    )
+    assert specs == []
 
 
 # -- tamper ------------------------------------------------------------------
