@@ -94,6 +94,7 @@ def seed_database() -> None:
     from invoice_processing.db.repositories import (  # noqa: PLC0415
         PgCaseRepository,
         PgPurchaseOrderRepository,
+        PgVendorRepository,
     )
     from invoice_processing.db.session import tenant_session  # noqa: PLC0415
     from invoice_processing.ports import RunContext  # noqa: PLC0415
@@ -141,6 +142,19 @@ def seed_database() -> None:
             book=po_book.DbBook(PgPurchaseOrderRepository(), TENANT),
         )
         target.project_case(ctx, {**artifacts, **(coded or {})})
+    # case_005's supplier in the vendor master, before seed_finding() syncs the
+    # graph, so the vendor gets a node and /vendors/[id] has a trust profile.
+    # The tax ID is the one the invoice prints, so check 3.2 still matches.
+    PgVendorRepository().upsert_many(
+        TENANT,
+        [
+            {
+                "name": "QuickFix HVAC Repairs",
+                "tax_id": "51 824 753 556",
+                "kind": "service",
+            }
+        ],
+    )
     seed_finding()
 
 
