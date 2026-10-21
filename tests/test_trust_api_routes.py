@@ -465,7 +465,7 @@ def test_webhook_lifecycle(env):
     assert r.status_code == 201, r.text
     ep = r.json()
     assert ep["secret"].startswith("whsec_") and len(ep["secret"]) > 20
-    listed = admin.get("/api/integrations/webhooks").json()["webhooks"]
+    listed = admin.get("/api/integrations/webhooks").json()["endpoints"]
     mine = next(e for e in listed if e["id"] == ep["id"])
     assert mine["secret"] != ep["secret"] and mine["secret"].endswith(
         ep["secret"][-4:]

@@ -139,7 +139,7 @@ def list_webhooks(principal: Admin):
             .where(WebhookEndpoint.tenant_id == t)
             .order_by(WebhookEndpoint.created_at, WebhookEndpoint.id)
         ).all()
-        return {"webhooks": [_endpoint(ep) for ep in eps]}
+        return {"endpoints": [_endpoint(ep) for ep in eps]}
 
 
 @router.post("/api/integrations/webhooks", status_code=201)

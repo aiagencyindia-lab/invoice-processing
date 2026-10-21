@@ -127,8 +127,9 @@ def resolve(token: str, url=None):
     try:
         # `tenants` has no RLS; `api_keys` forces it and the app role cannot
         # bypass it, so the prefix is looked up inside each tenant's session.
-        # ponytail: one query per active tenant per key request; a SELECT
-        # policy for the lookup (as sso_domains has) makes it one query.
+        # ponytail: O(active tenants) queries per key request, stopping at the
+        # first match. Upgrade: put the tenant in the key
+        # (`ik_{tenant_slug}_{prefix}_{secret}`) or add a lookup policy.
         with Session(get_engine(url)) as s:
             tenants = s.scalars(
                 select(Tenant.id).where(Tenant.status == "active")
