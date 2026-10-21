@@ -1116,7 +1116,40 @@ def get_invoice(
             if (locks := get_locks())
             else None
         ),
+        # Whether the trust layer holds this payment, and on which findings,
+        # so the workbench shows it before anyone presses approve.
+        "hold": _hold_detail(principal.context(case_id)),
+        "trust_node": _trust_node(principal.tenant_id, case_id),
     }
+
+
+def _hold_detail(ctx) -> dict:
+    from ..trust import gate  # noqa: PLC0415 - optional layer
+
+    return gate.payment_hold_detail(ctx.tenant_id, ctx.case_id)
+
+
+def _trust_node(tenant_id: str, case_id: str) -> str | None:
+    """The invoice's Evidence Graph node, for the trust score panel."""
+    graph = get_graph_store()
+    if graph is None:
+        return None
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from ..db.models import Invoice  # noqa: PLC0415
+    from ..db.session import tenant_session  # noqa: PLC0415
+
+    with tenant_session(tenant_id) as s:
+        invoice_id = s.scalar(
+            select(Invoice.id)
+            .where(Invoice.tenant_id == tenant_id, Invoice.case_id == case_id)
+            .order_by(Invoice.created_at.desc())
+        )
+    if invoice_id is None:
+        return None
+    return graph.nodes_by_ref(tenant_id, "invoices", [invoice_id]).get(
+        invoice_id
+    )
 
 
 @app.get("/api/invoices/{case_id}/document")
@@ -1689,14 +1722,18 @@ def act(
             if held and not (
                 principal.can("admin") and request.override_reason
             ):
-                raise HTTPException(status_code=409, detail=held)
+                raise HTTPException(status_code=409, detail=held["message"])
+            hold_overridden = approval_flow.override_of(held)
             if held:
                 get_audit().emit(
                     ctx,
                     "approval_overridden",
-                    {"hold": held, "override_reason": request.override_reason},
+                    {
+                        "hold": held["message"],
+                        "finding_ids": hold_overridden["finding_ids"],
+                        "override_reason": request.override_reason,
+                    },
                 )
-            hold_overridden = held
         state = _record_workflow(
             ctx,
             # Export lets through exactly the hold that was overridden; a
@@ -1863,6 +1900,18 @@ def _store_three_way(ctx, entry: dict) -> dict:
     return get_cases().update_artifacts(ctx, swap)["phase2"]
 
 
+def _override_covers(stored, held: dict) -> bool:
+    """Whether the override recorded at approval covers this hold: every
+    holding finding was one it named, and no enforcing engine is still to
+    check. A message stored before overrides named findings covers nothing:
+    it was matched as text, which any change to a summary broke."""
+    if not isinstance(stored, dict) or held["waiting"]:
+        return False
+    return {h["finding_id"] for h in held["holds"]} <= set(
+        stored.get("finding_ids") or ()
+    )
+
+
 def _record_workflow(ctx, **changes) -> dict:
     state = {**_workflow(ctx), **changes}
     get_cases().put_artifact(ctx, WORKFLOW_ARTIFACT, state)
@@ -2026,13 +2075,18 @@ def export_invoice(
             ),
         )
     held = approval_flow.payment_hold(ctx)
-    if held and held != state.get("hold_overridden"):
+    if held and not _override_covers(state.get("hold_overridden"), held):
         # Raised after approval (a later evaluation): nothing is posted
         # while a trust engine in enforcing mode holds the payment.
-        raise HTTPException(status_code=409, detail=held)
+        raise HTTPException(status_code=409, detail=held["message"])
     if held:
         get_audit().emit(
-            ctx, "payment_hold_overridden_at_export", {"hold": held}
+            ctx,
+            "payment_hold_overridden_at_export",
+            {
+                "hold": held["message"],
+                "finding_ids": [h["finding_id"] for h in held["holds"]],
+            },
         )
     invoice = _with_gl(
         ctx, (artifacts.get("extraction") or {}).get("invoice") or {}, artifacts

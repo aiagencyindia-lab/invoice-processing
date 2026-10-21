@@ -191,11 +191,25 @@ class PaymentHold(Refused):
     """A trust engine in enforcing mode holds this payment (409)."""
 
 
-def payment_hold(ctx) -> str | None:
-    """Why the trust layer holds this payment, or None. See trust/gate.py."""
+def payment_hold(ctx) -> dict | None:
+    """The trust layer's hold on this payment ({held, message, holds,
+    waiting, transaction_node}), or None when it is not held. See
+    trust/gate.py."""
     from .trust import gate  # noqa: PLC0415 - optional layer, loaded on use
 
-    return gate.payment_hold(ctx.tenant_id, ctx.case_id)
+    detail = gate.payment_hold_detail(ctx.tenant_id, ctx.case_id)
+    return detail if detail["held"] else None
+
+
+def override_of(held: dict | None) -> dict | None:
+    """What an administrator's override let through: the message they saw
+    and the findings it named, so a finding raised later still holds."""
+    if not held:
+        return None
+    return {
+        "message": held["message"],
+        "finding_ids": [h["finding_id"] for h in held["holds"]],
+    }
 
 
 def over_billed(ctx, artifacts: dict) -> tuple[str | None, dict | None]:
@@ -310,8 +324,9 @@ class Decision:
     appended_second: bool
     # Step 2.3 matched live for an "unchecked" hold, to store on approval.
     three_way: dict | None = None
-    # The payment hold an administrator overrode, carried to export.
-    hold_overridden: str | None = None
+    # The payment hold an administrator overrode, carried to export:
+    # {message, finding_ids} (see `override_of`).
+    hold_overridden: dict | None = None
 
 
 def decide(
@@ -378,7 +393,7 @@ def decide(
         overridden = overridden or bool(over and override_reason)
         held = payment_hold(ctx)
         if held and not (principal.can("admin") and override_reason):
-            raise PaymentHold(held)
+            raise PaymentHold(held["message"])
         overridden = overridden or bool(held and override_reason)
 
     acting_for = None
@@ -430,7 +445,13 @@ def decide(
         )
         completed, second = False, True
     return Decision(
-        step, completed, why or "override", overridden, second, recheck, held
+        step,
+        completed,
+        why or "override",
+        overridden,
+        second,
+        recheck,
+        override_of(held),
     )
 
 
