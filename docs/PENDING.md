@@ -234,6 +234,10 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         a decision without its finding).
   - [ ] Partner gates (PRD §5): two design partners running agents in
         production and one adopted external mandate standard before release.
+- [ ] `opentelemetry-api` 1.42.1 advisory (CVE-2026-114603 /
+      GHSA-xcq7-p3pf-p88h) waived until **2026-12-12**: the fix (1.45.1) is
+      blocked by google-adk's cap (≤ 1.42.1, still so in 2.12.0); the product
+      API never parses inbound trace headers. Upgrade when google-adk allows.
 - [ ] Remove the Postgres TCP proxy before the trust routes go live (it was
       added for bootstrap only).
 
