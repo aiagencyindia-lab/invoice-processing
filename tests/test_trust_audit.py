@@ -1,6 +1,6 @@
 """Trust Audit (Wave 2): ledger + fee, scope and sampling, report, store, batch."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -130,7 +130,7 @@ def test_ledger_rows_keep_only_scope_money_events_and_totals_add_up():
 # -- scope + sampling ---------------------------------------------------------
 
 T = "tenant-acme"
-AT = datetime(2026, 10, 1, tzinfo=timezone.utc)
+AT = datetime(2026, 10, 1, tzinfo=UTC)
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="engine")
 
 

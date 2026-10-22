@@ -1,6 +1,6 @@
 """Every gap in Contract -> PO -> GRN -> Invoice -> Approval -> Payment -> GL is named."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fresh_schema import fresh_schema
@@ -13,7 +13,7 @@ from invoice_processing.trust.graph.store import GraphStore
 
 T = "tenant-acme"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="t")
-AT = datetime(2026, 10, 14, tzinfo=timezone.utc)
+AT = datetime(2026, 10, 14, tzinfo=UTC)
 
 
 @pytest.fixture

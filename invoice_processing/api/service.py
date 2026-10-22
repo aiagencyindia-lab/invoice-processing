@@ -35,7 +35,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager, nullcontext
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -1297,7 +1297,7 @@ def edit_fields(
             # corrections are accuracy evidence and must not be forgeable.
             "actor": principal.email,
             "tenant_id": principal.tenant_id,
-            "at": datetime.now(timezone.utc).isoformat(),
+            "at": datetime.now(UTC).isoformat(),
         }
         recorded.append(record)
         get_corrections().record(ctx, record)
@@ -1407,7 +1407,7 @@ def reroute(ctx, artifacts: dict, fields: list[str]) -> bool | str:
             ctx,
             artifacts,
             repo=repo,
-            now=datetime.now(timezone.utc),
+            now=datetime.now(UTC),
         )
         changed = shape() != before
     except Exception as exc:
@@ -1667,7 +1667,7 @@ def act(
                     approve=request.action == "approve",
                     note=request.reason,
                     override_reason=request.override_reason,
-                    now=datetime.now(timezone.utc),
+                    now=datetime.now(UTC),
                 )
             except (
                 approval_flow.AlreadyDecided,
@@ -1752,7 +1752,7 @@ def act(
             else None,
             decision=request.action,
             decided_by=principal.email,
-            decided_at=datetime.now(timezone.utc).isoformat(),
+            decided_at=datetime.now(UTC).isoformat(),
             reason=request.reason,
             reason_category=category,
         )
@@ -2143,7 +2143,7 @@ def export_invoice(
     _record_workflow(
         ctx,
         external_id=result.external_id,
-        exported_at=datetime.now(timezone.utc).isoformat(),
+        exported_at=datetime.now(UTC).isoformat(),
         exported_by=principal.email,
         export_target="xero",
     )

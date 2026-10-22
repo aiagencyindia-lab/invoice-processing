@@ -67,7 +67,7 @@ def test_hours_of_reads_days_as_eight_hours():
 # -- the engine on a graph -----------------------------------------------------
 
 import logging  # noqa: E402
-from datetime import datetime, timezone  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
 
 from fresh_schema import fresh_schema  # noqa: E402
 
@@ -84,8 +84,8 @@ from invoice_processing.trust.providers.registry import Registry  # noqa: E402
 
 T = "tenant-real"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="worker")
-AT = datetime(2026, 1, 1, tzinfo=timezone.utc)
-NOW = datetime(2026, 3, 1, tzinfo=timezone.utc)
+AT = datetime(2026, 1, 1, tzinfo=UTC)
+NOW = datetime(2026, 3, 1, tzinfo=UTC)
 
 
 class Env:

@@ -19,7 +19,7 @@ import os
 import tempfile
 import uuid
 from collections.abc import Callable, Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import paths
@@ -399,10 +399,10 @@ class JsonlAuditSink:
         payload: dict,
         before: dict | None = None,
     ) -> None:
-        from datetime import datetime, timezone  # noqa: PLC0415
+        from datetime import datetime  # noqa: PLC0415
 
         record = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "tenant_id": ctx.tenant_id,
             "case_id": ctx.case_id,
             "run_id": ctx.run_id,
@@ -462,7 +462,7 @@ class JsonDocumentRepository:
         data.setdefault(tenant_id, {})[document_id] = {
             "id": document_id,
             "tenant_id": tenant_id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             **fields,
         }
         self._write(data)
@@ -577,7 +577,7 @@ class JsonSupportingDocumentRepository:
                 "reviewed_by": None,
                 "reviewed_at": None,
                 "note": None,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
             }
             rows[row["id"]] = row
         elif row["status"] not in ("pending", "blocked"):
@@ -635,7 +635,7 @@ class JsonSupportingDocumentRepository:
             status=status,
             reviewed_by=reviewed_by,
             note=note,
-            reviewed_at=datetime.now(timezone.utc).isoformat(),
+            reviewed_at=datetime.now(UTC).isoformat(),
         )
         if extracted is not None:
             row["extracted"] = extracted

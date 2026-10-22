@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC
 from decimal import Decimal
 from typing import Annotated
 
@@ -190,7 +191,7 @@ def _store_contract(
     principal: Principal, graph, data: bytes, filename: str, vendor_id: str
 ):
     import hashlib  # noqa: PLC0415
-    from datetime import datetime, timezone  # noqa: PLC0415
+    from datetime import datetime  # noqa: PLC0415
 
     from . import service  # noqa: PLC0415
     from .ingest import IngestionRefused, check_acceptable, storage_key_for  # noqa: PLC0415
@@ -238,7 +239,7 @@ def _store_contract(
             kind="contract",
         )
     ctx = principal.context(document_id)
-    at = datetime.now(timezone.utc)
+    at = datetime.now(UTC)
     node = graph.upsert_node(
         ctx,
         kind="contract",
@@ -724,7 +725,7 @@ def review_clause(
     edit: ClauseEdit,
     principal: Annotated[Principal, Depends(require_role("approver"))],
 ):
-    from datetime import datetime, timezone  # noqa: PLC0415
+    from datetime import datetime  # noqa: PLC0415
 
     from . import service  # noqa: PLC0415
 
@@ -751,7 +752,7 @@ def review_clause(
         attrs["params"] = {str(k): str(v) for k, v in edit.params.items()}
     attrs["reviewed"] = True
     ctx = principal.context()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # A reviewed clause is a new version; the old row keeps what the engine
     # read. Re-versioning closes the clause's edges, so they are redrawn.
     out_edges = graph.edges(tenant, src=node_id)

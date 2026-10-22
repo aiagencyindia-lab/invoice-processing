@@ -1,7 +1,7 @@
 """score.compute: the trust_score node evaluate() writes after the engines."""
 
 import dataclasses
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -22,7 +22,7 @@ from invoice_processing.trust.types import DIMENSIONS
 
 T = "tenant-acme"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="worker")
-AT = datetime(2026, 10, 1, tzinfo=timezone.utc)
+AT = datetime(2026, 10, 1, tzinfo=UTC)
 
 
 class Store:

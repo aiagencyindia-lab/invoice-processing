@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 ENGINES = ("leakage", "payment", "provenance", "gst_itc", "reality")
 # Only `enforcing` places holds; the rest observe (spec §3.1.5).
@@ -89,7 +89,7 @@ def set_engine_mode(
     if mode not in MODES:
         raise ValueError(f"{engine} mode must be one of {', '.join(MODES)}.")
     store = _store(store)
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     current = dict(store.get(ctx.tenant_id) or {})
     modes = dict(current.get("trust_engine_modes") or {})
     was = modes.get(engine, "off")

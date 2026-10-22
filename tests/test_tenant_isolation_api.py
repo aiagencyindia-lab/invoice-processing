@@ -19,7 +19,7 @@ import json
 import pathlib
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import ClassVar
 
 import pytest
@@ -375,7 +375,7 @@ class TestWritesDoNotCross:
             ctx,
             service.get_cases().get_artifacts(ctx),
             repo=approvals_db,
-            now=datetime.now(timezone.utc),
+            now=datetime.now(UTC),
         )
         assert approvals_db.chain(ACME, "case_005")
 
@@ -1431,7 +1431,7 @@ class TestTrustFindingsIsolation:
             source_system="leakage",
             provenance="model_inference",
             confidence=0.9,
-            observed_at=datetime.now(timezone.utc),
+            observed_at=datetime.now(UTC),
         )
         fid, _ = findings.upsert(
             ctx,

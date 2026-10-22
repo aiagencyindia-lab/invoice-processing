@@ -16,7 +16,7 @@ import difflib
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from statistics import median
 
@@ -100,7 +100,7 @@ class _Master:
 def _utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def _norm_name(name: str | None) -> str:
@@ -487,7 +487,7 @@ def _anchor(ectx, attrs: dict) -> datetime:
     d = _day(attrs.get("invoice_date"))
     if d is None:
         return ectx.now
-    return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+    return datetime(d.year, d.month, d.day, tzinfo=UTC)
 
 
 def _bec(ectx, world, inv, vendor_node, m, amount, currency):

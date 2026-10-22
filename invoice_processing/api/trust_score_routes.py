@@ -6,7 +6,7 @@ reads the principal's, and a node of another tenant is a 404.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -26,7 +26,7 @@ class ModeChange(BaseModel):
 def _utc(value: str | None, name: str) -> datetime | None:
     at = _when(value, name)
     if at is not None and at.tzinfo is None:
-        at = at.replace(tzinfo=timezone.utc)
+        at = at.replace(tzinfo=UTC)
     return at
 
 

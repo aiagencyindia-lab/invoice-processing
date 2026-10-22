@@ -150,9 +150,8 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         `api_keys` blocks a cross-tenant prefix lookup). Put the tenant in
         the key (`ik_{tenant_slug}_{prefix}_{secret}`) or add a lookup
         policy before tenants number in the hundreds.
-  - [ ] Ruff's `target-version` stays `py310` below `requires-python >=3.11`;
-        moving it to `py311` rewrites every `timezone.utc` to `UTC` (~128
-        sites): a change of its own.
+  - [x] Ruff's `target-version` is `py311`, matching `requires-python`
+        (every `timezone.utc` is now `UTC`).
   - [x] Webhook hosts that resolve to internal addresses are refused on
         save and skipped (a failed attempt) at every delivery
         (`trust/webhooks/target.py`).

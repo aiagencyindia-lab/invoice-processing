@@ -13,7 +13,7 @@ import json
 import shutil
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .paths import AGENT_ROOT, DATA_DIR, EXEMPLARY_DIR
 
@@ -173,7 +173,7 @@ def _build_acting_stage_result(acting_result, stages, pipeline_start, case_id):
             "acting_decision": "ERROR",
             "final_output": str(DATA_DIR / "agent_output" / case_id),
             "pipeline_time": (
-                datetime.now(timezone.utc) - pipeline_start
+                datetime.now(UTC) - pipeline_start
             ).total_seconds(),
         }
 
@@ -237,9 +237,7 @@ def _run_investigation_stage(
 
     # Gate: stop on MAJOR_VIOLATION
     if overall_compliance == "MAJOR_VIOLATION":
-        pipeline_time = (
-            datetime.now(timezone.utc) - pipeline_start
-        ).total_seconds()
+        pipeline_time = (datetime.now(UTC) - pipeline_start).total_seconds()
         print("\n  PIPELINE STOPPED: MAJOR_VIOLATION (compliance < 60%)")
         return (
             compliance_score,
@@ -288,9 +286,7 @@ def _run_alf_stage(
         alf_engine = ALFEngine()
         alf_engine.load_document(document)
     except Exception as e:
-        pipeline_time = (
-            datetime.now(timezone.utc) - pipeline_start
-        ).total_seconds()
+        pipeline_time = (datetime.now(UTC) - pipeline_start).total_seconds()
         stages["alf"] = {"error": str(e), "revised": False}
         return {
             "status": "COMPLETED",
@@ -311,9 +307,7 @@ def _run_alf_stage(
     # Load provisional output
     postprocessing_path = output_folder / "Postprocessing_Data.json"
     if not postprocessing_path.exists():
-        pipeline_time = (
-            datetime.now(timezone.utc) - pipeline_start
-        ).total_seconds()
+        pipeline_time = (datetime.now(UTC) - pipeline_start).total_seconds()
         return {
             "status": "ERROR",
             "error": f"Postprocessing_Data.json not found in {output_folder}",
@@ -355,9 +349,7 @@ def _run_alf_stage(
         "revised_decision": revised_decision,
     }
 
-    pipeline_time = (
-        datetime.now(timezone.utc) - pipeline_start
-    ).total_seconds()
+    pipeline_time = (datetime.now(UTC) - pipeline_start).total_seconds()
 
     print(f"\n{'=' * 60}")
     print(f"PIPELINE COMPLETED in {pipeline_time:.1f}s")
@@ -459,7 +451,7 @@ def run_inference(case_id: str, skip_investigation: str = "false") -> dict:
             - final_output: str (path to final output)
             - pipeline_time: float (seconds)
     """
-    pipeline_start = datetime.now(timezone.utc)
+    pipeline_start = datetime.now(UTC)
     stages = {}
 
     # ================================================================

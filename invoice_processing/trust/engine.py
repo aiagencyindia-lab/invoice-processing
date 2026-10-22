@@ -10,7 +10,7 @@ mode-agnostic: whether a hold gates is decided by the tenant's mode, not here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from ..ports import RunContext
@@ -19,7 +19,7 @@ from .graph.transactions import Transaction, transactions
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass

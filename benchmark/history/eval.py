@@ -8,7 +8,7 @@ import json
 import sys
 import tempfile
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -323,7 +323,7 @@ def main(argv: list[str] | None = None) -> None:
         )
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     (out_dir / f"{stamp}.json").write_text(
         json.dumps(result, indent=2), encoding="utf-8"
     )

@@ -1,9 +1,9 @@
 """The written change-control policy exists and says what CI enforces."""
 
 import re
+import tomllib
 from pathlib import Path
 
-import tomllib
 import yaml
 
 REPO = Path(__file__).resolve().parent.parent

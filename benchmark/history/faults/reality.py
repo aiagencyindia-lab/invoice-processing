@@ -26,7 +26,7 @@ import csv
 import json
 import math
 from collections import Counter, defaultdict
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from statistics import median
@@ -356,7 +356,7 @@ def _rows(data_dir: Path, kind: str) -> list[dict]:
 def seed_graph(ctx, graph, data_dir: Path) -> None:
     """One `invoice_line` per invoice the family planted: the manifest's
     when it has one, else derived from the evidence it was given."""
-    at = datetime.now(timezone.utc)
+    at = datetime.now(UTC)
     manifest = json.loads((Path(data_dir) / "manifest.json").read_text())
     fixed = {
         f["doc_number"]: f

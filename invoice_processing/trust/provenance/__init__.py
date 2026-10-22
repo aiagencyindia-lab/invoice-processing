@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from ...duplicates import normalize_number
@@ -220,7 +220,7 @@ def plant_vendor_document(
     """The node a KYC upload writes before the document is scored: what it
     is, whose, and who uploaded it, with `evidences` to the vendor's node
     when the vendor has one. The run keeps all of it."""
-    at = at or datetime.now(timezone.utc)
+    at = at or datetime.now(UTC)
     vid = graph.upsert_node(
         ctx,
         kind="document_version",

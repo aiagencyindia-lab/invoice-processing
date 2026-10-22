@@ -6,7 +6,7 @@ recommends: an administrator moves the mode, with a reason
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -83,7 +83,7 @@ def _at(value) -> datetime | None:
         return None
     if isinstance(value, str):
         value = datetime.fromisoformat(value)
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def row(
@@ -191,7 +191,7 @@ def report(
 ) -> list[dict]:
     from ... import tenant_settings  # noqa: PLC0415 - avoids an import cycle
 
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     settings = tenant_settings.effective(tenant_id, settings_store)
     current = settings.get("trust_engine_modes") or {}
     t = thresholds.merged(settings.get("trust_thresholds"))

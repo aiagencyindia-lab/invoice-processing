@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -27,7 +27,7 @@ from invoice_processing.trust.providers.registry import Registry
 
 T = "tenant-acme"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="worker")
-NOW = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 15, 12, tzinfo=UTC)
 ACCOUNT = "50100234567891"
 FIXTURES = Path(__file__).parent / "fixtures" / "trust_payment"
 NO_MODEL = FakeDecider({}, fail=True)
@@ -369,7 +369,7 @@ def test_dedupe_key_is_the_invoice_natural_key(world):
 def test_bank_change_window_is_anchored_on_the_invoice(world):
     # Changed 5 days before the invoice: still a signal on a re-run long
     # after, so a hold does not decay and get released by the scaffold.
-    days = (NOW - datetime(2026, 10, 10, tzinfo=timezone.utc)).days + 5
+    days = (NOW - datetime(2026, 10, 10, tzinfo=UTC)).days + 5
     graph, links = build(
         world,
         vendor={
@@ -455,7 +455,7 @@ def test_master_prefers_the_verified_v1_row(world):
                 email_domain="acme-steel.in",
                 bank_account_number=ACCOUNT,
                 bank_code="HDFC0001234",
-                bank_verified_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                bank_verified_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
         )
     sync_tenant(CTX, graph, links, url=url, decider=NO_MODEL)

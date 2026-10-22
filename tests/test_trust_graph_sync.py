@@ -1,6 +1,6 @@
 """v1 rows and imported history become one graph; engines read one shape."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -20,7 +20,7 @@ from invoice_processing.trust.history.importer import HistoryImporter
 
 T = "tenant-acme"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="sync")
-NOW = datetime(2026, 10, 14, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 14, tzinfo=UTC)
 GSTIN = "27AAPFU0939F1ZV"
 
 

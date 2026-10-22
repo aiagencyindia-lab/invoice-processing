@@ -10,7 +10,7 @@ enforcing engine's run, and `FindingStore.transition(to="rejected")`;
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -24,7 +24,7 @@ LIFTS = "rejected"
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _data(row: TrustHold, finding: TrustFinding | None) -> dict:

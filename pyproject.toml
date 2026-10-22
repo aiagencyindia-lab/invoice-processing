@@ -73,7 +73,7 @@ default = true
 line-length = 80
 # Below requires-python on purpose: py311 rewrites every timezone.utc to
 # UTC (128 files), a diff for its own change, not a dependency bump.
-target-version = "py310"
+target-version = "py311"
 # The dataset generator is vendored evidence of how the benchmark corpus was
 # produced. It is never imported and never edited, so formatting it would only
 # make it harder to compare against the original drop.

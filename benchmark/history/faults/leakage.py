@@ -14,7 +14,7 @@ the eval's settings leave at 0 (off).
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -214,7 +214,7 @@ def _clause(ctx, graph, contract, kind, params, excerpt, at) -> None:
 
 
 def seed_graph(ctx, graph, data_dir: Path) -> None:
-    at = datetime.now(timezone.utc)
+    at = datetime.now(UTC)
     manifest = json.loads((Path(data_dir) / "manifest.json").read_text())
     priced = {
         f["doc_number"]: (Decimal(f["quantity"]), Decimal(f["unit_price"]))

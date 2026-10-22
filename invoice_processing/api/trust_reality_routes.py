@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -172,7 +172,7 @@ def _store_proof(
             kind="proof",
         )
     ctx = principal.context(request_id)
-    at = datetime.now(timezone.utc)
+    at = datetime.now(UTC)
     # Close the request first: a clerk who lost a race to cancel or to
     # another upload leaves no proof in the graph that no request accepted.
     try:

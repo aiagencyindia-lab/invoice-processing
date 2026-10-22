@@ -26,7 +26,7 @@ import statistics
 import subprocess
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import dataset, normalize
@@ -812,9 +812,7 @@ def main(argv=None) -> int:
         "run": run_dir.name,
         "profile": args.profile,
         "git_sha": sha,
-        "generated_at": datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        ),
+        "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "records": len(records),
         "reference_date": "2026-09-03",
     }

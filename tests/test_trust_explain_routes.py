@@ -1,6 +1,6 @@
 """Explanation, evidence-pack and rating routes (the Why engine, FR-24)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -30,7 +30,7 @@ PROBED = {
 }
 
 ACME, GLOBEX = "tenant-acme", "tenant-globex"
-AT = datetime(2026, 10, 1, tzinfo=timezone.utc)
+AT = datetime(2026, 10, 1, tzinfo=UTC)
 
 
 class FakeVerifier:

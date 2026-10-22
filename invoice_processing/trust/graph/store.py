@@ -8,7 +8,7 @@ we know on D" without reconstruction (PRD FR-19.5).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import or_, select, update
@@ -22,7 +22,7 @@ PROVENANCE = ("document", "system_record", "human_assertion", "model_inference")
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _iso(value):

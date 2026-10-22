@@ -12,7 +12,7 @@ record, and the admin's ability to break a lock somebody left behind.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -210,7 +210,7 @@ class TestExpiry:
         _, lock = PgRecordLocks(db).acquire(TENANT, CASE, "dana@acme.test")
 
         expires = datetime.fromisoformat(lock["expires_at"])
-        remaining = expires - datetime.now(timezone.utc)
+        remaining = expires - datetime.now(UTC)
         assert timedelta(minutes=14) < remaining <= timedelta(minutes=15)
 
 

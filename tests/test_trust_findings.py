@@ -1,7 +1,7 @@
 """Findings v2: cited, versioned, deduplicated, with a money ledger of every step."""
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -234,7 +234,7 @@ def book(env):
             source_system="v1",
             provenance="system_record",
             confidence=1.0,
-            observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            observed_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
         invs.append(inv)
     ids = [
@@ -269,8 +269,8 @@ def test_list_filters_by_time_window(book):
     url, store, _, _, ids = book
     with tenant_session(T, url) as s:
         row = s.get(models.TrustFinding, ids[0])
-        row.created_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    cutoff = datetime(2025, 6, 1, tzinfo=timezone.utc)
+        row.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    cutoff = datetime(2025, 6, 1, tzinfo=UTC)
     assert {f["id"] for f in store.list(T, until=cutoff)} == {ids[0]}
     assert ids[0] not in {f["id"] for f in store.list(T, since=cutoff)}
 
@@ -293,7 +293,7 @@ def test_a_re_versioned_invoice_still_lists_under_its_vendor(book):
         source_system="v1",
         provenance="system_record",
         confidence=1.0,
-        observed_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        observed_at=datetime(2026, 1, 2, tzinfo=UTC),
     )
     assert [f["id"] for f in store.list(T, vendor_node=vendors["b"])] == [
         ids[2]

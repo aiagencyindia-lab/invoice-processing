@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -17,7 +17,7 @@ def emit(
     `s` is the caller's session, so the row commits with the change."""
     if event not in EVENTS:
         raise ValueError(f"No such event: {event}")
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     # ponytail: one endpoint query per event; cache per session if a batch
     # run's thousands of findings make it show.
     endpoints = s.scalars(

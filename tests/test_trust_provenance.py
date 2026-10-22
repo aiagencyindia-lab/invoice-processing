@@ -3,7 +3,7 @@
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -28,7 +28,7 @@ from invoice_processing.trust.provenance import pdfmeta
 
 T = "tenant-acme"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="worker")
-NOW = datetime(2026, 10, 15, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 15, tzinfo=UTC)
 
 # -- PDF facts ---------------------------------------------------------------
 
@@ -53,7 +53,7 @@ def test_subset_prefix_is_stripped_from_font_names():
 
 
 def test_pdf_date_parses_offsets_and_partial_forms():
-    utc = timezone.utc
+    utc = UTC
     assert pdfmeta.pdf_date("D:20250102") == datetime(2025, 1, 2, tzinfo=utc)
     assert pdfmeta.pdf_date("D:20250102030405Z") == datetime(
         2025, 1, 2, 3, 4, 5, tzinfo=utc
