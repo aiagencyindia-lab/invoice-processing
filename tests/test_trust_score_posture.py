@@ -1,6 +1,6 @@
 """Posture and the vendor trust profile: computed on read."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -19,7 +19,7 @@ from invoice_processing.trust.score import posture, vendor
 
 T = "tenant-acme"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="engine")
-AT = datetime(2026, 10, 1, tzinfo=timezone.utc)
+AT = datetime(2026, 10, 1, tzinfo=UTC)
 GSTIN = "29ABCDE1234F1Z5"
 
 
@@ -243,7 +243,7 @@ def test_posture_money_reconciles_with_the_ledger(env):
 
 
 def test_posture_since_bounds_what_moved(env):
-    later = datetime.now(timezone.utc) + timedelta(days=1)
+    later = datetime.now(UTC) + timedelta(days=1)
     p = posture.summary(
         T,
         graph=env["graph"],

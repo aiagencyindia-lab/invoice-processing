@@ -16,7 +16,7 @@ import logging
 import os
 import sys
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
@@ -89,9 +89,7 @@ class JsonFormatter(logging.Formatter):
         except (TypeError, ValueError):  # a bad %-format must not lose the line
             msg = f"{record.msg} {record.args!r}"
         line = {
-            "ts": datetime.fromtimestamp(
-                record.created, timezone.utc
-            ).isoformat(),
+            "ts": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "msg": msg,

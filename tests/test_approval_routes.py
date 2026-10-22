@@ -4,7 +4,7 @@ last. Without rules the endpoint behaves as before: one approver, done."""
 import json
 import shutil
 import threading
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -601,9 +601,7 @@ def test_delegation_rules(env):
 def route_case(env):
     ctx = RunContext(tenant_id=TENANT, case_id=CASE)
     artifacts = service.get_cases().get_artifacts(ctx)
-    approval_flow.route(
-        ctx, artifacts, repo=env["repo"], now=datetime.now(timezone.utc)
-    )
+    approval_flow.route(ctx, artifacts, repo=env["repo"], now=datetime.now(UTC))
 
 
 def test_mine_for_a_group_member(env):
@@ -998,7 +996,7 @@ def escalate_a_to_b(env):
         session.query(models.User).filter_by(
             email="a@x.test"
         ).one().manager_email = "b@x.test"
-    later = datetime.now(timezone.utc) + timedelta(days=60)
+    later = datetime.now(UTC) + timedelta(days=60)
     assert approval_flow.escalate_overdue(env["repo"], None, now=later) == 1
     (step,) = env["repo"].chain(TENANT, CASE)
     assert step["escalated_to"] == "b@x.test"
@@ -1184,7 +1182,7 @@ def po_env(env, monkeypatch):
         TENANT,
         [PO_ORDER],
         uploaded_by="a@x.test",
-        now=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        now=datetime(2026, 10, 1, tzinfo=UTC),
     )
     orders.record_receipts(
         TENANT,

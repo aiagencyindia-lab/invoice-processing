@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import ClassVar
 
 import openpyxl
@@ -441,7 +441,7 @@ class TestAStuckJobCanBeRestarted:
     def test_an_unfinished_job_goes_stale(self, db, client):
         seed(db, 1)
         job = export(client, format="csv")
-        long_ago = datetime.now(timezone.utc) - STALE_EXPORT_AFTER * 2
+        long_ago = datetime.now(UTC) - STALE_EXPORT_AFTER * 2
         with tenant_session(TENANT, db) as session:
             row = session.get(ExportJob, job["id"])
             row.status = "running"

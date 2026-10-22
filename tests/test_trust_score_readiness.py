@@ -1,13 +1,13 @@
 """Engine readiness: evidence for promoting an engine, never a promotion (U2)."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from invoice_processing.trust import thresholds
 from invoice_processing.trust.score import readiness as rd
 
-NOW = datetime(2026, 10, 21, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 21, tzinfo=UTC)
 T = thresholds.merged(None)
 
 

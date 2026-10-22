@@ -32,7 +32,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -582,7 +582,7 @@ def process_document(
                     ctx,
                     {**artifacts, "workflow": record.get("workflow")},
                     repo=repo,
-                    now=datetime.now(timezone.utc),
+                    now=datetime.now(UTC),
                 )
         except Exception as exc:
             logger.warning("Case %s not routed for approval: %s", case_id, exc)
@@ -668,7 +668,7 @@ def _write_heartbeat_row() -> None:
     from ..db.session import get_engine  # noqa: PLC0415
 
     engine = get_engine()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     values = {
         "worker_id": _worker_id(),
         "last_seen_at": now,
@@ -707,7 +707,7 @@ def _read_heartbeat_row() -> dict | None:
             return None
         seen = row.last_seen_at
         if seen.tzinfo is None:
-            seen = seen.replace(tzinfo=timezone.utc)
+            seen = seen.replace(tzinfo=UTC)
         return {"at": seen.timestamp(), "pid": row.pid}
 
 
@@ -1287,7 +1287,7 @@ class Worker:
             repo = service.get_approvals()
             if repo is not None:
                 approval_flow.escalate_overdue(
-                    repo, self.audit, now=datetime.now(timezone.utc)
+                    repo, self.audit, now=datetime.now(UTC)
                 )
         except Exception:
             logger.exception("Overdue-approval scan failed; continuing.")
@@ -1303,7 +1303,7 @@ class Worker:
         try:
             from ..trust.webhooks import deliver  # noqa: PLC0415
 
-            deliver.due(datetime.now(timezone.utc))
+            deliver.due(datetime.now(UTC))
         except Exception:
             logger.exception("Webhook delivery sweep failed; continuing.")
 

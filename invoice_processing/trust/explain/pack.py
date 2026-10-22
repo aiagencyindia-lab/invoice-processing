@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..graph.lineage import lineage
 from .engine import build
@@ -39,7 +39,7 @@ def evidence_pack(
 ) -> dict:
     if "citations" not in finding and findings is not None:
         finding = findings.get(tenant_id, finding["id"]) or finding
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     explanation = build(tenant_id, finding, graph=graph, links=links)
     ids = list(
         dict.fromkeys(c["node_id"] for c in finding.get("citations", []))

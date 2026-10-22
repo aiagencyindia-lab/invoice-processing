@@ -1,7 +1,7 @@
 """Trust Score, vendor profile, posture, readiness and mode routes (FR-25)."""
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -35,7 +35,7 @@ PROBED = {
 }
 
 ACME, GLOBEX = "tenant-acme", "tenant-globex"
-AT = datetime(2026, 10, 1, tzinfo=timezone.utc)
+AT = datetime(2026, 10, 1, tzinfo=UTC)
 
 
 class FakeVerifier:

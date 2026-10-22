@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 
 from .api.auth import AuthError, Principal, principal_from_claims
@@ -151,7 +151,7 @@ def _refuse_inactive(
 def _touch(services: SsoServices, row: dict, now: datetime) -> None:
     last = row.get("last_login_at")
     if last is not None and last.tzinfo is None:
-        last = last.replace(tzinfo=timezone.utc)
+        last = last.replace(tzinfo=UTC)
     if last is None or now - last >= LOGIN_TOUCH:
         try:
             services.directory.touch_login(row["tenant_id"], row["id"], now)
@@ -193,7 +193,7 @@ def resolve_principal(
     services: SsoServices | None,
     now: datetime | None = None,
 ) -> Principal:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if claims.get("tenant_id") or claims.get("tenantId"):
         base = principal_from_claims(claims)
         if services is None:

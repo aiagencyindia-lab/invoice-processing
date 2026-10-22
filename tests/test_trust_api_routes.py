@@ -7,7 +7,7 @@ a bearer and with the other tenant's API key.
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -53,7 +53,7 @@ PROBED = {
 }
 
 ACME, GLOBEX = "tenant-acme", "tenant-globex"
-AT = datetime(2026, 10, 1, tzinfo=timezone.utc)
+AT = datetime(2026, 10, 1, tzinfo=UTC)
 ROLES = ("viewer", "clerk", "approver", "admin")
 
 

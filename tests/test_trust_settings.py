@@ -1,6 +1,6 @@
 """Engine modes and provider choices are tenant settings, off and fake by default."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -137,7 +137,7 @@ def test_bec_window_is_a_payment_threshold():
 # -- mode changes (Wave 3) --------------------------------------------------
 
 
-T0 = datetime(2026, 10, 21, 9, 0, tzinfo=timezone.utc)
+T0 = datetime(2026, 10, 21, 9, 0, tzinfo=UTC)
 CTX = RunContext(tenant_id="t", actor="admin@x.test")
 
 

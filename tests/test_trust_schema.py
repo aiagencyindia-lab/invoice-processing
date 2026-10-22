@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fresh_schema import fresh_schema
@@ -13,7 +13,7 @@ from invoice_processing.db.models import TENANT_TABLES
 from invoice_processing.db.session import tenant_session
 
 T = "tenant-acme"
-NOW = datetime(2026, 10, 14, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 14, tzinfo=UTC)
 
 
 @pytest.fixture

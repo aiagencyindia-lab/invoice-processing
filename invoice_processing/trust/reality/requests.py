@@ -5,7 +5,7 @@ invoice re-checked. No public link and no email: nothing leaves the tenant.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from sqlalchemy import select, update
 
@@ -24,7 +24,7 @@ class RequestClosed(ValueError):
 
 
 def _today() -> date:
-    return datetime.now(timezone.utc).date()
+    return datetime.now(UTC).date()
 
 
 def _iso(value) -> str | None:
@@ -148,7 +148,7 @@ class RequestStore:
             request_id,
             status="fulfilled",
             proof_document_id=document_id,
-            fulfilled_at=at or datetime.now(timezone.utc),
+            fulfilled_at=at or datetime.now(UTC),
         )
 
     def cancel(self, ctx: RunContext, request_id: str) -> dict:

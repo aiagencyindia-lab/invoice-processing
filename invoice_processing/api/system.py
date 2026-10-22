@@ -31,7 +31,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any
@@ -736,7 +736,7 @@ def export_audit(
 
 
 def _as_utc(stamp: datetime) -> datetime:
-    return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
+    return stamp.replace(tzinfo=UTC) if stamp.tzinfo is None else stamp
 
 
 def _read_jsonl_audit(

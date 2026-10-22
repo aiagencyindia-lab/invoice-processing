@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from invoice_processing import sso
 from invoice_processing.api.auth import AuthError, Principal
 
-NOW = datetime(2026, 10, 12, 9, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 12, 9, 0, tzinfo=UTC)
 ACME = "tenant-acme"
 
 

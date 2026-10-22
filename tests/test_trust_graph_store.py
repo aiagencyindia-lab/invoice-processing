@@ -1,6 +1,6 @@
 """Graph rows are never updated in place; the past stays queryable."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fresh_schema import fresh_schema
@@ -12,7 +12,7 @@ from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
 
 T = "tenant-acme"
-T0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+T0 = datetime(2026, 10, 1, tzinfo=UTC)
 T1 = T0 + timedelta(days=1)
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="t")
 

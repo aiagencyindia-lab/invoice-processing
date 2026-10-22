@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -22,7 +22,7 @@ from invoice_processing.trust.graph.store import GraphStore
 from invoice_processing.trust.webhooks import deliver, outbox
 
 ACME, GLOBEX = "tenant-acme", "tenant-globex"
-NOW = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
 SECRET = "whsec_test"
 
 
@@ -251,7 +251,7 @@ def test_a_finding_reaches_a_subscribed_endpoint_end_to_end(env):
         ),
     )
     post = FakePost()
-    assert deliver.due(datetime.now(timezone.utc), post=post, url=url) == 1
+    assert deliver.due(datetime.now(UTC), post=post, url=url) == 1
     body = json.loads(post.calls[0]["data"])
     assert body["event"] == "finding.created"
     assert body["tenant"] == ACME
@@ -265,7 +265,7 @@ def test_sign_matches_the_documented_recipe():
 
 
 def _aware(dt):
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def test_a_redirect_is_a_failed_attempt(env):

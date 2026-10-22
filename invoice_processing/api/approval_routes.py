@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -237,7 +237,7 @@ def my_queue(
     from . import service  # noqa: PLC0415
 
     repo, t = _repo(), principal.tenant_id
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     steps = repo.mine(
         t,
         email=principal.email,
@@ -274,7 +274,7 @@ def my_queue(
         overdue = False
         if due:
             when = datetime.fromisoformat(due)
-            overdue = when.replace(tzinfo=when.tzinfo or timezone.utc) < now
+            overdue = when.replace(tzinfo=when.tzinfo or UTC) < now
         items.append(
             {
                 "case_id": s["case_id"],
@@ -313,7 +313,7 @@ def invoice_chain(
         steps,
         repo=repo,
         documents=service.get_documents(),
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
     )
     if current is not None and not principal.can("approver"):
         # act needs the approver role before any seat counts; a seat holder

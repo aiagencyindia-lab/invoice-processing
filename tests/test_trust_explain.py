@@ -352,12 +352,12 @@ def test_caused_by_is_worded_as_likely_and_names_the_approver():
 # -- evidence pack + HTML -------------------------------------------------------
 
 import hashlib  # noqa: E402
-from datetime import datetime, timezone  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
 
 from invoice_processing.trust.explain import pack as xp  # noqa: E402
 from invoice_processing.trust.explain import render  # noqa: E402
 
-NOW = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
 RATING = {
     "rater": "clerk@x.test",
     "correct": True,

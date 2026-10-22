@@ -7,7 +7,7 @@ up by (tenant_id, id): a guessed id from another tenant is a None, never a row.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -34,12 +34,12 @@ EMPTY_PROGRESS = {
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _aware(value: datetime | None) -> datetime | None:
     if isinstance(value, datetime) and value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)  # SQLite drops the zone
+        return value.replace(tzinfo=UTC)  # SQLite drops the zone
     return value
 
 

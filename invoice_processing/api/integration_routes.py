@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated
 from urllib.parse import urlsplit
 
@@ -235,7 +235,7 @@ def delete_webhook(endpoint_id: str, principal: Admin):
 def ping_webhook(endpoint_id: str, principal: Admin):
     """Queue a `ping` for this endpoint alone, whatever it subscribes to."""
     t = principal.tenant_id
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with tenant_session(t) as s:
         ep = _get(s, t, endpoint_id)
         if not ep.active:

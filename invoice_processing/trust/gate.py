@@ -14,7 +14,7 @@ payment has not checked yet (evaluation is asynchronous) is held until it has:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -129,7 +129,7 @@ def _checked(graph, tenant_id, invoice_id, created_at) -> set[str]:
     done = set((own or {}).get("attrs") or {})
     batch = graph.open_node(tenant_id, "trust_evaluation", TENANT_RUN)
     if created_at is not None and created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)  # SQLite
+        created_at = created_at.replace(tzinfo=UTC)  # SQLite
     for name, at in ((batch or {}).get("attrs") or {}).items():
         # A batch run covers the invoices that existed when it ran.
         if created_at is None or datetime.fromisoformat(at) >= created_at:

@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -268,7 +268,7 @@ def _plant_pdf(ctx, graph, blobs, vendor, number, spec, *, amount, at):
 
 
 def seed_graph(ctx, graph, data_dir: Path) -> None:
-    at = datetime.now(timezone.utc)
+    at = datetime.now(UTC)
     manifest = json.loads((data_dir / "manifest.json").read_text())
     vendor_of: dict[str, str] = {}
     # Master-backed vendor nodes first; a run without a vendor file still

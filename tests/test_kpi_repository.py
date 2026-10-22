@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fresh_schema import fresh_schema
@@ -26,7 +26,7 @@ from invoice_processing.db.session import tenant_session
 
 ACME = "tenant-acme"
 GLOBEX = "tenant-globex"
-NOW = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
 
 
 def days_ago(n: float) -> datetime:

@@ -1,7 +1,7 @@
 """Trust Audit routes (Wave 2): engagements, runs, samples, report, ledger,
 each probed as two tenants."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -33,7 +33,7 @@ PROBED = {
     "/api/trust/audits/{audit_id}/ledger",
 }
 
-AT = datetime(2026, 10, 1, tzinfo=timezone.utc)
+AT = datetime(2026, 10, 1, tzinfo=UTC)
 BODY = {
     "name": "FY26 leakage",
     "period_from": "2026-01-01",
@@ -288,7 +288,7 @@ def test_a_stale_run_is_abandoned_and_a_new_one_accepted(env, monkeypatch):
     monkeypatch.setattr(
         audit_store,
         "_now",
-        lambda: datetime.now(timezone.utc) + audit_store.QUEUED_FOR * 2,
+        lambda: datetime.now(UTC) + audit_store.QUEUED_FOR * 2,
     )
     r = c.post(f"/api/trust/audits/{a['id']}/runs", json={})
     assert r.status_code == 202 and r.json()["id"] != first["id"]
@@ -654,7 +654,7 @@ def test_polling_a_stale_run_self_heals(env, monkeypatch):
     monkeypatch.setattr(
         audit_store,
         "_now",
-        lambda: datetime.now(timezone.utc) + audit_store.QUEUED_FOR * 2,
+        lambda: datetime.now(UTC) + audit_store.QUEUED_FOR * 2,
     )
     got = (
         env["client"]("acme", "viewer")

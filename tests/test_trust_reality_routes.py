@@ -1,6 +1,6 @@
 """Evidence-request routes for reality checks (FR-23.5, U4)."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -171,7 +171,7 @@ def test_a_decided_finding_cannot_be_asked_about(env):
 
 def test_list_filters_and_overdue_on_read(env):
     fid, _ = env["finding"](ACME)
-    past = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    past = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
     future = (date.today() + timedelta(days=30)).isoformat()
     late = ask(env, "acme:clerk", fid, due_date=past).json()
     ask(env, "acme:clerk", fid, due_date=future)

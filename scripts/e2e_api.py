@@ -33,7 +33,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -528,7 +528,7 @@ def seed_scans() -> None:
         session.execute(
             update(SupportingDocument)
             .where(SupportingDocument.id == orphan["id"])
-            .values(reviewed_at=datetime.now(timezone.utc) - timedelta(hours=1))
+            .values(reviewed_at=datetime.now(UTC) - timedelta(hours=1))
         )
 
 

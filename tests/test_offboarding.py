@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -34,7 +34,7 @@ from invoice_processing.db.repositories import PgAuditSink
 from invoice_processing.db.session import get_engine, tenant_session
 from tests.pg_roles import bootstrapped_database, pg_only
 
-NOW = datetime(2026, 10, 13, 9, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 13, 9, 0, tzinfo=UTC)
 
 
 @pytest.fixture

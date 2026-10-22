@@ -13,7 +13,7 @@ own configuration while it is suspended, and become only the
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, func, select, text, update
 
@@ -37,7 +37,7 @@ class OffboardingError(RuntimeError):
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _required(value: str | None, what: str) -> str:

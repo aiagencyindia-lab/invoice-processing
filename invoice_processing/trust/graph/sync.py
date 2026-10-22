@@ -7,7 +7,7 @@ and confidence say how we know.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -70,7 +70,7 @@ def _utc_iso(value) -> str | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+        value = value.replace(tzinfo=UTC)
     return value.isoformat()
 
 
@@ -620,7 +620,7 @@ def sync_tenant(
     decider=None,
     at: datetime | None = None,
 ) -> dict:
-    at = at or datetime.now(timezone.utc)
+    at = at or datetime.now(UTC)
     counts: dict[str, int] = {}
 
     def bump(kind):

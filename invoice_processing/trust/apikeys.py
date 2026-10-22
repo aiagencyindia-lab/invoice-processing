@@ -13,7 +13,7 @@ import hmac
 import logging
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -103,7 +103,7 @@ def revoke(ctx, key_id: str, *, audit=None, url=None) -> dict | None:
         ).first()
         if key is None:
             return None
-        key.revoked_at = datetime.now(timezone.utc)
+        key.revoked_at = datetime.now(UTC)
         row = _row(key)
     if audit is not None:
         audit.emit(
@@ -173,4 +173,4 @@ def _stamp(tenant_id: str, key_id: str, url=None) -> None:
     with tenant_session(tenant_id, url) as s:
         key = s.get(ApiKey, key_id)
         if key is not None:
-            key.last_used_at = datetime.now(timezone.utc)
+            key.last_used_at = datetime.now(UTC)

@@ -1,6 +1,6 @@
 """payment_hold: an open hold-type finding, from an engine in enforcing, stops payment."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -180,7 +180,7 @@ def test_the_newest_invoice_row_of_a_case_decides(env, evaluated):
                 case_id="case-1",
                 total_inc_tax=Decimal("1"),
                 status="done",
-                created_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+                created_at=datetime(2020, 1, 1, tzinfo=UTC),
             )
         )
     add(store, node, "T-PAYHOLD")
