@@ -513,3 +513,55 @@ def test_a_text_loader_that_raises_is_no_signal():
         behaviour.injection(a, {"name": "bot"}, None, None, SETTINGS, NOW, d)
         is None
     )
+
+
+# -- explanations -----------------------------------------------------------
+
+from test_trust_explain import load  # noqa: E402
+
+from invoice_processing.trust.explain import engine as explain  # noqa: E402
+from invoice_processing.trust.explain.templates import agents as tpl  # noqa: E402
+
+AGENT_TYPES = sorted(tpl.NEXT)
+
+
+def test_a_template_for_each_of_the_nine_types():
+    assert len(AGENT_TYPES) == 9
+    assert set(AGENT_TYPES) == set(tpl.WOULD)
+
+
+@pytest.mark.parametrize("code", AGENT_TYPES)
+def test_agent_explanation_names_the_agent_and_its_reasons(code):
+    f, graph, _ = load(code)
+    x = explain.build(T, f, graph=graph)
+    reasons = f["details"]["reasons"]
+    assert x.what_happened == reasons[0]["message"]
+    agent_steps = [s for s in x.why if s.node_id == "n-agent"]
+    assert [s.text for s in agent_steps] == [r["message"] for r in reasons]
+    actor = x.caused_by[0]
+    assert (actor.kind, actor.label, actor.node_id) == (
+        "agent",
+        "bot-ap (owner ops@acme.test)",
+        "n-agent",
+    )
+    assert x.next_action == tpl.NEXT[code]
+    assert list(x.would_change) == tpl.WOULD[code]
+    assert {e.node_id for e in x.evidence} == {
+        c["node_id"] for c in f["citations"]
+    }
+
+
+def test_the_subject_step_points_at_the_invoice_when_cited():
+    f, graph, _ = load("AGENT-SPLIT")
+    x = explain.build(T, f, graph=graph)
+    assert x.why[-1].node_id == "n-inv" and "invoice.approve" in x.why[-1].text
+    f, graph, _ = load("AGENT-VELOCITY")  # cited only the agent (B14)
+    x = explain.build(T, f, graph=graph)
+    assert {s.node_id for s in x.why} == {"n-agent"}
+
+
+def test_an_agent_finding_without_reasons_falls_back_to_its_summary():
+    f, graph, _ = load("AGENT-CIRCULAR")
+    f["details"]["reasons"] = []
+    x = explain.build(T, f, graph=graph)
+    assert x.what_happened == f["summary"] and x.why
