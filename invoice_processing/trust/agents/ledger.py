@@ -31,7 +31,11 @@ def money(value) -> str:
 
 
 def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+    return (
+        value.replace(tzinfo=UTC)
+        if value.tzinfo is None
+        else value.astimezone(UTC)
+    )
 
 
 def window(since, until, now: datetime) -> tuple[datetime, datetime]:

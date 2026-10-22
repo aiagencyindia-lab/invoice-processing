@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import re
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from ...db.models import ApiKey
@@ -33,16 +33,12 @@ def _api_key(tenant_id: str, key_id: str, url) -> tuple[str, str]:
         ).first()
         if key is None:
             raise LookupError("Unknown API key.")
-        # The rules know an actor by the email it writes; two live keys of one
-        # name write the same email.
-        twins = s.scalar(
-            select(func.count()).where(
-                *live,
-                ApiKey.id != key_id,
-                func.lower(ApiKey.name) == key.name.lower(),
-            )
-        )
-        if twins:
+        # The rules know an actor by the casefolded email it writes; two live
+        # keys whose names casefold alike write the same one.
+        names = s.scalars(
+            select(ApiKey.name).where(*live, ApiKey.id != key_id)
+        ).all()
+        if any(n.casefold() == key.name.casefold() for n in names):
             raise AgentConflict(
                 "Another live key has this name; rename one before "
                 "registering it."
@@ -65,6 +61,8 @@ def register(ctx, body: dict, *, store, audit, url=None) -> dict:
         )
     elif principal.get("user_id"):
         kind, principal_id = "user", principal["user_id"]
+        if principal_id.startswith("api-key:"):
+            raise ValueError("Register an API key by its api_key_id.")
         email = _email(principal.get("email"), "principal.email")
     else:
         raise ValueError(

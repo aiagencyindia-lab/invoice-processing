@@ -788,3 +788,155 @@ def test_no_route_crosses_tenants(env):
     led = bearer("acme:approver").get(f"/api/trust/agents/{a}/ledger").json()
     assert len(led["actions"]) == 1
     assert service._agent_store.list("tenant-globex") == []
+
+
+# -- review fixes --------------------------------------------------------------
+
+
+def test_an_agent_key_may_only_ask_not_log(env):
+    key = env["acme"]["keys"]["bot"]
+    own = register("acme", key["id"])
+    r = evaluate(keyed(key["key"]), own["id"], source="log", amount="5")
+    assert r.status_code == 403
+    assert service._agent_store.actions("tenant-acme", agent_id=own["id"]) == []
+
+
+def test_a_user_agent_asks_about_itself_by_bearer(env):
+    own = register(
+        "acme",
+        name="svc",
+        principal={"user_id": "u-acme:clerk", "email": "clerk1@acme.test"},
+    )
+    r = evaluate(bearer("acme:clerk"), own["id"], source="dryrun")
+    assert r.status_code == 200, r.text
+
+
+def test_a_log_row_is_judged_by_the_mandate_in_force_then(env, monkeypatch):
+    monkeypatch.setattr(rules, "RULES", (mandate_rule,))
+    agent, v1 = mandated("acme")
+    v2 = propose("acme", agent["id"])
+    assert approve("acme", agent["id"], v2["id"]).status_code == 200
+    with tenant_session("tenant-acme", env["url"]) as s:
+        s.get(models.AgentMandate, v1["id"]).approved_at = NOW - timedelta(
+            days=20
+        )
+        s.get(models.AgentMandate, v1["id"]).revoked_at = NOW - timedelta(
+            days=2
+        )
+        s.get(models.AgentMandate, v2["id"]).approved_at = NOW - timedelta(
+            days=2
+        )
+    client = bearer("acme:approver")
+    cases = (
+        (NOW - timedelta(days=5), "ALLOW", 1),
+        (NOW - timedelta(hours=1), "ALLOW", 2),
+        (NOW - timedelta(days=21, hours=1), "BLOCK", None),  # before any
+    )
+    for at, decision, version in cases:
+        r = evaluate(client, agent["id"], occurred_at=at.isoformat())
+        assert r.json()["decision"] == decision, at
+        [row] = service._agent_store.actions(
+            "tenant-acme",
+            agent_id=agent["id"],
+            since=at,
+            until=at + timedelta(seconds=1),
+        )
+        assert row["mandate_version"] == version
+
+
+@pytest.mark.parametrize(
+    "principal",
+    [
+        {"api_key_id": {"a": 1}},
+        {"user_id": {"a": 1}, "email": "s@acme.test"},
+        {"user_id": True, "email": "s@acme.test"},
+        {"user_id": "api-key:anything", "email": "s@acme.test"},
+        {"user_id": "u" * 65, "email": "s@acme.test"},
+    ],
+)
+def test_a_malformed_principal_is_refused_not_500(env, principal):
+    r = bearer("acme:admin").post(
+        "/api/trust/agents",
+        json={"name": "x", "owner": "o@acme.test", "principal": principal},
+    )
+    assert r.status_code in (400, 422), r.text
+
+
+def test_an_unhashable_action_is_400(env):
+    agent = register("acme")
+    r = bearer("acme:admin").post(
+        f"/api/trust/agents/{agent['id']}/mandates",
+        json={
+            "scope": {**SCOPE, "actions": [["invoice.approve"]]},
+            "valid_from": NOW.isoformat(),
+            "valid_to": (NOW + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_an_offset_time_is_stored_in_utc(env):
+    agent = register("acme")
+    r = evaluate(
+        bearer("acme:approver"),
+        agent["id"],
+        occurred_at="2026-10-21T10:00:00+05:30",
+    )
+    assert r.status_code == 200, r.text
+    [row] = service._agent_store.actions("tenant-acme", agent_id=agent["id"])
+    assert row["occurred_at"] == datetime(2026, 10, 21, 4, 30, tzinfo=UTC)
+    led = bearer("acme:approver").get(
+        f"/api/trust/agents/{agent['id']}/ledger"
+        "?since=2026-10-21T09:00:00%2B05:30&until=2026-10-21T10:30:00%2B05:30"
+    )
+    assert led.status_code == 200 and len(led.json()["actions"]) == 1
+
+
+def test_key_names_that_casefold_alike_are_twins(env):
+    ctx = RunContext(
+        tenant_id="tenant-acme", case_id="", run_id="", actor="admin1@acme.test"
+    )
+    a, _ = apikeys.create(ctx, "straße", "clerk", url=env["url"])
+    apikeys.create(ctx, "STRASSE", "clerk", url=env["url"])
+    r = bearer("acme:admin").post(
+        "/api/trust/agents",
+        json={
+            "name": "x",
+            "owner": "o@acme.test",
+            "principal": {"api_key_id": a["id"]},
+        },
+    )
+    assert r.status_code == 409
+
+
+def test_import_reads_xlsx(env):
+    import io  # noqa: PLC0415
+
+    import openpyxl  # noqa: PLC0415
+
+    register("acme")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(CSV_HEAD.strip().split(","))
+    ws.append(
+        [
+            "payables-bot",
+            "invoice.approve",
+            "inv-1",
+            "Acme",
+            "",
+            "100",
+            "INR",
+            "2026-10-21T10:00:00Z",
+        ]
+    )
+    buf = io.BytesIO()
+    wb.save(buf)
+    r = bearer("acme:admin").post(
+        "/api/trust/agents/actions/import",
+        files={
+            "file": ("log.xlsx", buf.getvalue(), "application/octet-stream")
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["by_decision"] == {"ALLOW": 1} and r.json()["errors"] == []

@@ -221,3 +221,30 @@ def test_expired_is_computed_on_read(env):
     assert mandates.annotate(rows, NOW)[0]["expired"] is False
     later = NOW + timedelta(days=31)
     assert mandates.annotate(rows, later)[0]["expired"] is True
+
+
+def test_a_non_ascii_signature_in_the_db_reads_unverified(env):
+    store, agent_id, url = env
+    m = mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    edit(url, m["id"], signature="é" * 64)
+    [row] = store.mandates(T, agent_id)
+    assert mandates.verify(row, None) is False
+    edit(url, m["id"], digest="é" * 64)
+    [row] = store.mandates(T, agent_id)
+    assert mandates.verify(row, None) is False
+
+
+def test_in_force_picks_the_version_that_held_at_a_time(env):
+    store, agent_id, url = env
+    v1 = mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    v2 = mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    # Both valid NOW..NOW+30d; v1 held until v2 replaced it on day 10.
+    edit(url, v1["id"], approved_at=NOW)
+    edit(url, v1["id"], revoked_at=NOW + timedelta(days=10))
+    edit(url, v2["id"], approved_at=NOW + timedelta(days=10))
+    rows = store.mandates(T, agent_id)
+    at = mandates.in_force(rows, NOW + timedelta(days=5))
+    assert at["id"] == v1["id"] and at["status"] == "active"
+    assert mandates.in_force(rows, NOW + timedelta(days=20))["id"] == v2["id"]
+    assert mandates.in_force(rows, NOW - timedelta(days=1)) is None
+    assert mandates.in_force(rows, NOW + timedelta(days=31)) is None

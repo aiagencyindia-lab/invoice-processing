@@ -26,6 +26,7 @@ __all__ = [
     "MandateKeyMissing",
     "annotate",
     "approve",
+    "in_force",
     "sign",
     "validate",
     "verify",
@@ -114,6 +115,7 @@ def validate(body: dict, *, now: datetime) -> tuple[dict, datetime, datetime]:
     if (
         not isinstance(actions, list)
         or not actions
+        or not all(isinstance(a, str) for a in actions)
         or not set(actions) <= set(ACTIONS)
     ):
         raise ValueError(
@@ -157,11 +159,16 @@ def sign(tenant_id: str, row_digest: str) -> str:
     ).hexdigest()
 
 
+def _same(a: str, b: str | None) -> bool:
+    # Bytes: compare_digest refuses a non-ASCII str (a tampered column).
+    return hmac.compare_digest(a.encode(), (b or "").encode())
+
+
 def verify(row: dict, prev: dict | None) -> bool:
     """The row is what was signed, and follows the version before it."""
     if row.get("prev_digest") != (prev or {}).get("digest"):
         return False
-    if not hmac.compare_digest(digest(row), row.get("digest") or ""):
+    if not _same(digest(row), row.get("digest")):
         return False
     if row.get("approved_by") is None:
         return True  # proposed: nobody has signed it yet
@@ -169,7 +176,7 @@ def verify(row: dict, prev: dict | None) -> bool:
         expected = sign(row["tenant_id"], row["digest"])
     except MandateKeyMissing:
         return False
-    return hmac.compare_digest(expected, row.get("signature") or "")
+    return _same(expected, row.get("signature"))
 
 
 def annotate(rows: list[dict], now: datetime) -> list[dict]:
@@ -185,6 +192,23 @@ def annotate(rows: list[dict], now: datetime) -> list[dict]:
         )
         prev = row
     return out
+
+
+def in_force(rows: list[dict], at: datetime) -> dict | None:
+    """The version that authorised the agent at `at`: approved by then,
+    valid then, not yet revoked or superseded. A logged action is judged by
+    it, not by today's mandate. Returned as it stood then (active)."""
+    held = [
+        m
+        for m in rows
+        if m["approved_at"] is not None
+        and m["approved_at"] <= at
+        and m["valid_from"] <= at < m["valid_to"]
+        and (m["revoked_at"] is None or at < m["revoked_at"])
+    ]
+    if not held:
+        return None
+    return {**max(held, key=lambda m: m["version"]), "status": "active"}
 
 
 def approve(ctx, store, mandate_id: str) -> dict:

@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..po_matching import normalize_vendor
 from ..trust import thresholds
@@ -86,9 +86,11 @@ def _settings(tenant_id: str) -> dict:
 
 
 def _utc(value: datetime | None) -> datetime | None:
-    if value is not None and value.tzinfo is None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
-    return value
+    return value.astimezone(UTC)
 
 
 def _judge(ctx, agent: dict, row: dict, source: str, now: datetime) -> dict:
@@ -138,7 +140,10 @@ def _judge(ctx, agent: dict, row: dict, source: str, now: datetime) -> dict:
     )
     store, service = _store(), _service()
     when = at or now
-    mandate = store.current_mandate(ctx.tenant_id, agent["id"], when)
+    # The version in force when it happened, not today's (B15).
+    mandate = mandates.in_force(
+        store.mandates(ctx.tenant_id, agent["id"]), when
+    )
     mode = engine_mode(ctx.tenant_id, "agents")
     decision = evaluate(
         ctx,
@@ -178,11 +183,19 @@ def _judge(ctx, agent: dict, row: dict, source: str, now: datetime) -> dict:
 # -- bodies ---------------------------------------------------------------------
 
 
+class AgentPrincipal(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    api_key_id: str | None = Field(default=None, max_length=36)
+    user_id: str | None = Field(default=None, max_length=64)
+    email: str | None = Field(default=None, max_length=320)
+
+
 class AgentCreate(BaseModel):
     name: str = Field(max_length=128)
     owner: str = Field(max_length=320)
     description: str | None = Field(default=None, max_length=500)
-    principal: dict | None = None
+    principal: AgentPrincipal | None = None
 
 
 class Reason(BaseModel):
@@ -391,6 +404,9 @@ def evaluate_action(agent_id: str, body: Evaluate, principal: Anyone):
         raise HTTPException(
             403, "Only an approver, or the agent itself, may ask."
         )
+    if body.source == "log" and not principal.can("approver"):
+        # A past action is an approver's attestation, not the agent's own.
+        raise HTTPException(403, "Only an approver may record a logged action.")
     try:
         return _judge(
             principal.context(), agent, body.model_dump(), body.source, _now()
