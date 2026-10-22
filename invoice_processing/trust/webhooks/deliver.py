@@ -21,6 +21,7 @@ from ...db.models import Tenant, WebhookEndpoint, WebhookOutbox
 from ...db.session import get_engine, tenant_session
 from ...masking import mask_text
 from ...ports import RunContext
+from . import target as _target
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,20 @@ def _sweep_tenant(tenant_id, now, post, limit, audit, url) -> int:
         # The moment it is sent, not the sweep's: receivers check freshness.
         ts = str(int(time.time()))
         status, error = None, None
+        # Checked per delivery: a public name may have been pointed inward
+        # since the endpoint was saved.
+        if _target.refused(target):
+            unreachable.add(target)
+            _record(
+                tenant_id,
+                row_id,
+                now,
+                None,
+                "The url is internal or ambiguous; not sent.",
+                audit,
+                url,
+            )
+            continue
         try:
             response = post(
                 target,

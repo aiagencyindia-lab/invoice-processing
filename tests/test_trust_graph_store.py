@@ -51,6 +51,14 @@ def test_changed_attrs_closes_old_row_and_as_of_sees_it(store):
     assert store.node(T, a)["valid_to"] is not None
 
 
+def test_open_node_as_of_reads_the_version_valid_then(store):
+    a = vendor(store, "Acme", T0)
+    b = vendor(store, "Acme Ltd", T1)
+    assert store.open_node(T, "vendor", "v1", as_of=T0)["id"] == a
+    assert store.open_node(T, "vendor", "v1", as_of=T1)["id"] == b
+    assert store.open_node(T, "vendor", "v1", as_of=T0 - T0.resolution) is None
+
+
 def test_bank_attrs_are_masked_in_graph(store):
     nid = store.upsert_node(
         CTX,

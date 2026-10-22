@@ -19,7 +19,7 @@ from invoice_processing.ports import RunContext
 from invoice_processing.trust.findings.model import Citation, FindingSpec
 from invoice_processing.trust.findings.store import FindingStore
 from invoice_processing.trust.graph.store import GraphStore
-from invoice_processing.trust.webhooks import deliver, outbox
+from invoice_processing.trust.webhooks import deliver, outbox, target
 
 ACME, GLOBEX = "tenant-acme", "tenant-globex"
 NOW = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
@@ -45,6 +45,12 @@ class FakePost:
         if isinstance(status, Exception):
             raise status
         return Response(status)
+
+
+@pytest.fixture(autouse=True)
+def public_dns(monkeypatch):
+    # Every test host resolves outward unless a test says otherwise.
+    monkeypatch.setattr(target, "addresses", lambda host: ["93.184.216.34"])
 
 
 @pytest.fixture
@@ -332,3 +338,36 @@ def test_a_row_deleted_mid_sweep_is_skipped(env):
         return Response(200)
 
     assert deliver.due(NOW, post=post, audit=audit, url=url) == 2
+
+
+def test_a_host_resolving_inward_is_a_failed_attempt_and_never_posted(
+    env, monkeypatch
+):
+    url, audit, _ = env
+    endpoint(url, target="https://rebound.example/h")
+    endpoint(url, target="https://ok.example/h")
+    emit(url)
+    emit(url)
+    monkeypatch.setattr(
+        target,
+        "addresses",
+        lambda host: ["10.0.0.7"] if host == "rebound.example" else ["8.8.8.8"],
+    )
+    post = FakePost()
+    deliver.due(NOW, post=post, audit=audit, url=url)
+    assert {c["url"] for c in post.calls} == {"https://ok.example/h"}
+    bad = [r for r in rows(url) if r.delivered_at is None]
+    tried = [r for r in bad if r.attempts]
+    assert tried[0].last_error == "The url is internal or ambiguous; not sent."
+    # Its second row waits for the next sweep, like an unreachable host's.
+    assert sorted(r.attempts for r in bad) == [0, 1]
+
+
+def test_a_backslash_url_saved_before_the_check_is_never_posted(env):
+    url, audit, _ = env
+    endpoint(url, target="https://10.0.0.1\\@example.com/")
+    emit(url)
+    post = FakePost()
+    deliver.due(NOW, post=post, audit=audit, url=url)
+    assert post.calls == []
+    assert rows(url)[0].attempts == 1
