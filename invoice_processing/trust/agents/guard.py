@@ -8,7 +8,8 @@ body explains it. Nothing here writes the governed table, so a refusal
 leaves it untouched.
 
 A failure is a 503 in enforcing (the action was not taken) and a logged
-no-op otherwise (B8).
+no-op otherwise (B8). A mode that cannot be read is a logged no-op: the
+route then meets the same database failure it always did.
 """
 
 from __future__ import annotations
@@ -45,9 +46,10 @@ def check(principal, action, *, settings_store=None, now=None, store=None):
     try:
         mode = modes.engine_mode(principal.tenant_id, ENGINE, settings_store)
     except Exception as exc:
-        # The mode is unknown, so it may be enforcing: fail closed.
+        # The settings live in the database the write is about to use: let
+        # the route meet that failure as it always has.
         _log(exc)
-        raise HTTPException(503, UNAVAILABLE) from None
+        return None
     if mode == "off":
         return None
     try:

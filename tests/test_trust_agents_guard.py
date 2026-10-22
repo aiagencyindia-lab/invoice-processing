@@ -475,15 +475,21 @@ def test_a_guard_failure_proceeds_below_enforcing(env, monkeypatch, caplog):
     assert TENANT not in rec.getMessage() and not hasattr(rec, "agent_id")
 
 
-def test_an_unreadable_mode_fails_closed(env, monkeypatch):
+def test_an_unreadable_mode_leaves_the_route_to_fail_as_it_did(env, caplog):
+    """The settings and the governed write share one database: when the mode
+    cannot be read, the route's own failure is the answer, unchanged."""
+
     class Down:
         def get(self, tenant_id):
             raise RuntimeError("down")
 
+    def build():
+        raise AssertionError("built an action without knowing the mode")
+
     principal = Principal("u-1", "a@x.test", TENANT, "approver")
-    with pytest.raises(guard.HTTPException) as e:
-        guard.check(principal, lambda: None, settings_store=Down())
-    assert e.value.status_code == 503
+    with caplog.at_level(logging.WARNING):
+        assert guard.check(principal, build, settings_store=Down()) is None
+    assert [r.msg for r in caplog.records] == ["agent_guard_failed"]
 
 
 # -- caps are hard limits (B17) ----------------------------------------------

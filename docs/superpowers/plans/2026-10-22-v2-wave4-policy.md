@@ -22,7 +22,7 @@
 ## Rulings (this branch's; ledgered in the main checkout)
 
 - R1 `check(principal, action, ...)` takes an `Action`, or a zero-arg callable returning an `Action` or a list of them (the `replace_vendors` case). A builder runs only when the mode is not `off`, so engine-off call sites read nothing extra. A list returns a list of decisions.
-- R2 A failure reading the mode is treated like any guard failure in enforcing: 503 (the mode cannot be known; fail closed). A read that succeeds and says `off` returns before anything else runs.
+- R2 A failure reading the mode is logged and the guard returns None: the settings and the governed write share one database, so the route meets that failure as it always did (an earlier 503 here changed 29 existing tests' answers).
 - R3 Spend windows run from the period start to the period end (not to `now`): a concurrent approval recorded a moment "after" this guard's `now` still counts. With no `per_period`, `per_vendor`/`per_category` use the calendar month.
 - R4 An approve with caps set and no readable amount is BLOCK `AGENT-OVER-LIMIT` ("amount unknown").
 - R5 `initiated_by` for `act`/`export` = the uploader (`approval_flow.uploader_of`) only. An email-sourced document stores the `.eml` key, not a sender, and the inbound-email actor is never a registered agent.
