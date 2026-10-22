@@ -611,3 +611,22 @@ def test_blank_owners_are_not_the_same_owner(store):
     ledger(store, maker, action="vendor.create")
     payer = {**payer, "owner": ""}
     assert run(store, behaviour.circular, approve(), payer) is None
+
+
+def test_detectors_load_whichever_agents_module_is_imported_first():
+    import subprocess  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    for first in ("record", "behaviour", "policy"):
+        done = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                f"import invoice_processing.trust.agents.{first}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+        )
+        assert done.returncode == 0, done.stderr[-500:]

@@ -15,7 +15,9 @@ from decimal import Decimal, InvalidOperation
 
 from ..decide import Question, decide
 from . import injection as inj
-from .policy import Reason
+
+# The module, not `Reason`: `policy` imports this file before defining it.
+from . import policy
 
 logger = logging.getLogger(__name__)
 # The store's windows are [since, until); a row stamped at the action's own
@@ -43,7 +45,7 @@ def circular(action, agent, mandate, store, settings, now, decider):
                 if c["id"] == agent["id"]
                 else f"{c['name']}, an agent of the same owner,"
             )
-            return Reason(
+            return policy.Reason(
                 "circular",
                 "AGENT-CIRCULAR",
                 "REVIEW",
@@ -103,7 +105,7 @@ def split(action, agent, mandate, store, settings, now, decider):
         or total <= line
     ):
         return None
-    return Reason(
+    return policy.Reason(
         "split",
         "AGENT-SPLIT",
         "REVIEW",
@@ -124,7 +126,7 @@ def velocity(action, agent, mandate, store, settings, now, decider):
     )
     if n < settings["agents.velocity_max"]:
         return None
-    return Reason(
+    return policy.Reason(
         "velocity",
         "AGENT-VELOCITY",
         "REVIEW",
@@ -162,7 +164,7 @@ def injection(action, agent, mandate, store, settings, now, decider):
     (answer,) = decide({"excerpts": quoted}, [QUESTION], decider)
     if answer.value is not True:
         return None
-    return Reason(
+    return policy.Reason(
         "injection",
         "AGENT-INJECTION",
         "REVIEW",
