@@ -53,10 +53,11 @@ def _explain_module():
 
 
 def _measure_modules() -> dict:
-    """benchmark/history/{reality,score}.py, each once its Wave 3 branch has
-    landed: `measure(...)` returns its measures and a `gates` dict."""
+    """benchmark/history/{reality,score,agents}.py, each once its branch has
+    landed: `measure(...)` returns its measures and a `gates` dict (agents is
+    Wave 4's simulated fleet, AC-28)."""
     found = {}
-    for name in ("reality", "score"):
+    for name in ("reality", "score", "agents"):
         try:
             found[name] = importlib.import_module(f"{__package__}.{name}")
         except ImportError:

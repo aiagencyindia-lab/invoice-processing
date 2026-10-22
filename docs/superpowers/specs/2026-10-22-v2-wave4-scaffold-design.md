@@ -13,7 +13,8 @@ Migration `b2c3d4e5f6a7_trust_wave4.py` (revises `a1b2c3d4e5f6`; own `RLS_TABLES
 - `trust/types.py`: the nine `AGENT-*` codes (engine `agents`, `hold=False`, dimension `authorization`), descriptions as in the program plan.
 - `trust/modes.py`: `ENGINES += ("agents",)`; `BLOCKING_ENGINES = frozenset({"agents"})`; `HOLD_ENGINES` unchanged. `set_engine_mode` works unchanged (it reconciles holds only for hold engines; `agents` has none).
 - `trust/score/readiness.py`: an engine in `BLOCKING_ENGINES` is not insight-only; its advisory→enforcing recommendation reason reads "Enforcing refuses blocked agent actions."
-- `trust/audit/report.py PREVENTION`: an `agents` row (enforcing, the nine codes).
+- `trust/audit/report.py PREVENTION`: no agents row — Trust Audit reports are customer-facing and the engine is dark (changed while building).
+- `trust/score/dimensions.py FEEDS` leaves out `BLOCKING_ENGINES`: authorization is measured from approvals whether or not agent control runs (changed while building; without it authorization read as unmeasured while the engine is off).
 - `trust/webhooks/__init__.py EVENTS += ("agent.action.blocked",)`; payload `{agent_id, agent_name, owner, action, subject_ref, decision, reasons, explanation, action_id, finding_id}` (no amounts beyond the action's own, no bank numbers).
 - `trust/thresholds.py DEFAULTS`: `agents.velocity_window_minutes 10`, `agents.velocity_max 20`, `agents.split_window_days 7`, `agents.split_min_count 2`, `agents.injection_min_hits 1`.
 - Frontend: `ENGINE_LABELS.agents = "Agent control"`; `/trust-engines` lists an engine only if its mode is not `off` or its readiness row has any findings (U6). No other UI.
@@ -35,7 +36,7 @@ Migration `b2c3d4e5f6a7_trust_wave4.py` (revises `a1b2c3d4e5f6`; own `RLS_TABLES
 ## S5 Routes, benchmark, isolation
 
 - `api/trust_agent_routes.py`: twelve handlers (names and paths as the program plan's branch A table) each raising `HTTPException(503, "Agent control is not built yet.")`; mounted in `service.py`; `service.get_agent_store()` lazy accessor beside `get_hold_store`.
-- `benchmark/history/eval.py`: optional `simulate(ctx, graph, findings, url, data_dir) -> dict` per fault module, called after engines run; `gates` merged into the run's gates, the rest stored under the family name. Absent → nothing changes.
+- `benchmark/history/eval.py`: `_measure_modules()` also looks for `benchmark/history/agents.py` (the Wave 3 `measure` plug-in). Absent → nothing changes.
 - `tests/test_tenant_isolation_api.py`: the twelve paths join a stub-probe set asserting 503 for both tenants (the Wave 3 hand-over mechanism, deleted at Wave 3 close in 5da399c — restore it from 4f836b3: a path leaves the stub set once `tests.test_trust_agent_routes.PROBED` lists it); `EXTRA_PROBE_MODULES += ("tests.test_trust_agent_routes",)`.
 - `explain/templates/agents.py` empty module, imported from `templates/__init__.py`; the explain coverage test skips `AGENT-*` until branch C fills them (marked, removed at wave close).
 

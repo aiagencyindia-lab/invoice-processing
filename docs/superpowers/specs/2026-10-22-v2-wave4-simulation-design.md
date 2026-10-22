@@ -2,11 +2,11 @@
 
 **Program plan:** `docs/superpowers/plans/2026-10-22-v2-wave4-program.md`, branch D. AC-28, PRD §9. Decision U7; calls B10, B12. Merged last.
 
-**Owns:** `benchmark/history/faults/agents.py`, `api/v2_routes.py` (agents routes), `docs/API_V2.md` (agents section), `tests/test_trust_agents_sim.py`, `tests/test_trust_api_routes.py` (`PROBED` += the four paths), its plan doc.
+**Owns:** `benchmark/history/agents.py`, `api/v2_routes.py` (agents routes), `docs/API_V2.md` (agents section), `tests/test_trust_agents_sim.py`, `tests/test_trust_api_routes.py` (`PROBED` += the four paths), its plan doc.
 
-## Fleet (`faults/agents.py`)
+## Fleet (`benchmark/history/agents.py`)
 
-`inject` no-op (the fleet acts on the base history's vendors and invoices); `GATES = {}`; `simulate(ctx, graph, findings, url, data_dir) -> dict`:
+A `measure(tenant_id, graph, findings, manifest, url) -> dict` module, picked up by `eval._measure_modules()` (the Wave 3 plug-in) after the engines ran; it acts on the base history's vendors and invoices:
 - Registers on the bench tenant: two admins (`admin-a`, `admin-b` emails), three compliant agents (owners distinct) and five rogue agents, each with a mandate proposed by `admin-a` and approved by `admin-b` (one rogue's mandate left `proposed`, one expired). `TRUST_MANDATE_KEY` set for the run.
 - Drives scripted `Action`s through `policy.evaluate_action` + `record(source="inline")` in timestamp order (no HTTP, no guard — the decision is what AC-28 measures).
 - **Compliant set** (≥ 40 actions): in-scope approvals under every cap, exports of approved invoices, human-created vendors, bank changes proposed by agents and decided by people.
@@ -32,6 +32,6 @@ Import + call + return, as the Wave 3 façade. The two registry POSTs need a hum
 
 ## Tests
 
-`simulate` on SQLite meets all four gates and reports counts per violation kind; a broken rule (monkeypatched to return `None`) fails the structural gate (the harness can fail); `/v2` parity with `/api` for the same principal; probes with bearer and foreign key; `eval --seed 7` output contains the four gates.
+`measure` on SQLite meets all four gates and reports counts per violation kind; a broken rule (monkeypatched to return `None`) fails the structural gate (the harness can fail); `/v2` parity with `/api` for the same principal; probes with bearer and foreign key; `eval --seed 7` output contains the four gates.
 
 **Done:** ruff; suite both dialects; `python -m benchmark.history.eval --seed 7` all gates green including the four `agents_*`.
