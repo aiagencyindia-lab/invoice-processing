@@ -462,6 +462,7 @@ def test_a_guard_failure_is_a_503_in_enforcing(env, monkeypatch):
     r = act(env, "approver:bot")
     assert r.status_code == 503 and "not taken" in r.json()["detail"]
     assert decided(env) is None
+    assert ledger(env) == []
 
 
 def test_a_guard_failure_proceeds_below_enforcing(env, monkeypatch, caplog):
@@ -562,3 +563,66 @@ def test_advisory_patch_and_proposal_write_and_are_ledgered(env):
         "vendor.patch",
     ]
     assert len(env["rows"](models.TrustFinding)) == 2
+
+
+# -- the fix pass (fable review) --------------------------------------------
+
+
+def test_the_invoice_currency_is_ledgered_normalised(env):
+    ctx = RunContext(tenant_id=TENANT, case_id=CASE, run_id="", actor="a")
+    artifacts = {
+        "extraction": {
+            "invoice": {"currency": " aud ", "invoice_total_inc_tax": "10"}
+        }
+    }
+    action = guard.invoice_action(ctx, artifacts, "invoice.approve")
+    assert action.currency == "AUD" and action.amount == Decimal("10")
+
+
+def test_a_vendor_load_looks_the_agent_up_once(env, monkeypatch):
+    env["settings"].mode = "advisory"
+    calls = []
+    real = AgentStore.by_principal
+
+    def counting(self, *a, **k):
+        calls.append(1)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(AgentStore, "by_principal", counting)
+    vendors = [
+        {"name": f"Vendor {n}", "tax_id": f"29AAAAA000{n}A1Z5"}
+        for n in range(3)
+    ]
+    r = env["client"]("admin").put("/api/vendors", json={"vendors": vendors})
+    assert r.status_code == 200 and len(calls) == 1
+
+
+def test_advisory_vendor_load_decision_and_export_write_and_are_ledgered(env):
+    env["settings"].mode = "advisory"
+    agent(env, "admin:loader", mandate=False)
+    r = env["client"]("admin:loader").put(
+        "/api/vendors", json={"vendors": [VENDOR]}
+    )
+    assert r.status_code == 200 and len(env["vendors"].list(TENANT)) == 1
+    vendor_id = env["vendors"].list(TENANT)[0]["id"]
+    proposed = env["client"]("clerk:person").post(
+        f"/api/vendors/{vendor_id}/bank-changes", json=BANK
+    )
+    agent(env, "approver:decider", mandate=False)
+    r = env["client"]("approver:decider").post(
+        f"/api/vendors/bank-changes/{proposed.json()['id']}/decide",
+        json={"action": "approve"},
+    )
+    assert r.status_code == 200
+    (change,) = env["rows"](models.VendorBankChange)
+    assert change.status == "approved"
+    assert act(env, "approver:person").status_code == 200
+    agent(env, "approver:exporter", mandate=False)
+    assert export(env, "approver:exporter").status_code == 200
+    assert "invoice_exported" in env["events"]()
+    assert sorted(r.action for r in ledger(env)) == [
+        "bank_change.decide",
+        "invoice.export",
+        "vendor.create",
+    ]
+    assert len(env["rows"](models.TrustFinding)) == 3

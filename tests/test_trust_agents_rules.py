@@ -70,7 +70,7 @@ def approve(**kw):
             "kind": "invoice.approve",
             "subject_table": "invoices",
             "subject_ref": "invoices:case_001",
-            "vendor_key": "acme supplies",
+            "vendor_key": "ACME SUPPLIES",
             "category": "service",
             "amount": Decimal("100.00"),
             "currency": "INR",
@@ -85,7 +85,7 @@ def ledger(env, agent=None, **cols):
         "action": "invoice.approve",
         "subject_table": "invoices",
         "subject_ref": "invoices:old",
-        "vendor_key": "acme supplies",
+        "vendor_key": "ACME SUPPLIES",
         "category": "service",
         "amount": Decimal("100.00"),
         "currency": "INR",
@@ -164,7 +164,7 @@ def test_an_action_outside_the_scope_blocks(env):
 def test_a_counterparty_outside_the_list_blocks(env):
     m = mandate({"counterparties": ["acme supplies"]})
     assert run(rules.in_scope, env, approve(), m) is None
-    r = run(rules.in_scope, env, approve(vendor_key="rogue ltd"), m)
+    r = run(rules.in_scope, env, approve(vendor_key="ROGUE"), m)
     assert r.type == "AGENT-OUT-OF-MANDATE"
 
 
@@ -404,3 +404,59 @@ def test_policy_imports_first_without_a_cycle():
         [sys.executable, "-c", code], capture_output=True, check=False
     )
     assert done.returncode == 0, done.stderr.decode()[-500:]
+
+
+# -- the fix pass (fable review) --------------------------------------------
+
+
+def test_counterparties_are_compared_normalised(env):
+    m = mandate({"counterparties": ["Acme Supplies"]})
+    assert run(rules.in_scope, env, approve(), m) is None
+
+
+def test_a_padded_currency_matches(env):
+    assert run(rules.currency, env, approve(currency=" inr ")) is None
+
+
+def test_a_negative_amount_cannot_lower_spend(env):
+    r = run(
+        rules.over_limit,
+        env,
+        approve(amount=Decimal("-900")),
+        mandate(per_action="1000"),
+    )
+    assert r.type == "AGENT-OVER-LIMIT" and "negative" in r.message
+
+
+def test_vendor_and_category_caps_need_a_known_key(env):
+    r = run(
+        rules.over_limit,
+        env,
+        approve(vendor_key=None),
+        mandate(per_vendor="500"),
+    )
+    assert r is not None and "vendor" in r.message
+    m = mandate(per_category={"service": "500"})
+    r = run(rules.over_limit, env, approve(category=None), m)
+    assert r is not None and "category" in r.message
+
+
+def test_a_naive_log_time_is_read_as_utc(env, monkeypatch):
+    monkeypatch.setenv("TZ", "Asia/Kolkata")
+    import time  # noqa: PLC0415
+
+    time.tzset()
+    try:
+        # 03:00 on the 21st read as Kolkata time is the 20th in UTC; read
+        # as UTC (as the ledger does) it is the 21st, with the row below.
+        ledger(
+            env,
+            amount=Decimal("100"),
+            occurred_at=datetime(2026, 10, 21, 1, tzinfo=UTC),
+        )
+        m = mandate(per_period={"period": "day", "amount": "150"})
+        late = approve(occurred_at=datetime(2026, 10, 21, 3))
+        assert run(rules.over_limit, env, late, m) is not None
+    finally:
+        monkeypatch.delenv("TZ")
+        time.tzset()

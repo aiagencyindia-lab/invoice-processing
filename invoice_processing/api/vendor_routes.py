@@ -202,6 +202,8 @@ def replace_vendors(
 
         def creates() -> list[Action]:
             # Keeping a vendor that already exists is not a create.
+            # ponytail: repo.list reads each vendor's pending change; a
+            # names-only query if loads reach the thousands with the engine on.
             known = {
                 po_matching.normalize_vendor(v["name"])
                 for v in repo.list(principal.tenant_id)

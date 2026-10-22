@@ -83,8 +83,15 @@ def _check(principal, action, *, mode, settings_store, now, store):
         return None  # no table: nothing can be registered
     built = action() if callable(action) else action
     many = isinstance(built, list)
+    # Once per request, however many actions it carries.
+    agent = (
+        store.by_principal(principal.tenant_id, principal.user_id)
+        if principal.user_id
+        else None
+    )
     out = [
         _one(
+            agent,
             principal,
             a,
             mode=mode,
@@ -97,13 +104,8 @@ def _check(principal, action, *, mode, settings_store, now, store):
     return out if many else out[0]
 
 
-def _one(principal, action: Action, *, mode, settings_store, now, store):
+def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
     tenant = principal.tenant_id
-    agent = (
-        store.by_principal(tenant, principal.user_id)
-        if principal.user_id
-        else None
-    )
     if agent is None:
         if action.kind in CHAIN:
             return _owner_check(
@@ -240,7 +242,8 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
         amount=None
         if kind == "invoice.reject"
         else _amount(invoice.get("invoice_total_inc_tax")),
-        currency=invoice.get("currency"),
+        # As the mandate names it: spend sums match the currency exactly.
+        currency=str(invoice.get("currency") or "").strip().upper() or None,
         transaction_node=service._trust_node(t, ctx.case_id),
         initiated_by=approval_flow.uploader_of(ctx, service.get_documents()),
         prior_deciders=tuple(

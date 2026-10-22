@@ -12,6 +12,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from ... import po_matching
+
 # Module, not name: policy imports this module before it defines Reason.
 from . import policy
 
@@ -27,6 +29,10 @@ def _block(rule: str, type_: str, message: str) -> policy.Reason:
     return policy.Reason(rule, type_, "BLOCK", message)
 
 
+def _code(currency) -> str:
+    return str(currency or "").strip().upper()
+
+
 def _scope(mandate) -> dict:
     return (mandate or {}).get("scope") or {}
 
@@ -35,8 +41,8 @@ def currency(action, agent, mandate, store, settings, now, decider):
     """A mandate names one currency (U10); no FX."""
     if action.kind != "invoice.approve" or mandate is None:
         return None
-    want = str(_scope(mandate).get("currency") or "").upper()
-    got = str(action.currency or "").upper()
+    want = _code(_scope(mandate).get("currency"))
+    got = _code(action.currency)
     if got == want:
         return None
     return _block(
@@ -75,7 +81,10 @@ def in_scope(action, agent, mandate, store, settings, now, decider):
         )
     parties = scope.get("counterparties")
     if parties is not None and action.vendor_key is not None:
-        if action.vendor_key not in parties:
+        # The same key `vendors.normalized_name` holds, whatever was stored.
+        if action.vendor_key not in {
+            po_matching.normalize_vendor(str(p)) for p in parties
+        }:
             return _block(
                 "in_scope",
                 "AGENT-OUT-OF-MANDATE",
@@ -127,7 +136,8 @@ def same_owner_chain(action, agent, mandate, store, settings, now, decider):
 def _period(at: datetime, period: str) -> tuple[datetime, datetime]:
     """The UTC calendar day or month around `at`. To the period's end, not to
     `at`: an approval recorded a moment later still counts (B17)."""
-    at = at.astimezone(UTC)
+    # A naive time is UTC, as the ledger stores it, never the host's zone.
+    at = at.replace(tzinfo=UTC) if at.tzinfo is None else at.astimezone(UTC)
     if period == "day":
         start = at.replace(hour=0, minute=0, second=0, microsecond=0)
         return start, start + timedelta(days=1)
@@ -160,13 +170,21 @@ def over_limit(action, agent, mandate, store, settings, now, decider):
             "unknown.",
         )
     amount = Decimal(amount)
+    if amount < 0:
+        # A credit would lower what the agent has spent.
+        return _block(
+            "over_limit",
+            "AGENT-OVER-LIMIT",
+            f"{agent['name']} has spend caps and this invoice's amount is "
+            "negative.",
+        )
     if caps.get("per_action") is not None:
         if amount > Decimal(str(caps["per_action"])):
             return over("per-action")
     per_period = caps.get("per_period") or {}
     name = per_period.get("period") or "month"
     since, until = _period(action.occurred_at or now, name)
-    cur = str(_scope(mandate).get("currency") or "").upper()
+    cur = _code(_scope(mandate).get("currency"))
 
     def spent(**by) -> Decimal:
         return store.spent(
@@ -181,13 +199,17 @@ def over_limit(action, agent, mandate, store, settings, now, decider):
     if per_period.get("amount") is not None:
         if spent() + amount > Decimal(str(per_period["amount"])):
             return over(f"per-{name}")
-    if caps.get("per_vendor") is not None and action.vendor_key:
+    if caps.get("per_vendor") is not None:
+        if not action.vendor_key:
+            return over("per-vendor (the vendor is unknown)")
         if spent(vendor_key=action.vendor_key) + amount > Decimal(
             str(caps["per_vendor"])
         ):
             return over("per-vendor")
     per_category = caps.get("per_category") or {}
-    if action.category and per_category.get(action.category) is not None:
+    if per_category and not action.category:
+        return over("per-category (the category is unknown)")
+    if per_category.get(action.category) is not None:
         if spent(category=action.category) + amount > Decimal(
             str(per_category[action.category])
         ):
