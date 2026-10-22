@@ -27,7 +27,9 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The suite runs twice here (Tests, then inside the acceptance sweep):
+    # ~25 min on a normal runner, so 30 left no room for a slow one.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
