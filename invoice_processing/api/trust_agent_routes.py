@@ -385,7 +385,7 @@ def revoke_mandate(
 ):
     before = _mandate(principal, agent_id, mandate_id)
     ctx = principal.context()
-    row = _store().revoke_mandate(ctx, mandate_id, body.reason)
+    row = mandates.revoke(ctx, _store(), mandate_id, body.reason)
     if before["status"] != "revoked":
         _audit().emit(
             ctx,

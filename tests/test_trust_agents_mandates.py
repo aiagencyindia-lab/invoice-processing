@@ -248,3 +248,100 @@ def test_in_force_picks_the_version_that_held_at_a_time(env):
     assert mandates.in_force(rows, NOW + timedelta(days=20))["id"] == v2["id"]
     assert mandates.in_force(rows, NOW - timedelta(days=1)) is None
     assert mandates.in_force(rows, NOW + timedelta(days=31)) is None
+
+
+# -- the signature covers the mandate's state (2026-10-23) ---------------------
+
+
+def test_a_superseded_version_is_resealed_and_still_verifies(env):
+    store, agent_id, _ = env
+    mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    v1, v2 = store.mandates(T, agent_id)
+    assert v1["status"] == "revoked" and v1["reason"] == "superseded"
+    assert mandates.verify(v1, None) and mandates.verify(v2, v1)
+
+
+@pytest.mark.parametrize(
+    "cols",
+    [
+        {"status": "active"},
+        {"status": "active", "revoked_at": None, "revoked_by": None},
+        {"revoked_at": NOW},
+    ],
+)
+def test_editing_a_revoked_mandates_state_breaks_verification(env, cols):
+    store, agent_id, url = env
+    m = mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    mandates.revoke(ADMIN_A, store, m["id"], "no longer needed")
+    [row] = store.mandates(T, agent_id)
+    assert row["status"] == "revoked" and mandates.verify(row, None)
+    edit(url, m["id"], **cols)
+    [row] = store.mandates(T, agent_id)
+    assert not mandates.verify(row, None)
+
+
+def test_un_revoking_an_active_mandate_by_status_alone_fails(env):
+    store, agent_id, url = env
+    m = mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    edit(url, m["id"], status="revoked")
+    [row] = store.mandates(T, agent_id)
+    assert not mandates.verify(row, None)
+
+
+def test_a_proposed_row_flipped_to_active_without_a_signature_fails(env):
+    store, agent_id, url = env
+    m = propose(store, agent_id)
+    edit(url, m["id"], status="active")
+    [row] = store.mandates(T, agent_id)
+    assert not mandates.verify(row, None)
+
+
+def test_revoking_the_agent_reseals_each_mandate_it_closed(env):
+    from invoice_processing.trust.agents import registry  # noqa: PLC0415
+
+    class Audit:
+        def emit(self, *a, **k):
+            pass
+
+    store, agent_id, _ = env
+    mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    propose(store, agent_id)  # a pending v2, closed too
+    registry.revoke(ADMIN_A, agent_id, "retired", store=store, audit=Audit())
+    v1, v2 = store.mandates(T, agent_id)
+    assert v1["status"] == v2["status"] == "revoked"
+    assert mandates.verify(v1, None) and mandates.verify(v2, v1)
+
+
+def test_a_reseal_never_touches_a_row_the_call_did_not_change(env):
+    store, agent_id, url = env
+    v1 = mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    edit(url, v1["id"], valid_to=NOW + timedelta(days=90))  # tampered
+    v2 = propose(store, agent_id)
+    # Approving v2 supersedes v1 and reseals v1's *state*; the tampered
+    # content still fails its digest, so nothing blessed it.
+    mandates.approve(ADMIN_B, store, v2["id"])
+    v1_row, _ = store.mandates(T, agent_id)
+    assert not mandates.verify(v1_row, None)
+
+
+def test_revoking_without_the_key_still_revokes(env, monkeypatch):
+    store, agent_id, _ = env
+    m = mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    monkeypatch.delenv("TRUST_MANDATE_KEY")
+    out = mandates.revoke(ADMIN_A, store, m["id"], "key rotated away")
+    assert out["status"] == "revoked"
+    [row] = store.mandates(T, agent_id)
+    assert row["status"] == "revoked" and row["signature"] is None
+
+
+def test_revoking_an_already_revoked_mandate_reseals_nothing(env):
+    """A repeat revoke changes nothing, so it must not sign whatever the
+    database now holds (fable review): a tampered revoked_at stays caught."""
+    store, agent_id, url = env
+    m = mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    mandates.revoke(ADMIN_A, store, m["id"], "first")
+    edit(url, m["id"], revoked_at=NOW + timedelta(days=400))
+    mandates.revoke(ADMIN_A, store, m["id"], "again")
+    [row] = store.mandates(T, agent_id)
+    assert not mandates.verify(row, None)

@@ -196,12 +196,26 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         blocks, ~1 s. A 27-step live smoke passed (2026-10-22).
   - [x] A new API key may not take a registered agent's name (its derived
         email would act as the agent); refused in `apikeys.create`.
-  - [ ] Mandate signatures are checked when read (`verified`) but not
-        enforced: the guard authorises any `active` mandate in its window,
-        so an unsigned one (crash between approve and sign) or one revived
-        by a database edit still authorises. The signature covers neither
-        `status` nor `revoked_*`. Enforce `verify()` in `mandate_active`
-        (tests then need a real `TRUST_MANDATE_KEY`).
+  - [x] Mandate signatures are enforced (2026-10-23): `mandate_active`
+        blocks an agent whose mandate in force does not verify (unsigned,
+        changed after signing, or `TRUST_MANDATE_KEY` unset) or was replaced
+        by a later version by the action's time; the signature now covers
+        the state (`status`, `revoked_*`) and every approve, supersede and
+        revoke reseals the rows it changed.
+  - [ ] Signatures made before 2026-10-23 sign the digest alone and no
+        longer verify: re-approve (propose + approve a new version) any
+        mandate approved earlier. No database holds one yet (the Wave 4
+        tables were never deployed; production is on the v1 schema).
+  - [ ] Approve and revoke seal in a second session after the state change
+        commits. A revoke of the very version being approved, landing
+        between the two, can leave it revoked with an "active" seal: it then
+        never verifies (fails closed, silently). Lock the row while sealing
+        if this ever matters.
+  - [ ] Replaying an entire earlier mandate row (signature included) from a
+        backup is undetectable from inside the database when no later
+        version exists (e.g. un-revoking an agent's only mandate together
+        with the agent row). Needs an anchor outside the database (e.g. the
+        audit trail shipped off-box, or a signed revocation list).
   - [ ] Spend counts decisions: an approve retried on an invoice that then
         answers 409 ("already decided") still adds to the cap; an
         `executed_at` stamp set after the write would count executions only.

@@ -211,6 +211,7 @@ class AgentStore:
 
     def revoke(self, ctx, agent_id: str, reason: str) -> dict | None:
         now = _now()
+        closed: list[str] = []
         with tenant_session(ctx.tenant_id, self.url) as s:
             row = self._agent(s, ctx.tenant_id, agent_id)
             if row is None:
@@ -227,7 +228,9 @@ class AgentStore:
                 )
             ):
                 self._revoke(m, ctx, "agent revoked", now)
-        return self._renode(ctx, agent_id)
+                closed.append(m.id)
+        # The caller reseals exactly these rows (`mandates.reseal`).
+        return {**self._renode(ctx, agent_id), "revoked_mandates": closed}
 
     # -- mandates ----------------------------------------------------------
 
@@ -300,6 +303,7 @@ class AgentStore:
                 raise SelfApproval(
                     "A mandate needs a second person to approve it."
                 )
+            superseded: list[str] = []
             for prior in s.scalars(
                 select(AgentMandate).where(
                     AgentMandate.tenant_id == ctx.tenant_id,
@@ -308,22 +312,26 @@ class AgentStore:
                 )
             ):
                 self._revoke(prior, ctx, "superseded", now)
+                superseded.append(prior.id)
             row.status = "active"
             row.approved_by = _fold(ctx.actor)
             row.approved_at = now
             s.flush()
             row.digest = digest(_dict(row))
             row.signature = signature
-            return _dict(row)
+            # The caller reseals these too (`mandates.reseal`).
+            return {**_dict(row), "superseded": superseded}
 
     def revoke_mandate(self, ctx, mandate_id: str, reason: str) -> dict | None:
         with tenant_session(ctx.tenant_id, self.url) as s:
             row = s.get(AgentMandate, mandate_id)
             if row is None or row.tenant_id != ctx.tenant_id:
                 return None
-            if row.status != "revoked":
+            changed = row.status != "revoked"
+            if changed:
                 self._revoke(row, ctx, reason, _now())
-            return _dict(row)
+            # The caller reseals only a row this call changed.
+            return {**_dict(row), "changed": changed}
 
     def mandates(self, tenant_id: str, agent_id: str) -> list[dict]:
         with tenant_session(tenant_id, self.url) as s:
