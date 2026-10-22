@@ -242,6 +242,7 @@ _supporting_documents = None
 _graph_store = None
 _finding_store = None
 _hold_store = None
+_agent_store = None
 _history_importer = None
 _rules = None
 _tenant_settings = None
@@ -585,6 +586,21 @@ def get_hold_store():
 
         _hold_store = holds
     return _hold_store
+
+
+def get_agent_store():
+    """Agent control's registry and decision ledger. `None` without the
+    table."""
+    global _agent_store
+    if (
+        _agent_store is None
+        and _database_configured()
+        and _table_exists("agents", "Agent control", raise_on_error=True)
+    ):
+        from ..trust.agents.store import AgentStore  # noqa: PLC0415
+
+        _agent_store = AgentStore(graph=get_graph_store())
+    return _agent_store
 
 
 def get_finding_store():
@@ -2178,6 +2194,7 @@ from .sheet import router as sheet_router  # noqa: E402
 from .signup import router as signup_router  # noqa: E402
 from .supporting_routes import router as supporting_router  # noqa: E402
 from .system import router as system_router  # noqa: E402
+from .trust_agent_routes import router as trust_agent_router  # noqa: E402
 from .trust_audit_routes import router as trust_audit_router  # noqa: E402
 from .trust_explain_routes import router as trust_explain_router  # noqa: E402
 from .trust_provenance_routes import (  # noqa: E402
@@ -2207,6 +2224,7 @@ app.include_router(trust_explain_router)
 app.include_router(trust_score_router)
 app.include_router(trust_reality_router)
 app.include_router(trust_provenance_router)
+app.include_router(trust_agent_router)
 app.include_router(integration_router)
 app.include_router(v2_router)
 app.include_router(supporting_router)
