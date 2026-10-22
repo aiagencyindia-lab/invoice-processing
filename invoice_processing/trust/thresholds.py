@@ -42,6 +42,12 @@ DEFAULTS: dict[str, float] = {
     "reality.price_jump_zscore": 3.0,
     "reality.volume_zscore": 3.0,
     "reality.min_history": 5,
+    # Agent control (FR-28.4): behavioural detection windows
+    "agents.velocity_window_minutes": 10,
+    "agents.velocity_max": 20,
+    "agents.split_window_days": 7,
+    "agents.split_min_count": 2,
+    "agents.injection_min_hits": 1,
     # Provenance v2 (FR-22)
     "provenance.edits_suspect": 2,
     # Mode progression: what the readiness report asks before recommending

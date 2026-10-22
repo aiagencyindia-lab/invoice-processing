@@ -622,6 +622,7 @@ def test_lifted_settings_raise_requested_off_engines_to_advisory_only():
         "provenance": "advisory",
         "gst_itc": "off",  # not requested: does not run in this batch
         "reality": "off",
+        "agents": "off",
     }
     assert out["other"] == 1
     assert batch.lifted(inner, []).get(T)["trust_engine_modes"] == {
@@ -630,6 +631,7 @@ def test_lifted_settings_raise_requested_off_engines_to_advisory_only():
         "provenance": "advisory",
         "gst_itc": "shadow",
         "reality": "advisory",
+        "agents": "advisory",  # runs no per-invoice check: harmless
     }
 
 

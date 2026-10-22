@@ -542,6 +542,7 @@ def test_the_score_is_computed_after_the_engines_ran(env, monkeypatch):
             "provenance": "off",
             "gst_itc": "off",
             "reality": "off",
+            "agents": "off",
         }
     ]
 

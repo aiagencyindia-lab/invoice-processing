@@ -31,7 +31,9 @@ export default function TrustEnginesPage() {
         <div className="empty-state">Loading…</div>
       ) : (
         <ReadinessTable
-          engines={data.engines}
+          // Agent control ships dark: while off and empty it stays out of the
+          // list (an admin can still set its mode through the API).
+          engines={data.engines.filter((e) => e.engine !== "agents" || e.mode !== "off" || e.findings > 0)}
           onChanged={(message) => {
             setNotice(message);
             reload();

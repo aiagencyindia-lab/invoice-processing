@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-ENGINES = ("leakage", "payment", "provenance", "gst_itc", "reality")
+ENGINES = ("leakage", "payment", "provenance", "gst_itc", "reality", "agents")
 # Only `enforcing` places holds; the rest observe (spec §3.1.5).
 MODES = ("off", "shadow", "advisory", "enforcing")
 # Engines that can hold payment: they fail closed even when their package
 # never imported far enough to register its hold types.
 HOLD_ENGINES = frozenset({"payment", "provenance", "gst_itc", "reality"})
+# Engines that never hold but, enforcing, refuse an action outright (agent
+# control refuses a blocked agent action with a 403).
+BLOCKING_ENGINES = frozenset({"agents"})
 CAPABILITIES = (
     "bank_verification",
     "gstin",

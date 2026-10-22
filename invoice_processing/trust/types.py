@@ -243,4 +243,60 @@ TABLE: dict[str, Type] = {
         "reality",
         "Billed for a period the organisation was shut down",
     ),
+    # Wave 4: agent control. Never a payment hold: enforcing refuses the
+    # agent's action instead (program plan U3).
+    "AGENT-OUT-OF-MANDATE": _t(
+        "agents",
+        False,
+        "authorization",
+        "An agent acted without an active mandate covering the action",
+    ),
+    "AGENT-SELF-APPROVAL": _t(
+        "agents",
+        False,
+        "authorization",
+        "An agent decided something it initiated",
+    ),
+    "AGENT-SAME-OWNER-CHAIN": _t(
+        "agents",
+        False,
+        "authorization",
+        "One owner's agents (or the owner and their agent) form an approval chain",
+    ),
+    "AGENT-OVER-LIMIT": _t(
+        "agents",
+        False,
+        "authorization",
+        "An agent action exceeds its mandate's spend cap",
+    ),
+    "AGENT-UNVERIFIED-VENDOR": _t(
+        "agents",
+        False,
+        "authorization",
+        "An agent paid or approved toward an agent-created vendor no person verified",
+    ),
+    "AGENT-CIRCULAR": _t(
+        "agents",
+        False,
+        "authorization",
+        "An agent approves an invoice to a vendor its owner's agents created",
+    ),
+    "AGENT-SPLIT": _t(
+        "agents",
+        False,
+        "authorization",
+        "An agent split one purchase into approvals each under its cap",
+    ),
+    "AGENT-VELOCITY": _t(
+        "agents",
+        False,
+        "authorization",
+        "An agent acted unusually fast",
+    ),
+    "AGENT-INJECTION": _t(
+        "agents",
+        False,
+        "authorization",
+        "A document an agent acted on carries instructions aimed at agents",
+    ),
 }

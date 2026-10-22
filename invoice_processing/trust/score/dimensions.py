@@ -14,12 +14,19 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from ..findings import model as finding_model
+from ..modes import BLOCKING_ENGINES
 from ..types import DIMENSIONS, TABLE
 
 # The engines whose findings speak to each dimension: with all of them off
-# and nothing found, the dimension is unmeasured, not clean.
+# and nothing found, the dimension is unmeasured, not clean. Agent control
+# is left out: authorization is measured from approvals whether or not it
+# runs, and its findings still show as drivers.
 FEEDS: dict[str, frozenset[str]] = {
-    d: frozenset(t.engine for t in TABLE.values() if t.dimension == d)
+    d: frozenset(
+        t.engine
+        for t in TABLE.values()
+        if t.dimension == d and t.engine not in BLOCKING_ENGINES
+    )
     for d in DIMENSIONS
 }
 INSIGHT_SEVERITY = 0.4

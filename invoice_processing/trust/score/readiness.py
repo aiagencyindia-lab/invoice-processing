@@ -23,7 +23,10 @@ TRIAGED_BY_PEOPLE = frozenset({"accepted", "rejected"})
 
 
 def insight_only(engine: str) -> bool:
-    """An engine that never holds payment: enforcing changes nothing."""
+    """An engine that never holds payment nor refuses anything: enforcing
+    changes nothing."""
+    if engine in modes_mod.BLOCKING_ENGINES:
+        return False
     return engine not in modes_mod.HOLD_ENGINES and not any(
         t.engine == engine and t.hold for t in TABLE.values()
     )
