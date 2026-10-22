@@ -60,6 +60,33 @@ def test_an_admin_key_is_refused(env):
         apikeys.create(ADMIN, "  ", "viewer", audit=audit, url=url)
 
 
+def test_a_new_key_cannot_take_a_registered_agents_name(env):
+    """Agent control knows a key by `{name}@api-key.{tenant}`; a second key
+    with that name would write as the registered agent (Wave 4 audit)."""
+    url, audit, _ = env
+    with tenant_session(ACME, url) as s:
+        s.add(
+            models.Agent(
+                tenant_id=ACME,
+                name="bot",
+                owner="ops@acme.test",
+                principal_id="api-key:k1",
+                principal_email=f"bot@api-key.{ACME}",
+                kind="api_key",
+            )
+        )
+    with pytest.raises(ValueError, match="agent"):
+        apikeys.create(ADMIN, "BOT", "approver", audit=audit, url=url)
+    # Another tenant's agent does not reserve the name here.
+    apikeys.create(
+        RunContext(tenant_id=GLOBEX, case_id="", run_id="", actor="g@x.test"),
+        "bot",
+        "approver",
+        audit=audit,
+        url=url,
+    )
+
+
 def test_resolve_returns_the_keys_principal_and_stamps_use(env):
     url, audit, _ = env
     row, key = apikeys.create(ADMIN, "erp", "approver", audit=audit, url=url)

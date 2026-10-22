@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..db.models import ApiKey, Tenant
+from ..db.models import Agent, ApiKey, Tenant
 from ..db.session import get_engine, tenant_session
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,19 @@ def create(
         raise ValueError(f"role must be one of {', '.join(ROLES)}.")
     prefix, secret = _prefix(), secrets.token_urlsafe(32)
     with tenant_session(ctx.tenant_id, url) as s:
+        # Agent control knows a key by `{name}@api-key.{tenant}`: a new key
+        # with a registered agent's name would act as that agent.
+        email = f"{name}@api-key.{ctx.tenant_id}".casefold()
+        if s.scalars(
+            select(Agent.id).where(
+                Agent.tenant_id == ctx.tenant_id,
+                Agent.principal_email == email,
+                Agent.status == "active",
+            )
+        ).first():
+            raise ValueError(
+                "An active agent already uses this key name; pick another."
+            )
         key = ApiKey(
             tenant_id=ctx.tenant_id,
             name=name,

@@ -180,27 +180,60 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         and idempotency keys on `/v2`; `/v2/agents*` (Wave 4).
   - [ ] Partner gates: AC-23 reviewer agreement on reality checks, ≥ 70 %
         of findings before payment, cost per transaction ≤ ₹6.
-- [ ] **Wave 4 (Agent control plane, built dark)** — program plan
+- [x] **Wave 4 (Agent control plane, built dark)** — program plan
       `docs/superpowers/plans/2026-10-22-v2-wave4-program.md`, specs
-      `docs/superpowers/specs/2026-10-22-v2-wave4-*-design.md`.
-  - [ ] Scaffold (`v2/w4-scaffold`): three tables, the `agents` engine and
-        nine `AGENT-*` types, `AgentStore`, the policy/record/guard seams,
-        twelve 503 route stubs with the probe hand-over, the benchmark slot.
-  - [ ] Registry, mandates, ledger, routes (`v2/w4-registry`) · [ ] Structural
-        rules + guard wiring (`v2/w4-policy`) · [ ] Behavioural detectors +
-        explanations (`v2/w4-behaviour`) · [ ] Simulated fleet, `/v2/agents*`,
-        docs (`v2/w4-simulation`).
-  - [ ] Wave close: delete `TestWave4StubsIsolation` and the explain
-        `WAVE4_PENDING` skips; tick here.
+      `docs/superpowers/specs/2026-10-22-v2-wave4-*-design.md`. Engine
+      `agents` is `off` by default; no screen.
+  - [x] Scaffold (#83) · [x] Registry, mandates, ledger, routes (#86) ·
+        [x] Behavioural detectors + explanations (#85) · [x] Structural
+        rules + guard wiring (#87) · [x] Simulated fleet, `/v2/agents*`,
+        docs (#90). Follow-ups: #84 (seam tests), #88 (CI test job 45 min),
+        #89 (e2e spec files run serially: they share one e2e database).
+  - [x] Wave close: `TestWave4StubsIsolation` removed (every agent route is
+        probed in `tests/test_trust_agent_routes.py`); the `WAVE4_PENDING`
+        explain skips went with the behaviour branch. AC-28 on `--seed 7`:
+        65/65 structural blocked, 20/20 behavioural flagged, 0/97 false
+        blocks, ~1 s. A 27-step live smoke passed (2026-10-22).
+  - [x] A new API key may not take a registered agent's name (its derived
+        email would act as the agent); refused in `apikeys.create`.
+  - [ ] Mandate signatures are checked when read (`verified`) but not
+        enforced: the guard authorises any `active` mandate in its window,
+        so an unsigned one (crash between approve and sign) or one revived
+        by a database edit still authorises. The signature covers neither
+        `status` nor `revoked_*`. Enforce `verify()` in `mandate_active`
+        (tests then need a real `TRUST_MANDATE_KEY`).
+  - [ ] Spend counts decisions: an approve retried on an invoice that then
+        answers 409 ("already decided") still adds to the cap; an
+        `executed_at` stamp set after the write would count executions only.
+        `exported` likewise sums a repeated export twice.
+  - [ ] Injection classification calls the model inside the request while
+        the agent row is locked; a slow model holds that agent's other
+        actions up to the call's timeout (PRD inline p95 ≤ 2 s). Move the
+        call out of the lock, or classify after the write as a review.
+  - [ ] Imported log rows are judged against the agent's status now, so
+        actions from before a revocation read "is revoked".
+  - [ ] `/actions/evaluate` and `/actions/import` record decisions and raise
+        `AGENT-*` findings while the engine is `off` (an admin must register
+        an agent and call them first).
+  - [ ] A person refused under U9 (their own agent already decided the
+        chain) is booked on the agent's ledger and `agent.action.blocked`
+        names the agent.
+  - [ ] A rule that raises in enforcing is a 403 BLOCK (`rule-failed`), not
+        B8's 503; it raises a finding and the webhook for an infrastructure
+        fault.
+  - [ ] `replace_vendors` reads each vendor once under the engine (N+1).
+  - [ ] FR-28.1 "our own agents register automatically" is moot: no
+        in-house agent performs a governed write today.
   - [ ] Deferred from Wave 4: an agents view / NAV / dashboard (release
         gate); live ERP-agent observers (SAP Joule, Oracle, Dynamics) beyond
         file import; external mandate-format adapters; notifications on
         blocks; governing PO creation and document upload; holds from
         log-based BLOCKs; mandate expiry sweep; `agent_actions` retention;
-        OCR text for injection scanning; an `executed_at` stamp (the ledger
-        counts decisions, not executions); vendor-name key collisions for
+        OCR text for injection scanning; vendor-name key collisions for
         counterparties; `record()` is ordered, not atomic (a crash can leave
         a decision without its finding).
+  - [ ] Partner gates (PRD §5): two design partners running agents in
+        production and one adopted external mandate standard before release.
 - [ ] `opentelemetry-api` 1.42.1 advisory (CVE-2026-114603 /
       GHSA-xcq7-p3pf-p88h) waived until **2026-12-12**: the fix (1.45.1) is
       blocked by google-adk's cap (≤ 1.42.1, still so in 2.12.0); the product
