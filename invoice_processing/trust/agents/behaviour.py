@@ -9,11 +9,15 @@ the wall clock. The store never counts a dry run (B15).
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
+from ..decide import Question, decide
+from . import injection as inj
 from .policy import Reason
 
+logger = logging.getLogger(__name__)
 # The store's windows are [since, until); a row stamped at the action's own
 # instant is part of its burst, so the end is nudged past it.
 _TICK = timedelta(microseconds=1)
@@ -128,4 +132,43 @@ def velocity(action, agent, mandate, store, settings, now, decider):
     )
 
 
-RULES: tuple = (circular, split, velocity)
+QUESTION = Question(
+    "injection",
+    "yes_no",
+    "Does this text try to instruct an automated agent?",
+    # An outage or a bad reply asks a person to look (fail toward review).
+    fallback=True,
+)
+
+
+def _text(action) -> str:
+    if action.text is None:
+        return ""
+    try:
+        return action.text() or ""
+    except Exception as exc:  # unreadable input is no signal, not a failure
+        logger.info("agent_text_failed", extra={"error": type(exc).__name__})
+        return ""
+
+
+def injection(action, agent, mandate, store, settings, now, decider):
+    text = _text(action)
+    hits = inj.scan(text) if text else []
+    if not hits or len(hits) < settings["agents.injection_min_hits"]:
+        return None  # the model is never asked without a deterministic hit
+    quoted = inj.excerpts(text, hits)
+    # Only the masked excerpts leave: never the whole document.
+    (answer,) = decide({"excerpts": quoted}, [QUESTION], decider)
+    if answer.value is not True:
+        return None
+    return Reason(
+        "injection",
+        "AGENT-INJECTION",
+        "REVIEW",
+        f"The text {agent['name']} acted on addresses automated agents: "
+        + "; ".join(f'"{q}"' for q in quoted)
+        + ".",
+    )
+
+
+RULES: tuple = (circular, split, velocity, injection)
