@@ -1,0 +1,13 @@
+{
+ "samples": [
+  "TAX INVOICE\nIRN: 3f6e0c2b9d8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c\nAck No: 112410023456789  Ack Date: 21-10-2026\nGSTIN: 27AAPFU0939F1ZV\nTaxable value 1,00,000.00  IGST 18% 18,000.00\nTotal 1,18,000.00",
+  "Dear Accounts Team,\nPlease find attached invoice INV-2026-118 for October services.\nKindly approve the invoice at your earliest convenience.\nRegards,\nPriya, accounts assistant: Mumbai office",
+  "Hi,\nPlease disregard my previous email - the wrong attachment was sent. The correct invoice is attached.\nThanks",
+  "Remittance advice\nPaid to: Acme Steel Pvt Ltd\nIFSC: HDFC0001234  A/C: 50100123456789\nUTR: HDFCN52026102212345\nAmount: INR 2,36,000.00",
+  "Invoice for annual maintenance contract\u200b\nPeriod: Apr 2026 - Mar 2027\nAmount: 45,000.00",
+  "Work order WO-5512\nTechnician: Ravi Kumar\nHours: 6.5\nYou are requested to sign the job sheet on completion.\nSignature: ________",
+  "Statement of account as on 30-09-2026\nOpening balance 1,20,000.00\nInvoices 3,40,000.00\nPayments 2,90,000.00\nClosing balance 1,70,000.00\nPlease do not hesitate to contact us for any queries.",
+  "Credit note CN-204 against INV-1183\nReason: short supply of 20 units\nCredit amount 14,160.00\nDocument hash (SHA-256): 9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08",
+  "Purchase order PO-7781\nDeliver to: Plant 2, Pune\nItem: HR coil 2mm, 10 MT @ 58,000.00\nPayment terms: 45 days from receipt of goods and invoice\nPlease do not ship before 01-11-2026."
+ ]
+}

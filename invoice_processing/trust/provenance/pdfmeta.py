@@ -131,6 +131,28 @@ def facts(data: bytes) -> dict | None:
     }
 
 
+def page_text(data: bytes, max_pages: int, max_chars: int) -> str:
+    """The text layer of the first `max_pages` pages, at most `max_chars`;
+    empty for anything that is not a readable PDF (no OCR)."""
+    if not data.startswith(b"%PDF") or len(data) > MAX_BYTES:
+        return ""
+    texts: list[str] = []
+    size = 0
+    try:
+        import pdfplumber  # noqa: PLC0415 - heavy; loaded on first use
+
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            for page in pdf.pages[:max_pages]:
+                texts.append(page.extract_text() or "")
+                size += len(texts[-1]) + 1
+                if size >= max_chars:
+                    break
+    except Exception as exc:  # pdfminer raises many types on a bad file
+        logger.info("pdf_text_unreadable", extra={"error": type(exc).__name__})
+        return ""
+    return "\n".join(texts)[:max_chars]
+
+
 def fingerprint(f: dict) -> str:
     """The template: rounded page sizes + sorted font set + producer."""
     key = json.dumps(
