@@ -6,7 +6,6 @@ one or point the tenant's events somewhere new.
 
 from __future__ import annotations
 
-import ipaddress
 import secrets
 from datetime import UTC, datetime
 from typing import Annotated
@@ -20,7 +19,7 @@ from ..db.models import WebhookEndpoint, WebhookOutbox
 from ..db.session import tenant_session
 from ..masking import mask_row
 from ..trust import apikeys
-from ..trust.webhooks import EVENTS
+from ..trust.webhooks import EVENTS, target
 from .auth import Principal, require_role
 
 router = APIRouter()
@@ -119,23 +118,6 @@ def _get(s, tenant_id: str, endpoint_id: str) -> WebhookEndpoint:
     return ep
 
 
-def _internal(host: str) -> bool:
-    """Loopback, private, link-local or reserved: the worker must not be
-    pointed into its own network.
-
-    ponytail: literal addresses and localhost names only; a public name that
-    resolves inward (or rebinds) still passes. Resolve and pin per delivery
-    if that matters.
-    """
-    if host == "localhost" or host.endswith(".localhost"):
-        return True
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return not ip.is_global
-
-
 class WebhookCreate(BaseModel):
     url: str = Field(max_length=1024)
     events: list[str] = Field(max_length=len(EVENTS))
@@ -165,7 +147,7 @@ def create_webhook(body: WebhookCreate, principal: Admin):
     parts = urlsplit(body.url.strip())
     if parts.scheme != "https" or not parts.hostname:
         raise HTTPException(400, "url must be an https:// address.")
-    if _internal(parts.hostname):
+    if target.refused(body.url.strip()):
         raise HTTPException(400, "url must be a public address.")
     events = _events(body.events)
     secret = f"whsec_{secrets.token_urlsafe(24)}"

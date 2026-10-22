@@ -30,6 +30,7 @@ from invoice_processing.trust.findings.model import Citation, FindingSpec
 from invoice_processing.trust.findings.store import FindingStore
 from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
+from invoice_processing.trust.webhooks import target
 from invoice_processing.worker.queue import LocalQueue
 
 PROBED = {
@@ -208,6 +209,8 @@ def _scorable(graph, findings, tid, tmp_path, url):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch, scratch_db):
+    # Test hosts resolve outward; no real DNS.
+    monkeypatch.setattr(target, "addresses", lambda host: ["93.184.216.34"])
     url = scratch_db("api_routes.db")
     fresh_schema(url)
     for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
@@ -841,3 +844,22 @@ def test_a_foreign_patch_changes_nothing(env):
     assert r.status_code == 404
     listed = bearer("acme:admin").get("/api/integrations/webhooks").json()
     assert all(e["description"] != "pwned" for e in listed["endpoints"])
+
+
+def test_a_name_resolving_inward_is_refused(env, monkeypatch):
+    monkeypatch.setattr(target, "addresses", lambda host: ["10.0.0.5"])
+    r = bearer("acme:admin").post(
+        "/api/integrations/webhooks",
+        json={"url": "https://inward.example/h", "events": ["*"]},
+    )
+    assert r.status_code == 400, r.text
+
+
+@pytest.mark.parametrize(
+    "u", ["https://10.0.0.1\\@erp.example/h", "https://u:p@erp.example/h"]
+)
+def test_an_ambiguous_or_credentialed_url_is_refused(env, u):
+    r = bearer("acme:admin").post(
+        "/api/integrations/webhooks", json={"url": u, "events": ["*"]}
+    )
+    assert r.status_code == 400, r.text

@@ -162,6 +162,17 @@ def test_a_rerun_with_the_same_inputs_keeps_the_node(env):
     assert old["id"] == first["id"]
 
 
+def test_score_as_of_looks_up_its_own_key_not_every_score(env, monkeypatch):
+    score.compute(ectx(env), {})
+    monkeypatch.setattr(
+        env["graph"], "nodes", lambda *a, **k: pytest.fail("scanned")
+    )
+    invoice = env["graph"].node(T, env["invoice"])
+    assert score.score_node(
+        env["graph"], T, invoice, as_of=AT + timedelta(minutes=1)
+    )
+
+
 def test_reality_and_authenticity_are_read_by_data_contract(env):
     g = env["graph"]
     rid = g.upsert_node(

@@ -294,6 +294,23 @@ def test_a_hold_no_longer_found_by_a_clean_run_is_released(env):
     assert f["status"] == "rejected"
 
 
+def test_a_clean_shadow_run_releases_a_hold_placed_while_enforcing(env):
+    """Policy (2026-10-22): mode decides whether a hold is placed, not what
+    the engine finds, so a clean run in any mode is a verdict and releases."""
+    url, _, _ = env
+    finding_model.register_type("T-HOLD8", "hold", engine="payment", hold=True)
+    state = {"emit": True}
+    ev.RUNNERS["payment"] = lambda ectx: (
+        [finding_for(ectx, "T-HOLD8")] if state["emit"] else []
+    )
+    run(env, modes={"payment": "enforcing"})
+    assert _held(url) == [("T-HOLD8", True)]
+    state["emit"] = False
+    run(env, modes={"payment": "shadow"})
+    assert FindingStore(url).list(T, type="T-HOLD8")[0]["status"] == "rejected"
+    assert _held(url) == [("T-HOLD8", False)]
+
+
 def test_a_human_decided_hold_is_not_released_by_the_engine(env):
     url, _, _ = env
     finding_model.register_type("T-HOLD4", "hold", engine="payment", hold=True)
