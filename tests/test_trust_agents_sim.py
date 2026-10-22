@@ -130,6 +130,44 @@ def test_a_dead_rule_fails_the_structural_gate(scratch_db, key, monkeypatch):
     assert out["gates"]["agents_structural_blocked"] is False
 
 
+def test_a_dead_per_action_cap_fails_the_structural_gate(
+    scratch_db, key, monkeypatch
+):
+    """Each cap is scripted alone: with the per-action check dead, no other
+    cap blocks the over-per-action approvals in its place."""
+    real = rules.over_limit
+
+    def no_per_action(action, agent, mandate, *rest):
+        if mandate is not None:
+            scope = dict(mandate["scope"])
+            scope["caps"] = {
+                k: v for k, v in scope["caps"].items() if k != "per_action"
+            }
+            mandate = {**mandate, "scope": scope}
+        return real(action, agent, mandate, *rest)
+
+    monkeypatch.setattr(
+        rules,
+        "RULES",
+        tuple(no_per_action if r is real else r for r in rules.RULES),
+    )
+    url = scratch_db("dead_cap.db")
+    graph, findings = _bench(url)
+    out = fleet.measure(TENANT, graph, findings, {}, url)
+    assert out["by_kind"]["over_per_action"]["caught"] == 0
+    assert out["gates"]["agents_structural_blocked"] is False
+
+
+def test_an_empty_key_is_left_as_it_was(scratch_db, monkeypatch):
+    import os  # noqa: PLC0415
+
+    monkeypatch.setenv("TRUST_MANDATE_KEY", "")
+    url = scratch_db("empty_key.db")
+    graph, findings = _bench(url)
+    fleet.measure(TENANT, graph, findings, {}, url)
+    assert os.environ["TRUST_MANDATE_KEY"] == ""
+
+
 def test_the_fleet_runs_with_a_bare_graph(scratch_db, key):
     """No vendors or invoices yet: synthetic names, no transaction nodes."""
     url = scratch_db("bare.db")

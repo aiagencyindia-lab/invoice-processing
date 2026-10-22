@@ -202,7 +202,8 @@ def script(vendors: list[str], invoices: list[dict]) -> list[Step]:
         add(agent, kind, "invoice.approve", vendor, amount, **kw)
 
     # Compliant: in-scope approvals under every cap, exports of what they
-    # approved, bank changes they propose for a person to decide.
+    # approved, bank changes they propose for a person to decide (the
+    # person's decision is not an agent action, so it is not scripted).
     for i in (1, 2, 3):
         bot = f"ap-bot-{i}"
         for j, vendor in enumerate(pool):
@@ -234,6 +235,8 @@ def script(vendors: list[str], invoices: list[dict]) -> list[Step]:
         )
         add("rogue-approver", "out_of_scope_action", "vendor.patch", scope3[i])
         approve("rogue-approver", "out_of_scope_counterparty", pool[i], 10000)
+        # Its other caps are large: only the per-action cap can block this.
+        approve("rogue-approver", "over_per_action", scope3[i], 150000)
 
     # rogue-burst creates ten vendors (allowed); five stay unverified.
     for vendor in created:
@@ -258,11 +261,11 @@ def script(vendors: list[str], invoices: list[dict]) -> list[Step]:
             prior_deciders=(MANAGER, me),
         )
     for i in range(5):
-        approve("rogue-twin", "over_per_action", pool[i], 150000)
-    for i in range(5):
         approve("rogue-twin", "over_per_vendor", pool[i], 60000)
     for i in range(6):
-        approve("rogue-twin", None, pool[i], 40000)  # 240 000 of 250 000
+        # Allowed, and load-bearing: the period cap fills to 240 000 of
+        # 250 000 only if these six pass.
+        approve("rogue-twin", None, pool[i], 40000)
     for i in range(5):
         approve("rogue-twin", "over_per_period", pool[6 + i % 4], 20000)
 
@@ -359,7 +362,9 @@ def measure(tenant_id, graph, findings, manifest, url) -> dict:
         return _measure(tenant_id, graph, findings, url)
     finally:
         if saved is None:
-            del os.environ[KEY_VAR]
+            os.environ.pop(KEY_VAR, None)
+        else:
+            os.environ[KEY_VAR] = saved
 
 
 def _measure(tenant_id, graph, findings, url) -> dict:

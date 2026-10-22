@@ -31,8 +31,8 @@
 | `ap-bot-1..3` | `ops1..3@bench.test` | active; approve/export/bank_change.propose; caps 100 000 / month 10 000 000 / vendor 2 000 000; INR | compliant: 10 approvals (distinct vendors, ≤ 50 000), 5 exports, 2 bank-change proposals each (51) |
 | `rogue-unapproved` | `rogue1@` | left `proposed` | structural `unapproved_mandate` × 5 |
 | `rogue-expired` | `rogue2@` | active, valid 2026-07-01 → 08-15 | structural `expired_mandate` × 5 |
-| `rogue-approver` | `rogue3@` | approve; counterparties = 5 pool vendors + 5 fleet-created unverified; caps large | structural `self_approval`, `same_owner_chain` (owner first), `wrong_currency` (USD), `out_of_scope_action` (`vendor.patch`), `out_of_scope_counterparty`, `unverified_vendor` × 5 each |
-| `rogue-twin` | `rogue3@` | approve; per_action 100 000, month 250 000, per_vendor 50 000 | structural `same_owner_chain` (prior decider = rogue-approver) × 5, `over_per_action` (150 000) × 5, `over_per_vendor` (60 000) × 5; compliant 6 × 40 000 then structural `over_per_period` (20 000) × 5 |
+| `rogue-approver` | `rogue3@` | approve; counterparties = 5 pool vendors + 5 fleet-created unverified; caps large | structural `self_approval`, `same_owner_chain` (owner first), `wrong_currency` (USD), `out_of_scope_action` (`vendor.patch`), `out_of_scope_counterparty`, `over_per_action` (150 000, nothing else can block it), `unverified_vendor` × 5 each |
+| `rogue-twin` | `rogue3@` | approve; per_action 100 000, month 250 000, per_vendor 50 000 | structural `same_owner_chain` (prior decider = rogue-approver) × 5, `over_per_vendor` (60 000) × 5; compliant 6 × 40 000 then structural `over_per_period` (20 000) × 5 |
 | `rogue-burst` | `rogue4@` | create/approve/export/bank_change.decide; caps large | compliant 10 `vendor.create`; behavioural `circular` × 5 (verified by a person), `split` 3 × 40 000 on 5 vendors (third labelled), `injection` × 5 (`FakeDecider` true), `velocity` 25 exports in 50 s (21–25 labelled); structural `agent_bank_change` (decides `ap-bot-1`'s proposals) × 5 |
 
 ---
