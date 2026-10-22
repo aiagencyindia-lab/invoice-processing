@@ -34,7 +34,7 @@ from invoice_processing.db.repositories import (
 )
 from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
-from invoice_processing.trust.agents import guard
+from invoice_processing.trust.agents import guard, mandates
 from invoice_processing.trust.agents.policy import Action
 from invoice_processing.trust.agents.store import AgentStore
 from invoice_processing.trust.findings.store import FindingStore
@@ -84,6 +84,7 @@ def env(tmp_path, monkeypatch, scratch_db):
         for email in ("a@x.test", "b@x.test"):
             s.add(models.User(tenant_id=TENANT, email=email, role="approver"))
     monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("TRUST_MANDATE_KEY", "guard-test-key")
     approvals = PgApprovalRepository(url)
     vendors = PgVendorRepository(url)
     graph = GraphStore(url)
@@ -169,7 +170,8 @@ def agent(
             valid_from=datetime.now(UTC) - timedelta(days=1),
             valid_to=datetime.now(UTC) + timedelta(days=30),
         )
-        env["store"].approve_mandate(ADMIN_B, m["id"], signature="sig")
+        # Really signed: the guard refuses a mandate that does not verify.
+        mandates.approve(ADMIN_B, env["store"], m["id"])
     return a
 
 

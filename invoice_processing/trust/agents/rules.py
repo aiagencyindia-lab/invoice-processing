@@ -66,6 +66,41 @@ def mandate_active(action, agent, mandate, store, settings, now, decider):
             "AGENT-OUT-OF-MANDATE",
             f"{agent['name']} has no active mandate.",
         )
+    return _sealed(action, agent, mandate, store, now)
+
+
+def _sealed(action, agent, mandate, store, now):
+    """The mandate in force must be the stored row as signed (content and
+    state) and must not have been replaced by then. The stored row is what is
+    checked: a logged action is handed the version then in force with its
+    status read as active."""
+    from . import mandates  # noqa: PLC0415 - mandates imports this package
+
+    rows = store.mandates(mandate["tenant_id"], agent["id"])
+    by_version = {m["version"]: m for m in rows}
+    stored = next((m for m in rows if m["id"] == mandate["id"]), None)
+    if stored is None or not mandates.verify(
+        stored, by_version.get(stored["version"] - 1)
+    ):
+        return _block(
+            "mandate_active",
+            "AGENT-OUT-OF-MANDATE",
+            f"{agent['name']}'s mandate does not verify: it is unsigned or "
+            "was changed after it was signed.",
+        )
+    at = action.occurred_at or now
+    if any(
+        m["version"] > stored["version"]
+        and m["approved_at"] is not None
+        and m["approved_at"] <= at
+        for m in rows
+    ):
+        return _block(
+            "mandate_active",
+            "AGENT-OUT-OF-MANDATE",
+            f"{agent['name']}'s mandate v{stored['version']} was replaced by "
+            "a later version.",
+        )
     return None
 
 
