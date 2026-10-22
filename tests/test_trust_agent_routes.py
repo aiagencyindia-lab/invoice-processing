@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +26,7 @@ from invoice_processing.ports import RunContext
 from invoice_processing.tenant_settings import JsonTenantSettings
 from invoice_processing.trust import apikeys
 from invoice_processing.trust.agents import rules
+from invoice_processing.trust.agents import store as store_mod
 from invoice_processing.trust.agents.policy import Reason
 from invoice_processing.trust.agents.store import AgentStore
 from invoice_processing.trust.findings.store import FindingStore
@@ -154,6 +156,19 @@ def mandated(slug, key_id=None, **kw):
     agent = register(slug, key_id, **kw)
     m = propose(slug, agent["id"])
     r = approve(slug, agent["id"], m["id"])
+    assert r.status_code == 200, r.text
+    return agent, r.json()
+
+
+def mandated_earlier(slug, key_id=None, **kw):
+    """A mandate valid and approved since well before NOW. A logged action is
+    judged by the mandate in force when it happened (B15), and these tests
+    log as far back as 2026-09-30, before a mandate approved on the real
+    clock or valid from NOW - 21 days."""
+    agent = register(slug, key_id, **kw)
+    m = propose(slug, agent["id"], start=NOW - timedelta(days=40))
+    with patch.object(store_mod, "_now", lambda: NOW - timedelta(days=35)):
+        r = approve(slug, agent["id"], m["id"])
     assert r.status_code == 200, r.text
     return agent, r.json()
 
@@ -580,7 +595,7 @@ def test_an_agent_key_may_evaluate_only_itself(env):
 
 
 def test_the_ledger_sums_by_vendor_category_and_period(env):
-    agent, m = mandated("acme")
+    agent, m = mandated_earlier("acme")
     client = bearer("acme:approver")
     for body in (
         {"vendor": "Acme Steel", "category": "goods", "amount": "30000"},
@@ -612,7 +627,9 @@ def test_the_ledger_sums_by_vendor_category_and_period(env):
     assert inr["approved"] == "50000.5" and inr["exported"] == "30000"
     assert inr["by_vendor"] == {"ACME STEEL": "30000", "BETA": "20000.5"}
     assert inr["by_category"] == {"goods": "30000", "services": "20000.5"}
-    assert led["spend"]["USD"]["approved"] == "10"
+    # U10: a mandate names one currency, so the USD approve under this INR
+    # mandate was BLOCKed and spent nothing. It shows as an exception.
+    assert "USD" not in led["spend"]
     assert led["period"] == {
         "period": "month",
         "currency": "INR",
@@ -623,7 +640,8 @@ def test_the_ledger_sums_by_vendor_category_and_period(env):
         "until": "2026-11-01T00:00:00+00:00",
     }
     assert len(led["actions"]) == 5  # the dryrun too, labelled
-    assert led["exceptions"] == []
+    (usd,) = led["exceptions"]
+    assert usd["currency"] == "USD" and usd["decision"] == "BLOCK"
     wide = client.get(
         f"/api/trust/agents/{agent['id']}/ledger?since=2026-09-01T00:00:00Z"
     ).json()
@@ -636,7 +654,7 @@ def test_the_ledger_sums_by_vendor_category_and_period(env):
 
 
 def test_the_tenant_ledger_groups_by_owner(env, monkeypatch):
-    a, _ = mandated("acme")
+    a, _ = mandated_earlier("acme")
     b = register("acme", name="b", owner="finance@acme.test")
     client = bearer("acme:approver")
     evaluate(client, a["id"], vendor="V", amount="100", currency="INR")
@@ -667,7 +685,7 @@ def upload(client, text, name="log.csv"):
 
 def test_import_evaluates_each_row_and_reports_bad_ones(env):
     key = env["acme"]["keys"]["bot"]
-    agent, _ = mandated("acme", key["id"])
+    agent, _ = mandated_earlier("acme", key["id"])
     register("acme", name="twin")
     register("acme", name="twin")
     at = "2026-10-21T10:00:00Z"
@@ -914,7 +932,7 @@ def test_import_reads_xlsx(env):
 
     import openpyxl  # noqa: PLC0415
 
-    register("acme")
+    mandated_earlier("acme")
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.append(CSV_HEAD.strip().split(","))
