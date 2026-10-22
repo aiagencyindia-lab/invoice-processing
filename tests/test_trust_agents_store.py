@@ -288,3 +288,12 @@ def test_a_non_utc_validity_keeps_its_digest_after_a_reload(env):
     )
     (reloaded,) = store.mandates(T, a["id"])
     assert store_mod.digest(reloaded) == m["digest"] == reloaded["digest"]
+
+
+def test_revoke_reports_whether_it_changed_the_mandate(env):
+    store, _, _ = env
+    a = agent(store)
+    m = active(store, a["id"])
+    first = store.revoke_mandate(ADMIN_A, m["id"], "done")
+    again = store.revoke_mandate(ADMIN_A, m["id"], "done")
+    assert first["changed"] is True and again["changed"] is False

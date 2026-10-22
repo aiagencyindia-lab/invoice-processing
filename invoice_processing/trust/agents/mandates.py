@@ -214,7 +214,8 @@ def revoke(ctx, store, mandate_id: str, reason: str) -> dict | None:
     row = store.revoke_mandate(ctx, mandate_id, reason)
     if row is None:
         return None
-    reseal(ctx, store, [mandate_id])
+    if row["changed"]:  # a repeat revoke must not sign what the DB now holds
+        reseal(ctx, store, [mandate_id])
     return next(
         m
         for m in store.mandates(ctx.tenant_id, row["agent_id"])

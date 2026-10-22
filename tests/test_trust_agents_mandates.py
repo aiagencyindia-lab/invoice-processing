@@ -333,3 +333,15 @@ def test_revoking_without_the_key_still_revokes(env, monkeypatch):
     assert out["status"] == "revoked"
     [row] = store.mandates(T, agent_id)
     assert row["status"] == "revoked" and row["signature"] is None
+
+
+def test_revoking_an_already_revoked_mandate_reseals_nothing(env):
+    """A repeat revoke changes nothing, so it must not sign whatever the
+    database now holds (fable review): a tampered revoked_at stays caught."""
+    store, agent_id, url = env
+    m = mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    mandates.revoke(ADMIN_A, store, m["id"], "first")
+    edit(url, m["id"], revoked_at=NOW + timedelta(days=400))
+    mandates.revoke(ADMIN_A, store, m["id"], "again")
+    [row] = store.mandates(T, agent_id)
+    assert not mandates.verify(row, None)

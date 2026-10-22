@@ -202,6 +202,15 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         by a later version by the action's time; the signature now covers
         the state (`status`, `revoked_*`) and every approve, supersede and
         revoke reseals the rows it changed.
+  - [ ] Signatures made before 2026-10-23 sign the digest alone and no
+        longer verify: re-approve (propose + approve a new version) any
+        mandate approved earlier. No database holds one yet (the Wave 4
+        tables were never deployed; production is on the v1 schema).
+  - [ ] Approve and revoke seal in a second session after the state change
+        commits. A revoke of the very version being approved, landing
+        between the two, can leave it revoked with an "active" seal: it then
+        never verifies (fails closed, silently). Lock the row while sealing
+        if this ever matters.
   - [ ] Replaying an entire earlier mandate row (signature included) from a
         backup is undetectable from inside the database when no later
         version exists (e.g. un-revoking an agent's only mandate together

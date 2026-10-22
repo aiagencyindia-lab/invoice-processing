@@ -327,9 +327,11 @@ class AgentStore:
             row = s.get(AgentMandate, mandate_id)
             if row is None or row.tenant_id != ctx.tenant_id:
                 return None
-            if row.status != "revoked":
+            changed = row.status != "revoked"
+            if changed:
                 self._revoke(row, ctx, reason, _now())
-            return _dict(row)
+            # The caller reseals only a row this call changed.
+            return {**_dict(row), "changed": changed}
 
     def mandates(self, tenant_id: str, agent_id: str) -> list[dict]:
         with tenant_session(tenant_id, self.url) as s:
