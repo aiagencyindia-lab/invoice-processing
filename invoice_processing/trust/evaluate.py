@@ -142,7 +142,8 @@ def _release_cleared(ectx: EngineContext, name: str, emitted: set) -> None:
     insights priced from them, e.g. ITC at risk), and its engine-failed hold.
     A finding a person has decided is theirs and is left alone; one they
     sent for vendor evidence is still open, so the evidence clearing it
-    releases it the same way (else the hold outlives its proof)."""
+    releases it the same way (else the hold outlives its proof). Any mode
+    releases: mode decides whether a hold is placed, not what is found."""
     node = ectx.invoice_node
     if node is None:
         return

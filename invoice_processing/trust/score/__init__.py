@@ -36,14 +36,7 @@ def score_node(
     graph, tenant_id: str, invoice: dict, as_of: datetime | None = None
 ) -> dict | None:
     key = score_key(invoice["natural_key"])
-    if as_of is None:
-        return graph.open_node(tenant_id, KIND, key)
-    # ponytail: reads every score node valid then; a natural-key filter in
-    # GraphStore if a tenant passes ~50k invoices.
-    for n in graph.nodes(tenant_id, kind=KIND, as_of=as_of):
-        if n["natural_key"] == key:
-            return n
-    return None
+    return graph.open_node(tenant_id, KIND, key, as_of=as_of)
 
 
 def _amount(value) -> Decimal | None:
