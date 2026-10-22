@@ -179,3 +179,14 @@ def test_the_fleet_signs_its_mandates_without_a_configured_key(
         assert (rows[0]["signature"] is None) == (
             a["name"] == "rogue-unapproved"
         )
+
+
+def test_the_fleet_model_answers_the_injection_question_yes():
+    """A real answer, not the outage fallback: the bench measures detection
+    when the model agrees, as the spec scripts it."""
+    from invoice_processing.trust.agents import behaviour  # noqa: PLC0415
+    from invoice_processing.trust.decide import decide  # noqa: PLC0415
+
+    (answer,) = decide({"excerpts": ["x"]}, [behaviour.QUESTION], fleet.DECIDER)
+    assert answer.value is True
+    assert answer.fallback is False
