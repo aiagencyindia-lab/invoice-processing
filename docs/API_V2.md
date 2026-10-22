@@ -1,6 +1,6 @@
 # Ledgerly `/v2` API
 
-The `/v2` API exposes the trust layer to other systems: findings, explanations, lineage, scores, decisions and trust audits. Each `/v2` route returns exactly what its `/api` twin returns for the same caller. The routes below are the contract.
+The `/v2` API exposes the trust layer to other systems: findings, explanations, lineage, scores, decisions, trust audits and agent control. Each `/v2` route returns exactly what its `/api` twin returns for the same caller. The routes below are the contract.
 
 ## Authentication
 
@@ -42,6 +42,54 @@ A transaction id is the invoice's evidence-graph node id. It is the `transaction
 | POST | `/v2/trust-audits` | approver | `POST /api/trust/audits` |
 | POST | `/v2/trust-audits/{audit_id}/runs` | approver | `POST /api/trust/audits/{audit_id}/runs` |
 | GET | `/v2/trust-audits/{audit_id}/report` | viewer | `GET /api/trust/audits/{audit_id}/report` (`?format=json\|html`) |
+| POST | `/v2/agents` | admin (a signed-in person; a key gets 403) | `POST /api/trust/agents` |
+| POST | `/v2/agents/{agent_id}/mandates` | admin (a signed-in person; a key gets 403) | `POST /api/trust/agents/{agent_id}/mandates` |
+| POST | `/v2/agents/{agent_id}/actions/evaluate` | approver, or the agent's own key about itself | `POST /api/trust/agents/{agent_id}/actions/evaluate` |
+| GET | `/v2/agents/{agent_id}/ledger` | approver | `GET /api/trust/agents/{agent_id}/ledger` (`?since=&until=`) |
+
+## Agents
+
+Agent control is **off** unless an admin turns the `agents` engine on (`shadow`, `advisory` or `enforcing`). While it is off, nothing below changes what any write does.
+
+An **agent** is a machine actor an admin registered: `{name, owner, description?, principal}`. `owner` is the email of the person answerable for it. `principal` binds it to who it acts as: `{"api_key_id": "…"}` (one of the tenant's live keys), `{"user_id", "email"}` (a service account), or `null` (an outside agent known only from imported logs). One principal belongs to at most one agent (409).
+
+A **mandate** is what a person authorised the agent to do:
+
+```json
+{
+  "scope": {
+    "actions": ["invoice.approve", "invoice.export"],
+    "counterparties": ["Acme Steel"],
+    "caps": {
+      "per_action": "50000",
+      "per_period": {"period": "month", "amount": "100000"},
+      "per_vendor": "60000",
+      "per_category": {"raw_material": "80000"}
+    },
+    "currency": "INR"
+  },
+  "valid_from": "2026-10-01T00:00:00Z",
+  "valid_to": "2026-12-31T00:00:00Z"
+}
+```
+
+`actions` is a subset of `vendor.create`, `vendor.patch`, `bank_change.propose`, `bank_change.decide`, `invoice.approve`, `invoice.reject`, `invoice.export`. `counterparties` is a list of vendor names, or `null` for any vendor. Amounts are strings in the mandate's one currency. A mandate runs at most 366 days. One admin proposes it; a **different** admin approves it on `/api` (`POST /api/trust/agents/{agent_id}/mandates/{mandate_id}/approve`), and only then is it signed and in force. Until then every action of the agent is blocked.
+
+`actions/evaluate` asks about one action, `{action, subject_ref, vendor?, category?, amount?, currency?, occurred_at?, source}`:
+
+- `source: "dryrun"` asks "would this be allowed?". The answer is recorded but never counts toward a cap, never raises a finding and never refuses anything.
+- `source: "log"` records an action the agent already took elsewhere (`occurred_at` required; approver only). It counts and raises a finding like any other.
+
+The answer is `{action_id, decision, reasons: [{rule, type, severity, message}], explanation, mode, source}`, where `decision` is:
+
+| Decision | Means |
+|---|---|
+| `ALLOW` | Inside the mandate, nothing unusual. |
+| `ALLOW-WITH-REVIEW` | Allowed, with a finding for a person to look at: a circular vendor, a split approval, unusual velocity, or instruction-like text in the document. |
+| `BLOCK` | Outside what was authorised: no mandate, out of scope, over a cap, deciding something it (or its owner) started, or an unverified agent-created vendor. On Ledgerly's own write routes, with the engine `enforcing`, the write is refused with 403 and nothing is written. |
+
+The ledger answers `{agent, mandate, since, until, spend, period, actions, exceptions}`: what the agent approved and exported, against its caps, and every non-`ALLOW` decision in the window (default: this month).
+
 
 ## Webhooks
 
@@ -65,6 +113,7 @@ Lists answer as `{"keys": […]}`, `{"endpoints": […]}` and `{"deliveries": [�
 | `finding.decided` | A finding is accepted, rejected, sent for vendor input, claimed, recovered, prevented or written off. | The finding, without citation excerpts. |
 | `hold.placed` | An enforcing engine holds a payment. | `{finding_id, type, engine, transaction_node, summary, impact, currency}` |
 | `hold.lifted` | A held finding is rejected, or its engine leaves `enforcing`. | The `hold.placed` fields, plus `lifted_by` and `reason`. |
+| `agent.action.blocked` | An enforcing guard refused an agent's write. | `{agent_id, agent_name, owner, action, subject_ref, decision, reasons, explanation, action_id, finding_id}` |
 | `ping` | You pressed **Test**. | `{}` |
 
 Every delivery is a `POST` of a JSON body `{"event", "tenant", "occurred_at", "data"}` with these headers:

@@ -7,7 +7,7 @@ a bearer and with the other tenant's API key.
 
 import hashlib
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 from benchmark.history.faults.provenance import make_pdf
 from invoice_processing.adapters import JsonlAuditSink, LocalBlobStore
-from invoice_processing.api import auth, service
+from invoice_processing.api import auth, service, trust_agent_routes
 from invoice_processing.api.service import app
 from invoice_processing.db import models
 from invoice_processing.db.repositories import PgDocumentRepository
@@ -25,6 +25,8 @@ from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.tenant_settings import JsonTenantSettings
 from invoice_processing.trust import apikeys, score
+from invoice_processing.trust.agents import mandates
+from invoice_processing.trust.agents.store import AgentStore
 from invoice_processing.trust.engine import EngineContext
 from invoice_processing.trust.findings.model import Citation, FindingSpec
 from invoice_processing.trust.findings.store import FindingStore
@@ -51,10 +53,22 @@ PROBED = {
     "/v2/trust-audits",
     "/v2/trust-audits/{audit_id}/runs",
     "/v2/trust-audits/{audit_id}/report",
+    "/v2/agents",
+    "/v2/agents/{agent_id}/mandates",
+    "/v2/agents/{agent_id}/actions/evaluate",
+    "/v2/agents/{agent_id}/ledger",
 }
+# Registry changes are a human admin's, as on /api/trust/agents.
+ADMIN_ONLY = {"/v2/agents", "/v2/agents/{agent_id}/mandates"}
 
 ACME, GLOBEX = "tenant-acme", "tenant-globex"
 AT = datetime(2026, 10, 1, tzinfo=UTC)
+NOW = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
+SCOPE = {
+    "actions": ["invoice.approve", "invoice.export"],
+    "caps": {"per_action": "50000"},
+    "currency": "INR",
+}
 ROLES = ("viewer", "clerk", "approver", "admin")
 
 
@@ -228,6 +242,10 @@ def env(tmp_path, monkeypatch, scratch_db):
         service, "get_blobs", lambda tenant_id: LocalBlobStore(tmp_path / "b")
     )
     monkeypatch.setattr(service, "_audit", audit)
+    agents = AgentStore(url, graph=graph)
+    monkeypatch.setattr(service, "_agent_store", agents)
+    monkeypatch.setattr(trust_agent_routes, "_now", lambda: NOW)
+    monkeypatch.setenv("TRUST_MANDATE_KEY", "test-mandate-key")
     queue = LocalQueue(tmp_path / "queue")
     monkeypatch.setattr(service, "get_queue", lambda: queue)
     monkeypatch.setenv("DATABASE_URL", url)
@@ -249,6 +267,7 @@ def env(tmp_path, monkeypatch, scratch_db):
             row, key = apikeys.create(ctx, f"{role}-key", role, url=url)
             data["keys"][role] = key
             data["key_id"] = row["id"]
+        data["agent"] = _mandated(agents, tid, slug, data["key_id"])
         with tenant_session(tid, url) as s:
             ep = models.WebhookEndpoint(
                 tenant_id=tid,
@@ -266,6 +285,39 @@ def env(tmp_path, monkeypatch, scratch_db):
         data["audit"] = r.json()["id"]
         out[slug] = data
     return out
+
+
+def _mandated(agents, tid, slug, key_id):
+    """An agent bound to the tenant's approver key, under a mandate one
+    admin proposed and another approved."""
+    ctx = lambda who: RunContext(  # noqa: E731
+        tenant_id=tid, case_id="", run_id="r", actor=f"{who}@{slug}.test"
+    )
+    agent = agents.register(
+        ctx("admin"),
+        name="payables-bot",
+        owner=f"ops@{slug}.test",
+        kind="api_key",
+        principal_id=f"api-key:{key_id}",
+        principal_email=f"approver-key@api-key.{tid}",
+    )
+    m = agents.propose_mandate(
+        ctx("admin"),
+        agent["id"],
+        scope=SCOPE,
+        valid_from=NOW - timedelta(days=21),
+        valid_to=NOW + timedelta(days=40),
+    )
+    mandates.approve(ctx("controller"), agents, m["id"])
+    return agent["id"]
+
+
+def _mandate_body():
+    return {
+        "scope": SCOPE,
+        "valid_from": (NOW - timedelta(days=1)).isoformat(),
+        "valid_to": (NOW + timedelta(days=30)).isoformat(),
+    }
 
 
 def bearer(token):
@@ -389,6 +441,114 @@ def test_trust_audit_writes_match_their_api_routes(env):
     # A viewer key cannot open an engagement.
     v = keyed(d["keys"]["viewer"]).post("/v2/trust-audits", json={"name": "x"})
     assert v.status_code == 403
+
+
+# -- agents --------------------------------------------------------------------
+
+
+def _without(body, *keys):
+    return {k: v for k, v in body.items() if k not in keys}
+
+
+def test_agent_registry_writes_match_their_api_routes(env):
+    admin = bearer("acme:admin")
+    made = []
+    for path, name in (
+        ("/v2/agents", "v2-bot"),
+        ("/api/trust/agents", "api-bot"),
+    ):
+        r = admin.post(path, json={"name": name, "owner": "ops@acme.test"})
+        assert r.status_code == 201, r.text
+        made.append(r.json())
+    assert _without(made[0], "id", "name", "graph_node") == _without(
+        made[1], "id", "name", "graph_node"
+    )
+    proposed = []
+    for prefix, agent in zip(
+        ("/v2/agents", "/api/trust/agents"), made, strict=True
+    ):
+        r = admin.post(f"{prefix}/{agent['id']}/mandates", json=_mandate_body())
+        assert r.status_code == 201, r.text
+        proposed.append(r.json())
+    same = (
+        "version",
+        "status",
+        "scope",
+        "valid_from",
+        "valid_to",
+        "proposed_by",
+    )
+    assert [{k: m[k] for k in same} for m in proposed] == [
+        {k: proposed[1][k] for k in same}
+    ] * 2
+    for path in ("/v2/agents", "/api/trust/agents"):
+        bad = admin.post(path, json={"name": "x", "owner": "not-an-email"})
+        assert bad.status_code == 400
+    bad = [
+        admin.post(f"{p}/{made[0]['id']}/mandates", json={"scope": {}})
+        for p in ("/v2/agents", "/api/trust/agents")
+    ]
+    assert bad[0].status_code == bad[1].status_code == 422
+
+
+def test_agent_evaluate_and_ledger_match_their_api_routes(env):
+    d = env["acme"]
+    client = keyed(d["keys"]["approver"])
+    body = {
+        "action": "invoice.approve",
+        "subject_ref": "INV-1041",
+        "vendor": "Acme Steel",
+        "amount": "1200.00",
+        "currency": "INR",
+        "source": "dryrun",
+    }
+    agent = d["agent"]
+    answers = [
+        client.post(f"{p}/{agent}/actions/evaluate", json=body)
+        for p in ("/v2/agents", "/api/trust/agents")
+    ]
+    assert [a.status_code for a in answers] == [200, 200], answers[0].text
+    assert _without(answers[0].json(), "action_id") == _without(
+        answers[1].json(), "action_id"
+    )
+    a, b = (
+        client.get(f"{p}/{agent}/ledger")
+        for p in ("/v2/agents", "/api/trust/agents")
+    )
+    assert a.status_code == 200, a.text
+    assert a.json() == b.json()
+    assert (
+        client.get("/v2/agents/nope/ledger").status_code
+        == client.get("/api/trust/agents/nope/ledger").status_code
+        == 404
+    )
+
+
+@pytest.mark.parametrize("role", ["viewer", "clerk", "approver"])
+def test_agent_registry_writes_refuse_every_key(env, role):
+    d = env["acme"]
+    client = keyed(d["keys"][role])
+    assert (
+        client.post(
+            "/v2/agents", json={"name": "x", "owner": "ops@acme.test"}
+        ).status_code
+        == 403
+    )
+    r = client.post(f"/v2/agents/{d['agent']}/mandates", json=_mandate_body())
+    assert r.status_code == 403
+
+
+def test_a_viewer_cannot_evaluate_for_another_agent(env):
+    d = env["acme"]
+    r = keyed(d["keys"]["viewer"]).post(
+        f"/v2/agents/{d['agent']}/actions/evaluate",
+        json={
+            "action": "invoice.approve",
+            "subject_ref": "x",
+            "source": "dryrun",
+        },
+    )
+    assert r.status_code == 403
 
 
 # -- decisions -----------------------------------------------------------------
@@ -637,6 +797,7 @@ def _calls(d):
         "finding_id": d["finding"],
         "document_id": d["document"],
         "audit_id": d["audit"],
+        "agent_id": d["agent"],
     }
 
     def filled(template):
@@ -681,6 +842,18 @@ def _calls(d):
         ("post", "/v2/trust-audits", {"name": "probe"}),
         ("post", "/v2/trust-audits/{audit_id}/runs", {"engines": []}),
         ("get", "/v2/trust-audits/{audit_id}/report", None),
+        ("post", "/v2/agents", {"name": "probe", "owner": "ops@x.test"}),
+        ("post", "/v2/agents/{agent_id}/mandates", _mandate_body()),
+        (
+            "post",
+            "/v2/agents/{agent_id}/actions/evaluate",
+            {
+                "action": "invoice.export",
+                "subject_ref": "p",
+                "source": "dryrun",
+            },
+        ),
+        ("get", "/v2/agents/{agent_id}/ledger", None),
     ]
     return [(m, t, filled(t), body) for m, t, body in rows]
 
@@ -704,6 +877,7 @@ def test_every_probed_route_is_exercised():
                     "document",
                     "finding",
                     "audit",
+                    "agent",
                 ),
                 "x",
             )
@@ -717,11 +891,13 @@ class TestIsolation:
     leak rather than pass on a refusal."""
 
     @pytest.mark.parametrize("via", ["bearer", "key"])
-    @pytest.mark.parametrize("i", range(20))
+    @pytest.mark.parametrize("i", range(24))
     def test_a_foreign_tenant_sees_nothing_of_acme(self, env, via, i):
         acme = env["acme"]
         method, template, path, body = _calls(acme)[i]
-        integration = template.startswith("/api/integrations")
+        integration = (
+            template.startswith("/api/integrations") or template in ADMIN_ONLY
+        )
         if via == "bearer":
             foreign = bearer(
                 "globex:admin" if integration else "globex:approver"
@@ -739,6 +915,7 @@ class TestIsolation:
             acme["endpoint"],
             acme["key_id"],
             acme["audit"],
+            acme["agent"],
             "Acme Steel",
             "acme.example",
         ):
