@@ -999,7 +999,7 @@ export type ContractRow = {
 // The Why engine (trust/explain; the v2/w2-explain branch fills these in).
 export type ExplanationStep = { text: string; node_id: string };
 export type ExplanationActor = {
-  kind: "vendor" | "person" | "system" | "engine" | "provider";
+  kind: "vendor" | "person" | "system" | "engine" | "provider" | "agent";
   label: string;
   node_id: string | null;
 };
