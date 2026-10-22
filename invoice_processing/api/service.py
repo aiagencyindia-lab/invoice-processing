@@ -1653,6 +1653,15 @@ def act(
     artifacts = get_cases().get_artifacts(ctx)
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
+    from ..trust.agents import guard  # noqa: PLC0415 - optional layer
+
+    # Before routing: the decision is ledgered even when routing refuses.
+    guard.check(
+        principal,
+        lambda: guard.invoice_action(
+            ctx, artifacts, f"invoice.{request.action}"
+        ),
+    )
 
     # From the artifacts already in hand rather than a second read.
     previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
@@ -2113,6 +2122,12 @@ def export_invoice(
                 "finding_ids": [h["finding_id"] for h in held["holds"]],
             },
         )
+    from ..trust.agents import guard  # noqa: PLC0415 - optional layer
+
+    guard.check(
+        principal,
+        lambda: guard.invoice_action(ctx, artifacts, "invoice.export"),
+    )
     invoice = _with_gl(
         ctx, (artifacts.get("extraction") or {}).get("invoice") or {}, artifacts
     )
