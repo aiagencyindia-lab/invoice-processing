@@ -20,6 +20,7 @@ time, B12). `false_reviews` is reported, not gated.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -28,6 +29,7 @@ from decimal import Decimal
 from invoice_processing.po_matching import normalize_vendor
 from invoice_processing.ports import RunContext
 from invoice_processing.trust import thresholds
+from invoice_processing.trust.agents import mandates
 from invoice_processing.trust.agents.policy import Action, evaluate_action
 from invoice_processing.trust.agents.record import record
 from invoice_processing.trust.agents.store import AgentStore
@@ -41,6 +43,7 @@ EXPIRED = (datetime(2026, 7, 1, tzinfo=UTC), datetime(2026, 8, 15, tzinfo=UTC))
 ADMIN_A, ADMIN_B = "admin-a@bench.test", "admin-b@bench.test"
 CLERK, MANAGER = "clerk@bench.test", "manager@bench.test"
 CONTROLLER = "controller@bench.test"
+KEY_VAR, BENCH_KEY = "TRUST_MANDATE_KEY", "bench-only-mandate-key"
 NEEDED = 25  # bench vendors the script uses
 
 EXPECTED = {
@@ -317,25 +320,46 @@ def _register(store, tenant_id, agents) -> dict[str, dict]:
             principal_email=_email(a["name"]),
         )
         valid_from, valid_to = a.get("valid", VALID)
+        # Through the registry's own validation, as the API would take it.
+        scope, valid_from, valid_to = mandates.validate(
+            {
+                "scope": {
+                    "actions": a["actions"],
+                    "counterparties": a.get("counterparties"),
+                    "caps": a["caps"],
+                    "currency": "INR",
+                },
+                "valid_from": valid_from,
+                "valid_to": valid_to,
+            },
+            now=T0,
+        )
         mandate = store.propose_mandate(
             proposer,
             row["id"],
-            scope={
-                "actions": a["actions"],
-                "counterparties": a.get("counterparties"),
-                "caps": a["caps"],
-                "currency": "INR",
-            },
+            scope=scope,
             valid_from=valid_from,
             valid_to=valid_to,
         )
         if not a.get("unapproved"):
-            store.approve_mandate(approver, mandate["id"], signature=None)
+            mandates.approve(approver, store, mandate["id"])
         out[a["name"]] = row
     return out
 
 
 def measure(tenant_id, graph, findings, manifest, url) -> dict:
+    """Mandates are signed: with the deployment's TRUST_MANDATE_KEY when
+    set, else a bench-only key for this run (CI sets none)."""
+    saved = os.environ.get(KEY_VAR)
+    os.environ[KEY_VAR] = saved or BENCH_KEY
+    try:
+        return _measure(tenant_id, graph, findings, url)
+    finally:
+        if saved is None:
+            del os.environ[KEY_VAR]
+
+
+def _measure(tenant_id, graph, findings, url) -> dict:
     started = time.monotonic()
     vendors = sorted(
         n["attrs"]["name"]

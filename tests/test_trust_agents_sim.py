@@ -150,3 +150,32 @@ def test_eval_reports_the_four_agent_gates(tmp_path, scratch_db, key):
     ):
         assert out["gates"][gate] is True, (gate, out["agents"])
     assert out["passed"]
+
+
+def test_the_fleet_signs_its_mandates_without_a_configured_key(
+    scratch_db, monkeypatch
+):
+    """CI runs the eval with no TRUST_MANDATE_KEY: the fleet signs with a
+    bench-only key for its own run and leaves the environment as it was."""
+    import os  # noqa: PLC0415
+
+    from invoice_processing.trust.agents import mandates  # noqa: PLC0415
+    from invoice_processing.trust.agents.store import (  # noqa: PLC0415
+        AgentStore,
+    )
+
+    monkeypatch.delenv("TRUST_MANDATE_KEY", raising=False)
+    url = scratch_db("signed.db")
+    graph, findings = _bench(url)
+    fleet.measure(TENANT, graph, findings, {}, url)
+    assert "TRUST_MANDATE_KEY" not in os.environ
+    store = AgentStore(url)
+    agents = store.list(TENANT)
+    assert len(agents) == 8
+    monkeypatch.setenv("TRUST_MANDATE_KEY", fleet.BENCH_KEY)
+    for a in agents:
+        rows = mandates.annotate(store.mandates(TENANT, a["id"]), fleet.T0)
+        assert [m["verified"] for m in rows] == [True], a["name"]
+        assert (rows[0]["signature"] is None) == (
+            a["name"] == "rogue-unapproved"
+        )
