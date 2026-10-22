@@ -100,5 +100,8 @@ def revoke(ctx, agent_id: str, reason: str, *, store, audit) -> dict:
     if agent["status"] == "revoked":
         return agent
     agent = store.revoke(ctx, agent_id, reason)
+    from . import mandates  # noqa: PLC0415 - mandates imports this package
+
+    mandates.reseal(ctx, store, agent.pop("revoked_mandates"))
     audit.emit(ctx, "agent_revoked", {"name": agent["name"], "reason": reason})
     return agent
