@@ -34,11 +34,13 @@ PATTERNS: dict[str, re.Pattern] = {
         "new_account": r"\b(?:pay|transfer) to (?:the )?(?:new|updated) account\b",
     }.items()
 }
-# A run of 64+ base64 characters mixing upper and lower case. Case-sensitive:
-# a hex hash (an e-invoice IRN is 64 hex characters) has one case, no hit.
+# A run of 64+ base64 characters mixing upper case, lower case and digits,
+# standing alone. Case-sensitive: a hex hash (an e-invoice IRN is 64 hex) has
+# one case. Not part of a dotted name, URL host or JWT (a signed e-invoice QR
+# is base64url segments joined by dots), which is ordinary invoice text.
 PATTERNS["base64"] = re.compile(
-    r"(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*[a-z])"
-    r"[A-Za-z0-9+/]{64,}={0,2}"
+    r"(?<![A-Za-z0-9+/._-])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*[a-z])"
+    r"(?=[A-Za-z0-9+/]*[0-9])[A-Za-z0-9+/]{64,}={0,2}(?![A-Za-z0-9+/=._-])"
 )
 
 

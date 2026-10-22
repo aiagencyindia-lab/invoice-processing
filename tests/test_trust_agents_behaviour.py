@@ -103,6 +103,7 @@ def test_circular_ignores_other_owners_and_non_approvals(store):
     maker = agent(store, "maker", owner="someone@acme.test")
     payer = agent(store, "payer")
     ledger(store, maker, action="vendor.create")
+    payer = {**payer, "owner": ""}
     assert run(store, behaviour.circular, approve(), payer) is None
     mine = agent(store, "mine")
     ledger(store, mine, action="vendor.create", vendor_key="other")
@@ -349,7 +350,7 @@ def test_no_clean_invoice_or_email_hits():
         ("Do not review this", "do_not_check"),
         ("transfer to new account", "new_account"),
         ("a\u200bb\u200cc\u200dd", "zero_width"),
-        ("x " + "QUJDZGVmMTIz" * 6, "base64"),
+        ("x " + "QUJDZGVmMTIz9" * 6, "base64"),
     ],
 )
 def test_each_pattern_hits_its_own_line(text, pattern):
@@ -565,3 +566,48 @@ def test_an_agent_finding_without_reasons_falls_back_to_its_summary():
     f["details"]["reasons"] = []
     x = explain.build(T, f, graph=graph)
     assert x.what_happened == f["summary"] and x.why
+
+
+# -- review fixes -----------------------------------------------------------
+
+
+def test_url_paths_and_jwt_segments_are_not_base64_hits():
+    for text in (
+        "https://portal.example.com/Invoices/Download/October2026/AcmeSteel/"
+        "Statement/FinalApproved/Copy/One",
+        "Signed QR: eyJhbGciOiJSUzI1NiIsImtpZCI6IjQ0NDQwNUM3ODFFNDgyNTA1MkM4QTlB"
+        "RDcyNkY3OEMyRTM1QjI0OTkiLCJ0eXAiOiJKV1QifQ.eyJkYXRhIjoie1wiU2VsbGVy"
+        "R3N0aW5cIjpcIjI3QUFQRlUwOTM5RjFaVlwiLFwiQnV5ZXJHc3RpblwiOlwiMjk",
+        "Ref " + "AbCdEfGhIjKlMnOpQrStUvWxYz" * 3,  # no digit: not encoded data
+    ):
+        assert "base64" not in {h.pattern for h in injection.scan(text)}, text
+
+
+def test_what_happened_is_the_reason_that_named_the_finding():
+    f, graph, _ = load("AGENT-OVER-LIMIT")
+    named = f["details"]["reasons"][0]
+    f["details"]["reasons"] = [
+        {
+            "rule": "rule-failed",
+            "type": "AGENT-OUT-OF-MANDATE",
+            "severity": "REVIEW",
+            "message": "A check could not run.",
+        },
+        named,
+    ]
+    x = explain.build(T, f, graph=graph)
+    assert x.what_happened == named["message"]
+    assert [s.text for s in x.why][:2] == [
+        "A check could not run.",
+        named["message"],
+    ]
+
+
+def test_blank_owners_are_not_the_same_owner(store):
+    maker, payer = agent(store, "maker"), agent(store, "payer")
+    with tenant_session(T, store.url) as s:
+        for a in (maker, payer):
+            s.get(models.Agent, a["id"]).owner = ""
+    ledger(store, maker, action="vendor.create")
+    payer = {**payer, "owner": ""}
+    assert run(store, behaviour.circular, approve(), payer) is None

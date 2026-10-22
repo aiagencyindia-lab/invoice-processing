@@ -36,7 +36,8 @@ def circular(action, agent, mandate, store, settings, now, decider):
         return None
     creators = store.creators_of(agent["tenant_id"], action.vendor_key)
     for c in creators:
-        if c["id"] == agent["id"] or _fold(c["owner"]) == _fold(agent["owner"]):
+        owner = _fold(agent["owner"])
+        if c["id"] == agent["id"] or (owner and _fold(c["owner"]) == owner):
             who = (
                 "it"
                 if c["id"] == agent["id"]

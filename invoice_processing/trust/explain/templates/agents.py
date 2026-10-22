@@ -74,9 +74,12 @@ def agent(ctx: Context) -> dict:
             )
         )
     return {
-        "what_happened": reasons[0]["message"]
-        if reasons
-        else ctx.finding["summary"],
+        # The reason that named the finding (`record` picks the first of the
+        # deciding severity), not whatever rule ran first.
+        "what_happened": next(
+            (r["message"] for r in reasons if r.get("type") == code),
+            ctx.finding["summary"],
+        ),
         "why": why,
         "caused_by": [
             Actor("agent", f"{name} (owner {owner})", node),
