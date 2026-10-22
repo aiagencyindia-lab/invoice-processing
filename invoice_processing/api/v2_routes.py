@@ -9,6 +9,7 @@ graph node id, as `/v2/findings` rows carry it.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from ..trust.findings.model import REASON_REQUIRED
 from . import (
+    trust_agent_routes,
     trust_audit_routes,
     trust_explain_routes,
     trust_provenance_routes,
@@ -23,6 +25,7 @@ from . import (
     trust_score_routes,
 )
 from .auth import Principal, require_role
+from .integration_routes import Admin
 
 router = APIRouter(prefix="/v2")
 
@@ -202,4 +205,45 @@ def request_trust_audit_run(
 def trust_audit_report(audit_id: str, principal: Viewer, format: str = "json"):
     return trust_audit_routes.get_report(
         audit_id=audit_id, principal=principal, format=format
+    )
+
+
+# -- agents -------------------------------------------------------------------
+# Registering an agent and proposing its mandate are a human admin's acts (an
+# API key gets 403); approving a mandate stays on /api, a second person's.
+
+
+@router.post("/agents", status_code=201)
+def register_agent(body: trust_agent_routes.AgentCreate, principal: Admin):
+    return trust_agent_routes.register_agent(body=body, principal=principal)
+
+
+@router.post("/agents/{agent_id}/mandates", status_code=201)
+def propose_mandate(
+    agent_id: str, body: trust_agent_routes.MandateCreate, principal: Admin
+):
+    return trust_agent_routes.propose_mandate(
+        agent_id=agent_id, body=body, principal=principal
+    )
+
+
+@router.post("/agents/{agent_id}/actions/evaluate")
+def evaluate_action(
+    agent_id: str, body: trust_agent_routes.Evaluate, principal: Viewer
+):
+    """An approver, or the agent's own principal about itself."""
+    return trust_agent_routes.evaluate_action(
+        agent_id=agent_id, body=body, principal=principal
+    )
+
+
+@router.get("/agents/{agent_id}/ledger")
+def agent_ledger(
+    agent_id: str,
+    principal: Approver,
+    since: datetime | None = None,
+    until: datetime | None = None,
+):
+    return trust_agent_routes.get_ledger(
+        agent_id=agent_id, principal=principal, since=since, until=until
     )
