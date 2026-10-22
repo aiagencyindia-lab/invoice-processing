@@ -340,14 +340,12 @@ def test_the_store_refuses_a_non_finite_or_negative_ledger_amount(env):
 
 
 def test_every_engine_registration_agrees_with_the_static_table():
-    import invoice_processing.trust.agents  # noqa: PLC0415
-
     import invoice_processing.trust.gst_itc  # noqa: PLC0415
     import invoice_processing.trust.leakage  # noqa: PLC0415
     import invoice_processing.trust.payment  # noqa: PLC0415
     import invoice_processing.trust.provenance  # noqa: PLC0415
     import invoice_processing.trust.reality  # noqa: F401, PLC0415
-    from invoice_processing.trust import types  # noqa: PLC0415
+    from invoice_processing.trust import agents, types  # noqa: F401, PLC0415
 
     for code, t in types.TABLE.items():
         assert finding_model.TYPE_ENGINE[code] == t.engine, code
