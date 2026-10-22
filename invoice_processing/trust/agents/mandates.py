@@ -1,0 +1,226 @@
+"""Mandates: what a human authorised an agent to do (FR-28.5, B4, B16).
+
+A mandate's digest (the store's `digest`) covers its scope, validity, who
+proposed and approved it, and the digest of the version before it. On
+approval it is signed with HMAC-SHA256 under a per-tenant key derived from
+`TRUST_MANDATE_KEY`; nothing secret is stored. The honest claim is
+tamper-evidence against edits in the database, not non-repudiation.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import os
+import re
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
+
+from ...db.models import AgentMandate
+from ...db.session import tenant_session
+from ...po_matching import normalize_vendor
+from . import ACTIONS
+from .store import digest
+
+__all__ = [
+    "MandateKeyMissing",
+    "annotate",
+    "approve",
+    "in_force",
+    "sign",
+    "validate",
+    "verify",
+]
+
+CAPS = ("per_action", "per_period", "per_vendor", "per_category")
+PERIODS = ("day", "month")
+MAX_SPAN = timedelta(days=366)
+_CURRENCY = re.compile(r"^[A-Za-z]{3}$")
+
+
+class MandateKeyMissing(Exception):
+    """`TRUST_MANDATE_KEY` is not set: nothing can be signed."""
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _amount(value, name: str) -> str:
+    # Strings only: a JSON number has already been through a float.
+    try:
+        if not isinstance(value, str):
+            raise InvalidOperation
+        amount = Decimal(value.strip())
+    except InvalidOperation:
+        raise ValueError(f"{name} must be an amount as a string.") from None
+    if not amount.is_finite() or amount < 0:
+        raise ValueError(f"{name} must be a non-negative amount.")
+    return str(amount)
+
+
+def _caps(caps) -> dict:
+    if caps is None:
+        return {}
+    if not isinstance(caps, dict) or not set(caps) <= set(CAPS):
+        raise ValueError(f"caps may only name {', '.join(CAPS)}.")
+    out = {}
+    for name in ("per_action", "per_vendor"):
+        if caps.get(name) is not None:
+            out[name] = _amount(caps[name], name)
+    period = caps.get("per_period")
+    if period is not None:
+        if not isinstance(period, dict):
+            raise ValueError("per_period must be {period, amount}.")
+        if period.get("period") not in PERIODS:
+            raise ValueError("per_period.period must be day or month.")
+        out["per_period"] = {
+            "period": period["period"],
+            "amount": _amount(period.get("amount"), "per_period.amount"),
+        }
+    category = caps.get("per_category")
+    if category is not None:
+        if not isinstance(category, dict):
+            raise ValueError(
+                "per_category must map a vendor kind to an amount."
+            )
+        out["per_category"] = {
+            str(k): _amount(v, f"per_category.{k}") for k, v in category.items()
+        }
+    return out
+
+
+def _counterparties(names):
+    if names is None:
+        return None
+    if not isinstance(names, list):
+        raise ValueError(
+            "counterparties must be a list of vendor names or null."
+        )
+    keys = [normalize_vendor(n) if isinstance(n, str) else "" for n in names]
+    if not keys or not all(keys):
+        raise ValueError("Each counterparty must be a vendor name.")
+    return sorted(set(keys))
+
+
+def validate(body: dict, *, now: datetime) -> tuple[dict, datetime, datetime]:
+    """The normalised scope and UTC validity, or ValueError naming the first
+    problem."""
+    scope = body.get("scope")
+    if not isinstance(scope, dict):
+        raise ValueError("scope is required.")
+    actions = scope.get("actions")
+    if (
+        not isinstance(actions, list)
+        or not actions
+        or not all(isinstance(a, str) for a in actions)
+        or not set(actions) <= set(ACTIONS)
+    ):
+        raise ValueError(
+            f"actions must be a non-empty subset of {', '.join(ACTIONS)}."
+        )
+    currency = scope.get("currency")
+    if not isinstance(currency, str) or not _CURRENCY.match(currency):
+        raise ValueError("currency must be a three-letter ISO code.")
+    start, end = body.get("valid_from"), body.get("valid_to")
+    if not isinstance(start, datetime) or not isinstance(end, datetime):
+        raise ValueError("valid_from and valid_to are required.")
+    start, end = _utc(start), _utc(end)
+    if not start < end:
+        raise ValueError("valid_to must be after valid_from.")
+    if end - start > MAX_SPAN:
+        raise ValueError("A mandate may run at most 366 days.")
+    return (
+        {
+            "actions": sorted(set(actions), key=ACTIONS.index),
+            "counterparties": _counterparties(scope.get("counterparties")),
+            "caps": _caps(scope.get("caps")),
+            "currency": currency.upper(),
+        },
+        start,
+        end,
+    )
+
+
+def _key(tenant_id: str) -> bytes:
+    secret = os.getenv("TRUST_MANDATE_KEY")
+    if not secret:
+        raise MandateKeyMissing("Mandate signing is not configured.")
+    return hmac.new(
+        secret.encode(), tenant_id.encode(), hashlib.sha256
+    ).digest()
+
+
+def sign(tenant_id: str, row_digest: str) -> str:
+    return hmac.new(
+        _key(tenant_id), row_digest.encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def _same(a: str, b: str | None) -> bool:
+    # Bytes: compare_digest refuses a non-ASCII str (a tampered column).
+    return hmac.compare_digest(a.encode(), (b or "").encode())
+
+
+def verify(row: dict, prev: dict | None) -> bool:
+    """The row is what was signed, and follows the version before it."""
+    if row.get("prev_digest") != (prev or {}).get("digest"):
+        return False
+    if not _same(digest(row), row.get("digest")):
+        return False
+    if row.get("approved_by") is None:
+        return True  # proposed: nobody has signed it yet
+    try:
+        expected = sign(row["tenant_id"], row["digest"])
+    except MandateKeyMissing:
+        return False
+    return _same(expected, row.get("signature"))
+
+
+def annotate(rows: list[dict], now: datetime) -> list[dict]:
+    """`rows` in version order, each with `verified` and `expired`."""
+    out, prev = [], None
+    for row in rows:
+        out.append(
+            {
+                **row,
+                "verified": verify(row, prev),
+                "expired": row["status"] == "active" and row["valid_to"] <= now,
+            }
+        )
+        prev = row
+    return out
+
+
+def in_force(rows: list[dict], at: datetime) -> dict | None:
+    """The version that authorised the agent at `at`: approved by then,
+    valid then, not yet revoked or superseded. A logged action is judged by
+    it, not by today's mandate. Returned as it stood then (active)."""
+    held = [
+        m
+        for m in rows
+        if m["approved_at"] is not None
+        and m["approved_at"] <= at
+        and m["valid_from"] <= at < m["valid_to"]
+        and (m["revoked_at"] is None or at < m["revoked_at"])
+    ]
+    if not held:
+        return None
+    return {**max(held, key=lambda m: m["version"]), "status": "active"}
+
+
+def approve(ctx, store, mandate_id: str) -> dict:
+    """A second admin approves the pending latest version, and it is signed.
+
+    The store stamps `approved_at`, so the digest is known only after it
+    commits; the signature follows in a second session. A crash between leaves
+    an active mandate that reads `verified: false` -- visible, not silent.
+    """
+    _key(ctx.tenant_id)  # refuse before anything changes
+    row = store.approve_mandate(ctx, mandate_id, signature=None)
+    signature = sign(ctx.tenant_id, row["digest"])
+    with tenant_session(ctx.tenant_id, store.url) as s:
+        s.get(AgentMandate, mandate_id).signature = signature
+    return {**row, "signature": signature}
