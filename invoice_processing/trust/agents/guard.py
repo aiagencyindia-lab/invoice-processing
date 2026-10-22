@@ -225,6 +225,7 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
     the artifacts the route already read plus the lookups the rules need."""
     from ... import approval_flow, po_matching  # noqa: PLC0415
     from ...api import service  # noqa: PLC0415
+    from . import inputs  # noqa: PLC0415
 
     t = ctx.tenant_id
     invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
@@ -233,6 +234,12 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
     vendor = (vendors.find_by_name(t, name) if vendors and name else None) or {}
     approvals = service.get_approvals()
     steps = approvals.chain(t, ctx.case_id) if approvals else []
+
+    def text() -> str:
+        # Read only if a detector asks: the PDF text layer and email body.
+        document = service.get_documents().get(t, ctx.case_id) or {}
+        return inputs.text_of(document, service.get_blobs(t))()
+
     return Action(
         kind=kind,
         subject_table="invoices",
@@ -253,7 +260,5 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
         ),
         vendor_verified=bool(vendor.get("bank_verified_at")),
         vendor_verified_by=vendor.get("bank_verified_by"),
-        # TODO(w4-behaviour): text=lambda: inputs.text_of(...) once branch C
-        # merges; the parent session wires it.
-        text=None,
+        text=text,
     )

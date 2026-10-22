@@ -11,6 +11,7 @@ from fresh_schema import fresh_schema
 from invoice_processing.db import models
 from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
+from invoice_processing.trust import thresholds
 from invoice_processing.trust.agents import rules
 from invoice_processing.trust.agents.policy import Action, evaluate_action
 from invoice_processing.trust.agents.store import AgentStore
@@ -384,10 +385,10 @@ def test_the_rules_run_in_severity_order_and_a_clean_action_is_allowed(env):
         agent=env["bot"],
         mandate=mandate(per_action="1000"),
         store=env["store"],
-        settings={},
+        settings=thresholds.DEFAULTS,
         now=NOW,
     )
-    assert out.decision == "ALLOW"
+    assert out.decision == "ALLOW", out.explanation
 
 
 def test_policy_imports_first_without_a_cycle():
