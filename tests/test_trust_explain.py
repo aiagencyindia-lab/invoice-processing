@@ -159,34 +159,20 @@ def load(code: str) -> tuple[dict, FakeGraph, dict]:
 # Snapshots at import: other test modules register throwaway T-* types at
 # run time, which have no fixture and no template by design.
 ALL_TYPES = sorted(finding_model.TYPES)
-# Wave 4 agent types: their fixtures and templates land with the behaviour
-# branch, which deletes this skip.
-WAVE4_PENDING = {
-    c for c, e in finding_model.TYPE_ENGINE.items() if e == "agents"
-}
-
-
-def _pending(code):
-    if code in WAVE4_PENDING:
-        pytest.skip(f"{code}: explanation lands with v2/w4-behaviour")
-
-
 ENGINE_TYPES = {
     t
     for t, e in finding_model.TYPE_ENGINE.items()
-    if e in ("leakage", "payment", "provenance", "gst_itc", "reality")
+    if e in ("leakage", "payment", "provenance", "gst_itc", "reality", "agents")
 }
 
 
 @pytest.mark.parametrize("code", ALL_TYPES)
 def test_every_type_has_a_fixture(code):
-    _pending(code)
     assert (FIXTURES / f"{code}.json").exists()
 
 
 @pytest.mark.parametrize("code", ALL_TYPES)
 def test_counterfactual(code):
-    _pending(code)
     f, graph, expect = load(code)
     out = cf.counterfactual(f, graph.node(T, f["transaction_node"]))
     if "note" in expect:
@@ -210,7 +196,6 @@ def test_counterfactual_without_an_amount_still_prices_the_delta():
 
 @pytest.mark.parametrize("code", ALL_TYPES)
 def test_every_type_explains(code):
-    _pending(code)
     f, graph, _ = load(code)
     x = engine.build(T, f, graph=graph)
     cited = {c["node_id"] for c in f["citations"]}
@@ -223,7 +208,7 @@ def test_every_type_explains(code):
     assert x.versions["engine_version"] == f["engine_version"]
     assert x.counterfactual is not None
     assert all(
-        a.kind in ("vendor", "person", "system", "engine", "provider")
+        a.kind in ("vendor", "person", "system", "engine", "provider", "agent")
         for a in x.caused_by
     )
     d = x.as_dict()
