@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from invoice_processing.trust import thresholds
+from invoice_processing.trust import modes, thresholds
 from invoice_processing.trust.score import readiness as rd
 
 NOW = datetime(2026, 10, 21, tzinfo=UTC)
@@ -159,6 +159,10 @@ def test_leakage_is_insight_only():
     assert not rd.insight_only("reality")
 
 
+def test_agents_is_not_insight_only_though_it_never_holds():
+    assert not rd.insight_only("agents")
+
+
 class CountingStore:
     def __init__(self):
         self.calls = []
@@ -201,7 +205,7 @@ def test_the_report_reads_findings_and_events_once(monkeypatch):
         ),
         now=NOW,
     )
-    assert len(rows) == 5
+    assert len(rows) == len(modes.ENGINES)
     assert [c[0] for c in store.calls] == ["list", "events"]
     # An engine never moved through set_engine_mode reads all time.
     assert store.calls[0][1]["since"] is None

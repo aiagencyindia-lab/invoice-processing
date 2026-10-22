@@ -11,4 +11,5 @@ EVENTS = (
     "hold.placed",
     "hold.lifted",
     "ping",
+    "agent.action.blocked",
 )

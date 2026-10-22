@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -1336,6 +1337,116 @@ class WebhookOutbox(Base, TenantMixin, TimestampMixin):
     dead_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class Agent(Base, TenantMixin, TimestampMixin):
+    """A machine actor a tenant has registered for agent control (FR-28.1).
+    `principal_id` is the Principal's `user_id` it acts as; an external agent
+    (seen only through imported logs) has none."""
+
+    __tablename__ = "agents"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "principal_id", name="uq_agents_principal"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    owner: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    principal_id: Mapped[str | None] = mapped_column(String(64))
+    principal_email: Mapped[str | None] = mapped_column(String(320), index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active"
+    )
+    registered_by: Mapped[str | None] = mapped_column(String(320))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by: Mapped[str | None] = mapped_column(String(320))
+    revoke_reason: Mapped[str | None] = mapped_column(String(500))
+    graph_node: Mapped[str | None] = mapped_column(String(36))
+
+
+class AgentMandate(Base, TenantMixin, TimestampMixin):
+    """What a person authorised an agent to do, when, and for how much
+    (FR-28.5). Versioned; each version carries the previous one's digest."""
+
+    __tablename__ = "agent_mandates"
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_id", "version", name="uq_agent_mandates_version"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[dict] = mapped_column(JSONType, default=dict)
+    valid_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    valid_to: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="proposed"
+    )
+    proposed_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(320))
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    revoked_by: Mapped[str | None] = mapped_column(String(320))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(String(500))
+    prev_digest: Mapped[str | None] = mapped_column(String(64))
+    digest: Mapped[str | None] = mapped_column(String(64))
+    signature: Mapped[str | None] = mapped_column(String(64))
+
+
+class AgentAction(Base, TenantMixin, TimestampMixin):
+    """One evaluated agent action and the decision on it: the decision
+    ledger, written before the governed write (or from an imported log)."""
+
+    __tablename__ = "agent_actions"
+    __table_args__ = (
+        Index(
+            "ix_agent_actions_agent_time",
+            "tenant_id",
+            "agent_id",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id"), nullable=False, index=True
+    )
+    mandate_id: Mapped[str | None] = mapped_column(String(36))
+    mandate_version: Mapped[int | None] = mapped_column(Integer)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_table: Mapped[str | None] = mapped_column(String(32))
+    subject_ref: Mapped[str | None] = mapped_column(String(128), index=True)
+    transaction_node: Mapped[str | None] = mapped_column(String(36))
+    vendor_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    category: Mapped[str | None] = mapped_column(String(64))
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    currency: Mapped[str | None] = mapped_column(String(8))
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    reasons: Mapped[list] = mapped_column(JSONType, default=list)
+    explanation: Mapped[str | None] = mapped_column(String(1000))
+    mode: Mapped[str | None] = mapped_column(String(16))
+    source: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="inline"
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finding_id: Mapped[str | None] = mapped_column(String(36))
+    request_id: Mapped[str | None] = mapped_column(String(64))
+
+
 TENANT_TABLES = (
     "users",
     "record_locks",
@@ -1380,4 +1491,7 @@ TENANT_TABLES = (
     "api_keys",
     "webhook_endpoints",
     "webhook_outbox",
+    "agents",
+    "agent_mandates",
+    "agent_actions",
 )

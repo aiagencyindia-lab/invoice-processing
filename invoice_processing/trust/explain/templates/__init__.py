@@ -124,6 +124,7 @@ class Context:
 
 
 from . import (  # noqa: E402
+    agents,
     generic,
     gst_itc,
     leakage,

@@ -297,6 +297,16 @@ def test_the_wave3_measure_modules_add_their_gates(
     assert out["gates"]["reality_coverage"] and out["gates"]["score_coverage"]
 
 
+def test_an_agents_measure_module_is_picked_up_when_present(monkeypatch):
+    """Wave 4's simulation branch ships benchmark/history/agents.py; until
+    then the slot is empty and nothing changes."""
+    import sys  # noqa: PLC0415
+
+    fake = SimpleNamespace(measure=lambda *a: {"gates": {}})
+    monkeypatch.setitem(sys.modules, "benchmark.history.agents", fake)
+    assert history_eval._measure_modules()["agents"] is fake
+
+
 def test_the_generator_knows_the_evidence_kinds():
     from invoice_processing.trust.history import mapping  # noqa: PLC0415
 

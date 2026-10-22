@@ -47,6 +47,7 @@ export const ENGINE_LABELS: Record<string, string> = {
   provenance: "Provenance",
   gst_itc: "GST / ITC",
   reality: "Reality",
+  agents: "Agent control",
   trust: "Trust layer",
 };
 

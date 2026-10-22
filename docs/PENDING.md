@@ -180,7 +180,27 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         and idempotency keys on `/v2`; `/v2/agents*` (Wave 4).
   - [ ] Partner gates: AC-23 reviewer agreement on reality checks, ≥ 70 %
         of findings before payment, cost per transaction ≤ ₹6.
-- [ ] Wave 4 per the spec §2.
+- [ ] **Wave 4 (Agent control plane, built dark)** — program plan
+      `docs/superpowers/plans/2026-10-22-v2-wave4-program.md`, specs
+      `docs/superpowers/specs/2026-10-22-v2-wave4-*-design.md`.
+  - [ ] Scaffold (`v2/w4-scaffold`): three tables, the `agents` engine and
+        nine `AGENT-*` types, `AgentStore`, the policy/record/guard seams,
+        twelve 503 route stubs with the probe hand-over, the benchmark slot.
+  - [ ] Registry, mandates, ledger, routes (`v2/w4-registry`) · [ ] Structural
+        rules + guard wiring (`v2/w4-policy`) · [ ] Behavioural detectors +
+        explanations (`v2/w4-behaviour`) · [ ] Simulated fleet, `/v2/agents*`,
+        docs (`v2/w4-simulation`).
+  - [ ] Wave close: delete `TestWave4StubsIsolation` and the explain
+        `WAVE4_PENDING` skips; tick here.
+  - [ ] Deferred from Wave 4: an agents view / NAV / dashboard (release
+        gate); live ERP-agent observers (SAP Joule, Oracle, Dynamics) beyond
+        file import; external mandate-format adapters; notifications on
+        blocks; governing PO creation and document upload; holds from
+        log-based BLOCKs; mandate expiry sweep; `agent_actions` retention;
+        OCR text for injection scanning; an `executed_at` stamp (the ledger
+        counts decisions, not executions); vendor-name key collisions for
+        counterparties; `record()` is ordered, not atomic (a crash can leave
+        a decision without its finding).
 - [ ] Remove the Postgres TCP proxy before the trust routes go live (it was
       added for bootstrap only).
 

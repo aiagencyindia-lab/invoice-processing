@@ -345,7 +345,7 @@ def test_every_engine_registration_agrees_with_the_static_table():
     import invoice_processing.trust.payment  # noqa: PLC0415
     import invoice_processing.trust.provenance  # noqa: PLC0415
     import invoice_processing.trust.reality  # noqa: F401, PLC0415
-    from invoice_processing.trust import types  # noqa: PLC0415
+    from invoice_processing.trust import agents, types  # noqa: F401, PLC0415
 
     for code, t in types.TABLE.items():
         assert finding_model.TYPE_ENGINE[code] == t.engine, code
@@ -383,9 +383,28 @@ def test_the_api_process_knows_every_hold_type_without_the_engines():
 def test_reality_is_an_engine_that_can_hold():
     from invoice_processing.trust import modes  # noqa: PLC0415
 
-    assert modes.ENGINES[-1] == "reality"
+    assert "reality" in modes.ENGINES
     assert "reality" in modes.HOLD_ENGINES
     assert "usage" in modes.CAPABILITIES
+
+
+def test_agents_is_a_blocking_engine_that_never_holds():
+    from invoice_processing.trust import modes, types  # noqa: PLC0415
+
+    assert modes.ENGINES[-1] == "agents"
+    assert "agents" not in modes.HOLD_ENGINES
+    assert modes.BLOCKING_ENGINES == frozenset({"agents"})
+    codes = [c for c, t in types.TABLE.items() if t.engine == "agents"]
+    assert len(codes) == 9 and all(c.startswith("AGENT-") for c in codes)
+    for code in codes:
+        assert not types.TABLE[code].hold, code
+        assert types.TABLE[code].dimension == "authorization", code
+
+
+def test_agent_action_blocked_is_a_webhook_event():
+    from invoice_processing.trust.webhooks import EVENTS  # noqa: PLC0415
+
+    assert "agent.action.blocked" in EVENTS
 
 
 # -- the hold ledger and the webhook outbox (Wave 3) ---------------------------
