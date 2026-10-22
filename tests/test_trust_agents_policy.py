@@ -14,7 +14,6 @@ from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust.agents import (
     behaviour,
-    guard,
     policy,
     record,
     rules,
@@ -58,8 +57,10 @@ def evaluate(mode="advisory"):
     )
 
 
-def test_with_no_rules_everything_is_allowed():
-    assert rules.RULES == () and behaviour.RULES == ()
+def test_with_no_rules_everything_is_allowed(monkeypatch):
+    # The branches fill the rule tuples; this pins the composition alone.
+    monkeypatch.setattr(rules, "RULES", ())
+    monkeypatch.setattr(behaviour, "RULES", ())
     out = evaluate()
     assert (
         out.decision == "ALLOW" and out.reasons == () and out.explanation == ""
@@ -94,10 +95,6 @@ def test_a_rule_that_raises_blocks_only_in_enforcing(
     out = evaluate(mode)
     assert out.decision == decision
     assert out.reasons[0].rule == "rule-failed"
-
-
-def test_the_guard_is_a_stub_until_its_branch_lands():
-    assert guard.check(object(), ACTION) is None
 
 
 # -- record ----------------------------------------------------------------
