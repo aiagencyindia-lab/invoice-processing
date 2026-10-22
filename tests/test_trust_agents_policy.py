@@ -254,3 +254,59 @@ def test_a_blocked_action_draws_no_acted_on_edge(env):
         env["graph"].edges(T, src=env["agent"]["graph_node"], kind="acted_on")
         == []
     )
+
+
+def test_the_finding_is_typed_by_the_first_reason_of_the_decided_severity(
+    env, monkeypatch
+):
+    def boom(*a, **k):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(behaviour, "RULES", (_rule(REVIEW), boom))
+    decision = policy.evaluate_action(
+        CTX,
+        ACTION,
+        agent=env["agent"],
+        mandate=None,
+        store=env["store"],
+        settings={},
+        now=NOW,
+        mode="enforcing",
+    )
+    assert decision.decision == "BLOCK"
+    write(env, decision, mode="enforcing")
+    (finding,) = _rows(env, models.TrustFinding)
+    assert finding.type == "AGENT-OUT-OF-MANDATE"  # the BLOCK, not the review
+
+
+def test_recording_without_a_graph_node_is_refused_plainly(env):
+    graphless = {**env["agent"], "graph_node": None}
+    with pytest.raises(ValueError, match="graph"):
+        record.record(
+            CTX,
+            Decision("BLOCK", (BLOCK,), "x"),
+            ACTION,
+            agent=graphless,
+            mandate=None,
+            store=env["store"],
+            findings=env["findings"],
+            graph=None,
+            mode="advisory",
+            source="inline",
+            refused=False,
+            now=NOW,
+        )
+
+
+def test_record_runs_while_the_guard_holds_the_agent_lock(env):
+    """The guard's order (B17): lock the agent, read spend, record. On
+    Postgres a plain FOR UPDATE would hang here for ever."""
+    with tenant_session(T, env["url"]) as s:
+        env["store"].lock_agent(s, T, env["agent"]["id"])
+        write(
+            env,
+            Decision("BLOCK", (BLOCK,), "x"),
+            refused=True,
+            mode="enforcing",
+        )
+    assert len(_rows(env, models.AgentAction)) == 1

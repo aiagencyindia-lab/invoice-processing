@@ -82,6 +82,17 @@ def _dict(row) -> dict:
     }
 
 
+def _lock_query(tenant_id: str, agent_id: str):
+    # NO KEY UPDATE, not UPDATE: `record` inserts the ledger row from its own
+    # connection, and that insert's FK check takes FOR KEY SHARE on this row.
+    # FOR UPDATE would make it wait on a session that is waiting for it.
+    return (
+        select(Agent.id)
+        .where(Agent.tenant_id == tenant_id, Agent.id == agent_id)
+        .with_for_update(key_share=True)
+    )
+
+
 def _fold(email: str | None) -> str:
     return (email or "").strip().casefold()
 
@@ -131,7 +142,7 @@ class AgentStore:
                 principal_email=_fold(principal_email) or None,
                 description=description,
                 status="active",
-                registered_by=ctx.actor,
+                registered_by=_fold(ctx.actor),
             )
             s.add(row)
             s.flush()
@@ -258,8 +269,10 @@ class AgentStore:
                 agent_id=agent_id,
                 version=(latest.version + 1) if latest else 1,
                 scope=scope,
-                valid_from=valid_from,
-                valid_to=valid_to,
+                # Stored in UTC: SQLite keeps wall-clock time without the
+                # zone, and the digest must survive the round trip.
+                valid_from=valid_from.astimezone(UTC),
+                valid_to=valid_to.astimezone(UTC),
                 status="proposed",
                 proposed_by=_fold(ctx.actor),
                 reason=reason,
@@ -344,11 +357,7 @@ class AgentStore:
 
     def lock_agent(self, s, tenant_id: str, agent_id: str) -> None:
         """Serialise one agent's check-then-record (caps are hard limits)."""
-        s.execute(
-            select(Agent.id)
-            .where(Agent.tenant_id == tenant_id, Agent.id == agent_id)
-            .with_for_update()
-        )
+        s.execute(_lock_query(tenant_id, agent_id))
 
     def record_action(self, s, ctx, **cols) -> str:
         row = AgentAction(tenant_id=ctx.tenant_id, **cols)
@@ -453,7 +462,11 @@ class AgentStore:
                 .distinct()
             ).all()
             rows = (
-                s.scalars(select(Agent).where(Agent.id.in_(ids))).all()
+                s.scalars(
+                    select(Agent).where(
+                        Agent.tenant_id == tenant_id, Agent.id.in_(ids)
+                    )
+                ).all()
                 if ids
                 else []
             )

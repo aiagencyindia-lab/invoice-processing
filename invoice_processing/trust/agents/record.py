@@ -50,6 +50,12 @@ def record(
     """Write the decision; return the ledger row's id. `refused` is whether
     the action was actually stopped (enforcing, inline): only then does
     `agent.action.blocked` go out."""
+    if not agent.get("graph_node"):
+        # Every finding cites the agent's node; a store built without a
+        # graph has none. Build `AgentStore(url, graph=GraphStore(url))`.
+        raise ValueError(
+            "The agent has no graph node: give AgentStore a graph."
+        )
     reasons = _reasons(decision)
     with tenant_session(ctx.tenant_id, store.url) as s:
         action_id = store.record_action(
@@ -82,7 +88,13 @@ def record(
         finding_id, _ = findings.upsert(
             ctx,
             FindingSpec(
-                type=decision.reasons[0].type,
+                # The first reason of the severity that decided it (B6).
+                type=next(
+                    r.type
+                    for r in decision.reasons
+                    if r.severity
+                    == ("BLOCK" if decision.decision == "BLOCK" else "REVIEW")
+                ),
                 transaction_node=action.transaction_node or agent["graph_node"],
                 dedupe_key=f"agent_action:{action_id}",
                 impact=None,

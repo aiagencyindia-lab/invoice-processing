@@ -259,3 +259,32 @@ def test_lock_agent_takes_the_row(env):
     a = agent(store)["id"]
     with tenant_session(T, url) as s:
         store.lock_agent(s, T, a)  # no error on SQLite; FOR UPDATE on Postgres
+
+
+def test_the_agent_lock_lets_the_ledger_insert_through_on_postgres():
+    """`record` inserts the ledger row from its own connection; its FK check
+    takes FOR KEY SHARE on the agent row, which FOR UPDATE would block for
+    ever (the locking session is waiting for `record` to return)."""
+    from sqlalchemy.dialects import postgresql  # noqa: PLC0415
+
+    sql = str(
+        store_mod._lock_query(T, "a1").compile(dialect=postgresql.dialect())
+    )
+    assert "FOR NO KEY UPDATE" in sql
+
+
+def test_a_non_utc_validity_keeps_its_digest_after_a_reload(env):
+    from datetime import timezone  # noqa: PLC0415
+
+    store, _, _ = env
+    a = agent(store)
+    ist = timezone(timedelta(hours=5, minutes=30))
+    m = store.propose_mandate(
+        ADMIN_A,
+        a["id"],
+        scope=SCOPE,
+        valid_from=NOW.astimezone(ist),
+        valid_to=(NOW + timedelta(days=5)).astimezone(ist),
+    )
+    (reloaded,) = store.mandates(T, a["id"])
+    assert store_mod.digest(reloaded) == m["digest"] == reloaded["digest"]
