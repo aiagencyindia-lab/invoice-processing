@@ -173,3 +173,64 @@ def test_an_api_key_prefix_is_unique_per_tenant(url):
         s.add(key())
     with pytest.raises(IntegrityError), tenant_session(T, url) as s:
         s.add(key())
+
+
+WAVE4_TABLES = ("agents", "agent_mandates", "agent_actions")
+
+
+def test_the_wave4_tables_are_tenant_tables(url):
+    from sqlalchemy import inspect  # noqa: PLC0415
+
+    from invoice_processing.db.session import get_engine  # noqa: PLC0415
+
+    names = set(inspect(get_engine(url)).get_table_names())
+    for name in WAVE4_TABLES:
+        assert name in TENANT_TABLES, name
+        assert name in names, name
+
+
+def _agent(principal_id=None, name="bot"):
+    return models.Agent(
+        tenant_id=T,
+        name=name,
+        owner="ops@acme.test",
+        principal_id=principal_id,
+        kind="api_key" if principal_id else "external",
+    )
+
+
+def test_an_agent_principal_is_unique_per_tenant(url):
+    with tenant_session(T, url) as s:
+        s.add(_agent("api-key:1"))
+    with pytest.raises(IntegrityError), tenant_session(T, url) as s:
+        s.add(_agent("api-key:1", name="other"))
+
+
+def test_external_agents_need_no_principal(url):
+    with tenant_session(T, url) as s:
+        s.add(_agent(name="erp-1"))
+        s.add(_agent(name="erp-2"))
+
+
+def test_a_mandate_version_is_unique_per_agent(url):
+    with tenant_session(T, url) as s:
+        agent = _agent("api-key:2")
+        s.add(agent)
+        s.flush()
+        agent_id = agent.id
+
+    def mandate():
+        return models.AgentMandate(
+            tenant_id=T,
+            agent_id=agent_id,
+            version=1,
+            scope={"actions": ["invoice.approve"]},
+            valid_from=NOW,
+            valid_to=NOW,
+            proposed_by="admin@acme.test",
+        )
+
+    with tenant_session(T, url) as s:
+        s.add(mandate())
+    with pytest.raises(IntegrityError), tenant_session(T, url) as s:
+        s.add(mandate())
