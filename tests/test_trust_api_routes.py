@@ -1044,3 +1044,10 @@ def test_an_ambiguous_or_credentialed_url_is_refused(env, u):
         "/api/integrations/webhooks", json={"url": u, "events": ["*"]}
     )
     assert r.status_code == 400, r.text
+
+
+def test_the_intake_route_is_a_stub_until_branch_c(env):
+    r = keyed(env["acme"]["keys"]["approver"]).post(
+        "/v2/agents/actions", json={"actions": []}
+    )
+    assert r.status_code == 503

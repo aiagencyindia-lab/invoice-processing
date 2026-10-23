@@ -62,6 +62,8 @@ def environment(port: str) -> dict[str, str]:
     return {
         "INVOICE_DATA_DIR": str(SCRATCH),
         "DATABASE_URL": f"sqlite:///{SCRATCH / 'e2e.db'}",
+        # A fixed test key, so mandates can be approved and verified.
+        "TRUST_MANDATE_KEY": "e2e-mandate-key",
         # The browser cannot sign in to Identity Platform unattended, and the
         # sign-in gate itself is covered by tests/test_frontend_reaches_the_flow.py.
         "AUTH_DISABLED": "1",

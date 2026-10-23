@@ -10,7 +10,7 @@ branch's.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
 
@@ -279,6 +279,18 @@ def tenant_ledger(
     )
 
 
+@router.get("/api/trust/agents/blocks/count")
+def blocks_count(principal: Approver):
+    """The shell banner's numbers: what was stopped and what needs review in
+    the last `agents.banner_window_hours`."""
+    hours = int(_settings(principal.tenant_id)["agents.banner_window_hours"])
+    since = _now() - timedelta(hours=hours)
+    return {
+        **_store().count_blocked(principal.tenant_id, since),
+        "window_hours": hours,
+    }
+
+
 @router.post("/api/trust/agents/actions/import")
 def import_actions(principal: Admin, file: Annotated[UploadFile, File()]):
     mode = _mode(principal.tenant_id)
@@ -344,7 +356,14 @@ def register_agent(body: AgentCreate, principal: Admin):
 def list_agents(principal: Approver, status: str | None = None):
     if status not in (None, "active", "revoked"):
         raise HTTPException(400, "status must be active or revoked.")
-    return {"agents": _store().list(principal.tenant_id, status)}
+    now, tenant = _now(), principal.tenant_id
+    # Each row with its current mandate, so the agents screen needs one call.
+    return {
+        "agents": [
+            {**a, "mandate": _current(tenant, a["id"], now)}
+            for a in _store().list(tenant, status)
+        ]
+    }
 
 
 @router.get("/api/trust/agents/{agent_id}")
