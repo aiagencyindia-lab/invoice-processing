@@ -1001,3 +1001,25 @@ def test_a_failed_approval_and_a_repeated_export_count_once(env):
     owners = client.get("/api/trust/agents/ledger").json()["owners"]
     (o,) = [x for x in owners if x["owner"] == agent["owner"]]
     assert o["approved"] == {"INR": "100"} and o["exported"] == {"INR": "100"}
+
+
+def test_a_log_row_from_before_the_revocation_is_judged_then(env):
+    agent, _m = mandated_earlier("acme")
+    with patch.object(store_mod, "_now", lambda: NOW - timedelta(days=1)):
+        r = bearer("acme:admin").post(
+            f"/api/trust/agents/{agent['id']}/revoke", json={"reason": "x"}
+        )
+    assert r.status_code == 200, r.text
+    approver = bearer("acme:approver")
+    before = evaluate(
+        approver,
+        agent["id"],
+        occurred_at=(NOW - timedelta(days=2)).isoformat(),
+        currency="INR",
+        amount="10",
+    )
+    assert before.status_code == 200, before.text
+    assert "revoked" not in before.json()["explanation"]
+    after = evaluate(approver, agent["id"], currency="INR", amount="10")
+    assert after.json()["decision"] == "BLOCK"
+    assert "is revoked" in after.json()["explanation"]

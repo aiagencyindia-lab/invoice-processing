@@ -53,8 +53,22 @@ def currency(action, agent, mandate, store, settings, now, decider):
     )
 
 
+def _utc(at: datetime) -> datetime:
+    # A naive time is UTC, as the ledger stores it, never the host's zone.
+    return at.replace(tzinfo=UTC) if at.tzinfo is None else at.astimezone(UTC)
+
+
+def _revoked(action, agent, now) -> bool:
+    """Revoked by the action's time: a logged action from before the
+    revocation is judged by the mandate then in force (B15)."""
+    if agent.get("status") != "revoked":
+        return False
+    at = agent.get("revoked_at")
+    return at is None or _utc(at) <= _utc(action.occurred_at or now)
+
+
 def mandate_active(action, agent, mandate, store, settings, now, decider):
-    if agent.get("status") == "revoked":
+    if _revoked(action, agent, now):
         return _block(
             "mandate_active",
             "AGENT-OUT-OF-MANDATE",
@@ -171,8 +185,7 @@ def same_owner_chain(action, agent, mandate, store, settings, now, decider):
 def _period(at: datetime, period: str) -> tuple[datetime, datetime]:
     """The UTC calendar day or month around `at`. To the period's end, not to
     `at`: an approval recorded a moment later still counts (B17)."""
-    # A naive time is UTC, as the ledger stores it, never the host's zone.
-    at = at.replace(tzinfo=UTC) if at.tzinfo is None else at.astimezone(UTC)
+    at = _utc(at)
     if period == "day":
         start = at.replace(hour=0, minute=0, second=0, microsecond=0)
         return start, start + timedelta(days=1)
