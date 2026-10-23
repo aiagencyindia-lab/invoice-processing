@@ -9,7 +9,9 @@ from fresh_schema import fresh_schema
 from sqlalchemy import update
 
 from invoice_processing.db import models
+from invoice_processing.db.repositories import PgVendorRepository
 from invoice_processing.db.session import tenant_session
+from invoice_processing.po_matching import normalize_vendor
 from invoice_processing.ports import RunContext
 from invoice_processing.trust.agents import mandates
 from invoice_processing.trust.agents.store import AgentStore
@@ -44,7 +46,10 @@ def body(**over):
 def test_a_valid_scope_is_normalised():
     scope, start, end = mandates.validate(body(), now=NOW)
     assert scope["actions"] == ["invoice.approve"]
-    assert scope["counterparties"] == ["ACME STEEL PVT"]
+    # Without a vendors store, names only.
+    assert scope["counterparties"] == [
+        {"vendor_id": None, "key": "ACME STEEL PVT"}
+    ]
     assert scope["currency"] == "INR"
     assert scope["caps"]["per_period"] == {
         "period": "month",
@@ -93,6 +98,9 @@ def test_no_counterparties_means_any():
         ({"scope": {"caps": {"per_category": {"goods": "x"}}}}, "goods"),
         ({"scope": {"counterparties": ["  "]}}, "counterpart"),
         ({"scope": {"counterparties": "acme"}}, "counterpart"),
+        ({"scope": {"counterparties": [{"x": "acme"}]}}, "counterpart"),
+        ({"scope": {"counterparties": [{"name": " "}]}}, "counterpart"),
+        ({"scope": {"counterparties": [7]}}, "counterpart"),
         ({"valid_to": NOW}, "valid_to"),
         ({"valid_to": NOW + timedelta(days=367)}, "366"),
     ],
@@ -345,3 +353,98 @@ def test_revoking_an_already_revoked_mandate_reseals_nothing(env):
     mandates.revoke(ADMIN_A, store, m["id"], "again")
     [row] = store.mandates(T, agent_id)
     assert not mandates.verify(row, None)
+
+
+# -- counterparties by vendor id (U3) -----------------------------------------
+
+
+@pytest.fixture
+def vendors(env):
+    _, _, url = env
+    repo = PgVendorRepository(url)
+    repo.upsert_many(
+        T, [{"name": "Acme Steel Pvt. Ltd."}, {"name": "Globe Freight"}]
+    )
+    ids = {v["name"]: v["id"] for v in repo.list(T)}
+    return repo, ids["Acme Steel Pvt. Ltd."], ids["Globe Freight"]
+
+
+def parties(items, repo):
+    scope, _, _ = mandates.validate(
+        body(scope={"counterparties": items}),
+        now=NOW,
+        vendors=repo,
+        tenant_id=T,
+    )
+    return scope["counterparties"]
+
+
+def test_names_resolve_to_ids_where_the_vendor_exists(vendors):
+    repo, acme, _ = vendors
+    assert parties(["acme steel pvt ltd", "Nobody Ltd"], repo) == [
+        {"vendor_id": acme, "key": "ACME STEEL PVT"},
+        {"vendor_id": None, "key": "NOBODY"},
+    ]
+
+
+def test_an_id_is_accepted_whatever_its_case(vendors):
+    repo, acme, globe = vendors
+    assert parties([globe, acme.upper()], repo) == [
+        {"vendor_id": acme, "key": "ACME STEEL PVT"},
+        {"vendor_id": globe, "key": "GLOBE FREIGHT"},
+    ]
+
+
+def test_objects_name_an_id_or_a_name(vendors):
+    repo, acme, globe = vendors
+    assert parties([{"vendor_id": acme}, {"name": "Globe Freight"}], repo) == [
+        {"vendor_id": acme, "key": "ACME STEEL PVT"},
+        {"vendor_id": globe, "key": "GLOBE FREIGHT"},
+    ]
+
+
+def test_one_vendor_by_name_and_by_id_is_stored_once(vendors):
+    repo, acme, _ = vendors
+    assert parties(
+        [acme, "Acme Steel Pvt. Ltd.", {"vendor_id": acme}], repo
+    ) == [{"vendor_id": acme, "key": "ACME STEEL PVT"}]
+
+
+@pytest.mark.parametrize(
+    "item", ["0b8f6c1e-0000-4000-8000-000000000000", {"vendor_id": "nope"}]
+)
+def test_an_unknown_vendor_id_is_refused(vendors, item):
+    repo, _, _ = vendors
+    with pytest.raises(ValueError, match="Unknown vendor id"):
+        parties([item], repo)
+
+
+def test_a_name_object_is_a_name_even_when_it_looks_like_an_id(vendors):
+    repo, _, _ = vendors
+    looks = "0b8f6c1e-0000-4000-8000-000000000000"
+    assert parties([{"name": looks}], repo) == [
+        {"vendor_id": None, "key": normalize_vendor(looks)}
+    ]
+
+
+def test_without_a_store_an_id_object_is_refused(vendors):
+    _, acme, _ = vendors
+    with pytest.raises(ValueError, match="Unknown vendor id"):
+        parties([{"vendor_id": acme}], None)
+
+
+def test_a_mandate_with_vendor_ids_verifies_after_approval(env, vendors):
+    store, agent_id, _ = env
+    repo, acme, _ = vendors
+    scope, start, end = mandates.validate(
+        body(scope={"counterparties": [acme, "Nobody"]}),
+        now=NOW,
+        vendors=repo,
+        tenant_id=T,
+    )
+    m = store.propose_mandate(
+        ADMIN_A, agent_id, scope=scope, valid_from=start, valid_to=end
+    )
+    approved = mandates.approve(ADMIN_B, store, m["id"])
+    assert approved["scope"]["counterparties"][0]["vendor_id"] == acme
+    assert mandates.verify(approved, None)

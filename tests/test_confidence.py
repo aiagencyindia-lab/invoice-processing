@@ -640,3 +640,30 @@ class TestAScanIsReadByOcr:
         pages = confidence.ocr_page_text(_pdf("case_005"))
         assert locate("INV-00005", pages)[0] is True
         assert locate("51824753556", pages)[0] is True
+
+
+def test_ocr_reads_bytes_like_a_path_and_stops_early(tmp_path, monkeypatch):
+    """The worker's injection scan hands OCR the blob's bytes (Wave 5 B8),
+    capped in pages and in time; tesseract is faked, pypdfium2 is real."""
+    import subprocess  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    from test_trust_leakage import make_pdf  # noqa: PLC0415
+
+    calls = []
+
+    def run(argv, *, input, **kw):
+        calls.append(len(input))
+        return subprocess.CompletedProcess(argv, 0, stdout=b"page")
+
+    monkeypatch.setattr(confidence.shutil, "which", lambda _n: "/bin/tess")
+    monkeypatch.setattr(confidence.subprocess, "run", run)
+    data = make_pdf([["one"], ["two"], ["three"]])
+    path = tmp_path / "scan.pdf"
+    path.write_bytes(data)
+    assert confidence.ocr_page_text(data) == confidence.ocr_page_text(path)
+    assert confidence.ocr_page_text(data) == ["page"] * 3
+    assert confidence.ocr_page_text(data, max_pages=2) == ["page"] * 2
+    calls.clear()
+    assert confidence.ocr_page_text(data, deadline=time.monotonic() - 1) == []
+    assert calls == []

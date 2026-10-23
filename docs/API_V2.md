@@ -46,7 +46,7 @@ A transaction id is the invoice's evidence-graph node id. It is the `transaction
 | POST | `/v2/agents/{agent_id}/mandates` | admin (a signed-in person; a key gets 403) | `POST /api/trust/agents/{agent_id}/mandates` |
 | POST | `/v2/agents/{agent_id}/actions/evaluate` | approver, or the agent's own key about itself | `POST /api/trust/agents/{agent_id}/actions/evaluate` |
 | GET | `/v2/agents/{agent_id}/ledger` | approver | `GET /api/trust/agents/{agent_id}/ledger` (`?since=&until=`) |
-| POST | `/v2/agents/actions` | approver (API key or user) | — (not built yet: answers 503) |
+| POST | `/v2/agents/actions` | approver (API key or user) | — (the JSON twin of the log import, `POST /api/trust/agents/actions/import`) |
 
 ## Agents
 
@@ -54,13 +54,13 @@ Agent control is **off** unless an admin turns the `agents` engine on (`shadow`,
 
 An **agent** is a machine actor an admin registered: `{name, owner, description?, principal}`. `owner` is the email of the person answerable for it. `principal` binds it to who it acts as: `{"api_key_id": "…"}` (one of the tenant's live keys), `{"user_id", "email"}` (a service account), or `null` (an outside agent known only from imported logs). One principal belongs to at most one agent (409).
 
-A **mandate** is what a person authorised the agent to do:
+A **mandate** is what a person authorised the agent to do. An admin proposes it with `POST /v2/agents/{agent_id}/mandates`:
 
 ```json
 {
   "scope": {
     "actions": ["invoice.approve", "invoice.export"],
-    "counterparties": ["Acme Steel"],
+    "counterparties": ["Acme Steel", "6f1c2d8e-4b1a-4c55-9a2e-1f0b7c3d9e21", {"vendor_id": "…"}, {"name": "Globe Freight"}],
     "caps": {
       "per_action": "50000",
       "per_period": {"period": "month", "amount": "100000"},
@@ -70,18 +70,55 @@ A **mandate** is what a person authorised the agent to do:
     "currency": "INR"
   },
   "valid_from": "2026-10-01T00:00:00Z",
-  "valid_to": "2026-12-31T00:00:00Z"
+  "valid_to": "2026-12-31T00:00:00Z",
+  "reason": "Q4 payables run"
 }
 ```
 
-`actions` is a subset of `vendor.create`, `vendor.patch`, `bank_change.propose`, `bank_change.decide`, `invoice.approve`, `invoice.reject`, `invoice.export`. `counterparties` is a list of vendor names, or `null` for any vendor. Amounts are strings in the mandate's one currency. A mandate runs at most 366 days. One admin proposes it; a **different** admin approves it on `/api` (`POST /api/trust/agents/{agent_id}/mandates/{mandate_id}/approve`), and only then is it signed and in force. Until then every action of the agent is blocked.
+`actions` is a non-empty subset of these kinds:
+
+| Kind | Governs | Raised by |
+|---|---|---|
+| `vendor.create` | Adding a supplier the tenant did not have. | `PUT /api/vendors` (each new name in the upload) |
+| `vendor.patch` | Changing a supplier's details (its email domain). | `PATCH /api/vendors/{vendor_id}` |
+| `bank_change.propose` | Proposing new payee bank details for a supplier. | `POST /api/vendors/{vendor_id}/bank-changes`, `POST /api/invoices/{case_id}/bank-change` |
+| `bank_change.decide` | Approving or rejecting a proposed bank change. | `POST /api/vendors/bank-changes/{change_id}/decide` |
+| `invoice.approve` | Approving an invoice for payment; the only kind the caps count. | `POST /api/invoices/{case_id}/actions` (`approve`) |
+| `invoice.reject` | Rejecting an invoice. | `POST /api/invoices/{case_id}/actions` (`reject`) |
+| `invoice.export` | Exporting an approved invoice to the ERP. | `POST /api/invoices/{case_id}/export` |
+| `po.create` | Adding a purchase order the tenant did not have (the amount is recorded, never counted by caps). | `POST /api/purchase-orders/import`, `PUT /api/purchase-orders` (each new PO number) |
+| `document.upload` | Storing a document (an invoice, or a supplier's KYC file). | `POST /api/documents`, `POST /api/vendors/{vendor_id}/documents` |
+
+`currency` is the mandate's one ISO currency; an approval in another currency, or with none, is out of mandate. Amounts are strings (a JSON number has already been through a float).
+
+`counterparties` is `null` (any vendor) or a non-empty list. Each item is a vendor name, a vendor id, `{"vendor_id": "…"}` or `{"name": "…"}`. At proposal a name resolves to its vendor when the tenant has one; an id must name a stored vendor (otherwise 400 `Unknown vendor id`, so a typo never becomes a name that matches nothing). Without the vendors table every item must be a name. The mandate stores and returns them as `[{"vendor_id": "…" | null, "key": "ACME STEEL"}]`, sorted and de-duplicated, where `key` is the normalised name. An action that names a vendor is in scope when that vendor's id is listed, or, failing that, its normalised name is: a renamed vendor still matches by id, and a `vendor.create` (no id yet) matches by name. An action that names no vendor at all (a plain document upload, or a logged row without `vendor`) is not tested against `counterparties`; its other limits still apply.
+
+`caps` are optional and count only `invoice.approve` amounts: `per_action` (one approval), `per_period` (`day` or `month`, calendar, UTC), `per_vendor` and `per_category` (by vendor kind) over that period. An approval that would pass a cap is blocked.
+
+A mandate runs from `valid_from` to `valid_to`, at most 366 days; it is expired, not deleted, after `valid_to`. One admin proposes it; a **different** admin approves it on `/api` (`POST /api/trust/agents/{agent_id}/mandates/{mandate_id}/approve`), and only then is it signed and in force (a new version supersedes the old on approval). Until then every action of the agent is blocked. Each mandate read carries `verified`: the row is what was signed, in the state it was signed in, and follows the version before it; a mandate edited in the database reads `verified: false` and authorises nothing.
 
 `actions/evaluate` asks about one action, `{action, subject_ref, vendor?, category?, amount?, currency?, occurred_at?, source}`:
 
 - `source: "dryrun"` asks "would this be allowed?". The answer is recorded but never counts toward a cap, never raises a finding and never refuses anything. With a past `occurred_at` it is judged as of then: the mandate in force then, and the agent revoked only from its revocation.
 - `source: "log"` records an action the agent already took elsewhere (`occurred_at` required; approver only). It counts and raises a finding like any other.
 
-While the tenant's `agents` engine is `off`, `actions/evaluate` (and the log import on `/api`) answers 409 and records nothing: turn it to `shadow` or higher first.
+While the tenant's `agents` engine is `off`, `actions/evaluate`, the intake below and the log import on `/api` answer 409 and record nothing: turn it to `shadow` or higher first.
+
+`POST /v2/agents/actions` takes a batch of logged actions from an agent's own system, the log import's columns as JSON:
+
+```json
+{"actions": [
+  {"agent": "payables-bot", "action": "invoice.approve", "subject_ref": "invoices:case_0412",
+   "vendor": "Acme Steel", "category": "raw_material", "amount": "1200.50", "currency": "INR",
+   "occurred_at": "2026-10-21T10:00:00Z"}
+]}
+```
+
+- 1 to 5000 rows (more: 400). Every field is an optional string; a bad value (an unknown `action`, a missing or unreadable `occurred_at`, an amount that is not a number) is that row's error, and the other rows still land. A field over its length limit, or a JSON number where a string belongs, is a 422 for the request.
+- `agent` names the agent by name (case-blind; a revoked agent of the same name is passed over for the active one) or by its principal email. Two active agents with that name → the row error "Two agents share this name; use its principal email."; no such agent → "Unknown agent.". Leave `agent` out and the row is the calling API key's own agent; a caller bound to no agent gets "Name the agent: this caller is not registered as one.".
+- Each row is judged as `source: "log"` against the mandate in force at its `occurred_at`, counts and raises a finding like any other. The answer is `{"rows", "by_decision": {"ALLOW": n, …}, "errors": [{"row", "message"}]}`, rows numbered from 1.
+- A logged row is an approver's attestation: an approver key may log rows for any agent it names, exactly as an approver's CSV upload can. Rate limits and idempotency keys are not offered yet; resending a batch records it twice.
+- In `enforcing`, a logged `BLOCK` on an invoice (`subject_ref` `invoices:<case_id>` of a known invoice) places a payment hold that only a person's decision on its finding lifts; changing the engine's mode does not reconcile agent holds (the hold stops biting below `enforcing` and bites again when it returns).
 
 The answer is `{action_id, decision, reasons: [{rule, type, severity, message}], explanation, mode, source}`, where `decision` is:
 
