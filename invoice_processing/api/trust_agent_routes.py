@@ -259,6 +259,8 @@ def judge_log(
                     raise ValueError(NO_AGENT)
             else:
                 named = by_name.get(who, [])
+                # A revoked namesake does not make the live agent ambiguous.
+                named = [a for a in named if a["status"] == "active"] or named
                 if len(named) > 1:
                     raise ValueError(
                         "Two agents share this name; use its principal email."

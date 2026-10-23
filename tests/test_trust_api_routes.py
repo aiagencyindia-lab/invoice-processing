@@ -660,6 +660,23 @@ def test_two_agents_sharing_a_name_is_a_row_error(env):
     ]
 
 
+def test_a_revoked_namesake_does_not_make_a_name_ambiguous(env):
+    ctx = RunContext(tenant_id=ACME, case_id="", run_id="r", actor="a@acme")
+    agents = service._agent_store
+    old = agents.register(
+        ctx, name="feed", owner="o@acme.test", kind="external"
+    )
+    agents.revoke(ctx, old["id"], "replaced")
+    new = agents.register(
+        ctx, name="Feed", owner="o@acme.test", kind="external"
+    )
+    r = bearer("acme:approver").post(
+        "/v2/agents/actions", json=_intake_body(_row(agent="feed"))
+    )
+    assert r.json()["errors"] == []
+    assert [a["agent_id"] for a in _ledger_rows(env)] == [new["id"]]
+
+
 def test_mixed_rows_fill_decisions_and_errors(env):
     r = keyed(env["acme"]["keys"]["approver"]).post(
         "/v2/agents/actions",

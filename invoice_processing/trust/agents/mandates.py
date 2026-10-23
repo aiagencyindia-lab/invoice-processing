@@ -117,12 +117,13 @@ def _party(item, vendors, tenant_id) -> dict:
         if found is None:
             raise ValueError(f"Unknown vendor id: {vendor_id.strip()[:64]}")
         return _vendor_party(found)
-    if isinstance(item, dict) and set(item) == {"name"}:
+    named = isinstance(item, dict) and set(item) == {"name"}
+    if named:
         item = item["name"]
     if not isinstance(item, str):
         raise ValueError(EACH_PARTY)
     text = item.strip()
-    if _UUID.fullmatch(text.lower()):
+    if not named and _UUID.fullmatch(text.lower()):
         # An id typo must not become a name that never matches.
         return _party({"vendor_id": text}, vendors, tenant_id)
     key = normalize_vendor(text)

@@ -11,6 +11,7 @@ from sqlalchemy import update
 from invoice_processing.db import models
 from invoice_processing.db.repositories import PgVendorRepository
 from invoice_processing.db.session import tenant_session
+from invoice_processing.po_matching import normalize_vendor
 from invoice_processing.ports import RunContext
 from invoice_processing.trust.agents import mandates
 from invoice_processing.trust.agents.store import AgentStore
@@ -416,6 +417,14 @@ def test_an_unknown_vendor_id_is_refused(vendors, item):
     repo, _, _ = vendors
     with pytest.raises(ValueError, match="Unknown vendor id"):
         parties([item], repo)
+
+
+def test_a_name_object_is_a_name_even_when_it_looks_like_an_id(vendors):
+    repo, _, _ = vendors
+    looks = "0b8f6c1e-0000-4000-8000-000000000000"
+    assert parties([{"name": looks}], repo) == [
+        {"vendor_id": None, "key": normalize_vendor(looks)}
+    ]
 
 
 def test_without_a_store_an_id_object_is_refused(vendors):
