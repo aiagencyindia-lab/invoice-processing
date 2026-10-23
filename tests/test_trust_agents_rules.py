@@ -171,6 +171,29 @@ def test_a_revoked_agent_blocks_even_with_a_mandate(env):
     assert r.type == "AGENT-OUT-OF-MANDATE" and "revoked" in r.message
 
 
+def test_an_action_before_the_revocation_is_not_revoked(env):
+    m = sealed(env)
+    revoked = {**env["bot"], "status": "revoked", "revoked_at": NOW}
+    early = approve(occurred_at=NOW - timedelta(hours=1))
+    assert run(rules.mandate_active, env, early, m, agent=revoked) is None
+
+
+@pytest.mark.parametrize("after", [timedelta(0), timedelta(hours=1)])
+def test_an_action_at_or_after_the_revocation_is_revoked(env, after):
+    m = sealed(env)
+    revoked = {**env["bot"], "status": "revoked", "revoked_at": NOW}
+    late = approve(occurred_at=NOW + after)
+    r = run(rules.mandate_active, env, late, m, agent=revoked)
+    assert r.message.endswith("is revoked.")
+
+
+def test_a_revoked_agent_without_a_time_is_revoked(env):
+    revoked = {**env["bot"], "status": "revoked", "revoked_at": None}
+    early = approve(occurred_at=NOW - timedelta(days=9))
+    r = run(rules.mandate_active, env, early, sealed(env), agent=revoked)
+    assert r.message.endswith("is revoked.")
+
+
 def test_an_active_agent_with_a_sealed_mandate_passes(env):
     assert run(rules.mandate_active, env, approve(), sealed(env)) is None
 

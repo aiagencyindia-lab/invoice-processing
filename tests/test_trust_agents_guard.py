@@ -206,10 +206,11 @@ def ledger(env):
     return env["rows"](models.AgentAction)
 
 
-def blocked(response, code):
+def blocked(response, code, *, person=False):
+    """A refused agent action has a ledger row; a refused person (U9) none."""
     assert response.status_code == 403, response.text
     body = response.json()["detail"]
-    assert body["action_id"] and body["detail"]
+    assert body["detail"] and (body["action_id"] is None) == person
     assert code in [r["type"] for r in body["reasons"]]
     return body
 
@@ -320,11 +321,38 @@ def test_agent_then_its_owner_is_refused_for_the_owner(env):
     two_tier(env)
     bot = agent(env, "approver:a", owner="b@x.test")
     assert act(env, "approver:a").status_code == 200
-    body = blocked(act(env, "approver:b"), "AGENT-SAME-OWNER-CHAIN")
+    body = blocked(
+        act(env, "approver:b"), "AGENT-SAME-OWNER-CHAIN", person=True
+    )
     assert "your agent a" in body["detail"]
     assert decided(env) is None
-    refused = [r for r in ledger(env) if r.decision == "BLOCK"]
-    assert [r.agent_id for r in refused] == [bot["id"]]
+    # The person was refused, not the agent: nothing on its ledger, no
+    # agent.action.blocked; the finding names both.
+    assert [r.decision for r in ledger(env)] == ["ALLOW"]
+    assert not env["rows"](models.WebhookOutbox)
+    (finding,) = owner_findings(env)
+    assert finding.details["person"] == "b@x.test"
+    assert finding.details["agent_id"] == bot["id"]
+
+
+def owner_findings(env):
+    return [
+        f
+        for f in env["rows"](models.TrustFinding)
+        if f.type == "AGENT-SAME-OWNER-CHAIN"
+    ]
+
+
+def test_a_person_refused_twice_raises_one_finding(env):
+    env["settings"].mode = "enforcing"
+    two_tier(env)
+    agent(env, "approver:a", owner="b@x.test")
+    assert act(env, "approver:a").status_code == 200
+    for _ in range(2):
+        blocked(act(env, "approver:b"), "AGENT-SAME-OWNER-CHAIN", person=True)
+    (finding,) = owner_findings(env)
+    # Keyed on the email U9 matches on, not a token's user id (may be "").
+    assert finding.dedupe_key == f"owner_chain:invoices:{CASE}:b@x.test"
 
 
 def test_the_owner_check_only_records_below_enforcing(env):
@@ -334,7 +362,8 @@ def test_the_owner_check_only_records_below_enforcing(env):
     assert act(env, "approver:a").status_code == 200
     assert act(env, "approver:b").status_code == 200
     assert decided(env) == "approve"
-    assert [r.decision for r in ledger(env)].count("BLOCK") == 1
+    assert [r.decision for r in ledger(env)].count("BLOCK") == 0
+    assert len(owner_findings(env)) == 1
 
 
 # -- export ------------------------------------------------------------------
@@ -390,6 +419,26 @@ def test_only_new_vendors_are_creates(env):
     (row,) = ledger(env)
     assert row.action == "vendor.create" and row.vendor_key == "BRAND NEW"
     assert len(env["vendors"].list(TENANT)) == 2
+
+
+def test_a_vendor_load_reads_the_vendor_names_once(env, monkeypatch):
+    env["client"]("admin").put("/api/vendors", json={"vendors": [VENDOR]})
+    env["settings"].mode = "advisory"
+    agent(env, "admin:bot", actions=["vendor.create"])
+
+    def per_vendor(*a, **k):
+        raise AssertionError("list() reads each vendor's pending change")
+
+    monkeypatch.setattr(PgVendorRepository, "list", per_vendor)
+    others = [
+        {"name": f"Brand New {n} Pty", "tax_id": f"29BBBBB000{n}B1Z5"}
+        for n in range(3)
+    ]
+    r = env["client"]("admin:bot").put(
+        "/api/vendors", json={"vendors": [VENDOR, *others]}
+    )
+    assert r.status_code == 200, r.text
+    assert [row.action for row in ledger(env)] == ["vendor.create"] * 3
 
 
 def _vendor(env):
@@ -465,6 +514,39 @@ def test_a_guard_failure_is_a_503_in_enforcing(env, monkeypatch):
     assert r.status_code == 503 and "not taken" in r.json()["detail"]
     assert decided(env) is None
     assert ledger(env) == []
+
+
+def _crash(*a, **k):
+    raise RuntimeError("db down")
+
+
+def test_a_crashing_rule_is_503_in_enforcing_and_writes_nothing(
+    env, monkeypatch
+):
+    from invoice_processing.trust.agents import rules  # noqa: PLC0415
+
+    env["settings"].mode = "enforcing"
+    agent(env, "approver:bot")
+    monkeypatch.setattr(rules, "RULES", (*rules.RULES, _crash))
+    r = act(env, "approver:bot")
+    assert r.status_code == 503 and "not taken" in r.json()["detail"]
+    assert decided(env) is None and ledger(env) == []
+    assert not env["rows"](models.TrustFinding)
+    assert not env["rows"](models.WebhookOutbox)
+
+
+def test_a_crashing_detector_does_not_stop_the_write_in_enforcing(
+    env, monkeypatch
+):
+    from invoice_processing.trust.agents import behaviour  # noqa: PLC0415
+
+    env["settings"].mode = "enforcing"
+    agent(env, "approver:bot")
+    monkeypatch.setattr(behaviour, "RULES", (_crash, *behaviour.RULES))
+    assert act(env, "approver:bot").status_code == 200
+    assert decided(env) == "approve"
+    (row,) = ledger(env)
+    assert row.decision == "ALLOW"
 
 
 def test_a_guard_failure_proceeds_below_enforcing(env, monkeypatch, caplog):
