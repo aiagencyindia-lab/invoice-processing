@@ -930,3 +930,33 @@ def test_a_record_failure_in_enforcing_is_503_and_writes_nothing(
     assert ledger(env) == []
     assert not env["rows"](models.TrustFinding)
     assert not env["rows"](models.WebhookOutbox)
+
+
+def test_a_list_refusal_stamps_the_creates_before_it_failed(env):
+    env["settings"].mode = "enforcing"
+    bot = agent(env, "admin:bot", mandate=False)
+    m = env["store"].propose_mandate(
+        ADMIN_A,
+        bot["id"],
+        scope={
+            "actions": ["vendor.create"],
+            "currency": "AUD",
+            "counterparties": ["ONE", "TWO"],
+            "caps": {},
+        },
+        valid_from=datetime.now(UTC) - timedelta(days=1),
+        valid_to=datetime.now(UTC) + timedelta(days=30),
+    )
+    mandates.approve(ADMIN_B, env["store"], m["id"])
+    vendors = [
+        {"name": name, "tax_id": f"29AAAAA000{n}A1Z5"}
+        for n, name in enumerate(["One", "Two", "Three"])
+    ]
+    r = env["client"]("admin:bot").put(
+        "/api/vendors", json={"vendors": vendors}
+    )
+    blocked(r, "AGENT-OUT-OF-MANDATE")
+    rows = sorted(ledger(env), key=lambda row: row.created_at)
+    assert [row.decision for row in rows] == ["ALLOW", "ALLOW", "BLOCK"]
+    assert [row.outcome for row in rows[:2]] == ["failed", "failed"]
+    assert env["vendors"].list(TENANT) == []

@@ -388,12 +388,13 @@ def _measure(tenant_id, graph, findings, url) -> dict:
         k: {"label": KIND_LABEL[k], "n": 0, "caught": 0} for k in EXPECTED
     }
     compliant = {"n": 0, "false_blocks": 0, "false_reviews": 0}
-    for s in steps:
+    for i, s in enumerate(steps):
         agent, now = agents[s.agent], s.action.occurred_at
         ctx = RunContext(
             tenant_id=tenant_id,
             case_id="",
-            run_id="fleet",
+            # One request per scripted action: velocity counts requests.
+            run_id=f"fleet-{i}",
             actor=agent["principal_email"],
         )
         mandate = store.current_mandate(tenant_id, agent["id"], now)

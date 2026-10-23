@@ -143,18 +143,29 @@ def _check(principal, action, *, mode, settings_store, now, store):
         if principal.user_id
         else None
     )
-    out = [
-        _one(
-            agent,
-            principal,
-            a,
-            mode=mode,
-            settings_store=settings_store,
-            now=now,
-            store=store,
-        )
-        for a in (built if many else [built])
-    ]
+    out = []
+    for a in built if many else [built]:
+        try:
+            out.append(
+                _one(
+                    agent,
+                    principal,
+                    a,
+                    mode=mode,
+                    settings_store=settings_store,
+                    now=now,
+                    store=store,
+                )
+            )
+        except HTTPException:
+            # A later action refused: the ones already allowed are not
+            # written either, so the ledger must not show them as taken.
+            _settle(
+                principal,
+                [d.action_id for d in out if d and d.action_id],
+                "failed",
+            )
+            raise
     return out if many else out[0]
 
 

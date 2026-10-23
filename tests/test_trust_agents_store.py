@@ -325,3 +325,14 @@ def test_set_outcome_refuses_an_unknown_outcome(env):
     row = record(store, url, a, amount=Decimal("1"))
     with pytest.raises(ValueError):
         store.set_outcome(T, row, "maybe")
+
+
+def test_count_since_counts_one_bulk_request_once(env):
+    store, _, url = env
+    a = agent(store)["id"]
+    for _ in range(5):
+        record(store, url, a, action="vendor.create", request_id="req-bulk")
+    record(store, url, a)
+    record(store, url, a)
+    since, until = NOW - timedelta(minutes=5), NOW + timedelta(seconds=1)
+    assert store.count_since(T, a, since=since, until=until) == 3

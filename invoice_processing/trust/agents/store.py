@@ -465,7 +465,10 @@ class AgentStore:
     def count_since(
         self, tenant_id: str, agent_id: str, *, since: datetime, until: datetime
     ) -> int:
-        q = select(func.count()).where(
+        """Requests in the window: the rows of one bulk request (a vendor
+        load, a PO import) share its request id and count once."""
+        burst = func.coalesce(AgentAction.request_id, AgentAction.id)
+        q = select(func.count(func.distinct(burst))).where(
             *self._counted(tenant_id),
             AgentAction.agent_id == agent_id,
             AgentAction.occurred_at >= since,
