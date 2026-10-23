@@ -84,12 +84,14 @@ def _days(value, default: int) -> int:
 
 def _retention_days(settings: dict) -> int:
     """How far back the ledger keeps rows: the tenant's retention, never less
-    than a split window plus a day or a cap period (a calendar month)."""
-    return max(
+    than a split window plus a day or a cap period (a calendar month). A
+    century keeps everything; more would overflow the date arithmetic."""
+    days = max(
         _days(settings.get("agents.retention_days"), 400),
         _days(settings.get("agents.split_window_days"), 7) + 1,
         31,
     )
+    return min(days, 36_500)
 
 
 class ProcessingFailed(RuntimeError):

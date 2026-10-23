@@ -176,3 +176,11 @@ def test_purged_rows_are_logged_without_the_tenant(env, caplog):
     ]
     assert [r.rows for r in logged] == [1, 1]
     assert all(A not in str(vars(r)) and B not in str(vars(r)) for r in logged)
+
+
+def test_an_absurd_retention_keeps_everything_without_raising(env, caplog):
+    assert runner._retention_days({"agents.retention_days": 1e10}) == 36_500
+    env["overrides"][A] = {"agents.retention_days": 1e10}
+    env["worker"]._purge_agent_actions_if_due()
+    assert len(ages(env, A)) == 4 and ages(env, B) == KEPT
+    assert "failed for a tenant" not in caplog.text
