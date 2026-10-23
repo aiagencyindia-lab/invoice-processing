@@ -405,7 +405,6 @@ def _measure(tenant_id, graph, findings, url) -> dict:
             store=store,
             settings=settings,
             now=now,
-            mode="advisory",
             decider=DECIDER,
         )
         record(

@@ -181,7 +181,6 @@ def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
             store=store,
             settings=settings,
             now=now,
-            mode=mode,
             decider=None,
         )
         decision = _record(

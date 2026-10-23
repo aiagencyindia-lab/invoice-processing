@@ -9,6 +9,7 @@ branch's.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
@@ -27,6 +28,7 @@ from ..trust.modes import engine_mode
 from .auth import Principal, require_role
 from .integration_routes import Admin
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 Approver = Annotated[Principal, Depends(require_role("approver"))]
 Anyone = Annotated[Principal, Depends(require_role("viewer"))]
@@ -34,6 +36,7 @@ NEEDS_DB = "Agent control needs a database. Configure DATABASE_URL."
 OFF = (
     "Agent control is off for this tenant; turn it on (shadow or higher) first."
 )
+CHECK_FAILED = "A check could not run; try again."
 MAX_IMPORT_ROWS = 5000
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 SUBJECT_TABLES = {
@@ -41,6 +44,10 @@ SUBJECT_TABLES = {
     "bank_change": "vendor_bank_changes",
     "invoice": "invoices",
 }
+
+
+class CheckFailed(RuntimeError):
+    """A structural rule raised: nothing was recorded (B8)."""
 
 
 def _now() -> datetime:
@@ -157,16 +164,19 @@ def _judge(
     mandate = mandates.in_force(
         store.mandates(ctx.tenant_id, agent["id"]), when
     )
-    decision = evaluate(
-        ctx,
-        action,
-        agent=agent,
-        mandate=mandate,
-        store=store,
-        settings=_settings(ctx.tenant_id),
-        now=when,
-        mode=mode,
-    )
+    try:
+        decision = evaluate(
+            ctx,
+            action,
+            agent=agent,
+            mandate=mandate,
+            store=store,
+            settings=_settings(ctx.tenant_id),
+            now=when,
+        )
+    except Exception as exc:
+        logger.warning("agent_rule_failed", extra={"error": type(exc).__name__})
+        raise CheckFailed from None
     action_id = record.record(
         ctx,
         decision,
@@ -286,6 +296,9 @@ def import_actions(principal: Admin, file: Annotated[UploadFile, File()]):
             out = _judge(ctx, agent, row, "log", now, mode)
         except ValueError as exc:
             errors.append({"row": line, "message": str(exc)})
+            continue
+        except CheckFailed:
+            errors.append({"row": line, "message": CHECK_FAILED})
             continue
         counts[out["decision"]] = counts.get(out["decision"], 0) + 1
     return {"rows": len(rows), "by_decision": counts, "errors": errors}
@@ -432,6 +445,8 @@ def evaluate_action(agent_id: str, body: Evaluate, principal: Anyone):
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
+    except CheckFailed:
+        raise HTTPException(503, CHECK_FAILED) from None
 
 
 @router.get("/api/trust/agents/{agent_id}/ledger")

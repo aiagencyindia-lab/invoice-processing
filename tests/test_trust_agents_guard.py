@@ -494,6 +494,39 @@ def test_a_guard_failure_is_a_503_in_enforcing(env, monkeypatch):
     assert ledger(env) == []
 
 
+def _crash(*a, **k):
+    raise RuntimeError("db down")
+
+
+def test_a_crashing_rule_is_503_in_enforcing_and_writes_nothing(
+    env, monkeypatch
+):
+    from invoice_processing.trust.agents import rules  # noqa: PLC0415
+
+    env["settings"].mode = "enforcing"
+    agent(env, "approver:bot")
+    monkeypatch.setattr(rules, "RULES", (*rules.RULES, _crash))
+    r = act(env, "approver:bot")
+    assert r.status_code == 503 and "not taken" in r.json()["detail"]
+    assert decided(env) is None and ledger(env) == []
+    assert not env["rows"](models.TrustFinding)
+    assert not env["rows"](models.WebhookOutbox)
+
+
+def test_a_crashing_detector_does_not_stop_the_write_in_enforcing(
+    env, monkeypatch
+):
+    from invoice_processing.trust.agents import behaviour  # noqa: PLC0415
+
+    env["settings"].mode = "enforcing"
+    agent(env, "approver:bot")
+    monkeypatch.setattr(behaviour, "RULES", (_crash, *behaviour.RULES))
+    assert act(env, "approver:bot").status_code == 200
+    assert decided(env) == "approve"
+    (row,) = ledger(env)
+    assert row.decision == "ALLOW"
+
+
 def test_a_guard_failure_proceeds_below_enforcing(env, monkeypatch, caplog):
     env["settings"].mode = "advisory"
     agent(env, "approver:bot")

@@ -1056,3 +1056,31 @@ def test_evaluate_and_import_are_409_while_off(env):
     assert service._agent_store.actions("tenant-acme") == []
     with tenant_session("tenant-acme", env["url"]) as s:
         assert not s.scalars(select(models.TrustFinding)).all()
+
+
+def test_a_crashing_rule_is_503_on_evaluate_and_a_row_error_on_import(
+    env, monkeypatch
+):
+    agent, _m = mandated_earlier("acme")
+
+    def crash(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(rules, "RULES", (*rules.RULES, crash))
+    r = evaluate(bearer("acme:approver"), agent["id"], source="dryrun")
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"] == trust_agent_routes.CHECK_FAILED
+    at = "2026-10-21T10:00:00Z"
+    text = CSV_HEAD + "\n".join(
+        [
+            f"payables-bot,invoice.approve,inv-1,Acme,,1,INR,{at}",
+            f"nobody,invoice.approve,inv-2,Acme,,1,INR,{at}",
+        ]
+    )
+    r = upload(bearer("acme:admin"), text)
+    assert r.status_code == 200, r.text
+    assert r.json()["errors"] == [
+        {"row": 2, "message": trust_agent_routes.CHECK_FAILED},
+        {"row": 3, "message": "Unknown agent."},
+    ]
+    assert service._agent_store.actions("tenant-acme") == []
