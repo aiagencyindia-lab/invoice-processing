@@ -109,7 +109,11 @@ def _party(item, vendors, tenant_id) -> dict:
         vendor_id = item["vendor_id"]
         if not isinstance(vendor_id, str) or not vendor_id.strip():
             raise ValueError(EACH_PARTY)
-        found = vendors.get(tenant_id, vendor_id.strip().lower()) if vendors else None
+        found = (
+            vendors.get(tenant_id, vendor_id.strip().lower())
+            if vendors
+            else None
+        )
         if found is None:
             raise ValueError(f"Unknown vendor id: {vendor_id.strip()[:64]}")
         return _vendor_party(found)
