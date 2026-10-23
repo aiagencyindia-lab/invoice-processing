@@ -175,3 +175,6 @@ def injection(action, agent, mandate, store, settings, now, decider):
 
 
 RULES: tuple = (circular, split, velocity, injection)
+# Read the document and ask the model: the guard runs these after the write,
+# in the worker (`later.classify`), never under the agent lock.
+DEFERRED: tuple = (injection,)

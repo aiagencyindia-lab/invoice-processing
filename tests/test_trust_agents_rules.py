@@ -12,7 +12,7 @@ from invoice_processing.db import models
 from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.trust import thresholds
-from invoice_processing.trust.agents import rules
+from invoice_processing.trust.agents import mandates, rules
 from invoice_processing.trust.agents.policy import Action, evaluate_action
 from invoice_processing.trust.agents.store import AgentStore
 
@@ -34,6 +34,27 @@ SCOPE = {
     "counterparties": None,
     "caps": {},
 }
+
+
+@pytest.fixture(autouse=True)
+def mandate_key(monkeypatch):
+    monkeypatch.setenv("TRUST_MANDATE_KEY", "rules-test-key")
+
+
+ADMIN_B = RunContext(tenant_id=T, case_id="", run_id="", actor="b@acme.test")
+
+
+def sealed(env, agent=None, **caps):
+    """A really proposed, approved and signed mandate for the agent."""
+    agent = agent or env["bot"]
+    m = env["store"].propose_mandate(
+        CTX,
+        agent["id"],
+        scope={**SCOPE, "caps": caps},
+        valid_from=NOW - timedelta(days=1),
+        valid_to=NOW + timedelta(days=30),
+    )
+    return mandates.approve(ADMIN_B, env["store"], m["id"])
 
 
 @pytest.fixture
@@ -150,8 +171,110 @@ def test_a_revoked_agent_blocks_even_with_a_mandate(env):
     assert r.type == "AGENT-OUT-OF-MANDATE" and "revoked" in r.message
 
 
-def test_an_active_agent_with_a_mandate_passes(env):
-    assert run(rules.mandate_active, env, approve()) is None
+def test_an_action_before_the_revocation_is_not_revoked(env):
+    m = sealed(env)
+    revoked = {**env["bot"], "status": "revoked", "revoked_at": NOW}
+    early = approve(occurred_at=NOW - timedelta(hours=1))
+    assert run(rules.mandate_active, env, early, m, agent=revoked) is None
+
+
+@pytest.mark.parametrize("after", [timedelta(0), timedelta(hours=1)])
+def test_an_action_at_or_after_the_revocation_is_revoked(env, after):
+    m = sealed(env)
+    revoked = {**env["bot"], "status": "revoked", "revoked_at": NOW}
+    late = approve(occurred_at=NOW + after)
+    r = run(rules.mandate_active, env, late, m, agent=revoked)
+    assert r.message.endswith("is revoked.")
+
+
+def test_a_revoked_agent_without_a_time_is_revoked(env):
+    revoked = {**env["bot"], "status": "revoked", "revoked_at": None}
+    early = approve(occurred_at=NOW - timedelta(days=9))
+    r = run(rules.mandate_active, env, early, sealed(env), agent=revoked)
+    assert r.message.endswith("is revoked.")
+
+
+def test_an_active_agent_with_a_sealed_mandate_passes(env):
+    assert run(rules.mandate_active, env, approve(), sealed(env)) is None
+
+
+def _edit(env, mandate_id, **cols):
+    from sqlalchemy import update  # noqa: PLC0415
+
+    with tenant_session(T, env["url"]) as s:
+        s.execute(
+            update(models.AgentMandate)
+            .where(models.AgentMandate.id == mandate_id)
+            .values(**cols)
+        )
+
+
+def _stored(env, mandate_id):
+    rows = env["store"].mandates(T, env["bot"]["id"])
+    return next(m for m in rows if m["id"] == mandate_id)
+
+
+def test_a_mandate_altered_in_the_db_blocks(env):
+    m = sealed(env)
+    _edit(env, m["id"], valid_to=NOW + timedelta(days=365))
+    r = run(rules.mandate_active, env, approve(), _stored(env, m["id"]))
+    assert r.type == "AGENT-OUT-OF-MANDATE" and r.severity == "BLOCK"
+    assert "does not verify" in r.message
+
+
+def test_an_unsigned_active_mandate_blocks(env):
+    m = env["store"].propose_mandate(
+        CTX,
+        env["bot"]["id"],
+        scope=SCOPE,
+        valid_from=NOW - timedelta(days=1),
+        valid_to=NOW + timedelta(days=30),
+    )
+    m = env["store"].approve_mandate(ADMIN_B, m["id"], signature=None)
+    r = run(rules.mandate_active, env, approve(), _stored(env, m["id"]))
+    assert r is not None and "does not verify" in r.message
+
+
+def test_without_the_key_no_mandate_verifies(env, monkeypatch):
+    m = sealed(env)
+    monkeypatch.delenv("TRUST_MANDATE_KEY")
+    r = run(rules.mandate_active, env, approve(), m)
+    assert r is not None and "does not verify" in r.message
+
+
+def test_a_replayed_superseded_version_blocks(env):
+    """Restoring v1's whole pre-supersede row (signature included) verifies;
+    the later approved version still gives it away."""
+    v1 = sealed(env)
+    sealed(env)  # v2 supersedes v1 now
+    _edit(
+        env,
+        v1["id"],
+        status="active",
+        revoked_at=None,
+        revoked_by=None,
+        reason=None,
+        signature=v1["signature"],
+    )
+    replayed = _stored(env, v1["id"])
+    assert mandates.verify(replayed, None)  # the replay itself is valid
+    # Approvals carry the real clock, so the action does too.
+    now = approve(occurred_at=datetime.now(UTC))
+    r = run(rules.mandate_active, env, now, replayed)
+    assert r is not None and "replaced" in r.message
+
+
+def test_a_logged_action_is_judged_by_the_version_then_in_force(env):
+    v1 = sealed(env)
+    v2 = sealed(env)
+    rows = env["store"].mandates(T, env["bot"]["id"])
+    v2_at = next(m for m in rows if m["id"] == v2["id"])["approved_at"]
+    at = v2_at - timedelta(microseconds=1)
+    assert at >= v1["approved_at"]
+    then = mandates.in_force(rows, at)
+    assert then["id"] == v1["id"]
+    logged = approve(occurred_at=at)
+    assert run(rules.mandate_active, env, logged, then) is None
 
 
 # -- in_scope --------------------------------------------------------------
@@ -383,7 +506,7 @@ def test_the_rules_run_in_severity_order_and_a_clean_action_is_allowed(env):
         CTX,
         approve(),
         agent=env["bot"],
-        mandate=mandate(per_action="1000"),
+        mandate=sealed(env, per_action="1000"),
         store=env["store"],
         settings=thresholds.DEFAULTS,
         now=NOW,

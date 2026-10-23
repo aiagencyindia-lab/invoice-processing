@@ -38,6 +38,9 @@ SIGNED = (
 )
 
 
+OUTCOMES = ("executed", "failed")
+
+
 class MandateConflict(Exception):
     """A version is already pending, or this one is not the pending latest."""
 
@@ -211,6 +214,7 @@ class AgentStore:
 
     def revoke(self, ctx, agent_id: str, reason: str) -> dict | None:
         now = _now()
+        closed: list[str] = []
         with tenant_session(ctx.tenant_id, self.url) as s:
             row = self._agent(s, ctx.tenant_id, agent_id)
             if row is None:
@@ -227,7 +231,9 @@ class AgentStore:
                 )
             ):
                 self._revoke(m, ctx, "agent revoked", now)
-        return self._renode(ctx, agent_id)
+                closed.append(m.id)
+        # The caller reseals exactly these rows (`mandates.reseal`).
+        return {**self._renode(ctx, agent_id), "revoked_mandates": closed}
 
     # -- mandates ----------------------------------------------------------
 
@@ -300,6 +306,7 @@ class AgentStore:
                 raise SelfApproval(
                     "A mandate needs a second person to approve it."
                 )
+            superseded: list[str] = []
             for prior in s.scalars(
                 select(AgentMandate).where(
                     AgentMandate.tenant_id == ctx.tenant_id,
@@ -308,22 +315,26 @@ class AgentStore:
                 )
             ):
                 self._revoke(prior, ctx, "superseded", now)
+                superseded.append(prior.id)
             row.status = "active"
             row.approved_by = _fold(ctx.actor)
             row.approved_at = now
             s.flush()
             row.digest = digest(_dict(row))
             row.signature = signature
-            return _dict(row)
+            # The caller reseals these too (`mandates.reseal`).
+            return {**_dict(row), "superseded": superseded}
 
     def revoke_mandate(self, ctx, mandate_id: str, reason: str) -> dict | None:
         with tenant_session(ctx.tenant_id, self.url) as s:
             row = s.get(AgentMandate, mandate_id)
             if row is None or row.tenant_id != ctx.tenant_id:
                 return None
-            if row.status != "revoked":
+            changed = row.status != "revoked"
+            if changed:
                 self._revoke(row, ctx, reason, _now())
-            return _dict(row)
+            # The caller reseals only a row this call changed.
+            return {**_dict(row), "changed": changed}
 
     def mandates(self, tenant_id: str, agent_id: str) -> list[dict]:
         with tenant_session(tenant_id, self.url) as s:
@@ -358,6 +369,21 @@ class AgentStore:
     def lock_agent(self, s, tenant_id: str, agent_id: str) -> None:
         """Serialise one agent's check-then-record (caps are hard limits)."""
         s.execute(_lock_query(tenant_id, agent_id))
+
+    def set_outcome(self, tenant_id: str, action_id: str, outcome: str) -> None:
+        if outcome not in OUTCOMES:
+            raise ValueError(f"outcome must be one of {', '.join(OUTCOMES)}.")
+        with tenant_session(tenant_id, self.url) as s:
+            row = s.get(AgentAction, action_id)
+            if row is not None and row.tenant_id == tenant_id:
+                row.outcome = outcome
+
+    def action(self, tenant_id: str, action_id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as s:
+            row = s.get(AgentAction, action_id)
+            if row is None or row.tenant_id != tenant_id:
+                return None
+            return _dict(row)
 
     def record_action(self, s, ctx, **cols) -> str:
         row = AgentAction(tenant_id=ctx.tenant_id, **cols)
@@ -424,6 +450,8 @@ class AgentStore:
             AgentAction.agent_id == agent_id,
             AgentAction.action == "invoice.approve",
             AgentAction.decision != "BLOCK",
+            # A failed write spent nothing; unstamped still counts.
+            AgentAction.outcome.is_distinct_from("failed"),
             AgentAction.currency == currency,
             AgentAction.occurred_at >= since,
             AgentAction.occurred_at < until,

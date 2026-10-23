@@ -1105,6 +1105,17 @@ class PgVendorRepository:
             ).all()
             return [self._vendor_dict(session, v) for v in rows]
 
+    def normalized_names(self, tenant_id: str) -> set[str]:
+        """Every vendor's matching key, in one query."""
+        with tenant_session(tenant_id, self.url) as session:
+            return set(
+                session.scalars(
+                    select(Vendor.normalized_name).where(
+                        Vendor.tenant_id == tenant_id
+                    )
+                )
+            )
+
     def get(self, tenant_id: str, vendor_id: str) -> dict | None:
         with tenant_session(tenant_id, self.url) as session:
             try:

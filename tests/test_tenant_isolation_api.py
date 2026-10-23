@@ -1529,48 +1529,6 @@ def branch_probed() -> set[str]:
     return probed
 
 
-class TestWave4StubsIsolation:
-    """The scaffold's agent-control stubs answer 503 to every tenant: nothing
-    to leak until the registry branch builds them, and then that branch's own
-    module carries the real two-tenant probe (its PROBED replaces these)."""
-
-    # (method, route template, role). Each entry counts as this route's
-    # probe while it is a stub. A branch that builds the route lists it in its
-    # own module's PROBED; the stub check then skips it, and the entry is
-    # deleted when the wave closes.
-    STUBS: ClassVar[list[tuple[str, str, str]]] = [
-        ("post", "/api/trust/agents", "admin"),
-        ("get", "/api/trust/agents", "approver"),
-        ("get", "/api/trust/agents/ledger", "approver"),
-        ("post", "/api/trust/agents/actions/import", "admin"),
-        ("get", "/api/trust/agents/{agent_id}", "approver"),
-        ("post", "/api/trust/agents/{agent_id}/revoke", "admin"),
-        ("post", "/api/trust/agents/{agent_id}/mandates", "admin"),
-        ("get", "/api/trust/agents/{agent_id}/mandates", "approver"),
-        (
-            "post",
-            "/api/trust/agents/{agent_id}/mandates/{mandate_id}/approve",
-            "admin",
-        ),
-        (
-            "post",
-            "/api/trust/agents/{agent_id}/mandates/{mandate_id}/revoke",
-            "admin",
-        ),
-        ("post", "/api/trust/agents/{agent_id}/actions/evaluate", "approver"),
-        ("get", "/api/trust/agents/{agent_id}/ledger", "approver"),
-    ]
-
-    @pytest.mark.parametrize(("method", "template", "role"), STUBS)
-    def test_a_stub_answers_no_tenant(self, clients, method, template, role):
-        if template in branch_probed():
-            pytest.skip(f"{template} is built; its branch module probes it")
-        path = re.sub(r"\{[^}]+\}", "x1", template)
-        for slug in ("acme", "globex"):
-            r = getattr(clients(slug, role), method)(path)
-            assert r.status_code == 503, (slug, path, r.status_code)
-
-
 class TestCoverage:
     # Routes that legitimately serve no tenant data, with the reason each is
     # exempt. Anything not listed must be probed above.
@@ -1679,31 +1637,12 @@ class TestCoverage:
         "tests.test_trust_provenance_routes",
         "tests.test_trust_score_routes",
         "tests.test_trust_api_routes",
-        # Wave 4 (absent until the registry branch lands).
+        # Wave 4.
         "tests.test_trust_agent_routes",
     )
 
     def _probed(self) -> set:
-
-        # The Wave 4 stubs, while they are stubs (TestWave4StubsIsolation).
-        stubs = {t for _, t, _ in TestWave4StubsIsolation.STUBS}
-        return set(self.PROBED) | stubs | branch_probed()
-
-    def test_a_built_stub_hands_over_to_its_branch_probe(self, monkeypatch):
-        import sys  # noqa: PLC0415
-        import types  # noqa: PLC0415
-
-        fake = types.ModuleType("tests.test_trust_agent_routes")
-        fake.PROBED = {"/api/trust/agents"}
-        monkeypatch.setitem(sys.modules, "tests.test_trust_agent_routes", fake)
-        assert "/api/trust/agents" in branch_probed()
-        assert "/api/trust/agents/ledger" not in branch_probed()
-
-    def test_a_stub_is_covered_only_while_it_is_a_stub(self):
-        """Listing a stub statically too would outlive it: once its branch
-        deleted the STUBS entry, nothing would demand a real probe."""
-        stubs = {t for _, t, _ in TestWave4StubsIsolation.STUBS}
-        assert not stubs & set(self.PROBED)
+        return set(self.PROBED) | branch_probed()
 
     def test_the_route_walk_sees_routes_mounted_from_routers(self):
         """FastAPI 0.141 puts each included router on `app.routes` as one

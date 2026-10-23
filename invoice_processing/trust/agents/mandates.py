@@ -20,6 +20,7 @@ from ...db.models import AgentMandate
 from ...db.session import tenant_session
 from ...po_matching import normalize_vendor
 from . import ACTIONS
+from .store import _dict as store_row
 from .store import digest
 
 __all__ = [
@@ -164,19 +165,62 @@ def _same(a: str, b: str | None) -> bool:
     return hmac.compare_digest(a.encode(), (b or "").encode())
 
 
+def _state(row: dict) -> str:
+    """What the signature covers: the content digest (which the version
+    chain links to, so it never changes) and the row's state, so reviving or
+    un-revoking a mandate in the database breaks it."""
+    at = row.get("revoked_at")
+    at = _utc(at).isoformat() if at else ""
+    return f"{row.get('digest')}|{row.get('status')}|{row.get('revoked_by') or ''}|{at}"
+
+
+def seal(row: dict) -> str:
+    return sign(row["tenant_id"], _state(row))
+
+
 def verify(row: dict, prev: dict | None) -> bool:
-    """The row is what was signed, and follows the version before it."""
+    """The row is what was signed, in the state it was signed in, and
+    follows the version before it."""
     if row.get("prev_digest") != (prev or {}).get("digest"):
         return False
     if not _same(digest(row), row.get("digest")):
         return False
-    if row.get("approved_by") is None:
-        return True  # proposed: nobody has signed it yet
+    if row.get("status") == "proposed" and row.get("approved_by") is None:
+        return True  # nobody has signed it yet
     try:
-        expected = sign(row["tenant_id"], row["digest"])
+        expected = seal(row)
     except MandateKeyMissing:
         return False
     return _same(expected, row.get("signature"))
+
+
+def reseal(ctx, store, mandate_ids) -> None:
+    """Sign the state of exactly the rows a call just changed. Never "every
+    row that does not match": that would bless a row edited in the database.
+    Without the key the rows are left unsigned (unverified), never blocked:
+    revoking must always work."""
+    for mandate_id in mandate_ids:
+        with tenant_session(ctx.tenant_id, store.url) as s:
+            row = s.get(AgentMandate, mandate_id)
+            if row is None or row.tenant_id != ctx.tenant_id:
+                continue
+            try:
+                row.signature = seal(store_row(row))
+            except MandateKeyMissing:
+                row.signature = None
+
+
+def revoke(ctx, store, mandate_id: str, reason: str) -> dict | None:
+    row = store.revoke_mandate(ctx, mandate_id, reason)
+    if row is None:
+        return None
+    if row["changed"]:  # a repeat revoke must not sign what the DB now holds
+        reseal(ctx, store, [mandate_id])
+    return next(
+        m
+        for m in store.mandates(ctx.tenant_id, row["agent_id"])
+        if m["id"] == mandate_id
+    )
 
 
 def annotate(rows: list[dict], now: datetime) -> list[dict]:
@@ -220,7 +264,9 @@ def approve(ctx, store, mandate_id: str) -> dict:
     """
     _key(ctx.tenant_id)  # refuse before anything changes
     row = store.approve_mandate(ctx, mandate_id, signature=None)
-    signature = sign(ctx.tenant_id, row["digest"])
-    with tenant_session(ctx.tenant_id, store.url) as s:
-        s.get(AgentMandate, mandate_id).signature = signature
-    return {**row, "signature": signature}
+    reseal(ctx, store, [mandate_id, *row["superseded"]])
+    return next(
+        m
+        for m in store.mandates(ctx.tenant_id, row["agent_id"])
+        if m["id"] == mandate_id
+    )

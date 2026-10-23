@@ -44,7 +44,7 @@ ACTION = Action(
 )
 
 
-def evaluate(mode="advisory"):
+def evaluate():
     return policy.evaluate_action(
         CTX,
         ACTION,
@@ -53,7 +53,6 @@ def evaluate(mode="advisory"):
         store=None,
         settings={},
         now=NOW,
-        mode=mode,
     )
 
 
@@ -77,24 +76,51 @@ def test_block_beats_review_and_every_rule_runs(monkeypatch):
 
 
 def test_review_alone_allows_with_review(monkeypatch):
+    monkeypatch.setattr(rules, "RULES", ())
     monkeypatch.setattr(behaviour, "RULES", (_rule(REVIEW),))
     assert evaluate().decision == "ALLOW-WITH-REVIEW"
 
 
-@pytest.mark.parametrize(
-    ("mode", "decision"),
-    [("enforcing", "BLOCK"), ("advisory", "ALLOW-WITH-REVIEW")],
-)
-def test_a_rule_that_raises_blocks_only_in_enforcing(
-    monkeypatch, mode, decision
-):
-    def boom(*a, **k):
-        raise RuntimeError("db down")
+def boom(*a, **k):
+    raise RuntimeError("db down")
 
+
+def test_skipped_detectors_do_not_run(monkeypatch):
+    calls = []
+
+    def asked(*a, **k):
+        calls.append(1)
+
+    monkeypatch.setattr(rules, "RULES", ())
+    monkeypatch.setattr(behaviour, "RULES", (asked, _rule(REVIEW)))
+    out = policy.evaluate_action(
+        CTX,
+        ACTION,
+        agent={"id": "a1"},
+        mandate=None,
+        store=None,
+        settings={},
+        now=NOW,
+        skip=(asked,),
+    )
+    assert calls == [] and out.reasons == (REVIEW,)
+
+
+def test_a_structural_rule_that_raises_propagates(monkeypatch):
+    # A control that cannot run is the guard's failure (B8): 503 in
+    # enforcing, a logged no-op below. Never a finding.
     monkeypatch.setattr(rules, "RULES", (boom,))
-    out = evaluate(mode)
-    assert out.decision == decision
-    assert out.reasons[0].rule == "rule-failed"
+    with pytest.raises(RuntimeError):
+        evaluate()
+
+
+def test_a_detector_that_raises_is_skipped(monkeypatch, caplog):
+    # Insights fail open: a detector only ever asks for review.
+    monkeypatch.setattr(rules, "RULES", ())
+    monkeypatch.setattr(behaviour, "RULES", (boom, _rule(REVIEW)))
+    out = evaluate()
+    assert out.decision == "ALLOW-WITH-REVIEW" and out.reasons == (REVIEW,)
+    assert "agent_rule_failed" in caplog.text
 
 
 # -- record ----------------------------------------------------------------
@@ -256,10 +282,8 @@ def test_a_blocked_action_draws_no_acted_on_edge(env):
 def test_the_finding_is_typed_by_the_first_reason_of_the_decided_severity(
     env, monkeypatch
 ):
-    def boom(*a, **k):
-        raise RuntimeError("down")
-
-    monkeypatch.setattr(behaviour, "RULES", (_rule(REVIEW), boom))
+    monkeypatch.setattr(rules, "RULES", (_rule(BLOCK),))
+    monkeypatch.setattr(behaviour, "RULES", (_rule(REVIEW),))
     decision = policy.evaluate_action(
         CTX,
         ACTION,
@@ -268,12 +292,27 @@ def test_the_finding_is_typed_by_the_first_reason_of_the_decided_severity(
         store=env["store"],
         settings={},
         now=NOW,
-        mode="enforcing",
     )
-    assert decision.decision == "BLOCK"
+    assert decision.reasons == (BLOCK, REVIEW)
     write(env, decision, mode="enforcing")
     (finding,) = _rows(env, models.TrustFinding)
-    assert finding.type == "AGENT-OUT-OF-MANDATE"  # the BLOCK, not the review
+    assert finding.type == "AGENT-SELF-APPROVAL"  # the BLOCK, not the review
+
+
+def test_a_person_finding_without_a_graph_node_is_refused_plainly(env):
+    from invoice_processing.api.auth import Principal  # noqa: PLC0415
+
+    graphless = {**env["agent"], "graph_node": None}
+    with pytest.raises(ValueError, match="graph"):
+        record.person(
+            CTX,
+            Decision("BLOCK", (BLOCK,), "x"),
+            ACTION,
+            agent=graphless,
+            principal=Principal("u1", "b@x.test", T, "approver"),
+            findings=env["findings"],
+            mode="advisory",
+        )
 
 
 def test_recording_without_a_graph_node_is_refused_plainly(env):

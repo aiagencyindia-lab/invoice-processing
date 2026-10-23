@@ -56,6 +56,8 @@ class Decision:
     explanation: str
     action_id: str | None = None
     agent_id: str | None = None
+    # Run the deferred detectors on this action once its write has happened.
+    defer: bool = False
 
 
 def evaluate_action(
@@ -67,24 +69,31 @@ def evaluate_action(
     store,
     settings: dict,
     now: datetime,
-    mode: str = "advisory",
     decider=None,
+    skip: tuple = (),
 ) -> Decision:
+    """A structural rule that raises propagates: a control that cannot run
+    is the guard's failure (B8), never a finding. A behavioural detector
+    that raises is skipped: insights fail open, and it only asks for review.
+    Detectors in `skip` run later instead (the guard defers injection to the
+    worker: `behaviour.DEFERRED`).
+    """
     reasons: list[Reason] = []
-    for rule in rules.RULES + behaviour.RULES:
+    args = (action, agent, mandate, store, settings, now, decider)
+    for rule in rules.RULES:
+        reason = rule(*args)
+        if reason is not None:
+            reasons.append(reason)
+    for detector in behaviour.RULES:
+        if detector in skip:
+            continue
         try:
-            reason = rule(action, agent, mandate, store, settings, now, decider)
+            reason = detector(*args)
         except Exception as exc:
-            # Fail closed only where it bites (program plan B8).
             logger.warning(
                 "agent_rule_failed", extra={"error": type(exc).__name__}
             )
-            reason = Reason(
-                "rule-failed",
-                "AGENT-OUT-OF-MANDATE",
-                "BLOCK" if mode == "enforcing" else "REVIEW",
-                "A check could not run.",
-            )
+            continue
         if reason is not None:
             reasons.append(reason)
     severities = {r.severity for r in reasons}

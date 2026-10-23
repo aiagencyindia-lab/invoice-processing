@@ -53,8 +53,22 @@ def currency(action, agent, mandate, store, settings, now, decider):
     )
 
 
+def _utc(at: datetime) -> datetime:
+    # A naive time is UTC, as the ledger stores it, never the host's zone.
+    return at.replace(tzinfo=UTC) if at.tzinfo is None else at.astimezone(UTC)
+
+
+def _revoked(action, agent, now) -> bool:
+    """Revoked by the action's time: a logged action from before the
+    revocation is judged by the mandate then in force (B15)."""
+    if agent.get("status") != "revoked":
+        return False
+    at = agent.get("revoked_at")
+    return at is None or _utc(at) <= _utc(action.occurred_at or now)
+
+
 def mandate_active(action, agent, mandate, store, settings, now, decider):
-    if agent.get("status") == "revoked":
+    if _revoked(action, agent, now):
         return _block(
             "mandate_active",
             "AGENT-OUT-OF-MANDATE",
@@ -65,6 +79,41 @@ def mandate_active(action, agent, mandate, store, settings, now, decider):
             "mandate_active",
             "AGENT-OUT-OF-MANDATE",
             f"{agent['name']} has no active mandate.",
+        )
+    return _sealed(action, agent, mandate, store, now)
+
+
+def _sealed(action, agent, mandate, store, now):
+    """The mandate in force must be the stored row as signed (content and
+    state) and must not have been replaced by then. The stored row is what is
+    checked: a logged action is handed the version then in force with its
+    status read as active."""
+    from . import mandates  # noqa: PLC0415 - mandates imports this package
+
+    rows = store.mandates(mandate["tenant_id"], agent["id"])
+    by_version = {m["version"]: m for m in rows}
+    stored = next((m for m in rows if m["id"] == mandate["id"]), None)
+    if stored is None or not mandates.verify(
+        stored, by_version.get(stored["version"] - 1)
+    ):
+        return _block(
+            "mandate_active",
+            "AGENT-OUT-OF-MANDATE",
+            f"{agent['name']}'s mandate does not verify: it is unsigned or "
+            "was changed after it was signed.",
+        )
+    at = action.occurred_at or now
+    if any(
+        m["version"] > stored["version"]
+        and m["approved_at"] is not None
+        and m["approved_at"] <= at
+        for m in rows
+    ):
+        return _block(
+            "mandate_active",
+            "AGENT-OUT-OF-MANDATE",
+            f"{agent['name']}'s mandate v{stored['version']} was replaced by "
+            "a later version.",
         )
     return None
 
@@ -136,8 +185,7 @@ def same_owner_chain(action, agent, mandate, store, settings, now, decider):
 def _period(at: datetime, period: str) -> tuple[datetime, datetime]:
     """The UTC calendar day or month around `at`. To the period's end, not to
     `at`: an approval recorded a moment later still counts (B17)."""
-    # A naive time is UTC, as the ledger stores it, never the host's zone.
-    at = at.replace(tzinfo=UTC) if at.tzinfo is None else at.astimezone(UTC)
+    at = _utc(at)
     if period == "day":
         start = at.replace(hour=0, minute=0, second=0, microsecond=0)
         return start, start + timedelta(days=1)

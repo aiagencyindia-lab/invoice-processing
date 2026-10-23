@@ -24,7 +24,7 @@ from invoice_processing.db import models
 from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.tenant_settings import JsonTenantSettings
-from invoice_processing.trust import apikeys
+from invoice_processing.trust import apikeys, modes
 from invoice_processing.trust.agents import rules
 from invoice_processing.trust.agents import store as store_mod
 from invoice_processing.trust.agents.policy import Reason
@@ -115,6 +115,10 @@ def env(tmp_path, monkeypatch, scratch_db):
             )
         ctx = RunContext(
             tenant_id=tid, case_id="", run_id="", actor=f"admin1@{slug}.test"
+        )
+        # Off means the engine does nothing; these routes need it on.
+        modes.set_engine_mode(
+            ctx, "agents", "shadow", store=service._tenant_settings
         )
         keys = {}
         for name, role in (("approver-key", "approver"), ("bot", "clerk")):
@@ -518,7 +522,7 @@ def test_a_proposed_mandate_evaluates_to_block(env, monkeypatch):
     body = r.json()
     assert body["decision"] == "BLOCK"
     assert body["reasons"][0]["type"] == "AGENT-OUT-OF-MANDATE"
-    assert body["mode"] == "off" and body["source"] == "dryrun"
+    assert body["mode"] == "shadow" and body["source"] == "dryrun"
 
 
 def test_dryrun_never_refuses_counts_or_raises_a_finding(env, monkeypatch):
@@ -958,3 +962,125 @@ def test_import_reads_xlsx(env):
     )
     assert r.status_code == 200, r.text
     assert r.json()["by_decision"] == {"ALLOW": 1} and r.json()["errors"] == []
+
+
+# -- count only what happened (2026-10-23) --------------------------------------
+
+
+def test_a_failed_approval_and_a_repeated_export_count_once(env):
+    """A failed approval (stamped by the route after the decision) adds
+    nothing; an invoice exported twice is paid once."""
+    agent, _ = mandated_earlier("acme")
+    client = bearer("acme:approver")
+    ok = evaluate(client, agent["id"], vendor="V", amount="100", currency="INR")
+    bad = evaluate(
+        client,
+        agent["id"],
+        vendor="V",
+        amount="40",
+        currency="INR",
+        subject_ref="inv-2",
+    )
+    for _ in range(2):
+        r = evaluate(
+            client,
+            agent["id"],
+            vendor="V",
+            amount="100",
+            currency="INR",
+            action="invoice.export",
+        )
+        assert r.status_code == 200, r.text
+    service.get_agent_store().set_outcome(
+        "tenant-acme", bad.json()["action_id"], "failed"
+    )
+    assert ok.status_code == 200
+    led = client.get(f"/api/trust/agents/{agent['id']}/ledger").json()
+    assert led["spend"]["INR"]["approved"] == "100"
+    assert led["spend"]["INR"]["exported"] == "100"
+    assert led["period"]["used"] == "100"
+    # The failed row is still on the record, labelled.
+    outcomes = {a["subject_ref"]: a.get("outcome") for a in led["actions"]}
+    assert outcomes["inv-2"] == "failed"
+    owners = client.get("/api/trust/agents/ledger").json()["owners"]
+    (o,) = [x for x in owners if x["owner"] == agent["owner"]]
+    assert o["approved"] == {"INR": "100"} and o["exported"] == {"INR": "100"}
+
+
+def test_a_log_row_from_before_the_revocation_is_judged_then(env):
+    agent, _m = mandated_earlier("acme")
+    with patch.object(store_mod, "_now", lambda: NOW - timedelta(days=1)):
+        r = bearer("acme:admin").post(
+            f"/api/trust/agents/{agent['id']}/revoke", json={"reason": "x"}
+        )
+    assert r.status_code == 200, r.text
+    approver = bearer("acme:approver")
+    before = evaluate(
+        approver,
+        agent["id"],
+        occurred_at=(NOW - timedelta(days=2)).isoformat(),
+        currency="INR",
+        amount="10",
+    )
+    assert before.status_code == 200, before.text
+    assert "revoked" not in before.json()["explanation"]
+    after = evaluate(approver, agent["id"], currency="INR", amount="10")
+    assert after.json()["decision"] == "BLOCK"
+    assert "is revoked" in after.json()["explanation"]
+
+
+def test_evaluate_and_import_are_409_while_off(env):
+    agent, _m = mandated_earlier("acme")
+    ctx = RunContext(
+        tenant_id="tenant-acme", case_id="", run_id="", actor="a@acme.test"
+    )
+    modes.set_engine_mode(ctx, "agents", "off", store=service._tenant_settings)
+    approver = bearer("acme:approver")
+    for source in ("log", "dryrun"):
+        r = evaluate(approver, agent["id"], source=source)
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"] == trust_agent_routes.OFF
+    r = approver.post(
+        f"/v2/agents/{agent['id']}/actions/evaluate",
+        json={
+            "action": "invoice.approve",
+            "subject_ref": "x",
+            "source": "dryrun",
+        },
+    )
+    assert r.status_code == 409, r.text
+    at = "2026-10-21T10:00:00Z"
+    text = CSV_HEAD + f"payables-bot,invoice.approve,inv-1,Acme,,1,INR,{at}"
+    r = upload(bearer("acme:admin"), text)
+    assert r.status_code == 409, r.text
+    assert service._agent_store.actions("tenant-acme") == []
+    with tenant_session("tenant-acme", env["url"]) as s:
+        assert not s.scalars(select(models.TrustFinding)).all()
+
+
+def test_a_crashing_rule_is_503_on_evaluate_and_a_row_error_on_import(
+    env, monkeypatch
+):
+    agent, _m = mandated_earlier("acme")
+
+    def crash(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(rules, "RULES", (*rules.RULES, crash))
+    r = evaluate(bearer("acme:approver"), agent["id"], source="dryrun")
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"] == trust_agent_routes.CHECK_FAILED
+    at = "2026-10-21T10:00:00Z"
+    text = CSV_HEAD + "\n".join(
+        [
+            f"payables-bot,invoice.approve,inv-1,Acme,,1,INR,{at}",
+            f"nobody,invoice.approve,inv-2,Acme,,1,INR,{at}",
+        ]
+    )
+    r = upload(bearer("acme:admin"), text)
+    assert r.status_code == 200, r.text
+    assert r.json()["errors"] == [
+        {"row": 2, "message": trust_agent_routes.CHECK_FAILED},
+        {"row": 3, "message": "Unknown agent."},
+    ]
+    assert service._agent_store.actions("tenant-acme") == []

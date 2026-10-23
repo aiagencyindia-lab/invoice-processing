@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -23,8 +24,9 @@ from fastapi import HTTPException
 
 from ...db.session import tenant_session
 from .. import modes, thresholds
-from . import ENGINE
+from . import ENGINE, behaviour
 from .policy import Action, Decision, Reason, evaluate_action
+from .record import person as record_person
 from .record import record
 
 logger = logging.getLogger(__name__)
@@ -70,6 +72,58 @@ def check(principal, action, *, settings_store=None, now=None, store=None):
         return None
 
 
+class Settle:
+    """Handed to the governed route: `written()` right after the write
+    commits, so a failure in the bookkeeping that follows does not turn a
+    committed write into "failed" (the cap would lose real money)."""
+
+    def __init__(self):
+        self.committed = False
+
+    def written(self) -> None:
+        self.committed = True
+
+
+@contextmanager
+def settling(principal, decision):
+    """Wrap the governed write: stamp the ledger row `executed` when the
+    body finishes, or when it raises after `written()`; `failed` when it
+    raises before (and re-raise). Spend skips a failed one, so a retry the
+    route then refuses (409 "already decided") costs the agent nothing.
+    No-op when the guard had nothing to say."""
+    decisions = [
+        d
+        for d in (decision if isinstance(decision, list) else [decision])
+        if d is not None and d.action_id
+    ]
+    ids = [d.action_id for d in decisions]
+    later = [d.action_id for d in decisions if d.defer]
+    settle = Settle()
+    try:
+        yield settle
+    except BaseException:
+        _settle(principal, ids, "executed" if settle.committed else "failed")
+        if settle.committed:
+            _defer(principal, later)
+        raise
+    _settle(principal, ids, "executed")
+    _defer(principal, later)
+
+
+def _settle(principal, ids, outcome) -> None:
+    if not ids:
+        return
+    try:
+        from ...api import service  # noqa: PLC0415
+
+        store = service.get_agent_store()
+        for action_id in ids:
+            store.set_outcome(principal.tenant_id, action_id, outcome)
+    except Exception as exc:
+        # The write's own result stands; an unstamped row still counts.
+        _log(exc)
+
+
 def _log(exc: Exception) -> None:
     logger.warning("agent_guard_failed", extra={"error": type(exc).__name__})
 
@@ -108,9 +162,7 @@ def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
     tenant = principal.tenant_id
     if agent is None:
         if action.kind in CHAIN:
-            return _owner_check(
-                principal, action, mode=mode, now=now, store=store
-            )
+            return _owner_check(principal, action, mode=mode, store=store)
         return None
     from ... import tenant_settings  # noqa: PLC0415 - avoids an import cycle
 
@@ -134,16 +186,38 @@ def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
             store=store,
             settings=settings,
             now=now,
-            mode=mode,
             decider=None,
+            skip=behaviour.DEFERRED,
         )
         decision = _record(
             ctx, decision, action, agent, mandate, store, mode, now
         )
+    # The document read and the model call run in the worker, once the write
+    # has happened (`settling`): never inline (PRD inline p95 <= 2 s).
+    if action.text is not None:
+        decision = dataclasses.replace(decision, defer=True)
     return _answer(decision, mode)
 
 
-def _owner_check(principal, action: Action, *, mode, now, store):
+def _defer(principal, ids) -> None:
+    """Queue the deferred detectors for actions whose write happened."""
+    if not ids:
+        return
+    from ...api import service  # noqa: PLC0415
+    from ...worker.runner import enqueue_agent_injection  # noqa: PLC0415
+
+    try:
+        queue, run_id = service.get_queue(), principal.context().run_id or ""
+        for action_id in ids:
+            enqueue_agent_injection(
+                queue, principal.tenant_id, action_id, run_id
+            )
+    except Exception as exc:
+        # The write stands; the action goes unscanned (logged).
+        _log(exc)
+
+
+def _owner_check(principal, action: Action, *, mode, store):
     """A person deciding a chain an agent they own already decided (U9).
     The only time the guard touches a human."""
     deciders = {_fold(d) for d in action.prior_deciders}
@@ -168,9 +242,18 @@ def _owner_check(principal, action: Action, *, mode, now, store):
     decision = Decision(
         "BLOCK", (reason,), reason.message, agent_id=agent["id"]
     )
-    mandate = store.current_mandate(tenant, agent["id"], now)
-    ctx = principal.context()
-    decision = _record(ctx, decision, action, agent, mandate, store, mode, now)
+    from ...api import service  # noqa: PLC0415
+
+    # The person acted: a finding, nothing on the agent's ledger.
+    record_person(
+        principal.context(),
+        decision,
+        action,
+        agent=agent,
+        principal=principal,
+        findings=service.get_finding_store(),
+        mode=mode,
+    )
     return _answer(decision, mode)
 
 
@@ -235,11 +318,6 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
     approvals = service.get_approvals()
     steps = approvals.chain(t, ctx.case_id) if approvals else []
 
-    def text() -> str:
-        # Read only if a detector asks: the PDF text layer and email body.
-        document = service.get_documents().get(t, ctx.case_id) or {}
-        return inputs.text_of(document, service.get_blobs(t))()
-
     return Action(
         kind=kind,
         subject_table="invoices",
@@ -260,5 +338,6 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
         ),
         vendor_verified=bool(vendor.get("bank_verified_at")),
         vendor_verified_by=vendor.get("bank_verified_by"),
-        text=text,
+        # Read only if a detector asks: the PDF text layer and email body.
+        text=inputs.invoice_text(t, ctx.case_id),
     )

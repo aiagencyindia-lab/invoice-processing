@@ -9,6 +9,7 @@ branch's.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
@@ -27,10 +28,15 @@ from ..trust.modes import engine_mode
 from .auth import Principal, require_role
 from .integration_routes import Admin
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 Approver = Annotated[Principal, Depends(require_role("approver"))]
 Anyone = Annotated[Principal, Depends(require_role("viewer"))]
 NEEDS_DB = "Agent control needs a database. Configure DATABASE_URL."
+OFF = (
+    "Agent control is off for this tenant; turn it on (shadow or higher) first."
+)
+CHECK_FAILED = "A check could not run; try again."
 MAX_IMPORT_ROWS = 5000
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 SUBJECT_TABLES = {
@@ -38,6 +44,10 @@ SUBJECT_TABLES = {
     "bank_change": "vendor_bank_changes",
     "invoice": "invoices",
 }
+
+
+class CheckFailed(RuntimeError):
+    """A structural rule raised: nothing was recorded (B8)."""
 
 
 def _now() -> datetime:
@@ -85,6 +95,14 @@ def _settings(tenant_id: str) -> dict:
     )
 
 
+def _mode(tenant_id: str) -> str:
+    """Off means the engine does nothing: no ledger row, no finding."""
+    mode = engine_mode(tenant_id, "agents")
+    if mode == "off":
+        raise HTTPException(409, OFF)
+    return mode
+
+
 def _utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -93,7 +111,9 @@ def _utc(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
-def _judge(ctx, agent: dict, row: dict, source: str, now: datetime) -> dict:
+def _judge(
+    ctx, agent: dict, row: dict, source: str, now: datetime, mode: str
+) -> dict:
     """Evaluate one past or hypothetical action and record the decision.
     ValueError names the first thing wrong with `row`."""
     kind = row.get("action")
@@ -144,17 +164,19 @@ def _judge(ctx, agent: dict, row: dict, source: str, now: datetime) -> dict:
     mandate = mandates.in_force(
         store.mandates(ctx.tenant_id, agent["id"]), when
     )
-    mode = engine_mode(ctx.tenant_id, "agents")
-    decision = evaluate(
-        ctx,
-        action,
-        agent=agent,
-        mandate=mandate,
-        store=store,
-        settings=_settings(ctx.tenant_id),
-        now=when,
-        mode=mode,
-    )
+    try:
+        decision = evaluate(
+            ctx,
+            action,
+            agent=agent,
+            mandate=mandate,
+            store=store,
+            settings=_settings(ctx.tenant_id),
+            now=when,
+        )
+    except Exception as exc:
+        logger.warning("agent_rule_failed", extra={"error": type(exc).__name__})
+        raise CheckFailed from None
     action_id = record.record(
         ctx,
         decision,
@@ -241,6 +263,7 @@ def tenant_ledger(
 
 @router.post("/api/trust/agents/actions/import")
 def import_actions(principal: Admin, file: Annotated[UploadFile, File()]):
+    mode = _mode(principal.tenant_id)
     data = file.file.read(MAX_IMPORT_BYTES + 1)
     if len(data) > MAX_IMPORT_BYTES:
         raise HTTPException(400, "The file is larger than 10 MB.")
@@ -270,9 +293,12 @@ def import_actions(principal: Admin, file: Annotated[UploadFile, File()]):
             agent = named[0] if named else by_email.get(who)
             if agent is None:
                 raise ValueError("Unknown agent.")
-            out = _judge(ctx, agent, row, "log", now)
+            out = _judge(ctx, agent, row, "log", now, mode)
         except ValueError as exc:
             errors.append({"row": line, "message": str(exc)})
+            continue
+        except CheckFailed:
+            errors.append({"row": line, "message": CHECK_FAILED})
             continue
         counts[out["decision"]] = counts.get(out["decision"], 0) + 1
     return {"rows": len(rows), "by_decision": counts, "errors": errors}
@@ -385,7 +411,7 @@ def revoke_mandate(
 ):
     before = _mandate(principal, agent_id, mandate_id)
     ctx = principal.context()
-    row = _store().revoke_mandate(ctx, mandate_id, body.reason)
+    row = mandates.revoke(ctx, _store(), mandate_id, body.reason)
     if before["status"] != "revoked":
         _audit().emit(
             ctx,
@@ -407,12 +433,20 @@ def evaluate_action(agent_id: str, body: Evaluate, principal: Anyone):
     if body.source == "log" and not principal.can("approver"):
         # A past action is an approver's attestation, not the agent's own.
         raise HTTPException(403, "Only an approver may record a logged action.")
+    mode = _mode(principal.tenant_id)
     try:
         return _judge(
-            principal.context(), agent, body.model_dump(), body.source, _now()
+            principal.context(),
+            agent,
+            body.model_dump(),
+            body.source,
+            _now(),
+            mode,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
+    except CheckFailed:
+        raise HTTPException(503, CHECK_FAILED) from None
 
 
 @router.get("/api/trust/agents/{agent_id}/ledger")
