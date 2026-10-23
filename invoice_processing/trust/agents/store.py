@@ -38,6 +38,9 @@ SIGNED = (
 )
 
 
+OUTCOMES = ("executed", "failed")
+
+
 class MandateConflict(Exception):
     """A version is already pending, or this one is not the pending latest."""
 
@@ -367,6 +370,14 @@ class AgentStore:
         """Serialise one agent's check-then-record (caps are hard limits)."""
         s.execute(_lock_query(tenant_id, agent_id))
 
+    def set_outcome(self, tenant_id: str, action_id: str, outcome: str) -> None:
+        if outcome not in OUTCOMES:
+            raise ValueError(f"outcome must be one of {', '.join(OUTCOMES)}.")
+        with tenant_session(tenant_id, self.url) as s:
+            row = s.get(AgentAction, action_id)
+            if row is not None and row.tenant_id == tenant_id:
+                row.outcome = outcome
+
     def record_action(self, s, ctx, **cols) -> str:
         row = AgentAction(tenant_id=ctx.tenant_id, **cols)
         s.add(row)
@@ -432,6 +443,8 @@ class AgentStore:
             AgentAction.agent_id == agent_id,
             AgentAction.action == "invoice.approve",
             AgentAction.decision != "BLOCK",
+            # A failed write spent nothing; unstamped still counts.
+            AgentAction.outcome.is_distinct_from("failed"),
             AgentAction.currency == currency,
             AgentAction.occurred_at >= since,
             AgentAction.occurred_at < until,
