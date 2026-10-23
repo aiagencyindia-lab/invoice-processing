@@ -350,7 +350,9 @@ def test_a_person_refused_twice_raises_one_finding(env):
     assert act(env, "approver:a").status_code == 200
     for _ in range(2):
         blocked(act(env, "approver:b"), "AGENT-SAME-OWNER-CHAIN", person=True)
-    assert len(owner_findings(env)) == 1
+    (finding,) = owner_findings(env)
+    # Keyed on the email U9 matches on, not a token's user id (may be "").
+    assert finding.dedupe_key == f"owner_chain:invoices:{CASE}:b@x.test"
 
 
 def test_the_owner_check_only_records_below_enforcing(env):

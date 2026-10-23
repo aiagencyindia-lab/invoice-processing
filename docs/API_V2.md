@@ -77,7 +77,7 @@ A **mandate** is what a person authorised the agent to do:
 
 `actions/evaluate` asks about one action, `{action, subject_ref, vendor?, category?, amount?, currency?, occurred_at?, source}`:
 
-- `source: "dryrun"` asks "would this be allowed?". The answer is recorded but never counts toward a cap, never raises a finding and never refuses anything.
+- `source: "dryrun"` asks "would this be allowed?". The answer is recorded but never counts toward a cap, never raises a finding and never refuses anything. With a past `occurred_at` it is judged as of then: the mandate in force then, and the agent revoked only from its revocation.
 - `source: "log"` records an action the agent already took elsewhere (`occurred_at` required; approver only). It counts and raises a finding like any other.
 
 While the tenant's `agents` engine is `off`, `actions/evaluate` (and the log import on `/api`) answers 409 and records nothing: turn it to `shadow` or higher first.

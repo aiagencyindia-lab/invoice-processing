@@ -33,6 +33,15 @@ def _reasons(decision: Decision) -> list[dict]:
     ]
 
 
+def _has_node(agent: dict) -> None:
+    if not agent.get("graph_node"):
+        # Every finding cites the agent's node; a store built without a
+        # graph has none. Build `AgentStore(url, graph=GraphStore(url))`.
+        raise ValueError(
+            "The agent has no graph node: give AgentStore a graph."
+        )
+
+
 def record(
     ctx,
     decision: Decision,
@@ -51,12 +60,7 @@ def record(
     """Write the decision; return the ledger row's id. `refused` is whether
     the action was actually stopped (enforcing, inline): only then does
     `agent.action.blocked` go out."""
-    if not agent.get("graph_node"):
-        # Every finding cites the agent's node; a store built without a
-        # graph has none. Build `AgentStore(url, graph=GraphStore(url))`.
-        raise ValueError(
-            "The agent has no graph node: give AgentStore a graph."
-        )
+    _has_node(agent)
     reasons = _reasons(decision)
     with tenant_session(ctx.tenant_id, store.url) as s:
         action_id = store.record_action(
@@ -176,6 +180,7 @@ def person(
     (U9). The person acted, not the agent: no ledger row (it would count
     against the agent's caps and velocity) and no `agent.action.blocked`.
     One finding per invoice and person, citing the agent and the invoice."""
+    _has_node(agent)
     citations = [Citation(agent["graph_node"])]
     if action.transaction_node:
         citations.append(Citation(action.transaction_node))
@@ -184,7 +189,11 @@ def person(
         FindingSpec(
             type=decision.reasons[0].type,
             transaction_node=action.transaction_node or agent["graph_node"],
-            dedupe_key=f"owner_chain:{action.subject_ref}:{principal.user_id}",
+            # The email U9 matched on; a token's user id may be empty.
+            dedupe_key=(
+                f"owner_chain:{action.subject_ref}:"
+                f"{principal.email.strip().casefold()}"
+            ),
             impact=None,
             currency=action.currency,
             confidence=None,

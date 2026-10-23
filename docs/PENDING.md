@@ -238,6 +238,8 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   - [x] A structural rule that raises is the guard's failure (503 in
         enforcing, logged no-op below, no finding); a behavioural detector
         that raises is skipped (2026-10-23).
+  - [ ] A detector that keeps raising is now only the `agent_rule_failed`
+        warning (error type); alert on it once logs reach a monitor.
   - [x] `replace_vendors` reads the vendor keys in one query (2026-10-23).
   - [ ] FR-28.1 "our own agents register automatically" is moot: no
         in-house agent performs a governed write today.

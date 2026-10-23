@@ -278,6 +278,22 @@ def test_the_finding_is_typed_by_the_first_reason_of_the_decided_severity(
     assert finding.type == "AGENT-SELF-APPROVAL"  # the BLOCK, not the review
 
 
+def test_a_person_finding_without_a_graph_node_is_refused_plainly(env):
+    from invoice_processing.api.auth import Principal  # noqa: PLC0415
+
+    graphless = {**env["agent"], "graph_node": None}
+    with pytest.raises(ValueError, match="graph"):
+        record.person(
+            CTX,
+            Decision("BLOCK", (BLOCK,), "x"),
+            ACTION,
+            agent=graphless,
+            principal=Principal("u1", "b@x.test", T, "approver"),
+            findings=env["findings"],
+            mode="advisory",
+        )
+
+
 def test_recording_without_a_graph_node_is_refused_plainly(env):
     graphless = {**env["agent"], "graph_node": None}
     with pytest.raises(ValueError, match="graph"):
