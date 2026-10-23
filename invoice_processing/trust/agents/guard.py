@@ -187,7 +187,26 @@ def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
         decision = _record(
             ctx, decision, action, agent, mandate, store, mode, now
         )
+    # The lock is released: the document read and the model call run in the
+    # worker, after the write (never inline: PRD inline p95 <= 2 s).
+    if action.text is not None and not (
+        mode == "enforcing" and decision.decision == "BLOCK"
+    ):
+        _defer(ctx, decision.action_id)
     return _answer(decision, mode)
+
+
+def _defer(ctx, action_id) -> None:
+    from ...api import service  # noqa: PLC0415
+    from ...worker.runner import enqueue_agent_injection  # noqa: PLC0415
+
+    try:
+        enqueue_agent_injection(
+            service.get_queue(), ctx.tenant_id, action_id, ctx.run_id or ""
+        )
+    except Exception as exc:
+        # The write stands; the action goes unscanned (logged).
+        _log(exc)
 
 
 def _owner_check(principal, action: Action, *, mode, store):

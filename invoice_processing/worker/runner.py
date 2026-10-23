@@ -62,6 +62,8 @@ REMATCH_ATTEMPTS = "rematch_attempts"
 TRUST_GRAPH_SYNC = "trust.graph.sync"
 TRUST_EVALUATE = "trust.evaluate"
 TRUST_AUDIT_RUN = "trust.audit.run"
+# Wave 4: the injection detector, after the agent's write (agents/later.py).
+TRUST_AGENT_INJECTION = "trust.agent.injection"
 TRUST_ATTEMPTS = "trust_attempts"
 
 
@@ -880,6 +882,7 @@ class Worker:
             TRUST_GRAPH_SYNC: self._handle_trust_sync,
             TRUST_EVALUATE: self._handle_trust_evaluate,
             TRUST_AUDIT_RUN: self._handle_trust_audit_run,
+            TRUST_AGENT_INJECTION: self._handle_agent_injection,
         }
 
     # -- one message -------------------------------------------------------
@@ -1203,6 +1206,39 @@ class Worker:
             done="trust-evaluated",
         )
 
+    def _handle_agent_injection(self, message: Message) -> str:
+        tenant_id = str(message.payload.get("tenant_id") or "")
+        action_id = str(message.payload.get("action_id") or "")
+        if not tenant_id or not action_id:
+            self._dead_letter(
+                message,
+                "Agent injection message is missing tenant_id or action_id",
+                event="trust_dead_lettered",
+            )
+            return "dead-lettered:malformed"
+
+        def run():
+            from ..api import service  # noqa: PLC0415
+            from ..trust.agents import later  # noqa: PLC0415
+
+            store = service.get_agent_store()
+            if store is None:
+                raise _NoDatabase("Agent control needs a database.")
+            later.classify(
+                tenant_id,
+                action_id,
+                store=store,
+                findings=service.get_finding_store(),
+            )
+
+        return self._run_claimless(
+            message,
+            key=f"agent_injection:{action_id}",
+            fn=run,
+            event="trust_dead_lettered",
+            done="agent-injection-classified",
+        )
+
     def _handle_trust_audit_run(self, message: Message) -> str:
         """A Trust Audit batch run (Wave 2): the engines over the whole
         tenant, with progress written to the run row by the audit package."""
@@ -1497,7 +1533,12 @@ def _dead_letter_event(message: Message) -> str:
     kind = message.payload.get("type")
     if kind == REMATCH:
         return "rematch_dead_lettered"
-    if kind in (TRUST_GRAPH_SYNC, TRUST_EVALUATE, TRUST_AUDIT_RUN):
+    if kind in (
+        TRUST_GRAPH_SYNC,
+        TRUST_EVALUATE,
+        TRUST_AUDIT_RUN,
+        TRUST_AGENT_INJECTION,
+    ):
         return "trust_dead_lettered"
     return "document_dead_lettered"
 
@@ -1523,6 +1564,20 @@ def enqueue_trust_evaluate(
             "type": TRUST_EVALUATE,
             "tenant_id": tenant_id,
             "document_id": document_id,
+            "request_id": request_id,
+        },
+        tenant_id=tenant_id,
+    )
+
+
+def enqueue_agent_injection(
+    queue: Queue, tenant_id: str, action_id: str, request_id: str = ""
+) -> str:
+    return queue.publish(
+        {
+            "type": TRUST_AGENT_INJECTION,
+            "tenant_id": tenant_id,
+            "action_id": action_id,
             "request_id": request_id,
         },
         tenant_id=tenant_id,
