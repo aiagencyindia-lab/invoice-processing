@@ -40,6 +40,8 @@ CHECK_FAILED = "A check could not run; try again."
 MAX_IMPORT_ROWS = 5000
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 SUBJECT_TABLES = {
+    "po": "purchase_orders",
+    "document": "documents",
     "vendor": "vendors",
     "bank_change": "vendor_bank_changes",
     "invoice": "invoices",
@@ -111,6 +113,20 @@ def _utc(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
+def _vendor_id(tenant_id: str, name) -> str | None:
+    """The stored vendor of that name (`normalized_name` is unique)."""
+    vendors = _service().get_vendors() if name else None
+    found = vendors.find_by_name(tenant_id, name) if vendors else None
+    return (found or {}).get("id")
+
+
+def _invoice_node(tenant_id: str, subject: str) -> str | None:
+    table, _, case_id = subject.partition(":")
+    if table != "invoices" or not case_id:
+        return None
+    return _service()._trust_node(tenant_id, case_id)
+
+
 def _judge(
     ctx, agent: dict, row: dict, source: str, now: datetime, mode: str
 ) -> dict:
@@ -153,10 +169,12 @@ def _judge(
         subject_table=SUBJECT_TABLES[kind.split(".")[0]],
         subject_ref=subject,
         vendor_key=vendor,
+        vendor_id=_vendor_id(ctx.tenant_id, row.get("vendor")),
         category=category,
         amount=amount,
         currency=currency,
         occurred_at=at,
+        transaction_node=_invoice_node(ctx.tenant_id, subject),
     )
     store, service = _store(), _service()
     when = at or now

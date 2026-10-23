@@ -1084,3 +1084,35 @@ def test_a_crashing_rule_is_503_on_evaluate_and_a_row_error_on_import(
         {"row": 3, "message": "Unknown agent."},
     ]
     assert service._agent_store.actions("tenant-acme") == []
+
+
+def test_judge_resolves_the_vendor_id_and_the_invoice_node(env, monkeypatch):
+    agent, _m = mandated_earlier("acme")
+    vendors = service.get_vendors()
+    vendors.upsert_many(
+        "tenant-acme", [{"name": "Acme Steel", "tax_id": "", "kind": ""}]
+    )
+    (stored,) = vendors.list("tenant-acme")
+    seen = []
+    real = trust_agent_routes.evaluate
+
+    def capture(ctx, action, **kw):
+        seen.append(action)
+        return real(ctx, action, **kw)
+
+    monkeypatch.setattr(trust_agent_routes, "evaluate", capture)
+    monkeypatch.setattr(
+        service,
+        "_trust_node",
+        lambda t, case: "node-7" if case == "inv-9" else None,
+    )
+    approver = bearer("acme:approver")
+    evaluate(
+        approver, agent["id"], vendor="Acme Steel", subject_ref="invoices:inv-9"
+    )
+    evaluate(
+        approver, agent["id"], vendor="Nobody Ltd", subject_ref="vendors:x"
+    )
+    first, second = seen
+    assert (first.vendor_id, first.transaction_node) == (stored["id"], "node-7")
+    assert (second.vendor_id, second.transaction_node) == (None, None)

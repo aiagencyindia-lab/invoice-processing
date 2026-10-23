@@ -346,3 +346,10 @@ def test_record_runs_while_the_guard_holds_the_agent_lock(env):
             mode="enforcing",
         )
     assert len(_rows(env, models.AgentAction)) == 1
+
+
+def test_wave5_kinds_and_vendor_id():
+    from invoice_processing.trust.agents import ACTIONS  # noqa: PLC0415
+
+    assert {"po.create", "document.upload"} <= set(ACTIONS)
+    assert ACTION.vendor_id is None

@@ -905,3 +905,12 @@ def test_a_write_that_fails_queues_nothing(env, monkeypatch):
     assert len(queued(env)) == 1
     assert act(env, "approver:bot").status_code == 409
     assert queued(env) == []
+
+
+def test_the_invoice_action_carries_the_stored_vendor_id(env):
+    env["client"]("admin").put("/api/vendors", json={"vendors": [VENDOR]})
+    (stored,) = env["vendors"].list(TENANT)
+    ctx = RunContext(tenant_id=TENANT, case_id=CASE, run_id="", actor="a")
+    artifacts = {"extraction": {"invoice": {"vendor_name": VENDOR["name"]}}}
+    action = guard.invoice_action(ctx, artifacts, "invoice.approve")
+    assert action.vendor_id == stored["id"]

@@ -323,6 +323,7 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
         subject_table="invoices",
         subject_ref=f"invoices:{ctx.case_id}",
         vendor_key=po_matching.normalize_vendor(name) or None,
+        vendor_id=vendor.get("id"),
         category=vendor.get("kind") or None,
         amount=None
         if kind == "invoice.reject"
