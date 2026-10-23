@@ -1,0 +1,34 @@
+# Wave 5 — Intake API, counterparties by vendor id, scope documentation (`v2/w5-intake`, branch C)
+
+**Program plan:** `docs/superpowers/plans/2026-10-23-v2-wave5-program.md` (U1, U3, B9). **Owns:** `api/v2_routes.py` (`intake_actions`), `api/trust_agent_routes.py` (`propose_mandate` only), `trust/agents/mandates.py`, `trust/agents/rules.py` (`in_scope`), `docs/API_V2.md`, `tests/test_trust_api_routes.py` (PROBED), `tests/test_trust_agents_mandates.py`, `tests/test_trust_agents_rules.py`. **Touches nothing else**; `_judge`, `vendor_id` on `Action` and the stub route come from the scaffold.
+
+## Intake `POST /v2/agents/actions` (U1, B9)
+
+- Role: `Approver` (`require_role("approver")`; an API key of role approver or a signed-in approver+). Not `Admin`: a machine feed must be able to call it. Mode: `trust_agent_routes._mode(tenant_id)` first — 409 `OFF` while the engine is off, nothing read or written.
+- Body: `{"actions": [IntakeRow, …]}`, 1 ≤ len ≤ `MAX_IMPORT_ROWS` (more → 400 "At most 5000 rows per request.", as the import). `IntakeRow` fields are all optional strings with the import's length caps (`agent ≤ 320, action ≤ 32, subject_ref ≤ 128, vendor ≤ 256, category ≤ 64, amount ≤ 32, currency ≤ 8, occurred_at ≤ 40`) so that a malformed row is a per-row error from `_judge` (which already validates and parses every field, `occurred_at` included), never a whole-request 422 — a feed with one bad line still lands the rest, exactly as the CSV import does.
+- The caller: an API key's `Principal.user_id` is `api-key:{id}` (`apikeys.resolve`), the same string `agents.principal_id` stores for a key-bound agent (Wave 4 B1), so `by_principal` finds the key's own agent.
+- `vendor_id` on each row: `_judge` resolves it from `vendor` via `find_by_name` (scaffold S2), so intake and CSV rows match a renamed vendor by id when the vendor exists; the scaffold is merged before this branch starts.
+- Agent resolution per row, reusing `import_actions`' map (name casefolded, or principal email): `agent` given → that map (two agents sharing the name → row error "Two agents share this name; use its principal email."; unknown → "Unknown agent."); `agent` omitted → `store.by_principal(tenant, principal.user_id)`, else row error "Name the agent: this caller is not registered as one." The shared resolver moves to a helper `trust_agent_routes.resolve_agents(store, tenant_id) -> (by_name, by_email)` used by both the CSV import and the intake.
+- Each row → `_judge(ctx, agent, row, "log", now, mode)`; `ValueError` → row error with the message; `CheckFailed` → row error `CHECK_FAILED`. Answer as the import: `{"rows", "by_decision", "errors": [{"row": i (1-based), "message"}]}`.
+- An approver key may attest rows for any named agent, exactly as an approver's CSV upload does today; said in the API doc. Rate limits and idempotency keys on `/v2` stay deferred (PENDING).
+- `tests/test_trust_api_routes.PROBED += "/v2/agents/actions"` (the scaffold's stub probe then skips it). Doc row format: copy the scaffold's stub row (`| POST | `/v2/agents/actions` | … |`), which the doc test parses.
+
+## Counterparties by vendor id (U3)
+
+- Scope input `counterparties`: `null` (any vendor) or a list whose items are strings (a vendor name **or** a vendor id) or objects `{"vendor_id": str}` / `{"name": str}`. Stored shape: `[{"vendor_id": str | null, "key": str}]`, sorted by `(key, vendor_id)`, de-duplicated.
+- `mandates.validate(body, *, now, vendors=None)` → `_counterparties(items, vendors)`: for each item, if a vendors store is given: an item equal to a vendor id (`vendors.get(tenant, item)`) → `{"vendor_id": id, "key": vendor["normalized_name"]}`; else a name → `vendors.find_by_name` → its id and key when found, else `{"vendor_id": None, "key": normalize_vendor(name)}`. Without a store (file-backed vendor master, tests): names only, `vendor_id: None`. An empty key → `ValueError("Each counterparty must be a vendor name or id.")`. Signature `validate(body, *, now, vendors=None, tenant_id=None)`; `propose_mandate` passes `vendors=service.get_vendors()` (None without the vendors table — the file-backed vendor master is not a store and has no ids) and `tenant_id`. `vendors is None` → names only; no duck-typing. A string that looks like a UUID (`re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", item)`) but matches no vendor is a `ValueError("Unknown vendor id: …")` → 400, not a name (an id typo must not silently become a never-matching key).
+- `rules.in_scope`: `parties = scope.get("counterparties")`; `None` → any. Else allowed when `action.vendor_id` is among the parties' non-null `vendor_id`s, **or** `action.vendor_key` is among their `key`s. A legacy list of plain strings (none exist; defensive) is read as keys. `vendor.create` (no id) therefore matches by key only, as today.
+- `mandates.annotate` adds nothing; the API returns the stored shape. The digest covers `scope`, so only mandates proposed after this lands carry the new shape (none exist anywhere).
+
+## `docs/API_V2.md` Agents section
+
+- Replace the scaffold's stub row/line with the intake route: body, agent resolution, answer, 409 while off, the attestation note.
+- Document the mandate scope JSON in full: `actions` (the nine kinds, with one line each on what the kind governs and which routes raise it: vendor.create / vendor.patch / bank_change.propose / bank_change.decide / invoice.approve / invoice.reject / invoice.export / po.create / document.upload), `currency`, `counterparties` (input forms and stored shape), `caps`, validity, the two-person rule, signing (`verified`).
+- One line from branch B: a log-sourced BLOCK in enforcing on an invoice places a payment hold that only a person's finding decision lifts; a mode change does not reconcile agent holds.
+- `test_the_doc_lists_every_v2_route_and_nothing_else` stays green.
+
+## Tests
+
+- `tests/test_trust_api_routes.py`: two-tenant probes (bearer approver and the foreign tenant's key) for the intake; clerk key → 403; approver key with its own agent and no `agent` field → rows judged for that agent; key without an agent and no `agent` → row error; named agent by name and by principal email; duplicate name → row error; off → 409 and no rows; a crashing rule → row error `CHECK_FAILED`; > `MAX_IMPORT_ROWS` → 422/400; mixed good and bad rows → `by_decision` and `errors` both filled.
+- `tests/test_trust_agents_mandates.py`: names resolve to ids where the vendor exists; an id is accepted; unknown name stays a name with `vendor_id: None`; mixed list sorted and de-duplicated; without a vendors store names only; the proposed mandate verifies after approval (digest over the new shape).
+- `tests/test_trust_agents_rules.py`: `in_scope` by id (key differs — a renamed vendor still matches), by key (a `vendor.create` with no id), `None` → any, a legacy list of strings, out of scope → `AGENT-OUT-OF-MANDATE`.
