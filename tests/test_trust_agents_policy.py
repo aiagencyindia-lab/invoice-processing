@@ -385,7 +385,8 @@ def test_record_refuses_two_databases(env):
             agent=env["agent"],
             mandate=None,
             store=env["store"],
-            findings=FindingStore("sqlite:///elsewhere.db"),
+            # Any store on another database; never opened.
+            findings=type("Elsewhere", (), {"url": "sqlite:///other.db"})(),
             graph=env["graph"],
             mode="advisory",
             source="inline",
