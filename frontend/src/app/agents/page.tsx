@@ -24,10 +24,16 @@ import { money } from "@/lib/trust";
 
 const FILTERS = ["all", "active", "revoked"] as const;
 
+/** An amount in its currency; a logged row may carry none (keyed ""), and
+ *  `money()` reads a missing currency as rupees. */
+function amountIn(amount: string, currency: string): string {
+  return currency ? money(amount, currency) : money(amount, "INR").replace(/^₹/, "");
+}
+
 /** "₹1,200.00 · 50.00 USD": a per-currency map, never summed across. */
 function joined(byCurrency: Record<string, string> | undefined): string {
   const entries = Object.entries(byCurrency ?? {});
-  return entries.length ? entries.map(([currency, amount]) => money(amount, currency || null)).join(" · ") : "—";
+  return entries.length ? entries.map(([currency, amount]) => amountIn(amount, currency)).join(" · ") : "—";
 }
 
 function sumByCurrency(maps: Record<string, string>[]): Record<string, string> {
@@ -36,8 +42,9 @@ function sumByCurrency(maps: Record<string, string>[]): Record<string, string> {
   return Object.fromEntries(Object.entries(out).map(([c, a]) => [c, a.toFixed(2)]));
 }
 
+/** The reader's local day: validity was entered as local time. */
 function day(iso: string | null | undefined): string {
-  return iso ? iso.slice(0, 10) : "—";
+  return iso ? new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—";
 }
 
 function MandateCell({ mandate }: { mandate: Mandate | null }) {
@@ -264,7 +271,8 @@ function AgentPanel({
   const rows = mandates.data?.mandates ?? [];
   const current = rows.find((m) => m.status === "active") ?? null;
   const exceptions = ledger.data?.exceptions ?? [];
-  const self = (m: Mandate) => m.proposed_by.toLowerCase() === me.email.toLowerCase();
+  // As the server folds (`_fold`): trimmed, casefolded.
+  const self = (m: Mandate) => m.proposed_by.trim().toLowerCase() === me.email.trim().toLowerCase();
 
   function finished(message: string) {
     setProposing(false);
@@ -381,8 +389,8 @@ function AgentPanel({
           {Object.entries(ledger.data.spend).map(([currency, s]) => (
             <p key={currency} className="muted" style={{ margin: 0, fontSize: 12.5 }}>
               {currency || "No currency"}: by vendor{" "}
-              {Object.entries(s.by_vendor).map(([v, a]) => `${v} ${money(a, currency)}`).join(", ") || "—"}; by kind{" "}
-              {Object.entries(s.by_category).map(([k, a]) => `${k} ${money(a, currency)}`).join(", ") || "—"}
+              {Object.entries(s.by_vendor).map(([v, a]) => `${v} ${amountIn(a, currency)}`).join(", ") || "—"}; by kind{" "}
+              {Object.entries(s.by_category).map(([k, a]) => `${k} ${amountIn(a, currency)}`).join(", ") || "—"}
             </p>
           ))}
           {ledger.data.actions.length === 0 ? (
@@ -406,7 +414,7 @@ function AgentPanel({
                       <td className="faint">{new Date(a.occurred_at).toLocaleString()}</td>
                       <td>{a.action}</td>
                       <td className="muted">{a.subject_ref}</td>
-                      <td>{a.amount ? money(a.amount, a.currency) : "—"}</td>
+                      <td>{a.amount ? amountIn(a.amount, a.currency ?? "") : "—"}</td>
                       <td>
                         <span className={decisionBadge(a.decision)}>{a.decision}</span>
                       </td>

@@ -658,3 +658,6 @@ button.tile:hover { background: var(--surface-alt); }
 .chain li.contradicts { border-left: 4px solid var(--error); }
 @media (max-width: 900px) { .evidence-split { grid-template-columns: 1fr; } }
 @media print { .app-sidebar, .app-topbar, nav[aria-label="Primary"] { display: none !important; } }
+
+/* Agents: the row whose panel is open. */
+.data-table tbody tr[aria-selected="true"] td { background: var(--surface-muted); }

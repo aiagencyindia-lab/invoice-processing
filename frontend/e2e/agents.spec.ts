@@ -118,3 +118,69 @@ test.describe.serial("agents", () => {
     await expect(alert.getByRole("link", { name: "Trust engines" })).toHaveAttribute("href", "/trust-engines");
   });
 });
+
+test.describe("agents display", () => {
+  // IST: a UTC evening is the next local day.
+  test.use({ timezoneId: "Asia/Kolkata", locale: "en-US" });
+
+  test("dates are local, a currency-less amount is no rupee, and the proposer is matched as the server folds", async ({ page }) => {
+    const mandate = {
+      id: "m1",
+      agent_id: "a1",
+      version: 2,
+      scope: { actions: ["vendor.create"], currency: "INR", counterparties: null, caps: {} },
+      valid_from: "2026-10-01T00:00:00+00:00",
+      valid_to: "2027-01-31T20:00:00+00:00",
+      status: "active",
+      expired: false,
+      verified: true,
+      proposed_by: "it@e2e-sso.test",
+      approved_by: "dev@localhost",
+      approved_at: "2026-10-01T00:00:00+00:00",
+      revoked_by: null,
+      revoked_at: null,
+      reason: null,
+    };
+    const agent = {
+      id: "a1",
+      name: "Mock bot",
+      owner: "alice@e2e.test",
+      description: null,
+      kind: "external",
+      status: "active",
+      principal_id: null,
+      principal_email: null,
+      registered_by: "dev@localhost",
+      revoked_at: null,
+      revoked_by: null,
+      revoke_reason: null,
+      mandate,
+    };
+    // Stored as typed: the server trims and casefolds before comparing.
+    const proposed = { ...mandate, id: "m3", version: 3, status: "proposed", approved_by: null, approved_at: null, proposed_by: " DEV@localhost " };
+    const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    await page.route("**/api/trust/agents", (r) => r.fulfill(json({ agents: [agent] })));
+    await page.route("**/api/trust/agents/ledger", (r) =>
+      r.fulfill(json({ since: "", until: "", owners: [{ owner: "alice@e2e.test", agents: 1, approved: { "": "1200" }, exported: {}, blocked: 0, reviewed: 0 }] })),
+    );
+    await page.route("**/api/trust/agents/a1/mandates", (r) => r.fulfill(json({ mandates: [mandate, proposed] })));
+    await page.route("**/api/trust/agents/a1/ledger", (r) =>
+      r.fulfill(json({ agent, mandate, since: "", until: "", spend: {}, period: null, actions: [], exceptions: [] })),
+    );
+
+    await goto(page, "/agents");
+    const row = page.getByRole("table", { name: "Agents" }).getByRole("row", { name: /Mock bot/ });
+    await expect(row).toContainText("v2 · until Feb 1, 2027 · verified");
+    await expect(page.locator("[data-tile='approved'] .tile-value")).toHaveText("1,200.00");
+
+    const before = await row.locator("td").first().evaluate((td) => getComputedStyle(td).backgroundColor);
+    await row.click();
+    await expect.poll(() => row.locator("td").first().evaluate((td) => getComputedStyle(td).backgroundColor)).not.toBe(before);
+
+    const panel = page.getByRole("region", { name: "Agent Mock bot" });
+    await expect(panel.getByRole("button", { name: "Approve v3" })).toBeDisabled();
+
+    await panel.getByRole("button", { name: "Propose mandate" }).click();
+    await expect(page.getByRole("dialog", { name: "Propose mandate" }).getByRole("checkbox", { name: "vendor.create" })).toBeFocused();
+  });
+});

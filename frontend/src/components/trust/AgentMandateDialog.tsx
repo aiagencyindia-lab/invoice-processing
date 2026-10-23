@@ -110,7 +110,12 @@ export function AgentMandateDialog({
           <legend className="eyebrow">Actions</legend>
           {AGENT_ACTIONS.map((kind) => (
             <label key={kind} className="row" style={{ gap: 6, fontSize: 13 }}>
-              <input type="checkbox" checked={actions.includes(kind)} onChange={() => toggle(kind)} />
+              <input
+                type="checkbox"
+                autoFocus={kind === AGENT_ACTIONS[0]}
+                checked={actions.includes(kind)}
+                onChange={() => toggle(kind)}
+              />
               {kind}
             </label>
           ))}
