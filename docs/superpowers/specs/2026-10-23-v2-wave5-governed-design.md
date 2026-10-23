@@ -33,7 +33,7 @@ Why nothing else changes: `gate.payment_hold_detail` reads each finding's `detai
 ## Notes
 
 - Mandates proposed before this lands do not list `po.create` / `document.upload`, so in enforcing those agents are refused on PO import and upload until a new version adds the kinds — the registered-only, mandate-grants rule (Wave 4 U2/U4). No mandate exists in any database, so no migration step.
-- A bulk import is one velocity burst (scaffold: `count_since` counts distinct requests); a refused PO in a list stamps the earlier rows `failed` (scaffold).
+- Velocity counts every ledger row, so a large PO import can raise `AGENT-VELOCITY` (a review, never a block) on the agent's later actions in the window — accepted; tune `agents.velocity_max` per tenant if an agent's job is bulk loads. A refused PO in a list stamps the earlier rows `failed` (scaffold).
 
 ## Tests
 

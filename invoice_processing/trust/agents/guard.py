@@ -157,9 +157,12 @@ def _check(principal, action, *, mode, settings_store, now, store):
                     store=store,
                 )
             )
-        except HTTPException:
-            # A later action refused: the ones already allowed are not
-            # written either, so the ledger must not show them as taken.
+        except Exception as exc:
+            if not isinstance(exc, HTTPException) and mode != "enforcing":
+                raise  # below enforcing the route proceeds: they are written
+            # A later action refused (or the guard failed in enforcing): the
+            # ones already allowed are not written either, so the ledger must
+            # not show them as taken.
             _settle(
                 principal,
                 [d.action_id for d in out if d and d.action_id],

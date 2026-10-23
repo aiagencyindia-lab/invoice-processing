@@ -8,9 +8,9 @@ import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, exists, func, or_, select
 
-from ...db.models import Agent, AgentAction, AgentMandate
+from ...db.models import Agent, AgentAction, AgentMandate, TrustHold
 from ...db.repositories import SelfApproval
 from ...db.session import tenant_session
 
@@ -465,10 +465,7 @@ class AgentStore:
     def count_since(
         self, tenant_id: str, agent_id: str, *, since: datetime, until: datetime
     ) -> int:
-        """Requests in the window: the rows of one bulk request (a vendor
-        load, a PO import) share its request id and count once."""
-        burst = func.coalesce(AgentAction.request_id, AgentAction.id)
-        q = select(func.count(func.distinct(burst))).where(
+        q = select(func.count()).where(
             *self._counted(tenant_id),
             AgentAction.agent_id == agent_id,
             AgentAction.occurred_at >= since,
@@ -481,10 +478,14 @@ class AgentStore:
         """For the shell banner. `blocked` = actions actually stopped: an
         enforcing BLOCK that was refused inline, or a logged one that held
         an invoice. `reviews` = every other decision a person should see."""
+        # By fact, not by shape: an open hold placed by this row's finding.
         held = and_(
             AgentAction.source == "log",
-            AgentAction.subject_table == "invoices",
-            AgentAction.transaction_node.is_not(None),
+            exists().where(
+                TrustHold.tenant_id == tenant_id,
+                TrustHold.finding_id == AgentAction.finding_id,
+                TrustHold.lifted_at.is_(None),
+            ),
         )
         stopped = and_(
             AgentAction.decision == "BLOCK",

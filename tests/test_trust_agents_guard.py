@@ -960,3 +960,57 @@ def test_a_list_refusal_stamps_the_creates_before_it_failed(env):
     assert [row.decision for row in rows] == ["ALLOW", "ALLOW", "BLOCK"]
     assert [row.outcome for row in rows[:2]] == ["failed", "failed"]
     assert env["vendors"].list(TENANT) == []
+
+
+def test_a_crash_part_way_through_a_list_stamps_the_earlier_creates(
+    env, monkeypatch
+):
+    env["settings"].mode = "enforcing"
+    agent(env, "admin:bot", actions=["vendor.create"])
+    real = guard.evaluate_action
+    calls = []
+
+    def third_crashes(*a, **k):
+        calls.append(1)
+        if len(calls) == 3:
+            raise RuntimeError("db down")
+        return real(*a, **k)
+
+    monkeypatch.setattr(guard, "evaluate_action", third_crashes)
+    vendors = [
+        {"name": f"Fresh {n} Pty", "tax_id": f"29CCCCC000{n}C1Z5"}
+        for n in range(3)
+    ]
+    r = env["client"]("admin:bot").put(
+        "/api/vendors", json={"vendors": vendors}
+    )
+    assert r.status_code == 503  # enforcing: nothing is written
+    assert env["vendors"].list(TENANT) == []
+    assert [row.outcome for row in ledger(env)] == ["failed", "failed"]
+
+
+def test_below_enforcing_a_crash_leaves_the_written_creates_counted(
+    env, monkeypatch
+):
+    env["settings"].mode = "advisory"
+    agent(env, "admin:bot", actions=["vendor.create"])
+    real = guard.evaluate_action
+    calls = []
+
+    def third_crashes(*a, **k):
+        calls.append(1)
+        if len(calls) == 3:
+            raise RuntimeError("db down")
+        return real(*a, **k)
+
+    monkeypatch.setattr(guard, "evaluate_action", third_crashes)
+    vendors = [
+        {"name": f"Fresh {n} Pty", "tax_id": f"29CCCCC000{n}C1Z5"}
+        for n in range(3)
+    ]
+    r = env["client"]("admin:bot").put(
+        "/api/vendors", json={"vendors": vendors}
+    )
+    assert r.status_code == 200  # the guard failure is a logged no-op
+    assert len(env["vendors"].list(TENANT)) == 3
+    assert [row.outcome for row in ledger(env)] == [None, None]
