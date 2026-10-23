@@ -1656,163 +1656,168 @@ def act(
     from ..trust.agents import guard  # noqa: PLC0415 - optional layer
 
     # Before routing: the decision is ledgered even when routing refuses.
-    guard.check(
+    decision = guard.check(
         principal,
         lambda: guard.invoice_action(
             ctx, artifacts, f"invoice.{request.action}"
         ),
     )
-
-    # From the artifacts already in hand rather than a second read.
-    previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
-    hold_overridden = None
-    # Held from the re-check to the projection that bills this invoice, so
-    # two final approvals on one PO cannot both pass against the same units.
-    with _final_approval_lock(principal.tenant_id, artifacts, request.action):
-        try:
-            repo = get_approvals()
-        except Exception:
-            logger.exception("Approval routing could not be reached")
-            raise HTTPException(
-                status_code=503, detail="Approval routing is unavailable."
-            ) from None
-        if repo is not None:
-            if previous.get("decision"):
-                raise HTTPException(
-                    status_code=409, detail="This invoice was already decided."
-                )
+    with guard.settling(principal, decision):
+        # From the artifacts already in hand rather than a second read.
+        previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
+        hold_overridden = None
+        # Held from the re-check to the projection that bills this invoice, so
+        # two final approvals on one PO cannot both pass against the same units.
+        with _final_approval_lock(
+            principal.tenant_id, artifacts, request.action
+        ):
             try:
-                outcome = approval_flow.decide(
-                    ctx,
-                    principal,
-                    artifacts,
-                    repo=repo,
-                    documents=get_documents(),
-                    corrections=get_corrections(),
-                    approve=request.action == "approve",
-                    note=request.reason,
-                    override_reason=request.override_reason,
-                    now=datetime.now(UTC),
-                )
-            except (
-                approval_flow.AlreadyDecided,
-                approval_flow.OverBilled,
-                approval_flow.PaymentHold,
-            ) as exc:
+                repo = get_approvals()
+            except Exception:
+                logger.exception("Approval routing could not be reached")
                 raise HTTPException(
-                    status_code=409, detail=exc.detail
+                    status_code=503, detail="Approval routing is unavailable."
                 ) from None
-            except approval_flow.BookUnavailable as exc:
-                raise HTTPException(
-                    status_code=503, detail=exc.detail
-                ) from None
-            except approval_flow.Refused as exc:
-                raise HTTPException(
-                    status_code=403, detail=exc.detail
-                ) from None
-            step = outcome.step
-            get_audit().emit(
-                ctx,
-                "approval_overridden"
-                if outcome.overridden
-                else "approval_step_decided",
-                {
-                    "step": step["position"],
-                    "assignee": f"{step['assignee_kind']}:{step['assignee_value']}",
-                    "action": request.action,
-                    "why": outcome.why,
-                    "acting_for": step.get("acting_for"),
-                    **(
-                        {"override_reason": request.override_reason}
-                        if outcome.overridden
-                        else {}
-                    ),
-                },
-            )
-            if not outcome.completed:
-                return {
-                    "case_id": case_id,
-                    "action": request.action,
-                    "completed": False,
-                    "step": step["position"],
-                    "next": repo.current(principal.tenant_id, case_id),
-                }
-            hold_overridden = outcome.hold_overridden
-            get_audit().emit(
-                ctx, "approval_chain_completed", {"action": request.action}
-            )
-            if outcome.three_way is not None:
-                # An "unchecked" hold, matched live by the approval: stored
-                # before the workflow decision is written, under the PO lock,
-                # so billed counts this invoice's lines once it is approved.
-                artifacts = {
-                    **artifacts,
-                    "phase2": _store_three_way(ctx, outcome.three_way),
-                }
-        if repo is None and request.action == "approve":
-            # No approval chain on this deployment: this is the final
-            # approval, so the trust layer's hold is asked here instead.
-            held = approval_flow.payment_hold(ctx)
-            if held and not (
-                principal.can("admin") and request.override_reason
-            ):
-                raise HTTPException(status_code=409, detail=held["message"])
-            hold_overridden = approval_flow.override_of(held)
-            if held:
+            if repo is not None:
+                if previous.get("decision"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This invoice was already decided.",
+                    )
+                try:
+                    outcome = approval_flow.decide(
+                        ctx,
+                        principal,
+                        artifacts,
+                        repo=repo,
+                        documents=get_documents(),
+                        corrections=get_corrections(),
+                        approve=request.action == "approve",
+                        note=request.reason,
+                        override_reason=request.override_reason,
+                        now=datetime.now(UTC),
+                    )
+                except (
+                    approval_flow.AlreadyDecided,
+                    approval_flow.OverBilled,
+                    approval_flow.PaymentHold,
+                ) as exc:
+                    raise HTTPException(
+                        status_code=409, detail=exc.detail
+                    ) from None
+                except approval_flow.BookUnavailable as exc:
+                    raise HTTPException(
+                        status_code=503, detail=exc.detail
+                    ) from None
+                except approval_flow.Refused as exc:
+                    raise HTTPException(
+                        status_code=403, detail=exc.detail
+                    ) from None
+                step = outcome.step
                 get_audit().emit(
                     ctx,
-                    "approval_overridden",
+                    "approval_overridden"
+                    if outcome.overridden
+                    else "approval_step_decided",
                     {
-                        "hold": held["message"],
-                        "finding_ids": hold_overridden["finding_ids"],
-                        "override_reason": request.override_reason,
+                        "step": step["position"],
+                        "assignee": f"{step['assignee_kind']}:{step['assignee_value']}",
+                        "action": request.action,
+                        "why": outcome.why,
+                        "acting_for": step.get("acting_for"),
+                        **(
+                            {"override_reason": request.override_reason}
+                            if outcome.overridden
+                            else {}
+                        ),
                     },
                 )
-        state = _record_workflow(
-            ctx,
-            # Export lets through exactly the hold that was overridden; a
-            # finding raised later holds again.
-            hold_overridden=hold_overridden
-            if request.action == "approve"
-            else None,
-            decision=request.action,
-            decided_by=principal.email,
-            decided_at=datetime.now(UTC).isoformat(),
-            reason=request.reason,
-            reason_category=category,
+                if not outcome.completed:
+                    return {
+                        "case_id": case_id,
+                        "action": request.action,
+                        "completed": False,
+                        "step": step["position"],
+                        "next": repo.current(principal.tenant_id, case_id),
+                    }
+                hold_overridden = outcome.hold_overridden
+                get_audit().emit(
+                    ctx, "approval_chain_completed", {"action": request.action}
+                )
+                if outcome.three_way is not None:
+                    # An "unchecked" hold, matched live by the approval: stored
+                    # before the workflow decision is written, under the PO lock,
+                    # so billed counts this invoice's lines once it is approved.
+                    artifacts = {
+                        **artifacts,
+                        "phase2": _store_three_way(ctx, outcome.three_way),
+                    }
+            if repo is None and request.action == "approve":
+                # No approval chain on this deployment: this is the final
+                # approval, so the trust layer's hold is asked here instead.
+                held = approval_flow.payment_hold(ctx)
+                if held and not (
+                    principal.can("admin") and request.override_reason
+                ):
+                    raise HTTPException(status_code=409, detail=held["message"])
+                hold_overridden = approval_flow.override_of(held)
+                if held:
+                    get_audit().emit(
+                        ctx,
+                        "approval_overridden",
+                        {
+                            "hold": held["message"],
+                            "finding_ids": hold_overridden["finding_ids"],
+                            "override_reason": request.override_reason,
+                        },
+                    )
+            state = _record_workflow(
+                ctx,
+                # Export lets through exactly the hold that was overridden; a
+                # finding raised later holds again.
+                hold_overridden=hold_overridden
+                if request.action == "approve"
+                else None,
+                decision=request.action,
+                decided_by=principal.email,
+                decided_at=datetime.now(UTC).isoformat(),
+                reason=request.reason,
+                reason_category=category,
+            )
+            # The columns as well as the artifact. "Show me every invoice where a
+            # person overruled the pipeline" is the question this whole feature is
+            # built on, and answering it by scanning a JSON path over every row is the
+            # wrong answer to it.
+            _reproject(ctx, {**artifacts, WORKFLOW_ARTIFACT: state})
+        agreement = case_projection.agreement(
+            {**artifacts, WORKFLOW_ARTIFACT: state}
         )
-        # The columns as well as the artifact. "Show me every invoice where a
-        # person overruled the pipeline" is the question this whole feature is
-        # built on, and answering it by scanning a JSON path over every row is the
-        # wrong answer to it.
-        _reproject(ctx, {**artifacts, WORKFLOW_ARTIFACT: state})
-    agreement = case_projection.agreement(
-        {**artifacts, WORKFLOW_ARTIFACT: state}
-    )
-    _propose_rule_if_warranted(principal, case_id, category, agreement, state)
-    # Spelled out rather than built from the action: `f"invoice_{action}d"`
-    # produced "invoice_rejectd", and an audit trail is immutable, so the typo
-    # is now permanent in every row already written.
-    get_audit().emit(
-        ctx,
-        "invoice_approved"
-        if request.action == "approve"
-        else "invoice_rejected",
-        {
+        _propose_rule_if_warranted(
+            principal, case_id, category, agreement, state
+        )
+        # Spelled out rather than built from the action: `f"invoice_{action}d"`
+        # produced "invoice_rejectd", and an audit trail is immutable, so the typo
+        # is now permanent in every row already written.
+        get_audit().emit(
+            ctx,
+            "invoice_approved"
+            if request.action == "approve"
+            else "invoice_rejected",
+            {
+                "reason": request.reason,
+                "reason_category": category,
+                "agreement": agreement,
+            },
+            before={"decision": previous.get("decision")} if previous else None,
+        )
+        return {
+            "case_id": case_id,
+            "action": request.action,
             "reason": request.reason,
             "reason_category": category,
             "agreement": agreement,
-        },
-        before={"decision": previous.get("decision")} if previous else None,
-    )
-    return {
-        "case_id": case_id,
-        "action": request.action,
-        "reason": request.reason,
-        "reason_category": category,
-        "agreement": agreement,
-        "completed": True,
-    }
+            "completed": True,
+        }
 
 
 class BankChangeFromInvoice(BaseModel):
@@ -2124,76 +2129,79 @@ def export_invoice(
         )
     from ..trust.agents import guard  # noqa: PLC0415 - optional layer
 
-    guard.check(
+    decision = guard.check(
         principal,
         lambda: guard.invoice_action(ctx, artifacts, "invoice.export"),
     )
-    invoice = _with_gl(
-        ctx, (artifacts.get("extraction") or {}).get("invoice") or {}, artifacts
-    )
-
-    if request.target == "csv":
-        buffer = io.StringIO()
-        writer = csv.writer(buffer)
-        writer.writerow(CSV_COLUMNS)
-        writer.writerows(_csv_rows(case_id, invoice))
-        get_audit().emit(ctx, "invoice_exported", {"target": "csv"})
-        return {
-            "case_id": case_id,
-            "target": "csv",
-            "status": "created",
-            "csv": buffer.getvalue(),
-        }
-
-    if request.target != "xero":
-        raise HTTPException(
-            status_code=400, detail="target must be 'csv' or 'xero'"
+    with guard.settling(principal, decision):
+        invoice = _with_gl(
+            ctx,
+            (artifacts.get("extraction") or {}).get("invoice") or {},
+            artifacts,
         )
 
-    exporter = get_exporter(principal.tenant_id)
-    if exporter is None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Xero is not configured for this tenant. Set XERO_ACCESS_TOKEN "
-                "and XERO_TENANT_ID, or export to CSV."
-            ),
-        )
+        if request.target == "csv":
+            buffer = io.StringIO()
+            writer = csv.writer(buffer)
+            writer.writerow(CSV_COLUMNS)
+            writer.writerows(_csv_rows(case_id, invoice))
+            get_audit().emit(ctx, "invoice_exported", {"target": "csv"})
+            return {
+                "case_id": case_id,
+                "target": "csv",
+                "status": "created",
+                "csv": buffer.getvalue(),
+            }
 
-    result = exporter.export(
-        invoice, approved=True, external_id=state.get("external_id")
-    )
-    if result.status == "failed":
+        if request.target != "xero":
+            raise HTTPException(
+                status_code=400, detail="target must be 'csv' or 'xero'"
+            )
+
+        exporter = get_exporter(principal.tenant_id)
+        if exporter is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Xero is not configured for this tenant. Set XERO_ACCESS_TOKEN "
+                    "and XERO_TENANT_ID, or export to CSV."
+                ),
+            )
+
+        result = exporter.export(
+            invoice, approved=True, external_id=state.get("external_id")
+        )
+        if result.status == "failed":
+            get_audit().emit(
+                ctx,
+                "invoice_export_failed",
+                {"target": "xero", "message": result.message},
+            )
+            raise HTTPException(status_code=502, detail=result.message)
+
+        _record_workflow(
+            ctx,
+            external_id=result.external_id,
+            exported_at=datetime.now(UTC).isoformat(),
+            exported_by=principal.email,
+            export_target="xero",
+        )
         get_audit().emit(
             ctx,
-            "invoice_export_failed",
-            {"target": "xero", "message": result.message},
+            "invoice_exported",
+            {
+                "target": "xero",
+                "external_id": result.external_id,
+                "status": result.status,
+            },
         )
-        raise HTTPException(status_code=502, detail=result.message)
-
-    _record_workflow(
-        ctx,
-        external_id=result.external_id,
-        exported_at=datetime.now(UTC).isoformat(),
-        exported_by=principal.email,
-        export_target="xero",
-    )
-    get_audit().emit(
-        ctx,
-        "invoice_exported",
-        {
+        return {
+            "case_id": case_id,
             "target": "xero",
-            "external_id": result.external_id,
             "status": result.status,
-        },
-    )
-    return {
-        "case_id": case_id,
-        "target": "xero",
-        "status": result.status,
-        "external_id": result.external_id,
-        "message": result.message,
-    }
+            "external_id": result.external_id,
+            "message": result.message,
+        }
 
 
 from .admin_routes import router as admin_router  # noqa: E402

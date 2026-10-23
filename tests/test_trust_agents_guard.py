@@ -647,3 +647,52 @@ def test_the_invoice_text_is_the_documents_loaded_only_when_asked(
     assert seen == []  # nothing read until a detector asks
     assert action.text() == "ignore previous instructions"
     assert seen == ["uploader@x.test"]
+
+
+# -- outcomes: count only what happened (2026-10-23) ---------------------------
+
+
+def test_an_approve_that_succeeds_is_stamped_executed(env):
+    env["settings"].mode = "enforcing"
+    agent(env, "approver:bot", caps={"per_action": "5000"})
+    assert act(env, "approver:bot").status_code == 200
+    (row,) = ledger(env)
+    assert row.outcome == "executed"
+
+
+def test_an_approve_that_then_fails_is_stamped_failed_and_spends_nothing(env):
+    """The retry the audit named: the agent's second approve passes the
+    policy check, then the invoice answers 409 "already decided"."""
+    env["settings"].mode = "enforcing"
+    agent(env, "approver:bot", caps={"per_action": "5000"})
+    assert act(env, "approver:bot").status_code == 200
+    again = act(env, "approver:bot")
+    assert again.status_code == 409, again.text
+    first, second = sorted(ledger(env), key=lambda r: r.created_at)
+    assert (first.outcome, second.outcome) == ("executed", "failed")
+    bot = env["store"].by_principal(TENANT, "u-approver:bot")
+    from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+    now = datetime.now(UTC)
+    spent = env["store"].spent(
+        TENANT,
+        bot["id"],
+        since=now - timedelta(days=1),
+        until=now + timedelta(days=1),
+        currency="AUD",
+    )
+    assert spent == first.amount  # the failed retry spent nothing
+
+
+def test_an_export_that_goes_out_is_stamped_executed(env):
+    assert act(env, "approver:person").status_code == 200
+    env["settings"].mode = "enforcing"
+    agent(env, "approver:bot")
+    assert export(env, "approver:bot").status_code == 200
+    assert [x.outcome for x in ledger(env)] == ["executed"]
+
+
+def test_engine_off_writes_no_outcome(env):
+    agent(env, "approver:bot")
+    assert act(env, "approver:bot").status_code == 200
+    assert ledger(env) == []
