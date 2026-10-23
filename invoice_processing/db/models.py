@@ -1445,6 +1445,9 @@ class AgentAction(Base, TenantMixin, TimestampMixin):
     )
     finding_id: Mapped[str | None] = mapped_column(String(36))
     request_id: Mapped[str | None] = mapped_column(String(64))
+    # executed | failed, stamped by the call site after its write; unstamped
+    # (a crash, an imported log) still counts toward spend.
+    outcome: Mapped[str | None] = mapped_column(String(16))
 
 
 TENANT_TABLES = (

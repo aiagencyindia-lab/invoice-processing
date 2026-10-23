@@ -958,3 +958,46 @@ def test_import_reads_xlsx(env):
     )
     assert r.status_code == 200, r.text
     assert r.json()["by_decision"] == {"ALLOW": 1} and r.json()["errors"] == []
+
+
+# -- count only what happened (2026-10-23) --------------------------------------
+
+
+def test_a_failed_approval_and_a_repeated_export_count_once(env):
+    """A failed approval (stamped by the route after the decision) adds
+    nothing; an invoice exported twice is paid once."""
+    agent, _ = mandated_earlier("acme")
+    client = bearer("acme:approver")
+    ok = evaluate(client, agent["id"], vendor="V", amount="100", currency="INR")
+    bad = evaluate(
+        client,
+        agent["id"],
+        vendor="V",
+        amount="40",
+        currency="INR",
+        subject_ref="inv-2",
+    )
+    for _ in range(2):
+        r = evaluate(
+            client,
+            agent["id"],
+            vendor="V",
+            amount="100",
+            currency="INR",
+            action="invoice.export",
+        )
+        assert r.status_code == 200, r.text
+    service.get_agent_store().set_outcome(
+        "tenant-acme", bad.json()["action_id"], "failed"
+    )
+    assert ok.status_code == 200
+    led = client.get(f"/api/trust/agents/{agent['id']}/ledger").json()
+    assert led["spend"]["INR"]["approved"] == "100"
+    assert led["spend"]["INR"]["exported"] == "100"
+    assert led["period"]["used"] == "100"
+    # The failed row is still on the record, labelled.
+    outcomes = {a["subject_ref"]: a.get("outcome") for a in led["actions"]}
+    assert outcomes["inv-2"] == "failed"
+    owners = client.get("/api/trust/agents/ledger").json()["owners"]
+    (o,) = [x for x in owners if x["owner"] == agent["owner"]]
+    assert o["approved"] == {"INR": "100"} and o["exported"] == {"INR": "100"}

@@ -216,10 +216,15 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         version exists (e.g. un-revoking an agent's only mandate together
         with the agent row). Needs an anchor outside the database (e.g. the
         audit trail shipped off-box, or a signed revocation list).
-  - [ ] Spend counts decisions: an approve retried on an invoice that then
-        answers 409 ("already decided") still adds to the cap; an
-        `executed_at` stamp set after the write would count executions only.
-        `exported` likewise sums a repeated export twice.
+  - [x] Spend counts what happened (2026-10-23): approve/reject and export
+        stamp their ledger row `executed` or `failed` around the write
+        (`agent_actions.outcome`, migration `c3d4e5f6a7b8`); caps and the
+        ledger skip failed rows, unstamped rows (a crash, imported logs)
+        still count, and the ledger counts each invoice's export once.
+  - [ ] Velocity (`agents.velocity_max`) still counts failed attempts, by
+        design: a burst of refused retries is itself the behaviour it flags.
+        Two exports of one invoice with identical timestamps (imported logs
+        only) pick an arbitrary "latest" amount.
   - [ ] Injection classification calls the model inside the request while
         the agent row is locked; a slow model holds that agent's other
         actions up to the call's timeout (PRD inline p95 ≤ 2 s). Move the

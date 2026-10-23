@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -68,6 +69,53 @@ def check(principal, action, *, settings_store=None, now=None, store=None):
         if mode == "enforcing":
             raise HTTPException(503, UNAVAILABLE) from None
         return None
+
+
+class Settle:
+    """Handed to the governed route: `written()` right after the write
+    commits, so a failure in the bookkeeping that follows does not turn a
+    committed write into "failed" (the cap would lose real money)."""
+
+    def __init__(self):
+        self.committed = False
+
+    def written(self) -> None:
+        self.committed = True
+
+
+@contextmanager
+def settling(principal, decision):
+    """Wrap the governed write: stamp the ledger row `executed` when the
+    body finishes, or when it raises after `written()`; `failed` when it
+    raises before (and re-raise). Spend skips a failed one, so a retry the
+    route then refuses (409 "already decided") costs the agent nothing.
+    No-op when the guard had nothing to say."""
+    ids = [
+        d.action_id
+        for d in (decision if isinstance(decision, list) else [decision])
+        if d is not None and d.action_id
+    ]
+    settle = Settle()
+    try:
+        yield settle
+    except BaseException:
+        _settle(principal, ids, "executed" if settle.committed else "failed")
+        raise
+    _settle(principal, ids, "executed")
+
+
+def _settle(principal, ids, outcome) -> None:
+    if not ids:
+        return
+    try:
+        from ...api import service  # noqa: PLC0415
+
+        store = service.get_agent_store()
+        for action_id in ids:
+            store.set_outcome(principal.tenant_id, action_id, outcome)
+    except Exception as exc:
+        # The write's own result stands; an unstamped row still counts.
+        _log(exc)
 
 
 def _log(exc: Exception) -> None:

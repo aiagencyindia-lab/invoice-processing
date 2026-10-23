@@ -297,3 +297,31 @@ def test_revoke_reports_whether_it_changed_the_mandate(env):
     first = store.revoke_mandate(ADMIN_A, m["id"], "done")
     again = store.revoke_mandate(ADMIN_A, m["id"], "done")
     assert first["changed"] is True and again["changed"] is False
+
+
+def test_a_failed_approval_spends_nothing(env):
+    """An approval that failed after the check (e.g. the invoice answered
+    409) is stamped failed and leaves the cap alone; an unstamped one still
+    counts, so caps stay conservative."""
+    store, _, url = env
+    a = agent(store)["id"]
+    ok = record(store, url, a, amount=Decimal("100"))
+    failed = record(store, url, a, amount=Decimal("40"))
+    record(store, url, a, amount=Decimal("7"))  # unstamped: counts
+    store.set_outcome(T, ok, "executed")
+    store.set_outcome(T, failed, "failed")
+    window = {
+        "since": NOW - timedelta(days=1),
+        "until": NOW + timedelta(days=1),
+    }
+    assert store.spent(T, a, currency="INR", **window) == Decimal("107")
+    rows = {r["id"]: r["outcome"] for r in store.actions(T, agent_id=a)}
+    assert rows[ok] == "executed" and rows[failed] == "failed"
+
+
+def test_set_outcome_refuses_an_unknown_outcome(env):
+    store, _, url = env
+    a = agent(store)["id"]
+    row = record(store, url, a, amount=Decimal("1"))
+    with pytest.raises(ValueError):
+        store.set_outcome(T, row, "maybe")
