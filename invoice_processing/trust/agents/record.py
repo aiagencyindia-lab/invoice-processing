@@ -2,13 +2,13 @@
 `agent.action.blocked` event and the lineage edge. `person` writes the one
 decision about a person (U9): a finding alone.
 
-Ordered, not atomic (program plan B13): the finding and graph stores open
-their own sessions. A crash after the ledger row leaves a decision with no
-finding; the decision the guard returned does not depend on it.
+One transaction per decision (Wave 5 B6): the ledger row, its finding and
+its event commit together, or none of them does.
 """
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime
 
 from ...db.models import AgentAction
@@ -56,15 +56,31 @@ def record(
     source: str,
     refused: bool,
     now: datetime,
+    s=None,
+    hold: bool = False,
 ) -> str:
     """Write the decision; return the ledger row's id. `refused` is whether
     the action was actually stopped (enforcing, inline): only then does
-    `agent.action.blocked` go out."""
+    `agent.action.blocked` go out.
+
+    The ledger row, the finding (and any hold it places), the row's
+    `finding_id` and the event are one transaction: in `s` when the caller
+    gives one (the guard's lock session), else a session of its own. The
+    `acted_on` edge is lineage only and follows after."""
     _has_node(agent)
+    if findings is not None and findings.url != store.url:
+        raise ValueError(
+            "The decision ledger and its findings must share one database."
+        )
     reasons = _reasons(decision)
-    with tenant_session(ctx.tenant_id, store.url) as s:
+    session = (
+        nullcontext(s)
+        if s is not None
+        else tenant_session(ctx.tenant_id, store.url)
+    )
+    with session as tx:
         action_id = store.record_action(
-            s,
+            tx,
             ctx,
             agent_id=agent["id"],
             mandate_id=(mandate or {}).get("id"),
@@ -85,67 +101,34 @@ def record(
             occurred_at=action.occurred_at or now,
             request_id=ctx.run_id or None,
         )
-    finding_id = None
-    if decision.decision != "ALLOW" and source != "dryrun":
-        citations = [Citation(agent["graph_node"])]
-        if action.transaction_node:
-            citations.append(Citation(action.transaction_node))
-        finding_id, _ = findings.upsert(
-            ctx,
-            FindingSpec(
-                # The first reason of the severity that decided it (B6).
-                type=next(
-                    r.type
-                    for r in decision.reasons
-                    if r.severity
-                    == ("BLOCK" if decision.decision == "BLOCK" else "REVIEW")
-                ),
-                transaction_node=action.transaction_node or agent["graph_node"],
-                dedupe_key=f"agent_action:{action_id}",
-                impact=None,
-                currency=action.currency,
-                confidence=None,
-                engine_version=ENGINE_VERSION,
-                rule_version=RULE_VERSION,
-                model_version="",
-                summary=f"{agent['name']}: {decision.explanation}"[:500],
-                details={
-                    "engine": ENGINE,
-                    "mode": mode,
-                    "source": source,
-                    "hold": False,
-                    "action": action.kind,
-                    "action_id": action_id,
+        finding_id = None
+        if decision.decision != "ALLOW" and source != "dryrun":
+            finding_id = _finding(
+                tx, ctx, decision, action, agent, findings,
+                action_id=action_id, reasons=reasons, mode=mode,
+                source=source, hold=hold,
+            )  # fmt: skip
+        if finding_id is not None:
+            tx.get(AgentAction, action_id).finding_id = finding_id
+        if refused:
+            outbox.emit(
+                tx,
+                ctx.tenant_id,
+                "agent.action.blocked",
+                {
                     "agent_id": agent["id"],
+                    "agent_name": agent["name"],
+                    "owner": agent["owner"],
+                    "action": action.kind,
+                    "subject_ref": action.subject_ref,
                     "decision": decision.decision,
                     "reasons": reasons,
-                    "subject_ref": action.subject_ref,
+                    "explanation": decision.explanation,
+                    "action_id": action_id,
+                    "finding_id": finding_id,
                 },
-                citations=tuple(citations),
-            ),
-        )
-    if finding_id is not None or refused:
-        with tenant_session(ctx.tenant_id, store.url) as s:
-            s.get(AgentAction, action_id).finding_id = finding_id
-            if refused:
-                outbox.emit(
-                    s,
-                    ctx.tenant_id,
-                    "agent.action.blocked",
-                    {
-                        "agent_id": agent["id"],
-                        "agent_name": agent["name"],
-                        "owner": agent["owner"],
-                        "action": action.kind,
-                        "subject_ref": action.subject_ref,
-                        "decision": decision.decision,
-                        "reasons": reasons,
-                        "explanation": decision.explanation,
-                        "action_id": action_id,
-                        "finding_id": finding_id,
-                    },
-                    now=now,
-                )
+                now=now,
+            )
     if (
         decision.decision != "BLOCK"
         and source == "inline"
@@ -164,6 +147,52 @@ def record(
             observed_at=now,
         )
     return action_id
+
+
+def _finding(
+    s, ctx, decision, action, agent, findings, *,
+    action_id, reasons, mode, source, hold,
+) -> str:  # fmt: skip
+    citations = [Citation(agent["graph_node"])]
+    if action.transaction_node:
+        citations.append(Citation(action.transaction_node))
+    finding_id, _ = findings._upsert(
+        s,
+        ctx,
+        FindingSpec(
+            # The first reason of the severity that decided it (B6).
+            type=next(
+                r.type
+                for r in decision.reasons
+                if r.severity
+                == ("BLOCK" if decision.decision == "BLOCK" else "REVIEW")
+            ),
+            transaction_node=action.transaction_node or agent["graph_node"],
+            dedupe_key=f"agent_action:{action_id}",
+            impact=None,
+            currency=action.currency,
+            confidence=None,
+            engine_version=ENGINE_VERSION,
+            rule_version=RULE_VERSION,
+            model_version="",
+            summary=f"{agent['name']}: {decision.explanation}"[:500],
+            details={
+                "engine": ENGINE,
+                "mode": mode,
+                "source": source,
+                "hold": hold,
+                "action": action.kind,
+                "action_id": action_id,
+                "agent_id": agent["id"],
+                "decision": decision.decision,
+                "reasons": reasons,
+                "subject_ref": action.subject_ref,
+            },
+            citations=tuple(citations),
+        ),
+        hold=hold,
+    )
+    return finding_id
 
 
 def person(

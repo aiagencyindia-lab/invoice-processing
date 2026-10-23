@@ -173,8 +173,7 @@ def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
     )
     ctx = principal.context()
     # Held from the spend read to the ledger row, so two approvals cannot
-    # both fit one cap (B17). Record writes from its own connection; the
-    # lock is FOR NO KEY UPDATE so its FK check does not wait on this one.
+    # both fit one cap (B17). The decision is recorded in this same session.
     with tenant_session(tenant, store.url) as s:
         store.lock_agent(s, tenant, agent["id"])
         mandate = store.current_mandate(tenant, agent["id"], now)
@@ -190,7 +189,7 @@ def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
             skip=behaviour.DEFERRED,
         )
         decision = _record(
-            ctx, decision, action, agent, mandate, store, mode, now
+            ctx, decision, action, agent, mandate, store, mode, now, s=s
         )
     # The document read and the model call run in the worker, once the write
     # has happened (`settling`): never inline (PRD inline p95 <= 2 s).
@@ -257,7 +256,7 @@ def _owner_check(principal, action: Action, *, mode, store):
     return _answer(decision, mode)
 
 
-def _record(ctx, decision, action, agent, mandate, store, mode, now):
+def _record(ctx, decision, action, agent, mandate, store, mode, now, s=None):
     from ...api import service  # noqa: PLC0415
 
     action_id = record(
@@ -273,6 +272,7 @@ def _record(ctx, decision, action, agent, mandate, store, mode, now):
         source="inline",
         refused=mode == "enforcing" and decision.decision == "BLOCK",
         now=now,
+        s=s,
     )
     return dataclasses.replace(decision, action_id=action_id)
 

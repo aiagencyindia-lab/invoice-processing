@@ -86,13 +86,12 @@ def _dict(row) -> dict:
 
 
 def _lock_query(tenant_id: str, agent_id: str):
-    # NO KEY UPDATE, not UPDATE: `record` inserts the ledger row from its own
-    # connection, and that insert's FK check takes FOR KEY SHARE on this row.
-    # FOR UPDATE would make it wait on a session that is waiting for it.
+    # The guard records its decision in the session holding this lock, so
+    # the ledger insert's FK check never waits on another connection.
     return (
         select(Agent.id)
         .where(Agent.tenant_id == tenant_id, Agent.id == agent_id)
-        .with_for_update(key_share=True)
+        .with_for_update()
     )
 
 

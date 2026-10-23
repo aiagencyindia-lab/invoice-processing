@@ -914,3 +914,19 @@ def test_the_invoice_action_carries_the_stored_vendor_id(env):
     artifacts = {"extraction": {"invoice": {"vendor_name": VENDOR["name"]}}}
     action = guard.invoice_action(ctx, artifacts, "invoice.approve")
     assert action.vendor_id == stored["id"]
+
+
+def test_a_record_failure_in_enforcing_is_503_and_writes_nothing(
+    env, monkeypatch
+):
+    def boom(*a, **k):
+        raise RuntimeError("findings down")
+
+    monkeypatch.setattr(FindingStore, "_upsert", boom)
+    env["settings"].mode = "enforcing"
+    agent(env, "approver:bot", actions=["invoice.export"])  # approve is a BLOCK
+    r = act(env, "approver:bot")
+    assert r.status_code == 503 and decided(env) is None
+    assert ledger(env) == []
+    assert not env["rows"](models.TrustFinding)
+    assert not env["rows"](models.WebhookOutbox)

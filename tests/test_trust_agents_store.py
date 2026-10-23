@@ -261,16 +261,16 @@ def test_lock_agent_takes_the_row(env):
         store.lock_agent(s, T, a)  # no error on SQLite; FOR UPDATE on Postgres
 
 
-def test_the_agent_lock_lets_the_ledger_insert_through_on_postgres():
-    """`record` inserts the ledger row from its own connection; its FK check
-    takes FOR KEY SHARE on the agent row, which FOR UPDATE would block for
-    ever (the locking session is waiting for `record` to return)."""
+def test_the_agent_lock_is_a_plain_for_update_on_postgres():
+    """The guard records its decision in the session holding the lock (Wave
+    5 B6), so the ledger insert's FK check runs on the same connection and a
+    plain FOR UPDATE serialises one agent's check-then-record."""
     from sqlalchemy.dialects import postgresql  # noqa: PLC0415
 
     sql = str(
         store_mod._lock_query(T, "a1").compile(dialect=postgresql.dialect())
     )
-    assert "FOR NO KEY UPDATE" in sql
+    assert "FOR UPDATE" in sql and "NO KEY" not in sql
 
 
 def test_a_non_utc_validity_keeps_its_digest_after_a_reload(env):
