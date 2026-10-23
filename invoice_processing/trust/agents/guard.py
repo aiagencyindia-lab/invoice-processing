@@ -375,7 +375,9 @@ def po_action(ctx, records: list[dict], repo) -> list[Action]:
         if number in stored:
             continue
         name = str(r.get("vendor_name") or "")
-        vendor = (vendors.find_by_name(t, name) if vendors and name else None) or {}
+        vendor = (
+            vendors.find_by_name(t, name) if vendors and name else None
+        ) or {}
         out.append(
             Action(
                 kind="po.create",

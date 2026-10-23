@@ -46,7 +46,10 @@ KYC = b"%PDF-1.4 governed kyc test\n%%EOF"
 @pytest.fixture
 def env(guard_env, tmp_path, monkeypatch):  # noqa: F811
     url = guard_env["url"]
-    orders, documents = PgPurchaseOrderRepository(url), PgDocumentRepository(url)
+    orders, documents = (
+        PgPurchaseOrderRepository(url),
+        PgDocumentRepository(url),
+    )
     monkeypatch.setattr(service, "_purchase_orders", orders)
     monkeypatch.setattr(service, "_documents", documents)
     blobs = tmp_path / "blobs"

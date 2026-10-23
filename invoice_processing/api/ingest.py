@@ -261,7 +261,9 @@ async def upload_document(
     return result.as_dict()
 
 
-def _governed_ingest(principal: Principal, data: bytes, filename) -> IngestResult:
+def _governed_ingest(
+    principal: Principal, data: bytes, filename
+) -> IngestResult:
     """The agent guard, then the store (FR-28.2): a refused upload stores
     nothing, since `check` runs before `ingest_document`."""
     from ..trust.agents import guard  # noqa: PLC0415
