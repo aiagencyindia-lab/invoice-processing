@@ -10,6 +10,7 @@ import {
   api,
   can,
   setTokenProvider,
+  type AgentBlockCount,
   type Me,
   type SystemStatus,
 } from "@/lib/api";
@@ -150,6 +151,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { data: status } = usePoll<SystemStatus>(
     me ? "/api/system/status" : null,
     POLL_MS,
+  );
+  // Time-windowed, not acknowledged: it clears when the window passes.
+  const { data: agentBlocks } = usePoll<AgentBlockCount>(
+    me && can(me, "approver") ? "/api/trust/agents/blocks/count" : null,
+    60_000,
   );
 
   // Signed in but refused goes to /signup, which explains what is missing
@@ -292,6 +298,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="banner" role="status">
             <span aria-hidden="true">⚠</span>
             {paused}
+          </div>
+        ) : null}
+        {agentBlocks && agentBlocks.blocked + agentBlocks.reviews > 0 ? (
+          <div className="banner" role="status">
+            <span aria-hidden="true">⚠</span>
+            <span>
+              {agentBlocks.blocked} agent action(s) blocked and {agentBlocks.reviews} need review in the last{" "}
+              {agentBlocks.window_hours} h · <Link href="/agents">Agents</Link>
+            </span>
           </div>
         ) : null}
 
