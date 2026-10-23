@@ -37,6 +37,7 @@ OFF = (
     "Agent control is off for this tenant; turn it on (shadow or higher) first."
 )
 CHECK_FAILED = "A check could not run; try again."
+NO_AGENT = "Name the agent: this caller is not registered as one."
 MAX_IMPORT_ROWS = 5000
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 SUBJECT_TABLES = {
@@ -220,6 +221,62 @@ def _judge(
     }
 
 
+def resolve_agents(
+    store, tenant_id: str
+) -> tuple[dict[str, list[dict]], dict[str, dict]]:
+    """The tenant's agents by casefolded name (a name may repeat) and by
+    casefolded principal email, for naming an agent in a log row."""
+    by_name: dict[str, list[dict]] = {}
+    by_email: dict[str, dict] = {}
+    for a in store.list(tenant_id):
+        by_name.setdefault(a["name"].casefold(), []).append(a)
+        if a["principal_email"]:
+            by_email[a["principal_email"].casefold()] = a
+    return by_name, by_email
+
+
+def judge_log(
+    principal: Principal, rows: list[dict], mode: str, *, first: int, own=False
+) -> dict:
+    """Judge each row as a logged action and answer as the import does. Row
+    `i` is reported as `first + i`. With `own`, a row naming no agent is the
+    caller's own agent (an API key bound to one)."""
+    store, ctx, now = _store(), principal.context(), _now()
+    by_name, by_email = resolve_agents(store, principal.tenant_id)
+    mine = (
+        store.by_principal(principal.tenant_id, principal.user_id)
+        if own
+        else None
+    )
+    counts: dict[str, int] = {}
+    errors = []
+    for line, row in enumerate(rows, start=first):
+        try:
+            who = (row.get("agent") or "").strip().casefold()
+            if own and not who:
+                agent = mine
+                if agent is None:
+                    raise ValueError(NO_AGENT)
+            else:
+                named = by_name.get(who, [])
+                if len(named) > 1:
+                    raise ValueError(
+                        "Two agents share this name; use its principal email."
+                    )
+                agent = named[0] if named else by_email.get(who)
+                if agent is None:
+                    raise ValueError("Unknown agent.")
+            out = _judge(ctx, agent, row, "log", now, mode)
+        except ValueError as exc:
+            errors.append({"row": line, "message": str(exc)})
+            continue
+        except CheckFailed:
+            errors.append({"row": line, "message": CHECK_FAILED})
+            continue
+        counts[out["decision"]] = counts.get(out["decision"], 0) + 1
+    return {"rows": len(rows), "by_decision": counts, "errors": errors}
+
+
 # -- bodies ---------------------------------------------------------------------
 
 
@@ -303,35 +360,7 @@ def import_actions(principal: Admin, file: Annotated[UploadFile, File()]):
         raise HTTPException(400, str(exc)) from None
     if len(rows) > MAX_IMPORT_ROWS:
         raise HTTPException(400, f"At most {MAX_IMPORT_ROWS} rows per file.")
-    store, ctx, now = _store(), principal.context(), _now()
-    by_name: dict[str, list[dict]] = {}
-    by_email: dict[str, dict] = {}
-    for a in store.list(principal.tenant_id):
-        by_name.setdefault(a["name"].casefold(), []).append(a)
-        if a["principal_email"]:
-            by_email[a["principal_email"]] = a
-    counts: dict[str, int] = {}
-    errors = []
-    for line, row in enumerate(rows, start=2):  # line 1 is the header
-        try:
-            who = (row.get("agent") or "").strip().casefold()
-            named = by_name.get(who, [])
-            if len(named) > 1:
-                raise ValueError(
-                    "Two agents share this name; use its principal email."
-                )
-            agent = named[0] if named else by_email.get(who)
-            if agent is None:
-                raise ValueError("Unknown agent.")
-            out = _judge(ctx, agent, row, "log", now, mode)
-        except ValueError as exc:
-            errors.append({"row": line, "message": str(exc)})
-            continue
-        except CheckFailed:
-            errors.append({"row": line, "message": CHECK_FAILED})
-            continue
-        counts[out["decision"]] = counts.get(out["decision"], 0) + 1
-    return {"rows": len(rows), "by_decision": counts, "errors": errors}
+    return judge_log(principal, rows, mode, first=2)  # line 1 is the header
 
 
 @router.post("/api/trust/agents", status_code=201)

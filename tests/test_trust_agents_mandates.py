@@ -404,9 +404,9 @@ def test_objects_name_an_id_or_a_name(vendors):
 
 def test_one_vendor_by_name_and_by_id_is_stored_once(vendors):
     repo, acme, _ = vendors
-    assert parties([acme, "Acme Steel Pvt. Ltd.", {"vendor_id": acme}], repo) == [
-        {"vendor_id": acme, "key": "ACME STEEL PVT"}
-    ]
+    assert parties(
+        [acme, "Acme Steel Pvt. Ltd.", {"vendor_id": acme}], repo
+    ) == [{"vendor_id": acme, "key": "ACME STEEL PVT"}]
 
 
 @pytest.mark.parametrize(

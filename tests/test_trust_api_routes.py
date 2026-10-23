@@ -60,6 +60,7 @@ PROBED = {
     "/v2/agents/{agent_id}/mandates",
     "/v2/agents/{agent_id}/actions/evaluate",
     "/v2/agents/{agent_id}/ledger",
+    "/v2/agents/actions",
 }
 # Registry changes are a human admin's, as on /api/trust/agents.
 ADMIN_ONLY = {"/v2/agents", "/v2/agents/{agent_id}/mandates"}
@@ -327,6 +328,21 @@ def _mandate_body():
     }
 
 
+def _row(**over):
+    return {
+        "action": "invoice.export",
+        "subject_ref": "invoices:i1",
+        # After the env's mandate was approved (at the wall clock).
+        "occurred_at": datetime.now(UTC).isoformat(),
+        **over,
+    }
+
+
+def _intake_body(*rows):
+    # Each tenant has its own "payables-bot": the name resolves per tenant.
+    return {"actions": list(rows) or [_row(agent="payables-bot")]}
+
+
 def bearer(token):
     return TestClient(app, headers={"Authorization": f"Bearer {token}"})
 
@@ -580,6 +596,143 @@ def test_a_viewer_cannot_evaluate_for_another_agent(env):
         },
     )
     assert r.status_code == 403
+
+
+# -- intake (U1, B9) -------------------------------------------------------------
+
+
+def _ledger_rows(env, tid=ACME):
+    return service._agent_store.actions(tid)
+
+
+def test_intake_judges_rows_for_the_keys_own_agent(env):
+    d = env["acme"]
+    r = keyed(d["keys"]["approver"]).post(
+        "/v2/agents/actions", json=_intake_body(_row(), _row(subject_ref="x"))
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"rows": 2, "by_decision": {"ALLOW": 2}, "errors": []}
+    rows = _ledger_rows(env)
+    assert {(a["agent_id"], a["source"]) for a in rows} == {(d["agent"], "log")}
+
+
+def test_a_caller_without_an_agent_must_name_one(env):
+    r = bearer("acme:approver").post(
+        "/v2/agents/actions", json=_intake_body(_row())
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["errors"] == [
+        {
+            "row": 1,
+            "message": "Name the agent: this caller is not registered as one.",
+        }
+    ]
+    assert _ledger_rows(env) == []
+
+
+@pytest.mark.parametrize(
+    "who",
+    ["payables-bot", "  PAYABLES-Bot ", "APPROVER-KEY@api-key.tenant-acme"],
+)
+def test_intake_names_an_agent_by_name_or_principal_email(env, who):
+    r = bearer("acme:approver").post(
+        "/v2/agents/actions", json=_intake_body(_row(agent=who))
+    )
+    assert r.json() == {"rows": 1, "by_decision": {"ALLOW": 1}, "errors": []}
+    assert [a["agent_id"] for a in _ledger_rows(env)] == [env["acme"]["agent"]]
+
+
+def test_two_agents_sharing_a_name_is_a_row_error(env):
+    ctx = RunContext(tenant_id=ACME, case_id="", run_id="r", actor="a@acme")
+    service._agent_store.register(
+        ctx, name="Payables-Bot", owner="ops@acme.test", kind="external"
+    )
+    r = bearer("acme:approver").post(
+        "/v2/agents/actions",
+        json=_intake_body(_row(agent="payables-bot"), _row(agent="nobody")),
+    )
+    assert r.json()["errors"] == [
+        {
+            "row": 1,
+            "message": "Two agents share this name; use its principal email.",
+        },
+        {"row": 2, "message": "Unknown agent."},
+    ]
+
+
+def test_mixed_rows_fill_decisions_and_errors(env):
+    r = keyed(env["acme"]["keys"]["approver"]).post(
+        "/v2/agents/actions",
+        json=_intake_body(
+            _row(),
+            _row(action="vendor.patch"),  # not in the mandate
+            _row(action="invoice.pay"),
+            _row(occurred_at="yesterday"),
+            _row(occurred_at=None),
+        ),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["rows"] == 5
+    assert body["by_decision"] == {"ALLOW": 1, "BLOCK": 1}
+    assert [e["row"] for e in body["errors"]] == [3, 4, 5]
+    assert "occurred_at" in body["errors"][1]["message"]
+
+
+def test_intake_while_off_is_409_and_records_nothing(env):
+    ctx = RunContext(tenant_id=ACME, case_id="", run_id="r", actor="a@acme")
+    modes.set_engine_mode(ctx, "agents", "off", store=service._tenant_settings)
+    r = keyed(env["acme"]["keys"]["approver"]).post(
+        "/v2/agents/actions", json=_intake_body(_row())
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == trust_agent_routes.OFF
+    assert _ledger_rows(env) == []
+
+
+def test_a_crashing_rule_is_a_row_error(env, monkeypatch):
+    from invoice_processing.trust.agents import rules  # noqa: PLC0415
+
+    def crash(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(rules, "RULES", (*rules.RULES, crash))
+    r = keyed(env["acme"]["keys"]["approver"]).post(
+        "/v2/agents/actions", json=_intake_body(_row())
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["errors"] == [
+        {"row": 1, "message": trust_agent_routes.CHECK_FAILED}
+    ]
+    assert _ledger_rows(env) == []
+
+
+def test_intake_bounds_its_batch(env, monkeypatch):
+    client = keyed(env["acme"]["keys"]["approver"])
+    assert (
+        client.post("/v2/agents/actions", json={"actions": []}).status_code
+        == 422
+    )
+    monkeypatch.setattr(trust_agent_routes, "MAX_IMPORT_ROWS", 2)
+    r = client.post("/v2/agents/actions", json=_intake_body(*[_row()] * 3))
+    assert r.status_code == 400
+    assert r.json()["detail"] == "At most 2 rows per request."
+    assert _ledger_rows(env) == []
+
+
+def test_an_over_long_field_is_a_422_not_a_row(env):
+    r = keyed(env["acme"]["keys"]["approver"]).post(
+        "/v2/agents/actions", json=_intake_body(_row(subject_ref="x" * 129))
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize("role", ["viewer", "clerk"])
+def test_intake_needs_an_approver(env, role):
+    for client in (bearer(f"acme:{role}"), keyed(env["acme"]["keys"][role])):
+        r = client.post("/v2/agents/actions", json=_intake_body())
+        assert r.status_code == 403
+    assert _ledger_rows(env) == []
 
 
 # -- decisions -----------------------------------------------------------------
@@ -885,6 +1038,7 @@ def _calls(d):
             },
         ),
         ("get", "/v2/agents/{agent_id}/ledger", None),
+        ("post", "/v2/agents/actions", _intake_body()),
     ]
     return [(m, t, filled(t), body) for m, t, body in rows]
 
@@ -922,7 +1076,7 @@ class TestIsolation:
     leak rather than pass on a refusal."""
 
     @pytest.mark.parametrize("via", ["bearer", "key"])
-    @pytest.mark.parametrize("i", range(24))
+    @pytest.mark.parametrize("i", range(25))
     def test_a_foreign_tenant_sees_nothing_of_acme(self, env, via, i):
         acme = env["acme"]
         method, template, path, body = _calls(acme)[i]
@@ -1071,10 +1225,3 @@ def test_an_ambiguous_or_credentialed_url_is_refused(env, u):
         "/api/integrations/webhooks", json={"url": u, "events": ["*"]}
     )
     assert r.status_code == 400, r.text
-
-
-def test_the_intake_route_is_a_stub_until_branch_c(env):
-    r = keyed(env["acme"]["keys"]["approver"]).post(
-        "/v2/agents/actions", json={"actions": []}
-    )
-    assert r.status_code == 503
