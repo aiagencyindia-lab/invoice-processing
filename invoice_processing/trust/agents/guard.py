@@ -143,18 +143,32 @@ def _check(principal, action, *, mode, settings_store, now, store):
         if principal.user_id
         else None
     )
-    out = [
-        _one(
-            agent,
-            principal,
-            a,
-            mode=mode,
-            settings_store=settings_store,
-            now=now,
-            store=store,
-        )
-        for a in (built if many else [built])
-    ]
+    out = []
+    for a in built if many else [built]:
+        try:
+            out.append(
+                _one(
+                    agent,
+                    principal,
+                    a,
+                    mode=mode,
+                    settings_store=settings_store,
+                    now=now,
+                    store=store,
+                )
+            )
+        except Exception as exc:
+            if not isinstance(exc, HTTPException) and mode != "enforcing":
+                raise  # below enforcing the route proceeds: they are written
+            # A later action refused (or the guard failed in enforcing): the
+            # ones already allowed are not written either, so the ledger must
+            # not show them as taken.
+            _settle(
+                principal,
+                [d.action_id for d in out if d and d.action_id],
+                "failed",
+            )
+            raise
     return out if many else out[0]
 
 
@@ -173,8 +187,7 @@ def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
     )
     ctx = principal.context()
     # Held from the spend read to the ledger row, so two approvals cannot
-    # both fit one cap (B17). Record writes from its own connection; the
-    # lock is FOR NO KEY UPDATE so its FK check does not wait on this one.
+    # both fit one cap (B17). The decision is recorded in this same session.
     with tenant_session(tenant, store.url) as s:
         store.lock_agent(s, tenant, agent["id"])
         mandate = store.current_mandate(tenant, agent["id"], now)
@@ -190,7 +203,7 @@ def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
             skip=behaviour.DEFERRED,
         )
         decision = _record(
-            ctx, decision, action, agent, mandate, store, mode, now
+            ctx, decision, action, agent, mandate, store, mode, now, s=s
         )
     # The document read and the model call run in the worker, once the write
     # has happened (`settling`): never inline (PRD inline p95 <= 2 s).
@@ -257,7 +270,7 @@ def _owner_check(principal, action: Action, *, mode, store):
     return _answer(decision, mode)
 
 
-def _record(ctx, decision, action, agent, mandate, store, mode, now):
+def _record(ctx, decision, action, agent, mandate, store, mode, now, s=None):
     from ...api import service  # noqa: PLC0415
 
     action_id = record(
@@ -273,6 +286,7 @@ def _record(ctx, decision, action, agent, mandate, store, mode, now):
         source="inline",
         refused=mode == "enforcing" and decision.decision == "BLOCK",
         now=now,
+        s=s,
     )
     return dataclasses.replace(decision, action_id=action_id)
 
@@ -323,6 +337,7 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
         subject_table="invoices",
         subject_ref=f"invoices:{ctx.case_id}",
         vendor_key=po_matching.normalize_vendor(name) or None,
+        vendor_id=vendor.get("id"),
         category=vendor.get("kind") or None,
         amount=None
         if kind == "invoice.reject"

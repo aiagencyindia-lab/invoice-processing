@@ -46,6 +46,7 @@ A transaction id is the invoice's evidence-graph node id. It is the `transaction
 | POST | `/v2/agents/{agent_id}/mandates` | admin (a signed-in person; a key gets 403) | `POST /api/trust/agents/{agent_id}/mandates` |
 | POST | `/v2/agents/{agent_id}/actions/evaluate` | approver, or the agent's own key about itself | `POST /api/trust/agents/{agent_id}/actions/evaluate` |
 | GET | `/v2/agents/{agent_id}/ledger` | approver | `GET /api/trust/agents/{agent_id}/ledger` (`?since=&until=`) |
+| POST | `/v2/agents/actions` | approver (API key or user) | — (not built yet: answers 503) |
 
 ## Agents
 

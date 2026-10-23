@@ -26,6 +26,9 @@ class Action:
     subject_table: str
     subject_ref: str
     vendor_key: str | None = None
+    # The vendor's id when it exists: a mandate may name it (a rename keeps
+    # matching). A vendor.create has none yet.
+    vendor_id: str | None = None
     category: str | None = None
     amount: Decimal | None = None
     currency: str | None = None

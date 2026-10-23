@@ -905,3 +905,112 @@ def test_a_write_that_fails_queues_nothing(env, monkeypatch):
     assert len(queued(env)) == 1
     assert act(env, "approver:bot").status_code == 409
     assert queued(env) == []
+
+
+def test_the_invoice_action_carries_the_stored_vendor_id(env):
+    env["client"]("admin").put("/api/vendors", json={"vendors": [VENDOR]})
+    (stored,) = env["vendors"].list(TENANT)
+    ctx = RunContext(tenant_id=TENANT, case_id=CASE, run_id="", actor="a")
+    artifacts = {"extraction": {"invoice": {"vendor_name": VENDOR["name"]}}}
+    action = guard.invoice_action(ctx, artifacts, "invoice.approve")
+    assert action.vendor_id == stored["id"]
+
+
+def test_a_record_failure_in_enforcing_is_503_and_writes_nothing(
+    env, monkeypatch
+):
+    def boom(*a, **k):
+        raise RuntimeError("findings down")
+
+    monkeypatch.setattr(FindingStore, "_upsert", boom)
+    env["settings"].mode = "enforcing"
+    agent(env, "approver:bot", actions=["invoice.export"])  # approve is a BLOCK
+    r = act(env, "approver:bot")
+    assert r.status_code == 503 and decided(env) is None
+    assert ledger(env) == []
+    assert not env["rows"](models.TrustFinding)
+    assert not env["rows"](models.WebhookOutbox)
+
+
+def test_a_list_refusal_stamps_the_creates_before_it_failed(env):
+    env["settings"].mode = "enforcing"
+    bot = agent(env, "admin:bot", mandate=False)
+    m = env["store"].propose_mandate(
+        ADMIN_A,
+        bot["id"],
+        scope={
+            "actions": ["vendor.create"],
+            "currency": "AUD",
+            "counterparties": ["ONE", "TWO"],
+            "caps": {},
+        },
+        valid_from=datetime.now(UTC) - timedelta(days=1),
+        valid_to=datetime.now(UTC) + timedelta(days=30),
+    )
+    mandates.approve(ADMIN_B, env["store"], m["id"])
+    vendors = [
+        {"name": name, "tax_id": f"29AAAAA000{n}A1Z5"}
+        for n, name in enumerate(["One", "Two", "Three"])
+    ]
+    r = env["client"]("admin:bot").put(
+        "/api/vendors", json={"vendors": vendors}
+    )
+    blocked(r, "AGENT-OUT-OF-MANDATE")
+    rows = sorted(ledger(env), key=lambda row: row.created_at)
+    assert [row.decision for row in rows] == ["ALLOW", "ALLOW", "BLOCK"]
+    assert [row.outcome for row in rows[:2]] == ["failed", "failed"]
+    assert env["vendors"].list(TENANT) == []
+
+
+def test_a_crash_part_way_through_a_list_stamps_the_earlier_creates(
+    env, monkeypatch
+):
+    env["settings"].mode = "enforcing"
+    agent(env, "admin:bot", actions=["vendor.create"])
+    real = guard.evaluate_action
+    calls = []
+
+    def third_crashes(*a, **k):
+        calls.append(1)
+        if len(calls) == 3:
+            raise RuntimeError("db down")
+        return real(*a, **k)
+
+    monkeypatch.setattr(guard, "evaluate_action", third_crashes)
+    vendors = [
+        {"name": f"Fresh {n} Pty", "tax_id": f"29CCCCC000{n}C1Z5"}
+        for n in range(3)
+    ]
+    r = env["client"]("admin:bot").put(
+        "/api/vendors", json={"vendors": vendors}
+    )
+    assert r.status_code == 503  # enforcing: nothing is written
+    assert env["vendors"].list(TENANT) == []
+    assert [row.outcome for row in ledger(env)] == ["failed", "failed"]
+
+
+def test_below_enforcing_a_crash_leaves_the_written_creates_counted(
+    env, monkeypatch
+):
+    env["settings"].mode = "advisory"
+    agent(env, "admin:bot", actions=["vendor.create"])
+    real = guard.evaluate_action
+    calls = []
+
+    def third_crashes(*a, **k):
+        calls.append(1)
+        if len(calls) == 3:
+            raise RuntimeError("db down")
+        return real(*a, **k)
+
+    monkeypatch.setattr(guard, "evaluate_action", third_crashes)
+    vendors = [
+        {"name": f"Fresh {n} Pty", "tax_id": f"29CCCCC000{n}C1Z5"}
+        for n in range(3)
+    ]
+    r = env["client"]("admin:bot").put(
+        "/api/vendors", json={"vendors": vendors}
+    )
+    assert r.status_code == 200  # the guard failure is a logged no-op
+    assert len(env["vendors"].list(TENANT)) == 3
+    assert [row.outcome for row in ledger(env)] == [None, None]

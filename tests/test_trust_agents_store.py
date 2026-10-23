@@ -261,16 +261,16 @@ def test_lock_agent_takes_the_row(env):
         store.lock_agent(s, T, a)  # no error on SQLite; FOR UPDATE on Postgres
 
 
-def test_the_agent_lock_lets_the_ledger_insert_through_on_postgres():
-    """`record` inserts the ledger row from its own connection; its FK check
-    takes FOR KEY SHARE on the agent row, which FOR UPDATE would block for
-    ever (the locking session is waiting for `record` to return)."""
+def test_the_agent_lock_is_a_plain_for_update_on_postgres():
+    """The guard records its decision in the session holding the lock (Wave
+    5 B6), so the ledger insert's FK check runs on the same connection and a
+    plain FOR UPDATE serialises one agent's check-then-record."""
     from sqlalchemy.dialects import postgresql  # noqa: PLC0415
 
     sql = str(
         store_mod._lock_query(T, "a1").compile(dialect=postgresql.dialect())
     )
-    assert "FOR NO KEY UPDATE" in sql
+    assert "FOR UPDATE" in sql and "NO KEY" not in sql
 
 
 def test_a_non_utc_validity_keeps_its_digest_after_a_reload(env):
@@ -325,3 +325,86 @@ def test_set_outcome_refuses_an_unknown_outcome(env):
     row = record(store, url, a, amount=Decimal("1"))
     with pytest.raises(ValueError):
         store.set_outcome(T, row, "maybe")
+
+
+def test_count_since_counts_every_row_whatever_its_request_id(env):
+    """A caller may send its own X-Request-ID, and a log import carries one
+    id for every row: velocity must not take the caller's word for what
+    one burst is."""
+    store, _, url = env
+    a = agent(store)["id"]
+    for _ in range(5):
+        record(store, url, a, action="vendor.create", request_id="req-bulk")
+    record(store, url, a)
+    since, until = NOW - timedelta(minutes=5), NOW + timedelta(seconds=1)
+    assert store.count_since(T, a, since=since, until=until) == 6
+
+
+def _record_held(store, url, agent_id):
+    from invoice_processing.trust.agents import record as record_mod  # noqa: PLC0415
+    from invoice_processing.trust.agents.policy import (  # noqa: PLC0415
+        Action,
+        Decision,
+        Reason,
+    )
+    from invoice_processing.trust.findings.store import FindingStore  # noqa: PLC0415
+
+    why = Reason("in_scope", "AGENT-OUT-OF-MANDATE", "BLOCK", "Out of scope.")
+    return record_mod.record(
+        ADMIN_A,
+        Decision("BLOCK", (why,), why.message),
+        Action(
+            kind="invoice.approve",
+            subject_table="invoices",
+            subject_ref="invoices:case_001",
+            occurred_at=NOW,
+        ),
+        agent=store.get(T, agent_id),
+        mandate=None,
+        store=store,
+        findings=FindingStore(url),
+        graph=store.graph,
+        mode="enforcing",
+        source="log",
+        refused=False,
+        now=NOW,
+        hold=True,
+    )
+
+
+def test_count_blocked_tells_stopped_from_review(env):
+    store, _, url = env
+    a = agent(store)["id"]
+    since = NOW - timedelta(hours=24)
+    assert store.count_blocked(T, since) == {"blocked": 0, "reviews": 0}
+    enforcing = {"decision": "BLOCK", "mode": "enforcing"}
+    record(store, url, a, **enforcing)  # refused inline
+    # Held: a log BLOCK whose finding placed an open hold (branch B's path).
+    held = _record_held(store, url, a)
+    record(
+        store, url, a, **enforcing, source="log",
+        subject_table="invoices", transaction_node=None,
+    )  # the same decision, but no hold was placed: a review  # fmt: skip
+    record(
+        store, url, a, **enforcing, source="log", subject_table="vendors"
+    )  # nothing held: a review
+    record(store, url, a, decision="BLOCK", mode="advisory")  # review
+    record(store, url, a, decision="ALLOW-WITH-REVIEW", mode="enforcing")
+    record(store, url, a, **enforcing, source="dryrun")  # never counted
+    record(store, url, a, **enforcing, occurred_at=NOW - timedelta(days=2))
+    record(store, url, a)  # ALLOW
+    assert held
+    assert store.count_blocked(T, since) == {"blocked": 2, "reviews": 4}
+
+
+def test_purge_before_keeps_vendor_creates_and_counts(env):
+    store, _, url = env
+    a = agent(store)["id"]
+    old = NOW - timedelta(days=500)
+    record(store, url, a, occurred_at=old)
+    record(store, url, a, occurred_at=old, action="vendor.create")
+    record(store, url, a, occurred_at=NOW - timedelta(days=10))
+    assert store.purge_before(T, NOW - timedelta(days=400)) == 1
+    kinds = sorted(r["action"] for r in store.actions(T, agent_id=a))
+    assert kinds == ["invoice.approve", "vendor.create"]
+    assert store.purge_before(T, NOW - timedelta(days=400)) == 0

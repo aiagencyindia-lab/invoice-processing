@@ -167,6 +167,7 @@ def write(
     refused=False,
     action=ACTION,
     mode="advisory",
+    s=None,
 ):
     return record.record(
         CTX,
@@ -181,6 +182,7 @@ def write(
         source=source,
         refused=refused,
         now=NOW,
+        s=s,
     )
 
 
@@ -335,8 +337,9 @@ def test_recording_without_a_graph_node_is_refused_plainly(env):
 
 
 def test_record_runs_while_the_guard_holds_the_agent_lock(env):
-    """The guard's order (B17): lock the agent, read spend, record. On
-    Postgres a plain FOR UPDATE would hang here for ever."""
+    """The guard's order (B17): lock the agent, read spend, record — all in
+    the lock's own session, so the ledger insert's FK check never waits on
+    another connection."""
     with tenant_session(T, env["url"]) as s:
         env["store"].lock_agent(s, T, env["agent"]["id"])
         write(
@@ -344,5 +347,49 @@ def test_record_runs_while_the_guard_holds_the_agent_lock(env):
             Decision("BLOCK", (BLOCK,), "x"),
             refused=True,
             mode="enforcing",
+            s=s,
         )
     assert len(_rows(env, models.AgentAction)) == 1
+    assert len(_rows(env, models.TrustFinding)) == 1
+
+
+def test_wave5_kinds_and_vendor_id():
+    from invoice_processing.trust.agents import ACTIONS  # noqa: PLC0415
+
+    assert {"po.create", "document.upload"} <= set(ACTIONS)
+    assert ACTION.vendor_id is None
+
+
+def test_a_failing_finding_write_leaves_no_ledger_row(env, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("findings down")
+
+    monkeypatch.setattr(FindingStore, "_upsert", boom)
+    with pytest.raises(RuntimeError):
+        write(
+            env,
+            Decision("BLOCK", (BLOCK,), "x"),
+            refused=True,
+            mode="enforcing",
+        )
+    assert _rows(env, models.AgentAction) == []
+    assert _rows(env, models.WebhookOutbox) == []
+
+
+def test_record_refuses_two_databases(env):
+    with pytest.raises(ValueError, match="database"):
+        record.record(
+            CTX,
+            Decision("BLOCK", (BLOCK,), "x"),
+            ACTION,
+            agent=env["agent"],
+            mandate=None,
+            store=env["store"],
+            # Any store on another database; never opened.
+            findings=type("Elsewhere", (), {"url": "sqlite:///other.db"})(),
+            graph=env["graph"],
+            mode="advisory",
+            source="inline",
+            refused=False,
+            now=NOW,
+        )

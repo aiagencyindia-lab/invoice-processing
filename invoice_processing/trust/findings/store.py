@@ -89,90 +89,95 @@ class FindingStore:
         changed amount is the engine's own run log. `hold` (an enforcing
         engine's hold type) opens a hold in the ledger unless the finding is
         decided or already held."""
+        with tenant_session(ctx.tenant_id, self.url) as s:
+            return self._upsert(s, ctx, spec, hold=hold)
+
+    def _upsert(
+        self, s, ctx: RunContext, spec: FindingSpec, *, hold: bool = False
+    ) -> tuple[str, str]:
+        """`upsert` in the caller's session, so a caller can make the finding
+        part of its own transaction (the agent ledger, `record.record`)."""
         if not spec.citations:
             raise ValueError("A finding needs at least one citation.")
-        with tenant_session(ctx.tenant_id, self.url) as s:
-            row = s.scalars(
-                select(TrustFinding).where(
-                    TrustFinding.tenant_id == ctx.tenant_id,
-                    TrustFinding.dedupe_key == spec.dedupe_key,
-                )
-            ).first()
-            if (
-                row is not None
-                and row.status == "rejected"
-                and (row.owner_id == SYSTEM)
-            ):
-                # The engine released it and now finds it again (evidence
-                # withdrawn, an engine failing again): it reopens and holds
-                # again. Only a person's ruling is final.
-                s.add(
-                    TrustFindingEvent(
-                        tenant_id=ctx.tenant_id,
-                        finding_id=row.id,
-                        from_status="rejected",
-                        to_status="detected",
-                        amount=spec.impact,
-                        actor=ctx.actor or "engine",
-                        reason="Found again by a later run.",
-                    )
-                )
-                row.status, row.owner_id, row.decided_at = (
-                    "detected",
-                    None,
-                    None,
-                )
-            elif row is not None and row.status in DECIDED:
-                return row.id, "untouched"
-            created = row is None
-            if created:
-                row = TrustFinding(
+        row = s.scalars(
+            select(TrustFinding).where(
+                TrustFinding.tenant_id == ctx.tenant_id,
+                TrustFinding.dedupe_key == spec.dedupe_key,
+            )
+        ).first()
+        if (
+            row is not None
+            and row.status == "rejected"
+            and (row.owner_id == SYSTEM)
+        ):
+            # The engine released it and now finds it again (evidence
+            # withdrawn, an engine failing again): it reopens and holds
+            # again. Only a person's ruling is final.
+            s.add(
+                TrustFindingEvent(
                     tenant_id=ctx.tenant_id,
-                    type=spec.type,
-                    transaction_node=spec.transaction_node,
-                    dedupe_key=spec.dedupe_key,
-                    status="detected",
-                )
-                s.add(row)
-                s.flush()
-            row.impact, row.currency = spec.impact, spec.currency
-            row.confidence = spec.confidence
-            row.engine_version = spec.engine_version
-            row.rule_version = spec.rule_version
-            row.model_version = spec.model_version
-            row.summary, row.details = spec.summary, dict(spec.details)
-            s.execute(
-                delete(TrustFindingCitation).where(
-                    TrustFindingCitation.finding_id == row.id
+                    finding_id=row.id,
+                    from_status="rejected",
+                    to_status="detected",
+                    amount=spec.impact,
+                    actor=ctx.actor or "engine",
+                    reason="Found again by a later run.",
                 )
             )
-            for c in spec.citations:
-                s.add(
-                    TrustFindingCitation(
-                        tenant_id=ctx.tenant_id,
-                        finding_id=row.id,
-                        node_id=c.node_id,
-                        excerpt=c.excerpt,
-                    )
+            row.status, row.owner_id, row.decided_at = (
+                "detected",
+                None,
+                None,
+            )
+        elif row is not None and row.status in DECIDED:
+            return row.id, "untouched"
+        created = row is None
+        if created:
+            row = TrustFinding(
+                tenant_id=ctx.tenant_id,
+                type=spec.type,
+                transaction_node=spec.transaction_node,
+                dedupe_key=spec.dedupe_key,
+                status="detected",
+            )
+            s.add(row)
+            s.flush()
+        row.impact, row.currency = spec.impact, spec.currency
+        row.confidence = spec.confidence
+        row.engine_version = spec.engine_version
+        row.rule_version = spec.rule_version
+        row.model_version = spec.model_version
+        row.summary, row.details = spec.summary, dict(spec.details)
+        s.execute(
+            delete(TrustFindingCitation).where(
+                TrustFindingCitation.finding_id == row.id
+            )
+        )
+        for c in spec.citations:
+            s.add(
+                TrustFindingCitation(
+                    tenant_id=ctx.tenant_id,
+                    finding_id=row.id,
+                    node_id=c.node_id,
+                    excerpt=c.excerpt,
                 )
-            if created:
-                s.add(
-                    TrustFindingEvent(
-                        tenant_id=ctx.tenant_id,
-                        finding_id=row.id,
-                        from_status=None,
-                        to_status="detected",
-                        amount=spec.impact,
-                        actor=ctx.actor or "engine",
-                    )
+            )
+        if created:
+            s.add(
+                TrustFindingEvent(
+                    tenant_id=ctx.tenant_id,
+                    finding_id=row.id,
+                    from_status=None,
+                    to_status="detected",
+                    amount=spec.impact,
+                    actor=ctx.actor or "engine",
                 )
-                s.flush()
-                outbox.emit(
-                    s, ctx.tenant_id, "finding.created", _finding_dict(row)
-                )
-            if hold:
-                holds.place(s, ctx, row)
-            return row.id, "created" if created else "refreshed"
+            )
+            s.flush()
+            outbox.emit(s, ctx.tenant_id, "finding.created", _finding_dict(row))
+        if hold:
+            holds.place(s, ctx, row)
+        return row.id, "created" if created else "refreshed"
 
     def transition(
         self,

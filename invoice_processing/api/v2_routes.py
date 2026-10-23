@@ -237,6 +237,12 @@ def evaluate_action(
     )
 
 
+@router.post("/agents/actions")
+def intake_actions(principal: Approver, body: dict):
+    """Wave 5 intake (branch C): log rows from an agent's own system."""
+    raise HTTPException(503, "Agent intake is not built yet.")
+
+
 @router.get("/agents/{agent_id}/ledger")
 def agent_ledger(
     agent_id: str,

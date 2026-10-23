@@ -1529,6 +1529,25 @@ def branch_probed() -> set[str]:
     return probed
 
 
+class TestWave5StubsIsolation:
+    """The scaffold's route stubs answer 503 to every tenant: nothing to leak
+    until a branch builds them, and then that branch's own module carries the
+    real two-tenant probe (its PROBED replaces these paths). The entries go
+    when the wave closes."""
+
+    STUBS: ClassVar[list[tuple[str, str, str]]] = [
+        ("post", "/v2/agents/actions", "approver"),
+    ]
+
+    @pytest.mark.parametrize(("method", "template", "role"), STUBS)
+    def test_a_stub_answers_no_tenant(self, clients, method, template, role):
+        if template in branch_probed():
+            pytest.skip(f"{template} is built; its branch module probes it")
+        for slug in ("acme", "globex"):
+            r = getattr(clients(slug, role), method)(template, json={})
+            assert r.status_code == 503, (slug, template, r.status_code)
+
+
 class TestCoverage:
     # Routes that legitimately serve no tenant data, with the reason each is
     # exempt. Anything not listed must be probed above.
@@ -1642,7 +1661,9 @@ class TestCoverage:
     )
 
     def _probed(self) -> set:
-        return set(self.PROBED) | branch_probed()
+        # The Wave 5 stubs, while they are stubs (TestWave5StubsIsolation).
+        stubs = {t for _, t, _ in TestWave5StubsIsolation.STUBS}
+        return set(self.PROBED) | stubs | branch_probed()
 
     def test_the_route_walk_sees_routes_mounted_from_routers(self):
         """FastAPI 0.141 puts each included router on `app.routes` as one

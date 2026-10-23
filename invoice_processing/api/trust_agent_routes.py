@@ -10,7 +10,7 @@ branch's.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
 
@@ -40,6 +40,8 @@ CHECK_FAILED = "A check could not run; try again."
 MAX_IMPORT_ROWS = 5000
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 SUBJECT_TABLES = {
+    "po": "purchase_orders",
+    "document": "documents",
     "vendor": "vendors",
     "bank_change": "vendor_bank_changes",
     "invoice": "invoices",
@@ -111,6 +113,20 @@ def _utc(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
+def _vendor_id(tenant_id: str, name) -> str | None:
+    """The stored vendor of that name (`normalized_name` is unique)."""
+    vendors = _service().get_vendors() if name else None
+    found = vendors.find_by_name(tenant_id, name) if vendors else None
+    return (found or {}).get("id")
+
+
+def _invoice_node(tenant_id: str, subject: str) -> str | None:
+    table, _, case_id = subject.partition(":")
+    if table != "invoices" or not case_id:
+        return None
+    return _service()._trust_node(tenant_id, case_id)
+
+
 def _judge(
     ctx, agent: dict, row: dict, source: str, now: datetime, mode: str
 ) -> dict:
@@ -153,10 +169,12 @@ def _judge(
         subject_table=SUBJECT_TABLES[kind.split(".")[0]],
         subject_ref=subject,
         vendor_key=vendor,
+        vendor_id=_vendor_id(ctx.tenant_id, row.get("vendor")),
         category=category,
         amount=amount,
         currency=currency,
         occurred_at=at,
+        transaction_node=_invoice_node(ctx.tenant_id, subject),
     )
     store, service = _store(), _service()
     when = at or now
@@ -261,6 +279,18 @@ def tenant_ledger(
     )
 
 
+@router.get("/api/trust/agents/blocks/count")
+def blocks_count(principal: Approver):
+    """The shell banner's numbers: what was stopped and what needs review in
+    the last `agents.banner_window_hours`."""
+    hours = int(_settings(principal.tenant_id)["agents.banner_window_hours"])
+    since = _now() - timedelta(hours=hours)
+    return {
+        **_store().count_blocked(principal.tenant_id, since),
+        "window_hours": hours,
+    }
+
+
 @router.post("/api/trust/agents/actions/import")
 def import_actions(principal: Admin, file: Annotated[UploadFile, File()]):
     mode = _mode(principal.tenant_id)
@@ -326,7 +356,14 @@ def register_agent(body: AgentCreate, principal: Admin):
 def list_agents(principal: Approver, status: str | None = None):
     if status not in (None, "active", "revoked"):
         raise HTTPException(400, "status must be active or revoked.")
-    return {"agents": _store().list(principal.tenant_id, status)}
+    now, tenant = _now(), principal.tenant_id
+    # Each row with its current mandate, so the agents screen needs one call.
+    return {
+        "agents": [
+            {**a, "mandate": _current(tenant, a["id"], now)}
+            for a in _store().list(tenant, status)
+        ]
+    }
 
 
 @router.get("/api/trust/agents/{agent_id}")

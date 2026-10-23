@@ -278,6 +278,7 @@ def decide_bank_change(
                 change.get("vendor_name") or ""
             )
             or None,
+            vendor_id=change.get("vendor_id"),
             initiated_by=change.get("proposed_by"),
         )
 
@@ -327,6 +328,7 @@ def patch_vendor(
             subject_table="vendors",
             subject_ref=f"vendors:{vendor_id}",
             vendor_key=po_matching.normalize_vendor(before["name"]),
+            vendor_id=vendor_id,
             category=before.get("kind") or None,
         ),
     )
@@ -374,6 +376,7 @@ def propose_change(
             subject_ref=f"vendors:{vendor_id}",
             vendor_key=po_matching.normalize_vendor(vendor.get("name") or "")
             or None,
+            vendor_id=vendor_id,
             category=vendor.get("kind") or None,
         )
 

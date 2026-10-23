@@ -35,6 +35,7 @@ from invoice_processing.trust.graph.store import GraphStore
 PROBED = {
     "/api/trust/agents",
     "/api/trust/agents/ledger",
+    "/api/trust/agents/blocks/count",
     "/api/trust/agents/actions/import",
     "/api/trust/agents/{agent_id}",
     "/api/trust/agents/{agent_id}/revoke",
@@ -1084,3 +1085,75 @@ def test_a_crashing_rule_is_503_on_evaluate_and_a_row_error_on_import(
         {"row": 3, "message": "Unknown agent."},
     ]
     assert service._agent_store.actions("tenant-acme") == []
+
+
+def test_judge_resolves_the_vendor_id_and_the_invoice_node(env, monkeypatch):
+    agent, _m = mandated_earlier("acme")
+    vendors = service.get_vendors()
+    vendors.upsert_many(
+        "tenant-acme", [{"name": "Acme Steel", "tax_id": "", "kind": ""}]
+    )
+    (stored,) = vendors.list("tenant-acme")
+    seen = []
+    real = trust_agent_routes.evaluate
+
+    def capture(ctx, action, **kw):
+        seen.append(action)
+        return real(ctx, action, **kw)
+
+    monkeypatch.setattr(trust_agent_routes, "evaluate", capture)
+    monkeypatch.setattr(
+        service,
+        "_trust_node",
+        lambda t, case: "node-7" if case == "inv-9" else None,
+    )
+    approver = bearer("acme:approver")
+    evaluate(
+        approver, agent["id"], vendor="Acme Steel", subject_ref="invoices:inv-9"
+    )
+    evaluate(
+        approver, agent["id"], vendor="Nobody Ltd", subject_ref="vendors:x"
+    )
+    first, second = seen
+    assert (first.vendor_id, first.transaction_node) == (stored["id"], "node-7")
+    assert (second.vendor_id, second.transaction_node) == (None, None)
+
+
+def test_the_block_count_is_the_tenants_own_and_windowed(env):
+    agent, _m = mandated_earlier("acme")
+    approver = bearer("acme:approver")
+    store = service._agent_store
+    ctx = RunContext(
+        tenant_id="tenant-acme", case_id="", run_id="", actor="a@acme.test"
+    )
+    with tenant_session("tenant-acme", env["url"]) as s:
+        for at in (NOW - timedelta(hours=1), NOW - timedelta(hours=30)):
+            store.record_action(
+                s, ctx, agent_id=agent["id"], action="invoice.approve",
+                subject_table="invoices", subject_ref="invoices:x",
+                decision="BLOCK", mode="enforcing", source="inline",
+                reasons=[], explanation="", occurred_at=at,
+            )  # fmt: skip
+    r = approver.get("/api/trust/agents/blocks/count")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"blocked": 1, "reviews": 0, "window_hours": 24}
+    other = bearer("globex:approver").get("/api/trust/agents/blocks/count")
+    assert other.json() == {"blocked": 0, "reviews": 0, "window_hours": 24}
+    assert (
+        bearer("acme:clerk").get("/api/trust/agents/blocks/count").status_code
+        == 403
+    )
+
+
+def test_the_agent_list_carries_each_current_mandate(env):
+    agent, m = mandated("acme")
+    bare = register("acme", name="no-mandate-bot")
+    rows = {
+        a["id"]: a
+        for a in bearer("acme:approver")
+        .get("/api/trust/agents")
+        .json()["agents"]
+    }
+    assert rows[bare["id"]]["mandate"] is None
+    current = rows[agent["id"]]["mandate"]
+    assert current["id"] == m["id"] and current["verified"] is True

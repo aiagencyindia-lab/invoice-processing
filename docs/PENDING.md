@@ -247,14 +247,32 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   - [x] `replace_vendors` reads the vendor keys in one query (2026-10-23).
   - [ ] FR-28.1 "our own agents register automatically" is moot: no
         in-house agent performs a governed write today.
-  - [ ] Deferred from Wave 4: an agents view / NAV / dashboard (release
-        gate); live ERP-agent observers (SAP Joule, Oracle, Dynamics) beyond
-        file import; external mandate-format adapters; notifications on
-        blocks; governing PO creation and document upload; holds from
-        log-based BLOCKs; mandate expiry sweep; `agent_actions` retention;
-        OCR text for injection scanning; vendor-name key collisions for
-        counterparties; `record()` is ordered, not atomic (a crash can leave
-        a decision without its finding).
+  - [x] Deferred from Wave 4 → **Wave 5** (program plan
+        `docs/superpowers/plans/2026-10-23-v2-wave5-program.md`):
+    - [x] Scaffold (`v2/w5-scaffold`): `record()` is one transaction (the
+          ledger row, finding and event commit together, in the guard's lock
+          session; plain `FOR UPDATE`); `po.create` / `document.upload` kinds;
+          `Action.vendor_id`; banner count route; agents list carries the
+          current mandate; a refused item in a bulk request stamps the
+          earlier rows failed; velocity counts requests; `/v2/agents/actions`
+          stub; Agents nav + stub page.
+    - [ ] A `v2/w5-screen`: agents view, mandates, spend by owner, dashboard
+          tiles, the block banner (notifications on blocks = in-app +
+          webhook).
+    - [ ] B `v2/w5-governed`: PO creation and document upload governed;
+          holds from log-based BLOCKs on invoices.
+    - [ ] C `v2/w5-intake`: `POST /v2/agents/actions` (the generic seam for
+          ERP observers; no vendor-specific adapter), counterparties by
+          vendor id, the mandate scope documented (in place of external
+          mandate-format adapters, which wait for a standard).
+    - [ ] D `v2/w5-hygiene`: `agent_actions` retention sweep; OCR text for
+          the worker's injection scan.
+    - [x] Mandate expiry sweep: not needed. Expiry is computed on every
+          read, and rewriting `status` would break the mandate signature.
+  - [ ] Surfaced by Wave 5, not built: (G1) FR-28.4 "drift from mandate" —
+        no detector compares an agent's behaviour with its baseline; (G2) PRD
+        "agent registration requires Controller approval" — registration is
+        one admin (safe today: no approved mandate → every action BLOCK).
   - [ ] Partner gates (PRD §5): two design partners running agents in
         production and one adopted external mandate standard before release.
 - [ ] `opentelemetry-api` 1.42.1 advisory (CVE-2026-114603 /

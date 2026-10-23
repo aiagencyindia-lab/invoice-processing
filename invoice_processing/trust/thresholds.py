@@ -48,6 +48,9 @@ DEFAULTS: dict[str, float] = {
     "agents.split_window_days": 7,
     "agents.split_min_count": 2,
     "agents.injection_min_hits": 1,
+    # Wave 5: the shell banner's window, and how long the ledger keeps rows.
+    "agents.banner_window_hours": 24,
+    "agents.retention_days": 400,
     # Provenance v2 (FR-22)
     "provenance.edits_suspect": 2,
     # Mode progression: what the readiness report asks before recommending

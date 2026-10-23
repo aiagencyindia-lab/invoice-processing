@@ -21,6 +21,9 @@ ACTIONS = (
     "invoice.approve",
     "invoice.reject",
     "invoice.export",
+    # Wave 5: governed on the PO import and the document uploads.
+    "po.create",
+    "document.upload",
 )
 DECISIONS = ("ALLOW", "ALLOW-WITH-REVIEW", "BLOCK")
 # dryrun = a question ("would this be allowed?"): never counted, never a

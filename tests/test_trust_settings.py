@@ -103,6 +103,8 @@ THRESHOLDS = {
     "agents.split_window_days": 7,
     "agents.split_min_count": 2,
     "agents.injection_min_hits": 1,
+    "agents.banner_window_hours": 24,
+    "agents.retention_days": 400,
     "provenance.edits_suspect": 2,
     "readiness.min_days": 14,
     "readiness.min_findings": 20,
