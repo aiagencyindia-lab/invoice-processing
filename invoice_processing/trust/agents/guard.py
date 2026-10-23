@@ -24,7 +24,7 @@ from fastapi import HTTPException
 
 from ...db.session import tenant_session
 from .. import modes, thresholds
-from . import ENGINE
+from . import ENGINE, behaviour
 from .policy import Action, Decision, Reason, evaluate_action
 from .record import person as record_person
 from .record import record
@@ -91,18 +91,23 @@ def settling(principal, decision):
     raises before (and re-raise). Spend skips a failed one, so a retry the
     route then refuses (409 "already decided") costs the agent nothing.
     No-op when the guard had nothing to say."""
-    ids = [
-        d.action_id
+    decisions = [
+        d
         for d in (decision if isinstance(decision, list) else [decision])
         if d is not None and d.action_id
     ]
+    ids = [d.action_id for d in decisions]
+    later = [d.action_id for d in decisions if d.defer]
     settle = Settle()
     try:
         yield settle
     except BaseException:
         _settle(principal, ids, "executed" if settle.committed else "failed")
+        if settle.committed:
+            _defer(principal, later)
         raise
     _settle(principal, ids, "executed")
+    _defer(principal, later)
 
 
 def _settle(principal, ids, outcome) -> None:
@@ -182,11 +187,34 @@ def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
             settings=settings,
             now=now,
             decider=None,
+            skip=behaviour.DEFERRED,
         )
         decision = _record(
             ctx, decision, action, agent, mandate, store, mode, now
         )
+    # The document read and the model call run in the worker, once the write
+    # has happened (`settling`): never inline (PRD inline p95 <= 2 s).
+    if action.text is not None:
+        decision = dataclasses.replace(decision, defer=True)
     return _answer(decision, mode)
+
+
+def _defer(principal, ids) -> None:
+    """Queue the deferred detectors for actions whose write happened."""
+    if not ids:
+        return
+    from ...api import service  # noqa: PLC0415
+    from ...worker.runner import enqueue_agent_injection  # noqa: PLC0415
+
+    try:
+        queue, run_id = service.get_queue(), principal.context().run_id or ""
+        for action_id in ids:
+            enqueue_agent_injection(
+                queue, principal.tenant_id, action_id, run_id
+            )
+    except Exception as exc:
+        # The write stands; the action goes unscanned (logged).
+        _log(exc)
 
 
 def _owner_check(principal, action: Action, *, mode, store):
@@ -290,11 +318,6 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
     approvals = service.get_approvals()
     steps = approvals.chain(t, ctx.case_id) if approvals else []
 
-    def text() -> str:
-        # Read only if a detector asks: the PDF text layer and email body.
-        document = service.get_documents().get(t, ctx.case_id) or {}
-        return inputs.text_of(document, service.get_blobs(t))()
-
     return Action(
         kind=kind,
         subject_table="invoices",
@@ -315,5 +338,6 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
         ),
         vendor_verified=bool(vendor.get("bank_verified_at")),
         vendor_verified_by=vendor.get("bank_verified_by"),
-        text=text,
+        # Read only if a detector asks: the PDF text layer and email body.
+        text=inputs.invoice_text(t, ctx.case_id),
     )

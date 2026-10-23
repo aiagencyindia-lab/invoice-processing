@@ -85,6 +85,27 @@ def boom(*a, **k):
     raise RuntimeError("db down")
 
 
+def test_skipped_detectors_do_not_run(monkeypatch):
+    calls = []
+
+    def asked(*a, **k):
+        calls.append(1)
+
+    monkeypatch.setattr(rules, "RULES", ())
+    monkeypatch.setattr(behaviour, "RULES", (asked, _rule(REVIEW)))
+    out = policy.evaluate_action(
+        CTX,
+        ACTION,
+        agent={"id": "a1"},
+        mandate=None,
+        store=None,
+        settings={},
+        now=NOW,
+        skip=(asked,),
+    )
+    assert calls == [] and out.reasons == (REVIEW,)
+
+
 def test_a_structural_rule_that_raises_propagates(monkeypatch):
     # A control that cannot run is the guard's failure (B8): 503 in
     # enforcing, a logged no-op below. Never a finding.

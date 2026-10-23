@@ -378,6 +378,13 @@ class AgentStore:
             if row is not None and row.tenant_id == tenant_id:
                 row.outcome = outcome
 
+    def action(self, tenant_id: str, action_id: str) -> dict | None:
+        with tenant_session(tenant_id, self.url) as s:
+            row = s.get(AgentAction, action_id)
+            if row is None or row.tenant_id != tenant_id:
+                return None
+            return _dict(row)
+
     def record_action(self, s, ctx, **cols) -> str:
         row = AgentAction(tenant_id=ctx.tenant_id, **cols)
         s.add(row)

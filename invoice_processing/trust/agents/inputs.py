@@ -27,6 +27,18 @@ def _read(fn) -> str:
         return ""
 
 
+def invoice_text(tenant_id: str, case_id: str) -> Callable[[], str]:
+    """The invoice's document text, read only when called."""
+
+    def load() -> str:
+        from ...api import service  # noqa: PLC0415 - asked from the API
+
+        document = service.get_documents().get(tenant_id, case_id) or {}
+        return text_of(document, service.get_blobs(tenant_id))()
+
+    return load
+
+
 def text_of(document: dict, blobs) -> Callable[[], str]:
     @cache
     def load() -> str:
