@@ -970,12 +970,20 @@ def test_a_failed_approval_and_a_repeated_export_count_once(env):
     client = bearer("acme:approver")
     ok = evaluate(client, agent["id"], vendor="V", amount="100", currency="INR")
     bad = evaluate(
-        client, agent["id"], vendor="V", amount="40", currency="INR",
+        client,
+        agent["id"],
+        vendor="V",
+        amount="40",
+        currency="INR",
         subject_ref="inv-2",
     )
     for _ in range(2):
         r = evaluate(
-            client, agent["id"], vendor="V", amount="100", currency="INR",
+            client,
+            agent["id"],
+            vendor="V",
+            amount="100",
+            currency="INR",
             action="invoice.export",
         )
         assert r.status_code == 200, r.text
