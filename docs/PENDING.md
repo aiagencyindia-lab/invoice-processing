@@ -225,10 +225,11 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         design: a burst of refused retries is itself the behaviour it flags.
         Two exports of one invoice with identical timestamps (imported logs
         only) pick an arbitrary "latest" amount.
-  - [ ] Injection classification calls the model inside the request while
-        the agent row is locked; a slow model holds that agent's other
-        actions up to the call's timeout (PRD inline p95 ≤ 2 s). Move the
-        call out of the lock, or classify after the write as a review.
+  - [x] Injection is classified after the write (2026-10-23): the guard
+        queues `trust.agent.injection` once the agent lock is released and
+        the worker reads the text and asks the model (`agents/later.py`);
+        a yes raises its own `AGENT-INJECTION` finding seconds later. An
+        unreachable queue leaves that action unscanned (logged).
   - [x] Imported log rows are judged at their time (2026-10-23): an agent
         is revoked only from its `revoked_at`.
   - [x] `/actions/evaluate` and `/actions/import` answer 409 while the
