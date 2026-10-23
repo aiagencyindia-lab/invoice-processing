@@ -16,7 +16,7 @@ from ...db.session import tenant_session
 from ..findings.model import Citation, FindingSpec
 from ..webhooks import outbox
 from . import ENGINE, ENGINE_VERSION
-from .policy import Action, Decision
+from .policy import Action, Decision, Reason
 
 RULE_VERSION = "agents-rules-1"
 
@@ -216,4 +216,59 @@ def person(
             citations=tuple(citations),
         ),
     )
+    return finding_id
+
+
+def injection(
+    ctx, row: dict, agent: dict, reason: Reason, *, store, findings
+) -> str:
+    """The deferred injection detector said yes (`later.classify`): its own
+    finding, and the reason added to the ledger row once (ALLOW becomes
+    ALLOW-WITH-REVIEW; a BLOCK or a review stays what it was)."""
+    _has_node(agent)
+    citations = [Citation(agent["graph_node"])]
+    if row.get("transaction_node"):
+        citations.append(Citation(row["transaction_node"]))
+    reasons = [*row["reasons"], *_reasons(Decision("", (reason,), ""))]
+    finding_id, _ = findings.upsert(
+        ctx,
+        FindingSpec(
+            type=reason.type,
+            transaction_node=row.get("transaction_node") or agent["graph_node"],
+            dedupe_key=f"agent_injection:{row['id']}",
+            impact=None,
+            currency=row.get("currency"),
+            confidence=None,
+            engine_version=ENGINE_VERSION,
+            rule_version=RULE_VERSION,
+            model_version="",
+            summary=f"{agent['name']}: {reason.message}"[:500],
+            details={
+                "engine": ENGINE,
+                "mode": row["mode"],
+                "source": row["source"],
+                "deferred": True,
+                "hold": False,
+                "action": row["action"],
+                "action_id": row["id"],
+                "agent_id": agent["id"],
+                "decision": "ALLOW-WITH-REVIEW"
+                if row["decision"] == "ALLOW"
+                else row["decision"],
+                "reasons": reasons,
+                "subject_ref": row["subject_ref"],
+            },
+            citations=tuple(citations),
+        ),
+    )
+    with tenant_session(ctx.tenant_id, store.url) as s:
+        a = s.get(AgentAction, row["id"])
+        if not any(r.get("rule") == reason.rule for r in a.reasons or []):
+            a.reasons = [*(a.reasons or []), reasons[-1]]
+            a.explanation = " ".join(
+                p for p in (a.explanation, reason.message) if p
+            )[:1000]
+            if a.decision == "ALLOW":
+                a.decision = "ALLOW-WITH-REVIEW"
+        a.finding_id = a.finding_id or finding_id
     return finding_id
