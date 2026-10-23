@@ -26,13 +26,14 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import shutil
 import tempfile
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,8 @@ ESCALATION_SCAN_SECONDS = 60
 # How often the worker sends due trust webhooks (the outbox's backoff lives
 # in its rows, so a coarse sweep only delays a retry by up to this much).
 WEBHOOK_SCAN_SECONDS = 60
+# How often the worker purges old agent-ledger rows (program plan B7).
+RETENTION_SCAN_SECONDS = 86_400
 
 DOCUMENT_INGESTED = "document.ingested"
 # A goods receipt arrived for a PO a held case quotes; see rematch.py.
@@ -65,6 +68,30 @@ TRUST_AUDIT_RUN = "trust.audit.run"
 # Wave 4: the injection detector, after the agent's write (agents/later.py).
 TRUST_AGENT_INJECTION = "trust.agent.injection"
 TRUST_ATTEMPTS = "trust_attempts"
+
+
+def _days(value, default: int) -> int:
+    """A threshold as whole days; a bad tenant value is the default, so it
+    never purges more and never raises."""
+    try:
+        days = float(value)
+    except (TypeError, ValueError):
+        return default
+    if isinstance(value, bool) or not math.isfinite(days) or days < 0:
+        return default
+    return int(days)
+
+
+def _retention_days(settings: dict) -> int:
+    """How far back the ledger keeps rows: the tenant's retention, never less
+    than a split window plus a day or a cap period (a calendar month). A
+    century keeps everything; more would overflow the date arithmetic."""
+    days = max(
+        _days(settings.get("agents.retention_days"), 400),
+        _days(settings.get("agents.split_window_days"), 7) + 1,
+        31,
+    )
+    return min(days, 36_500)
 
 
 class ProcessingFailed(RuntimeError):
@@ -868,6 +895,7 @@ class Worker:
         self.tenant_status = tenant_status
         self._last_scan: float | None = None
         self._last_webhook_scan: float | None = None
+        self._last_retention_scan: float | None = None
         self.queue = queue
         self.claims = claims
         self.handler = handler or self._default_handler
@@ -1303,6 +1331,7 @@ class Worker:
             write_heartbeat()
             self._escalate_if_due()
             self._deliver_webhooks_if_due()
+            self._purge_agent_actions_if_due()
             if not outcomes:
                 sleep(poll_seconds)
 
@@ -1342,6 +1371,55 @@ class Worker:
             deliver.due(datetime.now(UTC))
         except Exception:
             logger.exception("Webhook delivery sweep failed; continuing.")
+
+    def _purge_agent_actions_if_due(self) -> None:
+        now = self.clock()
+        if (
+            self._last_retention_scan is not None
+            and now - self._last_retention_scan < RETENTION_SCAN_SECONDS
+        ):
+            return
+        self._last_retention_scan = now
+        try:
+            from sqlalchemy import select  # noqa: PLC0415
+            from sqlalchemy.orm import Session  # noqa: PLC0415
+
+            from .. import tenant_settings  # noqa: PLC0415
+            from ..api import service  # noqa: PLC0415
+            from ..db.models import Tenant  # noqa: PLC0415
+            from ..db.session import get_engine  # noqa: PLC0415
+            from ..trust import thresholds  # noqa: PLC0415
+
+            store = service.get_agent_store()
+            if store is None:
+                return
+            # `tenants` has no RLS; `purge_before` opens each tenant's session.
+            with Session(get_engine()) as s:
+                tenants = s.scalars(
+                    select(Tenant.id).where(Tenant.status == "active")
+                ).all()
+            for tenant_id in tenants:
+                try:
+                    settings = thresholds.merged(
+                        tenant_settings.effective(tenant_id).get(
+                            "trust_thresholds"
+                        )
+                    )
+                    before = datetime.now(UTC) - timedelta(
+                        days=_retention_days(settings)
+                    )
+                    rows = store.purge_before(tenant_id, before)
+                    if rows:
+                        logger.info(
+                            "agent_actions_purged", extra={"rows": rows}
+                        )
+                except Exception:
+                    logger.exception(
+                        "Agent-action retention sweep failed for a tenant; "
+                        "continuing."
+                    )
+        except Exception:
+            logger.exception("Agent-action retention sweep failed; continuing.")
 
     def _default_handler(self, message: Message) -> dict:
         from ..api import service  # noqa: PLC0415

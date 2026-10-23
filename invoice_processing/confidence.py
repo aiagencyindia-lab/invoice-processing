@@ -38,6 +38,7 @@ import io
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -219,7 +220,12 @@ _OCR_DPI = 300
 _OCR_TIMEOUT_SECONDS = 60
 
 
-def ocr_page_text(pdf_path: Path) -> list[str]:
+def ocr_page_text(
+    pdf: Path | bytes,
+    *,
+    max_pages: int | None = None,
+    deadline: float | None = None,
+) -> list[str]:
     """Per-page text read by OCR, for a scan with no text layer.
 
     For grounding only: it is an independent reading of the page, which is
@@ -228,6 +234,10 @@ def ocr_page_text(pdf_path: Path) -> list[str]:
     repair an extracted value -- tesseract confuses O and 0 exactly as the
     extractor does. Empty, and the invoice stays in review, when tesseract is
     not installed or fails.
+
+    The agents' injection scan also reads it (bytes from the blob store, at
+    most `max_pages`, and no page started once `time.monotonic()` passes
+    `deadline`).
     """
     tesseract = shutil.which("tesseract")
     if not tesseract:
@@ -236,7 +246,12 @@ def ocr_page_text(pdf_path: Path) -> list[str]:
         import pypdfium2  # noqa: PLC0415 - a pdfplumber dependency
 
         pages = []
-        for page in pypdfium2.PdfDocument(str(pdf_path)):
+        source = pdf if isinstance(pdf, bytes) else str(pdf)
+        for page in pypdfium2.PdfDocument(source):
+            if max_pages is not None and len(pages) >= max_pages:
+                break
+            if deadline is not None and time.monotonic() > deadline:
+                break
             image = io.BytesIO()
             page.render(scale=_OCR_DPI / 72).to_pil().convert("L").save(
                 image, "PNG"

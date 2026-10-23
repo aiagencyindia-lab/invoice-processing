@@ -54,7 +54,7 @@ def classify(
         currency=row.get("currency"),
         transaction_node=row.get("transaction_node"),
         occurred_at=row.get("occurred_at"),
-        text=text or inputs.invoice_text(tenant_id, case_id),
+        text=text or inputs.invoice_text(tenant_id, case_id, ocr=True),
     )
     settings = settings or _settings(tenant_id)
     ctx = RunContext(
