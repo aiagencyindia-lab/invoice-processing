@@ -24,7 +24,7 @@ from fastapi import HTTPException
 
 from ...db.session import tenant_session
 from .. import modes, thresholds
-from . import ENGINE
+from . import ENGINE, behaviour
 from .policy import Action, Decision, Reason, evaluate_action
 from .record import person as record_person
 from .record import record
@@ -182,6 +182,7 @@ def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
             settings=settings,
             now=now,
             decider=None,
+            skip=behaviour.DEFERRED,
         )
         decision = _record(
             ctx, decision, action, agent, mandate, store, mode, now
@@ -290,11 +291,6 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
     approvals = service.get_approvals()
     steps = approvals.chain(t, ctx.case_id) if approvals else []
 
-    def text() -> str:
-        # Read only if a detector asks: the PDF text layer and email body.
-        document = service.get_documents().get(t, ctx.case_id) or {}
-        return inputs.text_of(document, service.get_blobs(t))()
-
     return Action(
         kind=kind,
         subject_table="invoices",
@@ -315,5 +311,6 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
         ),
         vendor_verified=bool(vendor.get("bank_verified_at")),
         vendor_verified_by=vendor.get("bank_verified_by"),
-        text=text,
+        # Read only if a detector asks: the PDF text layer and email body.
+        text=inputs.invoice_text(t, ctx.case_id),
     )

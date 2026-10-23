@@ -68,10 +68,13 @@ def evaluate_action(
     settings: dict,
     now: datetime,
     decider=None,
+    skip: tuple = (),
 ) -> Decision:
     """A structural rule that raises propagates: a control that cannot run
     is the guard's failure (B8), never a finding. A behavioural detector
     that raises is skipped: insights fail open, and it only asks for review.
+    Detectors in `skip` run later instead (the guard defers injection to the
+    worker: `behaviour.DEFERRED`).
     """
     reasons: list[Reason] = []
     args = (action, agent, mandate, store, settings, now, decider)
@@ -80,6 +83,8 @@ def evaluate_action(
         if reason is not None:
             reasons.append(reason)
     for detector in behaviour.RULES:
+        if detector in skip:
+            continue
         try:
             reason = detector(*args)
         except Exception as exc:
