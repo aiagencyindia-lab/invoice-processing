@@ -33,7 +33,8 @@ def _governed_store(
     subkind: str,
 ) -> dict:
     """400 and 404 first, then the agent guard, then the store: a refused
-    upload stores nothing. A duplicate is still one action (it ran)."""
+    upload stores nothing. Same bytes again is still one action (it ran);
+    a duplicate refused with a 409 stored nothing and is stamped failed."""
     from ..trust.agents import guard  # noqa: PLC0415
     from . import service  # noqa: PLC0415
     from .ingest import IngestionRefused, check_acceptable  # noqa: PLC0415

@@ -12,11 +12,13 @@ from sqlalchemy import select
 from test_trust_agents_guard import CASE, TENANT, act, agent, export
 from test_trust_agents_guard import env as guard_env  # noqa: F401 - fixture
 
+from invoice_processing.api import service
 from invoice_processing.db import models
 from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
+from invoice_processing.tenant_settings import JsonTenantSettings
 from invoice_processing.trust import evaluate as trust_evaluate
-from invoice_processing.trust import gate
+from invoice_processing.trust import gate, modes
 from invoice_processing.trust.graph.links import LinkStore
 
 HELD = "Payment is held until a person decides this finding."
@@ -163,5 +165,50 @@ def test_an_engine_run_on_the_invoice_leaves_the_hold(env):
         settings_store=Modes(),
     )
     assert isinstance(report["engines"]["payment"], dict), report
+    assert len(open_holds(env)) == 1
+    assert gate.payment_hold_detail(TENANT, CASE)["held"]
+
+
+def test_the_same_action_logged_twice_holds_once(env):
+    env["settings"].mode = "enforcing"
+    at = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+    for _ in range(2):
+        r = env["client"]("approver:boss").post(
+            f"/api/trust/agents/{env['bot']['id']}/actions/evaluate",
+            json={
+                "action": "invoice.approve",
+                "subject_ref": f"invoices:{CASE}",
+                "source": "log",
+                "occurred_at": at,
+            },
+        )
+        assert r.status_code == 200, r.text
+    assert len(findings(env)) == 1 and len(open_holds(env)) == 1
+
+
+def test_accepting_the_finding_keeps_the_hold(env):
+    env["settings"].mode = "enforcing"
+    log(env)
+    (finding,) = findings(env)
+    r = env["client"]("approver:person").post(
+        f"/v2/findings/{finding.id}/decision", json={"decision": "accept"}
+    )
+    assert r.status_code == 200, r.text
+    assert len(open_holds(env)) == 1
+
+
+def test_leaving_enforcing_lifts_the_hold_and_returning_replaces_it(
+    env, tmp_path, monkeypatch
+):
+    store = JsonTenantSettings(tmp_path / "ts.json")
+    monkeypatch.setattr(service, "_tenant_settings", store)
+    admin = RunContext(tenant_id=TENANT, run_id="", actor="admin@x.test")
+    modes.set_engine_mode(admin, "agents", "enforcing", store=store)
+    log(env)
+    assert len(open_holds(env)) == 1
+    modes.set_engine_mode(admin, "agents", "advisory", store=store)
+    assert open_holds(env) == []
+    assert not gate.payment_hold_detail(TENANT, CASE)["held"]
+    modes.set_engine_mode(admin, "agents", "enforcing", store=store)
     assert len(open_holds(env)) == 1
     assert gate.payment_hold_detail(TENANT, CASE)["held"]

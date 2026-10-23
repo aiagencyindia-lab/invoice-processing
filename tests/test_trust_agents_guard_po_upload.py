@@ -243,6 +243,7 @@ def test_enforcing_refuses_an_upload_and_stores_nothing(env):
     assert not env["blobs"].exists()
     (row,) = ledger(env)
     assert row.action == "document.upload" and row.subject_ref == subject()
+    assert row.outcome is None  # refused: never settled, never written
 
 
 def test_advisory_upload_is_stored_and_ledgered(env):
@@ -250,6 +251,9 @@ def test_advisory_upload_is_stored_and_ledgered(env):
     agent(env, "clerk:bot", actions=["document.upload"])
     first = upload(env, "clerk:bot")
     assert first.status_code == 200, first.text
+    sha = hashlib.sha256(PDF).hexdigest()
+    assert env["docs"].find_by_sha(TENANT, sha) is not None
+    assert any(env["blobs"].rglob("*.pdf"))
     again = upload(env, "clerk:bot")
     assert again.status_code == 200 and again.json()["duplicate"] is True
     rows = ledger(env)

@@ -8,6 +8,7 @@ its event commit together, or none of them does.
 
 from __future__ import annotations
 
+import hashlib
 from contextlib import nullcontext
 from datetime import datetime
 
@@ -161,6 +162,17 @@ def record(
     return action_id
 
 
+def _dedupe_key(agent, action, action_id, source) -> str:
+    """One finding per action. A logged action is the same action however
+    often it is logged (a re-imported file, a retry), so a second log
+    refreshes its finding instead of stacking a second payment hold."""
+    if source != "log":
+        return f"agent_action:{action_id}"
+    at = action.occurred_at.isoformat() if action.occurred_at else ""
+    same = "|".join((agent["id"], action.kind, action.subject_ref or "", at))
+    return f"agent_log:{hashlib.sha256(same.encode()).hexdigest()[:32]}"
+
+
 HELD = "Payment is held until a person decides this finding."
 
 
@@ -191,7 +203,7 @@ def _finding(
                 == ("BLOCK" if decision.decision == "BLOCK" else "REVIEW")
             ),
             transaction_node=action.transaction_node or agent["graph_node"],
-            dedupe_key=f"agent_action:{action_id}",
+            dedupe_key=_dedupe_key(agent, action, action_id, source),
             impact=None,
             currency=action.currency,
             confidence=None,
