@@ -71,21 +71,35 @@ def check(principal, action, *, settings_store=None, now=None, store=None):
         return None
 
 
+class Settle:
+    """Handed to the governed route: `written()` right after the write
+    commits, so a failure in the bookkeeping that follows does not turn a
+    committed write into "failed" (the cap would lose real money)."""
+
+    def __init__(self):
+        self.committed = False
+
+    def written(self) -> None:
+        self.committed = True
+
+
 @contextmanager
 def settling(principal, decision):
     """Wrap the governed write: stamp the ledger row `executed` when the
-    write finishes, `failed` when it raises (and re-raise). Spend skips a
-    failed one, so a retry the route then refuses (409 "already decided")
-    costs the agent nothing. No-op when the guard had nothing to say."""
+    body finishes, or when it raises after `written()`; `failed` when it
+    raises before (and re-raise). Spend skips a failed one, so a retry the
+    route then refuses (409 "already decided") costs the agent nothing.
+    No-op when the guard had nothing to say."""
     ids = [
         d.action_id
         for d in (decision if isinstance(decision, list) else [decision])
         if d is not None and d.action_id
     ]
+    settle = Settle()
     try:
-        yield
+        yield settle
     except BaseException:
-        _settle(principal, ids, "failed")
+        _settle(principal, ids, "executed" if settle.committed else "failed")
         raise
     _settle(principal, ids, "executed")
 

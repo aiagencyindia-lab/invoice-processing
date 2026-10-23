@@ -1662,7 +1662,7 @@ def act(
             ctx, artifacts, f"invoice.{request.action}"
         ),
     )
-    with guard.settling(principal, decision):
+    with guard.settling(principal, decision) as settle:
         # From the artifacts already in hand rather than a second read.
         previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
         hold_overridden = None
@@ -1713,6 +1713,7 @@ def act(
                     raise HTTPException(
                         status_code=403, detail=exc.detail
                     ) from None
+                settle.written()  # the step decision is stored
                 step = outcome.step
                 get_audit().emit(
                     ctx,
@@ -1784,6 +1785,7 @@ def act(
                 reason=request.reason,
                 reason_category=category,
             )
+            settle.written()  # the workflow decision is stored
             # The columns as well as the artifact. "Show me every invoice where a
             # person overruled the pipeline" is the question this whole feature is
             # built on, and answering it by scanning a JSON path over every row is the
@@ -2133,7 +2135,7 @@ def export_invoice(
         principal,
         lambda: guard.invoice_action(ctx, artifacts, "invoice.export"),
     )
-    with guard.settling(principal, decision):
+    with guard.settling(principal, decision) as settle:
         invoice = _with_gl(
             ctx,
             (artifacts.get("extraction") or {}).get("invoice") or {},
@@ -2178,6 +2180,7 @@ def export_invoice(
                 {"target": "xero", "message": result.message},
             )
             raise HTTPException(status_code=502, detail=result.message)
+        settle.written()  # the bill is in Xero
 
         _record_workflow(
             ctx,

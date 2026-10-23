@@ -221,6 +221,10 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         (`agent_actions.outcome`, migration `c3d4e5f6a7b8`); caps and the
         ledger skip failed rows, unstamped rows (a crash, imported logs)
         still count, and the ledger counts each invoice's export once.
+  - [ ] Velocity (`agents.velocity_max`) still counts failed attempts, by
+        design: a burst of refused retries is itself the behaviour it flags.
+        Two exports of one invoice with identical timestamps (imported logs
+        only) pick an arbitrary "latest" amount.
   - [ ] Injection classification calls the model inside the request while
         the agent row is locked; a slow model holds that agent's other
         actions up to the call's timeout (PRD inline p95 ≤ 2 s). Move the

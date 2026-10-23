@@ -696,3 +696,38 @@ def test_engine_off_writes_no_outcome(env):
     agent(env, "approver:bot")
     assert act(env, "approver:bot").status_code == 200
     assert ledger(env) == []
+
+
+def test_a_failure_after_the_approval_committed_still_counts(env, monkeypatch):
+    """Bookkeeping that fails after the write (here the workflow record)
+    must not turn a committed approval into "failed": the cap would lose
+    money that was really approved (fable review)."""
+    env["settings"].mode = "enforcing"
+    agent(env, "approver:bot", caps={"per_action": "5000"})
+
+    def boom(*a, **k):
+        raise RuntimeError("bookkeeping down")
+
+    # The workflow decision is written; projecting it then fails.
+    monkeypatch.setattr(service, "_reproject", boom)
+    assert act(env, "approver:bot").status_code == 500
+    assert decided(env) == "approve"  # the write did commit
+    (row,) = ledger(env)
+    assert row.outcome == "executed"
+
+
+def test_a_failure_before_the_write_is_failed(env, monkeypatch):
+    env["settings"].mode = "enforcing"
+    agent(env, "approver:bot", caps={"per_action": "5000"})
+
+    from invoice_processing import approval_flow  # noqa: PLC0415
+
+    def boom(*a, **k):
+        raise RuntimeError("approval store down")
+
+    # The step decision itself fails: nothing was approved.
+    monkeypatch.setattr(approval_flow, "decide", boom)
+    assert act(env, "approver:bot").status_code == 500
+    assert decided(env) is None
+    (row,) = ledger(env)
+    assert row.outcome == "failed"
