@@ -237,10 +237,40 @@ def evaluate_action(
     )
 
 
+class IntakeRow(BaseModel):
+    """One logged action, as a row of the CSV import. Every field is an
+    optional string so a malformed value is that row's error, not the
+    request's."""
+
+    agent: str | None = Field(default=None, max_length=320)
+    action: str | None = Field(default=None, max_length=32)
+    subject_ref: str | None = Field(default=None, max_length=128)
+    vendor: str | None = Field(default=None, max_length=256)
+    category: str | None = Field(default=None, max_length=64)
+    amount: str | None = Field(default=None, max_length=32)
+    currency: str | None = Field(default=None, max_length=8)
+    occurred_at: str | None = Field(default=None, max_length=40)
+
+
+class Intake(BaseModel):
+    actions: list[IntakeRow] = Field(min_length=1)
+
+
 @router.post("/agents/actions")
-def intake_actions(principal: Approver, body: dict):
-    """Wave 5 intake (branch C): log rows from an agent's own system."""
-    raise HTTPException(503, "Agent intake is not built yet.")
+def intake_actions(body: Intake, principal: Approver):
+    """Logged actions from an agent's own system: the CSV import over JSON.
+    A row naming no agent is the calling key's own agent."""
+    mode = trust_agent_routes._mode(principal.tenant_id)
+    limit = trust_agent_routes.MAX_IMPORT_ROWS
+    if len(body.actions) > limit:
+        raise HTTPException(400, f"At most {limit} rows per request.")
+    return trust_agent_routes.judge_log(
+        principal,
+        [r.model_dump() for r in body.actions],
+        mode,
+        first=1,
+        own=True,
+    )
 
 
 @router.get("/agents/{agent_id}/ledger")

@@ -8,6 +8,7 @@ its event commit together, or none of them does.
 
 from __future__ import annotations
 
+import hashlib
 from contextlib import nullcontext
 from datetime import datetime
 
@@ -61,7 +62,9 @@ def record(
 ) -> str:
     """Write the decision; return the ledger row's id. `refused` is whether
     the action was actually stopped (enforcing, inline): only then does
-    `agent.action.blocked` go out.
+    `agent.action.blocked` go out. A log BLOCK in enforcing on a known
+    invoice holds its payment (`hold` forces one); only a person's decision
+    on the finding lifts it.
 
     The ledger row, the finding (and any hold it places), the row's
     `finding_id` and the event are one transaction: in `s` when the caller
@@ -72,6 +75,16 @@ def record(
         raise ValueError(
             "The decision ledger and its findings must share one database."
         )
+    # A logged action an enforcing guard would have refused already
+    # happened: hold the invoice it touched (B5). Inline refusals never
+    # hold (nothing was written); below enforcing nothing holds.
+    hold = hold or (
+        source == "log"
+        and decision.decision == "BLOCK"
+        and mode == "enforcing"
+        and action.subject_table == "invoices"
+        and bool(action.transaction_node)
+    )
     reasons = _reasons(decision)
     session = (
         nullcontext(s)
@@ -149,6 +162,28 @@ def record(
     return action_id
 
 
+def _dedupe_key(agent, action, action_id, source) -> str:
+    """One finding per action. A logged action is the same action however
+    often it is logged (a re-imported file, a retry), so a second log
+    refreshes its finding instead of stacking a second payment hold."""
+    if source != "log":
+        return f"agent_action:{action_id}"
+    at = action.occurred_at.isoformat() if action.occurred_at else ""
+    same = "|".join((agent["id"], action.kind, action.subject_ref or "", at))
+    return f"agent_log:{hashlib.sha256(same.encode()).hexdigest()[:32]}"
+
+
+HELD = "Payment is held until a person decides this finding."
+
+
+def _summary(agent, decision, hold) -> str:
+    text = f"{agent['name']}: {decision.explanation}"
+    if not hold:
+        return text[:500]
+    # The sentence survives the cut: it is the only word on the release.
+    return f"{text[: 499 - len(HELD)]} {HELD}"
+
+
 def _finding(
     s, ctx, decision, action, agent, findings, *,
     action_id, reasons, mode, source, hold,
@@ -168,14 +203,14 @@ def _finding(
                 == ("BLOCK" if decision.decision == "BLOCK" else "REVIEW")
             ),
             transaction_node=action.transaction_node or agent["graph_node"],
-            dedupe_key=f"agent_action:{action_id}",
+            dedupe_key=_dedupe_key(agent, action, action_id, source),
             impact=None,
             currency=action.currency,
             confidence=None,
             engine_version=ENGINE_VERSION,
             rule_version=RULE_VERSION,
             model_version="",
-            summary=f"{agent['name']}: {decision.explanation}"[:500],
+            summary=_summary(agent, decision, hold),
             details={
                 "engine": ENGINE,
                 "mode": mode,

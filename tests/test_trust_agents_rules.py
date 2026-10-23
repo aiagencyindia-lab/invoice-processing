@@ -297,6 +297,46 @@ def test_an_action_without_a_vendor_skips_the_counterparty_test(env):
     assert run(rules.in_scope, env, approve(vendor_key=None), m) is None
 
 
+def party(key, vendor_id=None):
+    return {"vendor_id": vendor_id, "key": key}
+
+
+def test_a_renamed_vendor_still_matches_by_id(env):
+    m = mandate({"counterparties": [party("ACME OLD NAME", "v1")]})
+    act = approve(vendor_id="v1", vendor_key="ACME SUPPLIES")
+    assert run(rules.in_scope, env, act, m) is None
+
+
+def test_a_create_without_an_id_matches_by_key(env):
+    m = mandate({"counterparties": [party("ACME SUPPLIES", "v1")]})
+    act = approve(kind="vendor.create", vendor_id=None)
+    assert run(rules.in_scope, env, act, m) is None
+
+
+def test_a_name_only_party_matches_a_stored_vendor_by_key(env):
+    m = mandate({"counterparties": [party("ACME SUPPLIES")]})
+    assert run(rules.in_scope, env, approve(vendor_id="v9"), m) is None
+
+
+def test_another_vendor_is_out_of_mandate(env):
+    m = mandate({"counterparties": [party("ACME SUPPLIES", "v1")]})
+    act = approve(vendor_id="v2", vendor_key="ROGUE")
+    r = run(rules.in_scope, env, act, m)
+    assert r.type == "AGENT-OUT-OF-MANDATE" and "vendor" in r.message
+
+
+def test_an_id_alone_out_of_the_list_is_out_of_mandate(env):
+    m = mandate({"counterparties": [party("ACME SUPPLIES", "v1")]})
+    act = approve(vendor_id="v2", vendor_key=None)
+    assert run(rules.in_scope, env, act, m).type == "AGENT-OUT-OF-MANDATE"
+
+
+def test_any_vendor_when_counterparties_is_null(env):
+    m = mandate({"counterparties": None})
+    act = approve(vendor_id="v2", vendor_key="ROGUE")
+    assert run(rules.in_scope, env, act, m) is None
+
+
 def test_in_scope_says_nothing_without_a_mandate(env):
     r = rules.in_scope(approve(), env["bot"], None, env["store"], {}, NOW, None)
     assert r is None  # mandate_active already said it

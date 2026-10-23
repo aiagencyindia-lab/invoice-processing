@@ -24,6 +24,46 @@ SUBKINDS = ("gst_certificate", "pan", "udyam", "cancelled_cheque", "abn")
 SCORED_KINDS = (None, "kyc", "proof")
 
 
+def _governed_store(
+    principal: Principal,
+    graph,
+    data: bytes,
+    filename: str,
+    vendor_id: str,
+    subkind: str,
+) -> dict:
+    """400 and 404 first, then the agent guard, then the store: a refused
+    upload stores nothing. Same bytes again is still one action (it ran);
+    a duplicate refused with a 409 stored nothing and is stamped failed."""
+    from ..trust.agents import guard  # noqa: PLC0415
+    from . import service  # noqa: PLC0415
+    from .ingest import IngestionRefused, check_acceptable  # noqa: PLC0415
+
+    try:
+        check_acceptable(data, filename)
+    except IngestionRefused as exc:
+        raise HTTPException(400, str(exc)) from None
+    tenant_id = principal.tenant_id
+    if not _vendor_exists(tenant_id, vendor_id):
+        raise HTTPException(404, "Unknown vendor.")
+
+    def build():
+        vendors = service.get_vendors()
+        vendor = vendors.get(tenant_id, vendor_id) if vendors else None
+        return guard.document_action(
+            principal.context(),
+            data,
+            filename,
+            vendor=vendor or {"id": vendor_id},
+        )
+
+    decision = guard.check(principal, build)
+    with guard.settling(principal, decision) as settle:
+        out = _store(principal, graph, data, filename, vendor_id, subkind)
+        settle.written()
+    return out
+
+
 def _store(
     principal: Principal,
     graph,
@@ -35,15 +75,9 @@ def _store(
     from ..trust import provenance  # noqa: PLC0415
     from ..worker.runner import enqueue_trust_evaluate  # noqa: PLC0415
     from . import service  # noqa: PLC0415
-    from .ingest import IngestionRefused, check_acceptable, storage_key_for  # noqa: PLC0415
+    from .ingest import storage_key_for  # noqa: PLC0415
 
-    try:
-        check_acceptable(data, filename)
-    except IngestionRefused as exc:
-        raise HTTPException(400, str(exc)) from None
     tenant_id = principal.tenant_id
-    if not _vendor_exists(tenant_id, vendor_id):
-        raise HTTPException(404, "Unknown vendor.")
     documents = service.get_documents()
     sha256 = hashlib.sha256(data).hexdigest()
     existing = documents.find_by_sha(tenant_id, sha256)
@@ -146,7 +180,7 @@ async def upload_vendor_document(
             413, f"Documents are limited to {MAX_DOCUMENT_BYTES // 2**20} MB."
         )
     out = await run_in_threadpool(
-        _store,
+        _governed_store,
         principal,
         graph,
         data,

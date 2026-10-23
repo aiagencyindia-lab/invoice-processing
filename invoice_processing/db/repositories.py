@@ -2238,6 +2238,17 @@ class PgPurchaseOrderRepository:
             "po_numbers": po_numbers,
         }
 
+    def existing_numbers(self, tenant_id: str) -> set[str]:
+        """Every stored PO number (the normalized key), in one query."""
+        with tenant_session(tenant_id, self.url) as session:
+            return set(
+                session.scalars(
+                    select(PurchaseOrder.po_number).where(
+                        PurchaseOrder.tenant_id == tenant_id
+                    )
+                )
+            )
+
     def list_orders(self, tenant_id: str) -> list[dict]:
         with tenant_session(tenant_id, self.url) as session:
             out = []
