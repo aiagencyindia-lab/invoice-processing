@@ -24,7 +24,7 @@ from invoice_processing.db.repositories import PgDocumentRepository
 from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.tenant_settings import JsonTenantSettings
-from invoice_processing.trust import apikeys, score
+from invoice_processing.trust import apikeys, modes, score
 from invoice_processing.trust.agents import mandates
 from invoice_processing.trust.agents.store import AgentStore
 from invoice_processing.trust.engine import EngineContext
@@ -268,6 +268,10 @@ def env(tmp_path, monkeypatch, scratch_db):
             data["keys"][role] = key
             data["key_id"] = row["id"]
         data["agent"] = _mandated(agents, tid, slug, data["key_id"])
+        # Off means agent control does nothing; its routes need it on.
+        modes.set_engine_mode(
+            ctx, "agents", "shadow", store=service._tenant_settings
+        )
         with tenant_session(tid, url) as s:
             ep = models.WebhookEndpoint(
                 tenant_id=tid,

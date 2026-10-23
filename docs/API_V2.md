@@ -80,6 +80,8 @@ A **mandate** is what a person authorised the agent to do:
 - `source: "dryrun"` asks "would this be allowed?". The answer is recorded but never counts toward a cap, never raises a finding and never refuses anything.
 - `source: "log"` records an action the agent already took elsewhere (`occurred_at` required; approver only). It counts and raises a finding like any other.
 
+While the tenant's `agents` engine is `off`, `actions/evaluate` (and the log import on `/api`) answers 409 and records nothing: turn it to `shadow` or higher first.
+
 The answer is `{action_id, decision, reasons: [{rule, type, severity, message}], explanation, mode, source}`, where `decision` is:
 
 | Decision | Means |
