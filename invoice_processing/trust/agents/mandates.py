@@ -37,6 +37,10 @@ CAPS = ("per_action", "per_period", "per_vendor", "per_category")
 PERIODS = ("day", "month")
 MAX_SPAN = timedelta(days=366)
 _CURRENCY = re.compile(r"^[A-Za-z]{3}$")
+_UUID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
+EACH_PARTY = "Each counterparty must be a vendor name or id."
 
 
 class MandateKeyMissing(Exception):
@@ -93,22 +97,62 @@ def _caps(caps) -> dict:
     return out
 
 
-def _counterparties(names):
-    if names is None:
-        return None
-    if not isinstance(names, list):
-        raise ValueError(
-            "counterparties must be a list of vendor names or null."
+def _vendor_party(vendor: dict) -> dict:
+    # The vendors repository derives `normalized_name` this way.
+    return {"vendor_id": vendor["id"], "key": normalize_vendor(vendor["name"])}
+
+
+def _party(item, vendors, tenant_id) -> dict:
+    """One counterparty as stored: `{vendor_id, key}`. An id must name a
+    stored vendor; a name resolves to its vendor when there is one."""
+    if isinstance(item, dict) and set(item) == {"vendor_id"}:
+        vendor_id = item["vendor_id"]
+        if not isinstance(vendor_id, str) or not vendor_id.strip():
+            raise ValueError(EACH_PARTY)
+        found = (
+            vendors.get(tenant_id, vendor_id.strip().lower())
+            if vendors
+            else None
         )
-    keys = [normalize_vendor(n) if isinstance(n, str) else "" for n in names]
-    if not keys or not all(keys):
-        raise ValueError("Each counterparty must be a vendor name.")
-    return sorted(set(keys))
+        if found is None:
+            raise ValueError(f"Unknown vendor id: {vendor_id.strip()[:64]}")
+        return _vendor_party(found)
+    named = isinstance(item, dict) and set(item) == {"name"}
+    if named:
+        item = item["name"]
+    if not isinstance(item, str):
+        raise ValueError(EACH_PARTY)
+    text = item.strip()
+    if not named and _UUID.fullmatch(text.lower()):
+        # An id typo must not become a name that never matches.
+        return _party({"vendor_id": text}, vendors, tenant_id)
+    key = normalize_vendor(text)
+    if not key:
+        raise ValueError(EACH_PARTY)
+    found = vendors.find_by_name(tenant_id, text) if vendors else None
+    return _vendor_party(found) if found else {"vendor_id": None, "key": key}
 
 
-def validate(body: dict, *, now: datetime) -> tuple[dict, datetime, datetime]:
+def _counterparties(items, vendors=None, tenant_id=None):
+    if items is None:
+        return None
+    if not isinstance(items, list) or not items:
+        raise ValueError(
+            "counterparties must be a list of vendor names or ids, or null."
+        )
+    unique = {
+        (p["key"], p["vendor_id"]): p
+        for p in (_party(i, vendors, tenant_id) for i in items)
+    }
+    return [unique[k] for k in sorted(unique, key=lambda k: (k[0], k[1] or ""))]
+
+
+def validate(
+    body: dict, *, now: datetime, vendors=None, tenant_id: str | None = None
+) -> tuple[dict, datetime, datetime]:
     """The normalised scope and UTC validity, or ValueError naming the first
-    problem."""
+    problem. With `vendors` (the vendors repository), counterparties resolve
+    to vendor ids; without it they stay names."""
     scope = body.get("scope")
     if not isinstance(scope, dict):
         raise ValueError("scope is required.")
@@ -136,7 +180,9 @@ def validate(body: dict, *, now: datetime) -> tuple[dict, datetime, datetime]:
     return (
         {
             "actions": sorted(set(actions), key=ACTIONS.index),
-            "counterparties": _counterparties(scope.get("counterparties")),
+            "counterparties": _counterparties(
+                scope.get("counterparties"), vendors, tenant_id
+            ),
             "caps": _caps(scope.get("caps")),
             "currency": currency.upper(),
         },

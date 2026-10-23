@@ -129,11 +129,20 @@ def in_scope(action, agent, mandate, store, settings, now, decider):
             f"{agent['name']}'s mandate does not cover {action.kind}.",
         )
     parties = scope.get("counterparties")
-    if parties is not None and action.vendor_key is not None:
-        # The same key `vendors.normalized_name` holds, whatever was stored.
-        if action.vendor_key not in {
-            po_matching.normalize_vendor(str(p)) for p in parties
-        }:
+    if parties is not None and (action.vendor_id or action.vendor_key):
+        # By vendor id first (a renamed vendor keeps it), else by the key
+        # `vendors.normalized_name` holds; a plain string is a legacy key.
+        ids = {p.get("vendor_id") for p in parties if isinstance(p, dict)}
+        keys = {
+            po_matching.normalize_vendor(
+                str(p.get("key") if isinstance(p, dict) else p)
+            )
+            for p in parties
+        }
+        if not (
+            (action.vendor_id is not None and action.vendor_id in ids)
+            or (action.vendor_key is not None and action.vendor_key in keys)
+        ):
             return _block(
                 "in_scope",
                 "AGENT-OUT-OF-MANDATE",
