@@ -226,7 +226,7 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         Two exports of one invoice with identical timestamps (imported logs
         only) pick an arbitrary "latest" amount.
   - [x] Injection is classified after the write (2026-10-23): the guard
-        queues `trust.agent.injection` once the agent lock is released and
+        queues `trust.agent.injection` once the governed write happened and
         the worker reads the text and asks the model (`agents/later.py`);
         a yes raises its own `AGENT-INJECTION` finding seconds later. An
         unreachable queue leaves that action unscanned (logged).
