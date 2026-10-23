@@ -73,6 +73,47 @@ def _counted(tenant_id, since, until):
     )
 
 
+def _spent(tenant_id, since, until):
+    """The rows that moved money: counted, not blocked, not a write that
+    then failed (an unstamped row still counts)."""
+    return (
+        *_counted(tenant_id, since, until),
+        AgentAction.decision != "BLOCK",
+        AgentAction.outcome.is_distinct_from("failed"),
+        AgentAction.amount.is_not(None),
+    )
+
+
+def _exports(s, tenant_id, since, until, *, agent_id=None):
+    """Each invoice's export once, at its latest amount: exporting an invoice
+    twice pays it once. Keyed by owner, so the tenant view counts an invoice
+    once per owner however many of their agents exported it."""
+    q = (
+        select(
+            Agent.owner,
+            AgentAction.subject_ref,
+            AgentAction.currency,
+            AgentAction.amount,
+        )
+        .join(Agent, Agent.id == AgentAction.agent_id)
+        .where(
+            Agent.tenant_id == tenant_id,
+            *_spent(tenant_id, since, until),
+            AgentAction.action == EXPORT,
+        )
+        .order_by(AgentAction.occurred_at, AgentAction.created_at)
+    )
+    if agent_id is not None:
+        q = q.where(AgentAction.agent_id == agent_id)
+    latest = {}
+    for owner, ref, currency, amount in s.execute(q):
+        latest[(owner, ref or "")] = (currency or "", Decimal(str(amount)))
+    out: dict = defaultdict(lambda: defaultdict(Decimal))
+    for (owner, _), (currency, amount) in latest.items():
+        out[owner][currency] += amount
+    return out
+
+
 def _action(row: dict) -> dict:
     amount = row.get("amount")
     return {**row, "amount": None if amount is None else money(amount)}
@@ -91,11 +132,9 @@ def agent_ledger(
                 func.sum(AgentAction.amount),
             )
             .where(
-                *_counted(tenant_id, since, until),
+                *_spent(tenant_id, since, until),
                 AgentAction.agent_id == agent["id"],
-                AgentAction.action.in_((APPROVE, EXPORT)),
-                AgentAction.decision != "BLOCK",
-                AgentAction.amount.is_not(None),
+                AgentAction.action == APPROVE,
             )
             .group_by(
                 AgentAction.action,
@@ -104,8 +143,9 @@ def agent_ledger(
                 AgentAction.currency,
             )
         ).all()
+        exported = _exports(s, tenant_id, since, until, agent_id=agent["id"])
     spend: dict = {}
-    for action, vendor, category, currency, total in sums:
+    for _kind, vendor, category, currency, total in sums:
         cur = spend.setdefault(
             currency or "",
             {
@@ -116,14 +156,21 @@ def agent_ledger(
             },
         )
         amount = Decimal(str(total))
-        if action == EXPORT:
-            cur["exported"] += amount
-            continue
         cur["approved"] += amount
         if vendor:
             cur["by_vendor"][vendor] += amount
         if category:
             cur["by_category"][category] += amount
+    for currency, amount in exported.get(agent["owner"], {}).items():
+        spend.setdefault(
+            currency,
+            {
+                "approved": Decimal(0),
+                "exported": Decimal(0),
+                "by_vendor": defaultdict(Decimal),
+                "by_category": defaultdict(Decimal),
+            },
+        )["exported"] += amount
     spend = {
         c: {
             "approved": money(v["approved"]),
@@ -215,6 +262,7 @@ def tenant_ledger(store, tenant_id: str, *, since, until) -> dict:
                 AgentAction.action,
                 AgentAction.decision,
                 AgentAction.currency,
+                AgentAction.outcome,
                 func.count(),
                 func.sum(AgentAction.amount),
             )
@@ -227,8 +275,10 @@ def tenant_ledger(store, tenant_id: str, *, since, until) -> dict:
                 AgentAction.action,
                 AgentAction.decision,
                 AgentAction.currency,
+                AgentAction.outcome,
             )
         ).all()
+        exported = _exports(s, tenant_id, since, until)
     owners = {
         owner: {
             "owner": owner,
@@ -240,16 +290,18 @@ def tenant_ledger(store, tenant_id: str, *, since, until) -> dict:
         }
         for owner, n in agents
     }
-    for owner, action, decision, currency, n, total in rows:
+    for owner, action, decision, currency, outcome, n, total in rows:
         o = owners[owner]
         if decision == "BLOCK":
             o["blocked"] += n
             continue
         if decision == "ALLOW-WITH-REVIEW":
             o["reviewed"] += n
-        if action in (APPROVE, EXPORT) and total is not None:
-            key = "approved" if action == APPROVE else "exported"
-            o[key][currency or ""] += Decimal(str(total))
+        if action == APPROVE and total is not None and outcome != "failed":
+            o["approved"][currency or ""] += Decimal(str(total))
+    for owner, by_currency in exported.items():
+        for currency, amount in by_currency.items():
+            owners[owner]["exported"][currency] += amount
     return {
         "since": since.isoformat(),
         "until": until.isoformat(),
