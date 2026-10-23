@@ -1,5 +1,6 @@
 """The one writer of an agent decision: the ledger row, the finding, the
-`agent.action.blocked` event and the lineage edge.
+`agent.action.blocked` event and the lineage edge. `person` writes the one
+decision about a person (U9): a finding alone.
 
 Ordered, not atomic (program plan B13): the finding and graph stores open
 their own sessions. A crash after the ledger row leaves a decision with no
@@ -159,3 +160,51 @@ def record(
             observed_at=now,
         )
     return action_id
+
+
+def person(
+    ctx,
+    decision: Decision,
+    action: Action,
+    *,
+    agent: dict,
+    principal,
+    findings,
+    mode: str,
+) -> str:
+    """A person refused because their own agent already decided this chain
+    (U9). The person acted, not the agent: no ledger row (it would count
+    against the agent's caps and velocity) and no `agent.action.blocked`.
+    One finding per invoice and person, citing the agent and the invoice."""
+    citations = [Citation(agent["graph_node"])]
+    if action.transaction_node:
+        citations.append(Citation(action.transaction_node))
+    finding_id, _ = findings.upsert(
+        ctx,
+        FindingSpec(
+            type=decision.reasons[0].type,
+            transaction_node=action.transaction_node or agent["graph_node"],
+            dedupe_key=f"owner_chain:{action.subject_ref}:{principal.user_id}",
+            impact=None,
+            currency=action.currency,
+            confidence=None,
+            engine_version=ENGINE_VERSION,
+            rule_version=RULE_VERSION,
+            model_version="",
+            summary=decision.explanation[:500],
+            details={
+                "engine": ENGINE,
+                "mode": mode,
+                "source": "inline",
+                "hold": False,
+                "action": action.kind,
+                "agent_id": agent["id"],
+                "person": principal.email,
+                "decision": decision.decision,
+                "reasons": _reasons(decision),
+                "subject_ref": action.subject_ref,
+            },
+            citations=tuple(citations),
+        ),
+    )
+    return finding_id

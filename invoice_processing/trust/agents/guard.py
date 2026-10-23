@@ -26,6 +26,7 @@ from ...db.session import tenant_session
 from .. import modes, thresholds
 from . import ENGINE
 from .policy import Action, Decision, Reason, evaluate_action
+from .record import person as record_person
 from .record import record
 
 logger = logging.getLogger(__name__)
@@ -156,9 +157,7 @@ def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
     tenant = principal.tenant_id
     if agent is None:
         if action.kind in CHAIN:
-            return _owner_check(
-                principal, action, mode=mode, now=now, store=store
-            )
+            return _owner_check(principal, action, mode=mode, store=store)
         return None
     from ... import tenant_settings  # noqa: PLC0415 - avoids an import cycle
 
@@ -191,7 +190,7 @@ def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
     return _answer(decision, mode)
 
 
-def _owner_check(principal, action: Action, *, mode, now, store):
+def _owner_check(principal, action: Action, *, mode, store):
     """A person deciding a chain an agent they own already decided (U9).
     The only time the guard touches a human."""
     deciders = {_fold(d) for d in action.prior_deciders}
@@ -216,9 +215,18 @@ def _owner_check(principal, action: Action, *, mode, now, store):
     decision = Decision(
         "BLOCK", (reason,), reason.message, agent_id=agent["id"]
     )
-    mandate = store.current_mandate(tenant, agent["id"], now)
-    ctx = principal.context()
-    decision = _record(ctx, decision, action, agent, mandate, store, mode, now)
+    from ...api import service  # noqa: PLC0415
+
+    # The person acted: a finding, nothing on the agent's ledger.
+    record_person(
+        principal.context(),
+        decision,
+        action,
+        agent=agent,
+        principal=principal,
+        findings=service.get_finding_store(),
+        mode=mode,
+    )
     return _answer(decision, mode)
 
 

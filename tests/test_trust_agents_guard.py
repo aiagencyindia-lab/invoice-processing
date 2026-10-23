@@ -206,10 +206,11 @@ def ledger(env):
     return env["rows"](models.AgentAction)
 
 
-def blocked(response, code):
+def blocked(response, code, *, person=False):
+    """A refused agent action has a ledger row; a refused person (U9) none."""
     assert response.status_code == 403, response.text
     body = response.json()["detail"]
-    assert body["action_id"] and body["detail"]
+    assert body["detail"] and (body["action_id"] is None) == person
     assert code in [r["type"] for r in body["reasons"]]
     return body
 
@@ -320,11 +321,36 @@ def test_agent_then_its_owner_is_refused_for_the_owner(env):
     two_tier(env)
     bot = agent(env, "approver:a", owner="b@x.test")
     assert act(env, "approver:a").status_code == 200
-    body = blocked(act(env, "approver:b"), "AGENT-SAME-OWNER-CHAIN")
+    body = blocked(
+        act(env, "approver:b"), "AGENT-SAME-OWNER-CHAIN", person=True
+    )
     assert "your agent a" in body["detail"]
     assert decided(env) is None
-    refused = [r for r in ledger(env) if r.decision == "BLOCK"]
-    assert [r.agent_id for r in refused] == [bot["id"]]
+    # The person was refused, not the agent: nothing on its ledger, no
+    # agent.action.blocked; the finding names both.
+    assert [r.decision for r in ledger(env)] == ["ALLOW"]
+    assert not env["rows"](models.WebhookOutbox)
+    (finding,) = owner_findings(env)
+    assert finding.details["person"] == "b@x.test"
+    assert finding.details["agent_id"] == bot["id"]
+
+
+def owner_findings(env):
+    return [
+        f
+        for f in env["rows"](models.TrustFinding)
+        if f.type == "AGENT-SAME-OWNER-CHAIN"
+    ]
+
+
+def test_a_person_refused_twice_raises_one_finding(env):
+    env["settings"].mode = "enforcing"
+    two_tier(env)
+    agent(env, "approver:a", owner="b@x.test")
+    assert act(env, "approver:a").status_code == 200
+    for _ in range(2):
+        blocked(act(env, "approver:b"), "AGENT-SAME-OWNER-CHAIN", person=True)
+    assert len(owner_findings(env)) == 1
 
 
 def test_the_owner_check_only_records_below_enforcing(env):
@@ -334,7 +360,8 @@ def test_the_owner_check_only_records_below_enforcing(env):
     assert act(env, "approver:a").status_code == 200
     assert act(env, "approver:b").status_code == 200
     assert decided(env) == "approve"
-    assert [r.decision for r in ledger(env)].count("BLOCK") == 1
+    assert [r.decision for r in ledger(env)].count("BLOCK") == 0
+    assert len(owner_findings(env)) == 1
 
 
 # -- export ------------------------------------------------------------------
