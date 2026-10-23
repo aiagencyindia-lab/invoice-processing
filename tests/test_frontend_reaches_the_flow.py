@@ -33,6 +33,7 @@ VIEWS = (
     "trust-audit",
     "trust-posture",
     "trust-engines",
+    "agents",
     "integrations",
 )
 

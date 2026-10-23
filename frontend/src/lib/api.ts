@@ -1353,3 +1353,103 @@ export type VendorDocumentList = { documents: VendorDocument[] };
 export type ApiKeyList = { keys: ApiKey[] };
 export type WebhookEndpointList = { endpoints: WebhookEndpoint[] };
 export type WebhookDeliveryList = { deliveries: WebhookDelivery[] };
+
+
+// Agent control (Wave 5). Shapes from invoice_processing/trust/agents
+// (store._dict, mandates.annotate, ledger.agent_ledger / tenant_ledger).
+export type MandateScope = {
+  actions: string[];
+  currency: string;
+  counterparties: unknown[] | null;
+  caps: Record<string, unknown>;
+};
+export type Mandate = {
+  id: string;
+  agent_id: string;
+  version: number;
+  scope: MandateScope;
+  valid_from: string;
+  valid_to: string;
+  status: "proposed" | "active" | "revoked";
+  expired: boolean;
+  verified: boolean;
+  proposed_by: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  revoked_by: string | null;
+  revoked_at: string | null;
+  reason: string | null;
+};
+export type Agent = {
+  id: string;
+  name: string;
+  owner: string;
+  description: string | null;
+  kind: "api_key" | "user" | "external";
+  status: "active" | "revoked";
+  principal_id: string | null;
+  principal_email: string | null;
+  registered_by: string;
+  revoked_at: string | null;
+  revoked_by: string | null;
+  revoke_reason: string | null;
+  /** The current mandate (list and detail routes), or null. */
+  mandate: Mandate | null;
+};
+export type AgentList = { agents: Agent[] };
+export type MandateList = { mandates: Mandate[] };
+export type AgentAction = {
+  id: string;
+  action: string;
+  subject_ref: string;
+  vendor_key: string | null;
+  category: string | null;
+  amount: string | null;
+  currency: string | null;
+  decision: "ALLOW" | "ALLOW-WITH-REVIEW" | "BLOCK";
+  explanation: string;
+  mode: string;
+  source: "inline" | "log" | "dryrun";
+  occurred_at: string;
+  outcome: "executed" | "failed" | null;
+};
+export type AgentSpend = {
+  approved: string;
+  exported: string;
+  by_vendor: Record<string, string>;
+  by_category: Record<string, string>;
+};
+export type AgentLedger = {
+  agent: Agent;
+  mandate: Mandate | null;
+  since: string;
+  until: string;
+  /** Keyed by currency. */
+  spend: Record<string, AgentSpend>;
+  period: {
+    period: string;
+    currency: string;
+    cap: string;
+    used: string;
+    remaining: string;
+    since: string;
+    until: string;
+  } | null;
+  actions: AgentAction[];
+  exceptions: AgentAction[];
+};
+export type OwnerSpend = {
+  owner: string;
+  agents: number;
+  /** Keyed by currency. */
+  approved: Record<string, string>;
+  exported: Record<string, string>;
+  blocked: number;
+  reviewed: number;
+};
+export type TenantLedger = { since: string; until: string; owners: OwnerSpend[] };
+export type AgentBlockCount = {
+  blocked: number;
+  reviews: number;
+  window_hours: number;
+};
