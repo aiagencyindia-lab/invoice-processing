@@ -419,6 +419,26 @@ def test_only_new_vendors_are_creates(env):
     assert len(env["vendors"].list(TENANT)) == 2
 
 
+def test_a_vendor_load_reads_the_vendor_names_once(env, monkeypatch):
+    env["client"]("admin").put("/api/vendors", json={"vendors": [VENDOR]})
+    env["settings"].mode = "advisory"
+    agent(env, "admin:bot", actions=["vendor.create"])
+
+    def per_vendor(*a, **k):
+        raise AssertionError("list() reads each vendor's pending change")
+
+    monkeypatch.setattr(PgVendorRepository, "list", per_vendor)
+    others = [
+        {"name": f"Brand New {n} Pty", "tax_id": f"29BBBBB000{n}B1Z5"}
+        for n in range(3)
+    ]
+    r = env["client"]("admin:bot").put(
+        "/api/vendors", json={"vendors": [VENDOR, *others]}
+    )
+    assert r.status_code == 200, r.text
+    assert [row.action for row in ledger(env)] == ["vendor.create"] * 3
+
+
 def _vendor(env):
     env["client"]("admin").put("/api/vendors", json={"vendors": [VENDOR]})
     return env["vendors"].list(TENANT)[0]["id"]
