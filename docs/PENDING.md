@@ -229,18 +229,16 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         the agent row is locked; a slow model holds that agent's other
         actions up to the call's timeout (PRD inline p95 ≤ 2 s). Move the
         call out of the lock, or classify after the write as a review.
-  - [ ] Imported log rows are judged against the agent's status now, so
-        actions from before a revocation read "is revoked".
-  - [ ] `/actions/evaluate` and `/actions/import` record decisions and raise
-        `AGENT-*` findings while the engine is `off` (an admin must register
-        an agent and call them first).
-  - [ ] A person refused under U9 (their own agent already decided the
-        chain) is booked on the agent's ledger and `agent.action.blocked`
-        names the agent.
-  - [ ] A rule that raises in enforcing is a 403 BLOCK (`rule-failed`), not
-        B8's 503; it raises a finding and the webhook for an infrastructure
-        fault.
-  - [ ] `replace_vendors` reads each vendor once under the engine (N+1).
+  - [x] Imported log rows are judged at their time (2026-10-23): an agent
+        is revoked only from its `revoked_at`.
+  - [x] `/actions/evaluate` and `/actions/import` answer 409 while the
+        engine is `off` and record nothing (2026-10-23).
+  - [x] A person refused under U9 raises one finding per invoice and
+        person; no ledger row, no `agent.action.blocked` (2026-10-23).
+  - [x] A structural rule that raises is the guard's failure (503 in
+        enforcing, logged no-op below, no finding); a behavioural detector
+        that raises is skipped (2026-10-23).
+  - [x] `replace_vendors` reads the vendor keys in one query (2026-10-23).
   - [ ] FR-28.1 "our own agents register automatically" is moot: no
         in-house agent performs a governed write today.
   - [ ] Deferred from Wave 4: an agents view / NAV / dashboard (release
