@@ -392,7 +392,13 @@ def propose_mandate(agent_id: str, body: MandateCreate, principal: Admin):
     if agent["status"] != "active":
         raise HTTPException(409, "A revoked agent takes no new mandate.")
     try:
-        scope, start, end = mandates.validate(body.model_dump(), now=_now())
+        scope, start, end = mandates.validate(
+            body.model_dump(),
+            now=_now(),
+            # None without the vendors table: names only.
+            vendors=_service().get_vendors(),
+            tenant_id=principal.tenant_id,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
     ctx = principal.context()

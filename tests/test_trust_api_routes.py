@@ -20,7 +20,10 @@ from invoice_processing.adapters import JsonlAuditSink, LocalBlobStore
 from invoice_processing.api import auth, service, trust_agent_routes
 from invoice_processing.api.service import app
 from invoice_processing.db import models
-from invoice_processing.db.repositories import PgDocumentRepository
+from invoice_processing.db.repositories import (
+    PgDocumentRepository,
+    PgVendorRepository,
+)
 from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.tenant_settings import JsonTenantSettings
@@ -526,6 +529,30 @@ def test_agent_evaluate_and_ledger_match_their_api_routes(env):
         == client.get("/api/trust/agents/nope/ledger").status_code
         == 404
     )
+
+
+def test_a_proposed_counterparty_name_resolves_to_its_vendor_id(
+    env, monkeypatch
+):
+    vendors = PgVendorRepository(env["url"])
+    vendors.upsert_many(ACME, [{"name": "Acme Steel"}])
+    (acme,) = vendors.list(ACME)
+    monkeypatch.setattr(service, "_vendors", vendors)
+    body = _mandate_body()
+    body["scope"] = {**SCOPE, "counterparties": ["acme steel", "Nobody"]}
+    r = bearer("acme:admin").post(
+        f"/v2/agents/{env['acme']['agent']}/mandates", json=body
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["scope"]["counterparties"] == [
+        {"vendor_id": acme["id"], "key": "ACME STEEL"},
+        {"vendor_id": None, "key": "NOBODY"},
+    ]
+    body["scope"]["counterparties"] = ["0b8f6c1e-0000-4000-8000-000000000000"]
+    r = bearer("acme:admin").post(
+        f"/v2/agents/{env['acme']['agent']}/mandates", json=body
+    )
+    assert r.status_code == 400 and "Unknown vendor id" in r.text
 
 
 @pytest.mark.parametrize("role", ["viewer", "clerk", "approver"])
