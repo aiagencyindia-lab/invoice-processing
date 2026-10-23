@@ -336,3 +336,38 @@ def test_count_since_counts_one_bulk_request_once(env):
     record(store, url, a)
     since, until = NOW - timedelta(minutes=5), NOW + timedelta(seconds=1)
     assert store.count_since(T, a, since=since, until=until) == 3
+
+
+def test_count_blocked_tells_stopped_from_review(env):
+    store, _, url = env
+    a = agent(store)["id"]
+    since = NOW - timedelta(hours=24)
+    assert store.count_blocked(T, since) == {"blocked": 0, "reviews": 0}
+    enforcing = {"decision": "BLOCK", "mode": "enforcing"}
+    record(store, url, a, **enforcing)  # refused inline
+    record(
+        store, url, a, **enforcing, source="log",
+        subject_table="invoices", transaction_node="n1",
+    )  # held  # fmt: skip
+    record(
+        store, url, a, **enforcing, source="log", subject_table="vendors"
+    )  # nothing held: a review
+    record(store, url, a, decision="BLOCK", mode="advisory")  # review
+    record(store, url, a, decision="ALLOW-WITH-REVIEW", mode="enforcing")
+    record(store, url, a, **enforcing, source="dryrun")  # never counted
+    record(store, url, a, **enforcing, occurred_at=NOW - timedelta(days=2))
+    record(store, url, a)  # ALLOW
+    assert store.count_blocked(T, since) == {"blocked": 2, "reviews": 3}
+
+
+def test_purge_before_keeps_vendor_creates_and_counts(env):
+    store, _, url = env
+    a = agent(store)["id"]
+    old = NOW - timedelta(days=500)
+    record(store, url, a, occurred_at=old)
+    record(store, url, a, occurred_at=old, action="vendor.create")
+    record(store, url, a, occurred_at=NOW - timedelta(days=10))
+    assert store.purge_before(T, NOW - timedelta(days=400)) == 1
+    kinds = sorted(r["action"] for r in store.actions(T, agent_id=a))
+    assert kinds == ["invoice.approve", "vendor.create"]
+    assert store.purge_before(T, NOW - timedelta(days=400)) == 0

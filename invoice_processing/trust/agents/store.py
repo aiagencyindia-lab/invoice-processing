@@ -8,7 +8,7 @@ import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, delete, func, or_, select
 
 from ...db.models import Agent, AgentAction, AgentMandate
 from ...db.repositories import SelfApproval
@@ -476,6 +476,45 @@ class AgentStore:
         )
         with tenant_session(tenant_id, self.url) as s:
             return int(s.scalar(q))
+
+    def count_blocked(self, tenant_id: str, since: datetime) -> dict:
+        """For the shell banner. `blocked` = actions actually stopped: an
+        enforcing BLOCK that was refused inline, or a logged one that held
+        an invoice. `reviews` = every other decision a person should see."""
+        held = and_(
+            AgentAction.source == "log",
+            AgentAction.subject_table == "invoices",
+            AgentAction.transaction_node.is_not(None),
+        )
+        stopped = and_(
+            AgentAction.decision == "BLOCK",
+            AgentAction.mode == "enforcing",
+            or_(AgentAction.source == "inline", held),
+        )
+        q = select(
+            func.count().filter(stopped),
+            func.count().filter(AgentAction.decision != "ALLOW", ~stopped),
+        ).where(
+            AgentAction.tenant_id == tenant_id,
+            AgentAction.source != "dryrun",
+            AgentAction.occurred_at >= since,
+        )
+        with tenant_session(tenant_id, self.url) as s:
+            blocked, reviews = s.execute(q).one()
+        return {"blocked": int(blocked or 0), "reviews": int(reviews or 0)}
+
+    def purge_before(self, tenant_id: str, before: datetime) -> int:
+        """Retention: delete ledger rows older than `before`, except
+        `vendor.create` (`creators_of` reads them with no time bound)."""
+        with tenant_session(tenant_id, self.url) as s:
+            done = s.execute(
+                delete(AgentAction).where(
+                    AgentAction.tenant_id == tenant_id,
+                    AgentAction.occurred_at < before,
+                    AgentAction.action != "vendor.create",
+                )
+            )
+            return int(done.rowcount or 0)
 
     def creators_of(self, tenant_id: str, vendor_key: str) -> list[dict]:
         """The agents that created this vendor (an allowed or reviewed
