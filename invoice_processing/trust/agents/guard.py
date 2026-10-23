@@ -15,6 +15,7 @@ route then meets the same database failure it always did.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import logging
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -355,4 +356,56 @@ def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
         vendor_verified_by=vendor.get("bank_verified_by"),
         # Read only if a detector asks: the PDF text layer and email body.
         text=inputs.invoice_text(t, ctx.case_id),
+    )
+
+
+def po_action(ctx, records: list[dict], repo) -> list[Action]:
+    """One `po.create` per cleaned record whose number is not stored (a
+    stored PO the upload updates is not a create), keyed as the repository
+    stores it. The amount is recorded, never summed by caps (B9)."""
+    from ... import po_matching  # noqa: PLC0415
+    from ...api import service  # noqa: PLC0415
+
+    t = ctx.tenant_id
+    stored = repo.existing_numbers(t)
+    vendors = service.get_vendors()
+    out = []
+    for r in records:
+        number = po_matching.normalize_po_number(r["po_number"])
+        if number in stored:
+            continue
+        name = str(r.get("vendor_name") or "")
+        vendor = (
+            vendors.find_by_name(t, name) if vendors and name else None
+        ) or {}
+        out.append(
+            Action(
+                kind="po.create",
+                subject_table="purchase_orders",
+                subject_ref=f"purchase_orders:{number}",
+                vendor_key=po_matching.normalize_vendor(name) or None,
+                vendor_id=vendor.get("id"),
+                category=None,
+                amount=_amount(r.get("total_amount")),
+                currency=str(r.get("currency") or "").strip().upper() or None,
+            )
+        )
+    return out
+
+
+def document_action(
+    ctx, data: bytes, filename: str | None, *, vendor: dict | None = None
+) -> Action:
+    """The `document.upload` for these bytes: the same bytes are the same
+    subject. Not scanned at upload (`text=None`): nothing has acted on it."""
+    from ... import po_matching  # noqa: PLC0415
+
+    vendor = vendor or {}
+    return Action(
+        kind="document.upload",
+        subject_table="documents",
+        subject_ref=f"documents:{hashlib.sha256(data).hexdigest()[:32]}",
+        vendor_key=po_matching.normalize_vendor(vendor.get("name") or "")
+        or None,
+        vendor_id=vendor.get("id"),
     )

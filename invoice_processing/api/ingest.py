@@ -43,6 +43,7 @@ from email.utils import parseaddr
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 
 from ..ports import RunContext
 from .auth import Principal, require_role
@@ -250,16 +251,37 @@ async def upload_document(
     """
     data = await file.read()
     try:
-        result = ingest_document(
-            principal.context(),
-            data,
-            filename=file.filename,
-            source="upload",
-            source_ref=principal.email,
+        # Refused before anything is hashed or ledgered.
+        check_acceptable(data, file.filename)
+        result = await run_in_threadpool(
+            _governed_ingest, principal, data, file.filename
         )
     except IngestionRefused as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result.as_dict()
+
+
+def _governed_ingest(
+    principal: Principal, data: bytes, filename
+) -> IngestResult:
+    """The agent guard, then the store (FR-28.2): a refused upload stores
+    nothing, since `check` runs before `ingest_document`."""
+    from ..trust.agents import guard  # noqa: PLC0415
+
+    decision = guard.check(
+        principal,
+        lambda: guard.document_action(principal.context(), data, filename),
+    )
+    with guard.settling(principal, decision) as settle:
+        result = ingest_document(
+            principal.context(),
+            data,
+            filename=filename,
+            source="upload",
+            source_ref=principal.email,
+        )
+        settle.written()
+    return result
 
 
 # ---------------------------------------------------------------------------
