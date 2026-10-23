@@ -39,8 +39,8 @@ def classify(
     the finding was raised. A missing row or agent, or a subject that is not
     an invoice (no document to read), is nothing to do."""
     row = store.action(tenant_id, action_id)
-    if row is None:
-        return False
+    if row is None or row.get("outcome") == "failed":
+        return False  # gone, or an action that never happened
     agent = store.get(tenant_id, row["agent_id"])
     table, _, case_id = row["subject_ref"].partition(":")
     if agent is None or (text is None and (table != "invoices" or not case_id)):
@@ -56,20 +56,18 @@ def classify(
         occurred_at=row.get("occurred_at"),
         text=text or inputs.invoice_text(tenant_id, case_id),
     )
-    (detector,) = behaviour.DEFERRED
-    reason = detector(
-        action,
-        agent,
-        None,
-        store,
-        settings or _settings(tenant_id),
-        datetime.now(UTC),
-        decider,
-    )
-    if reason is None:
-        return False
+    settings = settings or _settings(tenant_id)
     ctx = RunContext(
         tenant_id=tenant_id, case_id=case_id, run_id="", actor="worker"
     )
-    record.injection(ctx, row, agent, reason, store=store, findings=findings)
-    return True
+    raised = False
+    for detector in behaviour.DEFERRED:
+        reason = detector(
+            action, agent, None, store, settings, datetime.now(UTC), decider
+        )
+        if reason is not None:
+            record.injection(
+                ctx, row, agent, reason, store=store, findings=findings
+            )
+            raised = True
+    return raised

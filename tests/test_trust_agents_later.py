@@ -172,3 +172,10 @@ def test_a_missing_row_or_non_invoice_subject_does_nothing(env):
         is False
     )
     assert injection_findings(env) == []
+
+
+def test_a_failed_action_is_left_alone(env):
+    action_id = ledgered(env)
+    env["store"].set_outcome(T, action_id, "failed")
+    assert classify(env, action_id) is False
+    assert injection_findings(env) == []

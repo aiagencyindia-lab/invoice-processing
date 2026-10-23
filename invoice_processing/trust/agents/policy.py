@@ -56,6 +56,8 @@ class Decision:
     explanation: str
     action_id: str | None = None
     agent_id: str | None = None
+    # Run the deferred detectors on this action once its write has happened.
+    defer: bool = False
 
 
 def evaluate_action(

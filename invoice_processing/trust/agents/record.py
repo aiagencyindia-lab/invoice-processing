@@ -262,7 +262,8 @@ def injection(
         ),
     )
     with tenant_session(ctx.tenant_id, store.url) as s:
-        a = s.get(AgentAction, row["id"])
+        # Locked: a redelivered job must not append the reason twice.
+        a = s.get(AgentAction, row["id"], with_for_update=True)
         if not any(r.get("rule") == reason.rule for r in a.reasons or []):
             a.reasons = [*(a.reasons or []), reasons[-1]]
             a.explanation = " ".join(
