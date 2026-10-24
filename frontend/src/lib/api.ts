@@ -142,12 +142,20 @@ export const ROLE_RANK: Record<string, number> = {
   viewer: 0,
   clerk: 1,
   approver: 2,
+  // A finance role: ranks with approver, never as admin.
+  controller: 2,
   admin: 3,
 };
 
 export function can(me: Me | null, required: string): boolean {
   if (!me) return false;
   return (ROLE_RANK[me.role] ?? -1) >= (ROLE_RANK[required] ?? 99);
+}
+
+/** The Controller's own power (approving agent registrations) is an exact
+ *  role, not a rank: an admin outranks a controller and still cannot. */
+export function isController(me: Me | null): boolean {
+  return me?.role === "controller";
 }
 
 export type Stats = {
@@ -1386,7 +1394,7 @@ export type Agent = {
   owner: string;
   description: string | null;
   kind: "api_key" | "user" | "external";
-  status: "active" | "revoked";
+  status: "proposed" | "active" | "rejected" | "revoked";
   principal_id: string | null;
   principal_email: string | null;
   registered_by: string;

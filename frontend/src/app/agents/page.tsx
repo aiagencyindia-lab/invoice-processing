@@ -8,6 +8,7 @@ import {
   api,
   ApiError,
   can,
+  isController,
   type Agent,
   type AgentAction,
   type AgentBlockCount,
@@ -22,7 +23,15 @@ import {
 import { usePoll } from "@/lib/hooks";
 import { money } from "@/lib/trust";
 
-const FILTERS = ["all", "active", "revoked"] as const;
+const FILTERS = ["all", "proposed", "active", "rejected", "revoked"] as const;
+
+/** proposed = registered, waiting for the Controller; rejected = the
+ *  Controller refused it; revoked = an admin ended an active one. */
+function StatusBadge({ status }: { status: Agent["status"] }) {
+  if (status === "active") return <span className="badge badge-ok">active</span>;
+  if (status === "proposed") return <span className="badge badge-warn">awaiting Controller</span>;
+  return <span className="badge badge-neutral">{status}</span>;
+}
 
 /** An amount in its currency; a logged row may carry none (keyed ""), and
  *  `money()` reads a missing currency as rupees. */
@@ -74,6 +83,8 @@ function decisionBadge(decision: AgentAction["decision"]): string {
 }
 
 type Pending =
+  | { kind: "approve-agent" }
+  | { kind: "reject-agent" }
   | { kind: "approve"; mandate: Mandate }
   | { kind: "revoke-mandate"; mandate: Mandate }
   | { kind: "revoke-agent" };
@@ -83,6 +94,7 @@ export default function AgentsPage() {
   const { data: me } = usePoll<Me>("/api/me");
   const approver = Boolean(me && can(me, "approver"));
   const admin = Boolean(me && can(me, "admin"));
+  const controller = isController(me ?? null);
   const agents = usePoll<AgentList>(approver ? "/api/trust/agents" : null);
   const count = usePoll<AgentBlockCount>(approver ? "/api/trust/agents/blocks/count" : null);
   const spend = usePoll<TenantLedger>(approver ? "/api/trust/agents/ledger" : null);
@@ -181,7 +193,7 @@ export default function AgentsPage() {
                       <td>{a.kind}</td>
                       <td className="muted">{a.principal_email ?? "—"}</td>
                       <td>
-                        <span className={a.status === "active" ? "badge badge-ok" : "badge badge-neutral"}>{a.status}</span>
+                        <StatusBadge status={a.status} />
                       </td>
                       <td>
                         <MandateCell mandate={a.mandate} />
@@ -193,7 +205,7 @@ export default function AgentsPage() {
             </div>
           )}
 
-          {agent ? <AgentPanel key={agent.id} agent={agent} me={me} admin={admin} onDone={done} /> : null}
+          {agent ? <AgentPanel key={agent.id} agent={agent} me={me} admin={admin} controller={controller} onDone={done} /> : null}
 
           <h2>Spend by owner</h2>
           {spend.error ? (
@@ -256,11 +268,13 @@ function AgentPanel({
   agent,
   me,
   admin,
+  controller,
   onDone,
 }: {
   agent: Agent;
   me: Me;
   admin: boolean;
+  controller: boolean;
   onDone: (message: string) => void;
 }) {
   const id = encodeURIComponent(agent.id);
@@ -303,6 +317,25 @@ function AgentPanel({
         ) : null}
       </div>
       {agent.description ? <p className="muted" style={{ margin: 0 }}>{agent.description}</p> : null}
+      {agent.status === "proposed" ? (
+        controller ? (
+          <div className="row" style={{ gap: 6 }}>
+            <button type="button" className="btn-primary" onClick={() => setPending({ kind: "approve-agent" })}>
+              Approve agent
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => setPending({ kind: "reject-agent" })}>
+              Reject agent
+            </button>
+          </div>
+        ) : (
+          <p className="muted" style={{ margin: 0 }}>
+            A Controller approves new agents. Until then nothing it does is allowed and it takes no mandate.
+          </p>
+        )
+      ) : null}
+      {agent.status === "rejected" && agent.revoke_reason ? (
+        <p className="muted" style={{ margin: 0 }}>Rejected: {agent.revoke_reason}</p>
+      ) : null}
 
       <h3 style={{ margin: 0 }}>Mandates</h3>
       {mandates.error ? (
@@ -451,7 +484,23 @@ function ConfirmDialog({
   const [busy, setBusy] = useState(false);
   const base = `/api/trust/agents/${encodeURIComponent(agent.id)}`;
   const spec =
-    pending.kind === "approve"
+    pending.kind === "approve-agent"
+      ? {
+          title: "Approve agent",
+          text: `Approving ${agent.name} lets an admin propose its mandate. It still does nothing until a mandate is approved.`,
+          path: `${base}/approve`,
+          button: "Approve agent",
+          done: `${agent.name} approved.`,
+        }
+      : pending.kind === "reject-agent"
+        ? {
+            title: "Reject agent",
+            text: `Rejecting ${agent.name} releases its key or user so it can be registered again correctly.`,
+            path: `${base}/reject`,
+            button: "Reject agent",
+            done: `${agent.name} rejected.`,
+          }
+      : pending.kind === "approve"
       ? {
           title: "Approve mandate",
           text: `Approving v${pending.mandate.version} signs it and replaces the version in force. You are the second person on it.`,
@@ -474,7 +523,7 @@ function ConfirmDialog({
             button: "Revoke agent",
             done: `${agent.name} revoked.`,
           };
-  const needsReason = pending.kind !== "approve";
+  const needsReason = pending.kind !== "approve" && pending.kind !== "approve-agent";
 
   async function submit() {
     setBusy(true);

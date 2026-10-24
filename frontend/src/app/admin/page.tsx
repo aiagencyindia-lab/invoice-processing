@@ -378,7 +378,7 @@ export default function AdminPage() {
                           );
                         }}
                       >
-                        {(users?.roles ?? ["viewer", "clerk", "approver", "admin"]).map(
+                        {(users?.roles ?? ["viewer", "clerk", "approver", "controller", "admin"]).map(
                           (value) => (
                             <option key={value} value={value}>
                               {value}
@@ -475,7 +475,7 @@ export default function AdminPage() {
               value={role}
               onChange={(event) => setRole(event.target.value)}
             >
-              {(users?.roles ?? ["viewer", "clerk", "approver", "admin"]).map(
+              {(users?.roles ?? ["viewer", "clerk", "approver", "controller", "admin"]).map(
                 (value) => (
                   <option key={value} value={value}>
                     {value}
