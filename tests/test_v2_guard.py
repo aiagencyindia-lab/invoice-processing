@@ -10,6 +10,7 @@ from sqlalchemy import select
 from invoice_processing.api import v2_guard
 from invoice_processing.db import models
 from invoice_processing.db.session import tenant_session
+from tests.pg_roles import bootstrapped_database, pg_only
 from tests.test_trust_api_routes import bearer, keyed
 from tests.test_trust_api_routes import env as api_env  # noqa: F401 - fixture
 
@@ -214,3 +215,79 @@ def test_expired_keys_and_old_windows_are_purged(env):
             "live"
         ]
         assert len(s.scalars(select(models.ApiRateWindow)).all()) == 1
+
+
+# -- races (two requests at the same moment) -----------------------------------
+
+
+def _together(fn, *args):
+    import threading  # noqa: PLC0415
+
+    out, start = [], threading.Barrier(2)
+
+    def run():
+        start.wait()
+        out.append(fn(*args))
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return out
+
+
+def test_two_first_requests_in_one_minute_both_count(env):
+    start = datetime.now(UTC).replace(second=0, microsecond=0)
+    counts = _together(v2_guard._count, ACME, "race-caller", start)
+    assert sorted(counts) == [1, 2]
+
+
+def test_two_first_posts_with_one_key_run_once(env):
+    outcomes = _together(
+        v2_guard._claim, ACME, "race-caller", "race-key", "h" * 64
+    )
+    assert sorted(o for o, _ in outcomes) == ["busy", "run"]
+
+
+def test_the_limit_is_read_once_a_minute_per_tenant(env, monkeypatch):
+    from invoice_processing import tenant_settings  # noqa: PLC0415
+
+    v2_guard._LIMITS.clear()
+    reads = []
+    real = tenant_settings.effective
+    monkeypatch.setattr(
+        tenant_settings,
+        "effective",
+        lambda t, *a: reads.append(t) or real(t, *a),
+    )
+    assert v2_guard.limit_for(ACME) == v2_guard.limit_for(ACME) == 120
+    assert reads == [ACME]
+
+
+def test_a_long_caller_id_is_stored(env):
+    start = datetime.now(UTC).replace(second=0, microsecond=0)
+    assert v2_guard._count(ACME, "u" * 128, start) == 1
+
+
+@pg_only
+def test_the_races_hold_as_the_production_app_role(monkeypatch):
+    """CI's user is a superuser and bypasses RLS, which once hid a race that
+    lost the tenant setting: prove both writes as the NOBYPASSRLS app role."""
+    from invoice_processing.db.session import get_engine  # noqa: PLC0415, F401
+
+    with bootstrapped_database() as db:
+        owner = db.owner_url.render_as_string(hide_password=False)
+        app = db.app_url.render_as_string(hide_password=False)
+        with tenant_session(ACME, owner) as s:
+            s.add(models.Tenant(id=ACME, name="a", slug="a", status="active"))
+        monkeypatch.setenv("DATABASE_URL", app)
+        start = datetime.now(UTC).replace(second=0, microsecond=0)
+        assert sorted(_together(v2_guard._count, ACME, "p", start)) == [1, 2]
+        outcomes = _together(v2_guard._claim, ACME, "p", "k", "h" * 64)
+        assert sorted(o for o, _ in outcomes) == ["busy", "run"]
+        v2_guard._finish(
+            ACME, "p", "k", 201, b'{"ok": true}', "application/json"
+        )
+        assert v2_guard._claim(ACME, "p", "k", "h" * 64)[0] == "replay"
+        assert v2_guard.purge_expired(ACME) == 0

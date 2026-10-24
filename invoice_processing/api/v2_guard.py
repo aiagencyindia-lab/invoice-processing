@@ -23,9 +23,9 @@ import logging
 import math
 import re
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from sqlalchemy import delete, select
-from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse, Response
 
@@ -47,97 +47,107 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+# ponytail: a per-process minute cache; settings change rarely, and a stale
+# limit for up to a minute is harmless.
+_LIMITS: dict[str, tuple[float, int]] = {}
+LIMIT_TTL = 60.0
+
+
 def limit_for(tenant_id: str) -> int:
     """The tenant's per-caller budget per minute (trust thresholds)."""
+    import time  # noqa: PLC0415
+
+    now = time.monotonic()
+    cached = _LIMITS.get(tenant_id)
+    if cached and cached[0] > now:
+        return cached[1]
     from .. import tenant_settings  # noqa: PLC0415 - avoids an import cycle
     from ..trust import thresholds  # noqa: PLC0415
 
     merged = thresholds.merged(
         tenant_settings.effective(tenant_id).get("trust_thresholds")
     )
-    return int(merged["v2.rate_limit_per_minute"])
+    value = int(merged["v2.rate_limit_per_minute"])
+    _LIMITS[tenant_id] = (now + LIMIT_TTL, value)
+    return value
+
+
+def _insert(s, model):
+    """An INSERT that understands ON CONFLICT on both dialects we run."""
+    if s.get_bind().dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert  # noqa: PLC0415
+    else:
+        from sqlalchemy.dialects.sqlite import insert  # noqa: PLC0415
+    return insert(model)
 
 
 def _count(tenant_id: str, principal: str, start: datetime) -> int:
-    """This request's number in its window (one row per caller per minute)."""
+    """This request's number in its window: one atomic insert-or-increment,
+    so two first requests of a minute both count and neither fails."""
+    now = _now()
     with tenant_session(tenant_id) as s:
-        row = s.scalars(
-            select(ApiRateWindow)
-            .where(
-                ApiRateWindow.tenant_id == tenant_id,
-                ApiRateWindow.principal == principal,
-                ApiRateWindow.window_start == start,
-            )
-            .with_for_update()
-        ).first()
-        if row is None:
-            row = ApiRateWindow(
-                tenant_id=tenant_id, principal=principal, window_start=start
-            )
-            s.add(row)
-            try:
-                s.flush()
-            except IntegrityError:
-                # Another request made the row first: count on that one.
-                s.rollback()
-                row = s.scalars(
-                    select(ApiRateWindow)
-                    .where(
-                        ApiRateWindow.tenant_id == tenant_id,
-                        ApiRateWindow.principal == principal,
-                        ApiRateWindow.window_start == start,
-                    )
-                    .with_for_update()
-                ).one()
-        row.count = (row.count or 0) + 1
-        return row.count
+        stmt = _insert(s, ApiRateWindow).values(
+            id=str(uuid4()),
+            tenant_id=tenant_id,
+            principal=principal,
+            window_start=start,
+            count=1,
+            created_at=now,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["tenant_id", "principal", "window_start"],
+            set_={"count": ApiRateWindow.count + 1, "updated_at": now},
+        ).returning(ApiRateWindow.count)
+        return int(s.execute(stmt).scalar_one())
 
 
 def _claim(tenant_id, principal, key, digest) -> tuple[str, dict | None]:
     """("run", None) when this request owns the key now; ("replay", row),
-    ("conflict", None) or ("busy", None) otherwise."""
+    ("conflict", None) or ("busy", None) otherwise. The claim is one atomic
+    insert-or-nothing, so of two first requests exactly one runs."""
     now = _now()
+    where = (
+        ApiIdempotency.tenant_id == tenant_id,
+        ApiIdempotency.principal == principal,
+        ApiIdempotency.key == key,
+    )
     with tenant_session(tenant_id) as s:
-        row = s.scalars(
-            select(ApiIdempotency).where(
-                ApiIdempotency.tenant_id == tenant_id,
-                ApiIdempotency.principal == principal,
-                ApiIdempotency.key == key,
+        s.execute(
+            delete(ApiIdempotency).where(
+                *where, ApiIdempotency.expires_at <= now
             )
-        ).first()
-        expires = row.expires_at if row is not None else None
-        if expires is not None and expires.tzinfo is None:
-            expires = expires.replace(tzinfo=UTC)
-        if row is not None and expires <= now:
-            s.delete(row)
-            s.flush()
-            row = None
-        if row is not None:
-            if row.status != "done":
-                return "busy", None  # the honest answer, whatever the body
-            if row.request_hash != digest:
-                return "conflict", None
-            return "replay", {
-                "status_code": row.status_code,
-                "body": row.body,
-                "content_type": row.content_type,
-            }
-        s.add(
-            ApiIdempotency(
+        )
+        stmt = (
+            _insert(s, ApiIdempotency)
+            .values(
+                id=str(uuid4()),
                 tenant_id=tenant_id,
                 principal=principal,
                 key=key,
                 request_hash=digest,
                 status="in_progress",
                 expires_at=now + KEEP,
+                created_at=now,
+                updated_at=now,
             )
+            .on_conflict_do_nothing(
+                index_elements=["tenant_id", "principal", "key"]
+            )
+            .returning(ApiIdempotency.id)
         )
-        try:
-            s.flush()
-        except IntegrityError:
-            # The same key arrived twice at once: the other one runs.
-            return "busy", None
-    return "run", None
+        if s.execute(stmt).scalar_one_or_none() is not None:
+            return "run", None
+        row = s.scalars(select(ApiIdempotency).where(*where)).one()
+        if row.status != "done":
+            return "busy", None  # the honest answer, whatever the body
+        if row.request_hash != digest:
+            return "conflict", None
+        return "replay", {
+            "status_code": row.status_code,
+            "body": row.body,
+            "content_type": row.content_type,
+        }
 
 
 def _finish(tenant_id, principal, key, status_code, body, content_type):
@@ -277,6 +287,7 @@ async def guard(request, call_next):
     out = Response(
         content=body,
         status_code=response.status_code,
+        background=response.background,
         headers={
             k: v
             for k, v in response.headers.items()

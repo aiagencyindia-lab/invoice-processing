@@ -34,7 +34,7 @@ def _common():
             nullable=False,
             index=True,
         ),
-        sa.Column("principal", sa.String(64), nullable=False),
+        sa.Column("principal", sa.String(128), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

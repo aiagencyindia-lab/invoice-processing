@@ -1461,7 +1461,7 @@ class ApiRateWindow(Base, TenantMixin, TimestampMixin):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    principal: Mapped[str] = mapped_column(String(64), nullable=False)
+    principal: Mapped[str] = mapped_column(String(128), nullable=False)
     window_start: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -1480,7 +1480,7 @@ class ApiIdempotency(Base, TenantMixin, TimestampMixin):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    principal: Mapped[str] = mapped_column(String(64), nullable=False)
+    principal: Mapped[str] = mapped_column(String(128), nullable=False)
     key: Mapped[str] = mapped_column(String(128), nullable=False)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(
