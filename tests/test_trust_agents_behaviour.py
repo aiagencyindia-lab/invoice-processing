@@ -707,3 +707,15 @@ def test_drift_counts_exports_in_the_history(store):
     assert (
         run(store, behaviour.drift, approve("30001"), a).type == "AGENT-DRIFT"
     )
+
+
+def test_a_flagged_outlier_does_not_become_the_new_normal(store):
+    """Only clean (ALLOW) actions define the agent's past: an outlier sent for
+    review must not raise the bar for the next one."""
+    a = agent(store)
+    history(store, a)
+    ledger(store, a, amount=Decimal("50000"), currency="INR",
+           decision="ALLOW-WITH-REVIEW", occurred_at=NOW - timedelta(minutes=1))  # fmt: skip
+    assert (
+        run(store, behaviour.drift, approve("50000"), a).type == "AGENT-DRIFT"
+    )

@@ -156,7 +156,9 @@ def drift(action, agent, mandate, store, settings, now, decider):
             agent_id=agent["id"],
             since=at - timedelta(days=days),
             until=at,
-            decisions=("ALLOW", "ALLOW-WITH-REVIEW"),
+            # Clean actions only: an outlier sent for review is not yet the
+            # agent's normal, or it would raise the bar for the next one.
+            decisions=("ALLOW",),
             sources=("inline", "log"),
         )
         if r["action"] in MONEY_KINDS
