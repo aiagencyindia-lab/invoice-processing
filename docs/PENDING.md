@@ -276,8 +276,8 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
           ledger shows both).
   - [ ] Wave 5 known limits: an agent hold bites only while agent control
         is enforcing (the hold row stays open and bites again on return;
-        only a person's decision lifts it); OCR needs tesseract in the
-        worker image (absent → no signal); an approver key may log rows
+        only a person's decision lifts it); OCR uses tesseract, which the
+        `Dockerfile` installs (a host without it gets no OCR signal); an approver key may log rows
         for any named agent and `/v2` has a per-caller rate limit and
         idempotency keys (2026-10-24); velocity counts every row, so a large PO import
         can raise a velocity review; the log import and intake look up the
