@@ -269,11 +269,12 @@ def test_velocity_ignores_dryruns_and_measures_a_log_row_at_its_time(store):
     assert run(store, behaviour.velocity, approve(at=then), a)
 
 
-def test_rules_are_the_four_detectors_in_order():
+def test_rules_are_the_five_detectors_in_order():
     assert [r.__name__ for r in behaviour.RULES] == [
         "circular",
         "split",
         "velocity",
+        "drift",
         "injection",
     ]
 
@@ -526,8 +527,8 @@ from invoice_processing.trust.explain.templates import agents as tpl  # noqa: E4
 AGENT_TYPES = sorted(tpl.NEXT)
 
 
-def test_a_template_for_each_of_the_nine_types():
-    assert len(AGENT_TYPES) == 9
+def test_a_template_for_each_of_the_ten_types():
+    assert len(AGENT_TYPES) == 10  # nine from Wave 4, AGENT-DRIFT (G1)
     assert set(AGENT_TYPES) == set(tpl.WOULD)
 
 
@@ -630,3 +631,79 @@ def test_detectors_load_whichever_agents_module_is_imported_first():
             cwd=ROOT,
         )
         assert done.returncode == 0, done.stderr[-500:]
+
+
+# -- drift (G1: drift from the agent's own past) -----------------------------
+
+
+def history(store, a, n=10, amount="10000", **cols):
+    for i in range(n):
+        ledger(
+            store,
+            a,
+            amount=Decimal(amount),
+            currency=cols.pop("currency", "INR") if i == 0 else "INR",
+            occurred_at=NOW - timedelta(days=1, minutes=i),
+            **cols,
+        )
+
+
+def test_drift_flags_an_amount_far_beyond_the_agents_past(store):
+    a = agent(store)
+    history(store, a)
+    r = run(store, behaviour.drift, approve("30001"), a)
+    assert r.type == "AGENT-DRIFT" and r.severity == "REVIEW"
+    assert "30001" in r.message and "10000" in r.message
+
+
+def test_drift_boundary_is_strictly_greater(store):
+    a = agent(store)
+    history(store, a)
+    assert run(store, behaviour.drift, approve("30000"), a) is None
+
+
+def test_drift_needs_enough_history(store):
+    a = agent(store)
+    history(store, a, n=9)
+    assert run(store, behaviour.drift, approve("900000"), a) is None
+
+
+def test_drift_compares_one_currency_only(store):
+    a = agent(store)
+    history(store, a)
+    assert (
+        run(store, behaviour.drift, approve("900000", currency="USD"), a)
+        is None
+    )
+
+
+def test_drift_ignores_blocked_dryrun_and_old_history(store):
+    a = agent(store)
+    history(store, a, n=5)
+    for i in range(5):
+        ledger(store, a, amount=Decimal("10000"), currency="INR",
+               decision="BLOCK", occurred_at=NOW - timedelta(hours=i + 1))  # fmt: skip
+        ledger(store, a, amount=Decimal("10000"), currency="INR",
+               source="dryrun", occurred_at=NOW - timedelta(hours=i + 1))  # fmt: skip
+        ledger(store, a, amount=Decimal("10000"), currency="INR",
+               occurred_at=NOW - timedelta(days=200 + i))  # fmt: skip
+    assert run(store, behaviour.drift, approve("900000"), a) is None
+
+
+def test_drift_skips_amountless_and_other_kinds(store):
+    a = agent(store)
+    history(store, a)
+    assert run(store, behaviour.drift, approve(None), a) is None
+    patch = Action(
+        "vendor.patch", "vendors", "vendors:x", vendor_key="acme steel"
+    )
+    assert run(store, behaviour.drift, patch, a) is None
+
+
+def test_drift_counts_exports_in_the_history(store):
+    a = agent(store)
+    history(store, a, n=5)
+    history(store, a, n=5, action="invoice.export")
+    assert (
+        run(store, behaviour.drift, approve("30001"), a).type == "AGENT-DRIFT"
+    )

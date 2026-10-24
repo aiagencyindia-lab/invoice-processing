@@ -51,6 +51,10 @@ DEFAULTS: dict[str, float] = {
     # Wave 5: the shell banner's window, and how long the ledger keeps rows.
     "agents.banner_window_hours": 24,
     "agents.retention_days": 400,
+    # G1: an amount over factor times the agent's largest in the window (review).
+    "agents.drift_window_days": 90,
+    "agents.drift_min_history": 10,
+    "agents.drift_amount_factor": 3,
     # Provenance v2 (FR-22)
     "provenance.edits_suspect": 2,
     # Mode progression: what the readiness report asks before recommending
