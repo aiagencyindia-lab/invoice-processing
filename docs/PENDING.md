@@ -284,8 +284,12 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         feeds grow).
     - [x] Mandate expiry sweep: not needed. Expiry is computed on every
           read, and rewriting `status` would break the mandate signature.
-  - [ ] Surfaced by Wave 5, not built: (G1) FR-28.4 "drift from mandate" —
-        no detector compares an agent's behaviour with its baseline.
+  - [x] (G1) FR-28.4 "drift from mandate" (2026-10-24), read as drift from
+        the agent's own past: an approval or export over 3 times the largest
+        amount it handled in that currency over 90 days (at least 10 clean
+        past actions) raises an `AGENT-DRIFT` review. Thresholds per tenant.
+        Not built: a "first-time kind of action" signal (it flags ordinary
+        approve-then-export work; the mandate already scopes the kinds).
   - [x] (G2) PRD "agent registration requires Controller approval"
         (2026-10-24): a `controller` role (ranks with approver, never
         admin) alone approves or rejects a registration; agents start
