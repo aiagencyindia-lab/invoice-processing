@@ -108,6 +108,7 @@ THRESHOLDS = {
     "agents.drift_window_days": 90,
     "agents.drift_min_history": 10,
     "agents.drift_amount_factor": 3,
+    "v2.rate_limit_per_minute": 120,
     "provenance.edits_suspect": 2,
     "readiness.min_days": 14,
     "readiness.min_findings": 20,
