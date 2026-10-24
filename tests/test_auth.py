@@ -213,6 +213,9 @@ class TestRoles:
             ("approver", "clerk", True),
             ("clerk", "approver", False),
             ("viewer", "clerk", False),
+            # A controller ranks with approver and never as admin.
+            ("controller", "approver", True),
+            ("controller", "admin", False),
         ],
     )
     def test_rank_ordering(self, role, required, expected):
@@ -542,3 +545,41 @@ class TestApiKeys:
         monkeypatch.setattr(auth, "_api_key_resolver", None)
         r = app.get("/whoami", headers=bearer(self.KEY))
         assert r.status_code == 401
+
+
+class TestRequireExactRole:
+    """The Controller's own power is an exact role, never the ladder: an
+    admin or an approver ranks at or above a controller and must not pass."""
+
+    def _client(self, monkeypatch, principal):
+        from fastapi import Depends, FastAPI  # noqa: PLC0415
+        from fastapi.testclient import TestClient  # noqa: PLC0415
+
+        from invoice_processing.api.auth import (  # noqa: PLC0415
+            current_principal,
+            require_exact_role,
+        )
+
+        app = FastAPI()
+
+        @app.get("/only")
+        def only(p=Depends(require_exact_role("controller"))):  # noqa: B008
+            return {"ok": p.role}
+
+        app.dependency_overrides[current_principal] = lambda: principal
+        return TestClient(app)
+
+    @pytest.mark.parametrize(
+        ("user_id", "role", "status"),
+        [
+            ("u1", "controller", 200),
+            ("u2", "admin", 403),
+            ("u3", "approver", 403),
+            ("api-key:k1", "controller", 403),  # a key never holds it
+        ],
+    )
+    def test_only_a_controller_person_passes(
+        self, monkeypatch, user_id, role, status
+    ):
+        p = Principal(user_id, "e@x.y", "t", role)
+        assert self._client(monkeypatch, p).get("/only").status_code == status

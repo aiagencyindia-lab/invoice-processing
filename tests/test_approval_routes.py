@@ -55,7 +55,7 @@ def held(*codes):
 class FakeVerifier:
     def verify(self, token):
         role, _, who = token.partition(":")
-        if role not in ("viewer", "clerk", "approver", "admin"):
+        if role not in ("viewer", "clerk", "approver", "controller", "admin"):
             raise auth.AuthError("Invalid token")
         return {
             "sub": f"u-{token}",
@@ -1513,3 +1513,35 @@ def test_admin_override_with_reason_passes_a_payment_hold(env, monkeypatch):
     monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-X"))
     r = act(env, "admin:boss", override_reason="Called the vendor on file")
     assert r.status_code == 200 and r.json()["completed"] is True
+
+
+def test_a_controller_decides_an_approver_step(env):
+    """No rule: the fallback chain asks for the approver role, and a
+    controller ranks with approver."""
+    env["add_users"]("cora@x.test", role="controller")
+    assert act(env, "controller:cora").status_code == 200, act
+    assert workflow(env)["decision"] == "approve"
+
+
+def test_a_controller_can_be_a_user_step_a_delegate_and_a_manager(env):
+    env["add_users"]("cora@x.test", role="controller")
+    assert (
+        make_rule(
+            env, steps=[{"kind": "user", "value": "cora@x.test"}]
+        ).status_code
+        == 201
+    )
+    r = delegation(env, "approver:a", delegate_email="cora@x.test")
+    assert r.status_code == 201, r.text
+    admin = env["client"]("admin:boss")
+    users = admin.get("/api/admin/users").json()["users"]
+    a = next(u for u in users if u["email"] == "a@x.test")
+    r = admin.patch(
+        f"/api/admin/users/{a['id']}", json={"manager_email": "cora@x.test"}
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_a_controller_role_step_is_refused(env):
+    r = make_rule(env, steps=[{"kind": "role", "value": "controller"}])
+    assert r.status_code == 400 and "controller" in r.text

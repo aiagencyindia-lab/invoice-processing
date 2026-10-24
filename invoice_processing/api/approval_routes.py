@@ -109,9 +109,10 @@ def _fold(email: str) -> str:
     return email.strip().casefold()
 
 
-# Roles that can decide a step. Anyone else named on a chain would be a seat
-# nobody can fill: the act endpoint needs approver.
-APPROVING = ("approver", "admin")
+def _approving(role) -> bool:
+    """Whether this role can decide a step. Anyone else named on a chain
+    would be a seat nobody can fill: the act endpoint needs approver."""
+    return ROLE_RANK.get(role, -1) >= ROLE_RANK["approver"]
 
 
 def _need_users(
@@ -129,7 +130,7 @@ def _need_users(
             raise HTTPException(
                 400, f"{e} is not a user of this account, so {what}."
             )
-        if approving and known[e] not in APPROVING:
+        if approving and not _approving(known[e]):
             raise HTTPException(
                 400,
                 f"{e} is a {known[e]}, so {what}; only an approver or admin "
@@ -217,6 +218,13 @@ def _check_rule(repo, tenant_id: str, kind, match, steps) -> tuple[dict, list]:
             raise HTTPException(
                 400,
                 f"Approver group {v!r} has no members, so nobody could approve.",
+            )
+        elif k == "role" and v == "controller":
+            # The ladder would let every approver and admin fill it.
+            raise HTTPException(
+                400,
+                "A controller step is not supported; name the controller "
+                "as a user step.",
             )
         elif k == "role" and v not in ROLE_RANK:
             raise HTTPException(
