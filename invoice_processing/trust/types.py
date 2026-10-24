@@ -299,4 +299,10 @@ TABLE: dict[str, Type] = {
         "authorization",
         "A document an agent acted on carries instructions aimed at agents",
     ),
+    "AGENT-DRIFT": _t(
+        "agents",
+        False,
+        "authorization",
+        "An agent handled an amount far beyond its own recent past",
+    ),
 }

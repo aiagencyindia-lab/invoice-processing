@@ -17,6 +17,7 @@ NEXT = {
     "AGENT-SPLIT": "Review the approvals together as one purchase; have a person approve the total.",
     "AGENT-VELOCITY": "Check what drove the burst; pause the agent if it was not expected.",
     "AGENT-INJECTION": "Read the document; remove the agent's access to this vendor if it acted on the text.",
+    "AGENT-DRIFT": "Confirm the amount with the agent's owner; tighten the per-action cap if it was not expected.",
 }
 WOULD = {
     "AGENT-OUT-OF-MANDATE": [
@@ -48,6 +49,10 @@ WOULD = {
     ],
     "AGENT-INJECTION": [
         "The flagged text being ordinary wording addressed to a person.",
+    ],
+    "AGENT-DRIFT": [
+        "An amount in line with what this agent has handled before.",
+        "A per-action cap that keeps the agent's amounts in their usual range.",
     ],
 }
 

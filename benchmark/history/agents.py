@@ -1,6 +1,6 @@
 """Benchmark gates for agent control (AC-28): a simulated fleet.
 
-Three compliant agents and five rogue ones, registered on the bench tenant
+Three compliant agents and six rogue ones, registered on the bench tenant
 with two-person mandates, act on the bench's vendors and invoices. Every
 scripted action goes through `policy.evaluate_action` and `record.record`
 (inline, advisory: the decision is what AC-28 measures, nothing is refused)
@@ -63,8 +63,9 @@ EXPECTED = {
     "split": "AGENT-SPLIT",
     "velocity": "AGENT-VELOCITY",
     "injection": "AGENT-INJECTION",
+    "drift": "AGENT-DRIFT",
 }
-BEHAVIOURAL = {"circular", "split", "velocity", "injection"}
+BEHAVIOURAL = {"circular", "split", "velocity", "injection", "drift"}
 KIND_LABEL = {
     k: "behavioural" if k in BEHAVIOURAL else "structural" for k in EXPECTED
 }
@@ -145,6 +146,13 @@ def fleet(created: list[str], scope3: list[str]) -> list[dict]:
                 "invoice.export",
                 "bank_change.decide",
             ],
+            "caps": LARGE,
+        },
+        {
+            # G1: steady approvals, then amounts far beyond its own past.
+            "name": "rogue-drift",
+            "owner": "rogue5@bench.test",
+            "actions": ["invoice.approve"],
             "caps": LARGE,
         },
     ]
@@ -268,6 +276,13 @@ def script(vendors: list[str], invoices: list[dict]) -> list[Step]:
         approve("rogue-twin", None, pool[i], 40000)
     for i in range(5):
         approve("rogue-twin", "over_per_period", pool[6 + i % 4], 20000)
+
+    # rogue-drift: ten ordinary approvals, then five at five times the most
+    # it has approved (one vendor each, so no split; well under its caps).
+    for i in range(10):
+        approve("rogue-drift", None, pool[i], 10000)
+    for i in range(5):
+        approve("rogue-drift", "drift", pool[i], 50000)
 
     # rogue-burst: the behavioural set, and a bank change an agent proposed.
     for i in range(5):

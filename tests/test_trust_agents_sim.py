@@ -108,6 +108,12 @@ def test_measure_meets_all_four_gates(scratch_db, key):
     }, out
     for kind, row in out["by_kind"].items():
         assert row["caught"] == row["n"] >= 5, kind
+    # G1: the drift detector is measured like the other four.
+    assert out["by_kind"]["drift"] == {
+        "label": "behavioural",
+        "n": 5,
+        "caught": 5,
+    }
     assert out["compliant"]["false_blocks"] == 0
     assert out["compliant"]["false_reviews"] == 0, out["compliant"]
     assert out["structural"]["blocked"] == out["structural"]["n"]
@@ -209,7 +215,7 @@ def test_the_fleet_signs_its_mandates_without_a_configured_key(
     assert "TRUST_MANDATE_KEY" not in os.environ
     store = AgentStore(url)
     agents = store.list(TENANT)
-    assert len(agents) == 8
+    assert len(agents) == 9  # three compliant, six rogue (rogue-drift, G1)
     monkeypatch.setenv("TRUST_MANDATE_KEY", fleet.BENCH_KEY)
     for a in agents:
         rows = mandates.annotate(store.mandates(TENANT, a["id"]), fleet.T0)

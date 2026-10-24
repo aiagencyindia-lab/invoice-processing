@@ -135,6 +135,55 @@ def velocity(action, agent, mandate, store, settings, now, decider):
     )
 
 
+MONEY_KINDS = ("invoice.approve", "invoice.export")
+
+
+def drift(action, agent, mandate, store, settings, now, decider):
+    """FR-28.4 "drift from mandate", read as drift from the agent's own past:
+    an amount far beyond anything it handled lately in that currency. Needs
+    enough history that a new agent is not flagged for being new."""
+    if action.kind not in MONEY_KINDS or action.amount is None:
+        return None
+    amount = Decimal(action.amount)
+    if amount <= 0:
+        return None
+    at = _at(action, now)
+    days = settings["agents.drift_window_days"]
+    past = [
+        Decimal(r["amount"])
+        for r in store.actions(
+            agent["tenant_id"],
+            agent_id=agent["id"],
+            since=at - timedelta(days=days),
+            until=at + _TICK,
+            decisions=("ALLOW", "ALLOW-WITH-REVIEW"),
+            sources=("inline", "log"),
+            # ponytail: the newest 500 rows only (an agent past ~6 money
+            # actions a day); a count/max aggregate if baselines must see more.
+        )
+        if r["action"] in MONEY_KINDS
+        and r["amount"] is not None
+        and r["currency"] == action.currency
+        # Drift's own flags never become the normal, or one outlier would
+        # raise the bar for the next. Other detectors' reviews still count.
+        and not any(x.get("rule") == "drift" for x in r.get("reasons") or [])
+    ]
+    if len(past) < settings["agents.drift_min_history"]:
+        return None
+    factor = Decimal(str(settings["agents.drift_amount_factor"]))
+    largest = max(past)
+    if amount <= factor * largest:
+        return None
+    return policy.Reason(
+        "drift",
+        "AGENT-DRIFT",
+        "REVIEW",
+        f"{agent['name']} handled {amount} {action.currency or ''}".rstrip()
+        + f", more than {factor:g} times the largest ({largest}) of its last "
+        f"{len(past)} actions in {int(days)} days.",
+    )
+
+
 QUESTION = Question(
     "injection",
     "yes_no",
@@ -174,7 +223,7 @@ def injection(action, agent, mandate, store, settings, now, decider):
     )
 
 
-RULES: tuple = (circular, split, velocity, injection)
+RULES: tuple = (circular, split, velocity, drift, injection)
 # Read the document and ask the model: the guard runs these after the write,
 # in the worker (`later.classify`), never under the agent lock.
 DEFERRED: tuple = (injection,)

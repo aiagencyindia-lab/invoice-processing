@@ -395,7 +395,8 @@ def test_agents_is_a_blocking_engine_that_never_holds():
     assert "agents" not in modes.HOLD_ENGINES
     assert modes.BLOCKING_ENGINES == frozenset({"agents"})
     codes = [c for c, t in types.TABLE.items() if t.engine == "agents"]
-    assert len(codes) == 9 and all(c.startswith("AGENT-") for c in codes)
+    # Nine from Wave 4 plus AGENT-DRIFT (G1).
+    assert len(codes) == 10 and all(c.startswith("AGENT-") for c in codes)
     for code in codes:
         assert not types.TABLE[code].hold, code
         assert types.TABLE[code].dimension == "authorization", code

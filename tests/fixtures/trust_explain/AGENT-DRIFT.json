@@ -1,0 +1,57 @@
+{
+ "finding": {
+  "id": "f-agent-drift",
+  "type": "AGENT-DRIFT",
+  "transaction_node": "n-agent",
+  "status": "detected",
+  "impact": null,
+  "currency": "INR",
+  "confidence": null,
+  "engine_version": "agents-1",
+  "rule_version": "agents-rules-1",
+  "model_version": "",
+  "summary": "bot-ap: bot-ap handled 90000 INR, more than 3 times the largest (10000) of its last 12 actions in 90 days.",
+  "details": {
+   "engine": "agents",
+   "mode": "advisory",
+   "source": "inline",
+   "hold": false,
+   "action": "invoice.approve",
+   "action_id": "act-1",
+   "agent_id": "a1",
+   "decision": "ALLOW-WITH-REVIEW",
+   "reasons": [
+    {
+     "rule": "drift",
+     "type": "AGENT-DRIFT",
+     "severity": "REVIEW",
+     "message": "bot-ap handled 90000 INR, more than 3 times the largest (10000) of its last 12 actions in 90 days."
+    }
+   ],
+   "subject_ref": "invoices:case_001"
+  },
+  "citations": [
+   {
+    "node_id": "n-agent",
+    "excerpt": null
+   }
+  ]
+ },
+ "nodes": {
+  "n-agent": {
+   "kind": "agent",
+   "ref_table": "agents",
+   "ref_id": "a1",
+   "attrs": {
+    "name": "bot-ap",
+    "owner": "ops@acme.test",
+    "kind": "api_key",
+    "status": "active"
+   }
+  }
+ },
+ "edges": [],
+ "expect": {
+  "note": "no money is computed for this finding"
+ }
+}
