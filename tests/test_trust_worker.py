@@ -12,11 +12,13 @@ from invoice_processing.db.session import tenant_session
 from invoice_processing.trust.graph.store import GraphStore
 from invoice_processing.worker.queue import LocalQueue
 from invoice_processing.worker.runner import (
+    TRUST_AGENT_INJECTION,
     TRUST_AUDIT_RUN,
     TRUST_EVALUATE,
     TRUST_GRAPH_SYNC,
     ClaimStore,
     Worker,
+    enqueue_agent_injection,
     enqueue_trust_audit_run,
     enqueue_trust_evaluate,
     enqueue_trust_graph_sync,
@@ -160,3 +162,68 @@ def test_a_failing_batch_run_is_retried_then_dead_lettered(env, monkeypatch):
     assert outcomes[0] == ["retry"] and outcomes[-1] == [
         "dead-lettered:exhausted"
     ]
+
+
+def test_the_webhook_sweep_runs_once_per_interval(tmp_path, monkeypatch):
+    from invoice_processing.trust.webhooks import deliver  # noqa: PLC0415
+    from invoice_processing.worker import runner  # noqa: PLC0415
+
+    calls = []
+    monkeypatch.setattr(
+        deliver, "due", lambda now, **kw: calls.append(now) or 0
+    )
+    now = {"t": 1000.0}
+    worker = Worker(
+        queue=LocalQueue(tmp_path / "q"),
+        claims=ClaimStore(tmp_path / "claims"),
+        handler=lambda m: {},
+        clock=lambda: now["t"],
+    )
+    worker._deliver_webhooks_if_due()
+    worker._deliver_webhooks_if_due()
+    assert len(calls) == 1
+    now["t"] += runner.WEBHOOK_SCAN_SECONDS + 1
+    worker._deliver_webhooks_if_due()
+    assert len(calls) == 2
+
+
+def test_a_failing_webhook_sweep_does_not_stop_the_worker(
+    tmp_path, monkeypatch
+):
+    from invoice_processing.trust.webhooks import deliver  # noqa: PLC0415
+
+    def boom(now, **kw):
+        raise RuntimeError("smtp? no, http")
+
+    monkeypatch.setattr(deliver, "due", boom)
+    worker = Worker(
+        queue=LocalQueue(tmp_path / "q"),
+        claims=ClaimStore(tmp_path / "claims"),
+        handler=lambda m: {},
+    )
+    worker._deliver_webhooks_if_due()  # logged, not raised
+
+
+def test_the_agent_injection_job_classifies_and_acks(env, monkeypatch):
+    from invoice_processing.trust.agents import later  # noqa: PLC0415
+
+    queue, worker, _ = env
+    calls = []
+    monkeypatch.setattr(service, "get_agent_store", lambda: "store")
+    monkeypatch.setattr(service, "get_finding_store", lambda: "findings")
+    monkeypatch.setattr(
+        later,
+        "classify",
+        lambda t, a, *, store, findings: calls.append((t, a, store, findings)),
+    )
+    enqueue_agent_injection(queue, T, "act-1", "req-1")
+    assert worker.run_once() == ["agent-injection-classified"]
+    assert calls == [(T, "act-1", "store", "findings")]
+    assert worker.run_once() == []
+
+
+def test_a_malformed_agent_injection_job_is_dead_lettered(env):
+    queue, worker, _ = env
+    queue.publish({"type": TRUST_AGENT_INJECTION, "tenant_id": T})
+    assert worker.run_once() == ["dead-lettered:malformed"]
+    assert len(queue.dead_letters()) == 1

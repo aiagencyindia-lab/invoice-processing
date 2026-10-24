@@ -142,12 +142,20 @@ export const ROLE_RANK: Record<string, number> = {
   viewer: 0,
   clerk: 1,
   approver: 2,
+  // A finance role: ranks with approver, never as admin.
+  controller: 2,
   admin: 3,
 };
 
 export function can(me: Me | null, required: string): boolean {
   if (!me) return false;
   return (ROLE_RANK[me.role] ?? -1) >= (ROLE_RANK[required] ?? 99);
+}
+
+/** The Controller's own power (approving agent registrations) is an exact
+ *  role, not a rank: an admin outranks a controller and still cannot. */
+export function isController(me: Me | null): boolean {
+  return me?.role === "controller";
 }
 
 export type Stats = {
@@ -369,6 +377,9 @@ export type Workflow = {
   decided_at?: string;
   reason?: string | null;
   reason_category?: string;
+  /** The trust hold an administrator overrode at approval, and the findings
+   *  it covered; a finding raised later holds export again. */
+  hold_overridden?: { message: string; finding_ids: string[] } | null;
 };
 
 export type InvoiceDetail = InvoiceSummary & {
@@ -388,6 +399,11 @@ export type InvoiceDetail = InvoiceSummary & {
   lock: RecordLock | null;
   /** Per-line GL coding; absent on a case coded before GL coding existed. */
   gl_coding?: GlCoding | null;
+  /** Whether the trust layer holds this payment, and on which findings.
+   *  Absent from an API older than Wave 3. */
+  hold?: HoldDetail | null;
+  /** The invoice's Evidence Graph node (for the trust score), or null. */
+  trust_node?: string | null;
 };
 
 /** A tenant rule that codes invoice lines to a GL account. At least one of
@@ -991,7 +1007,7 @@ export type ContractRow = {
 // The Why engine (trust/explain; the v2/w2-explain branch fills these in).
 export type ExplanationStep = { text: string; node_id: string };
 export type ExplanationActor = {
-  kind: "vendor" | "person" | "system" | "engine" | "provider";
+  kind: "vendor" | "person" | "system" | "engine" | "provider" | "agent";
   label: string;
   node_id: string | null;
 };
@@ -1166,4 +1182,282 @@ export type LedgerExport = {
     capped: string;
     due: string;
   };
+};
+
+
+// Wave 3 (always-on trust): holds, the Transaction Trust Score, posture,
+// engine readiness, evidence requests, API keys and webhooks. The shapes the
+// scaffold fixed in docs/superpowers/specs/2026-10-21-v2-wave3-*-design.md.
+
+export type HoldDetail = {
+  held: boolean;
+  message: string | null;
+  holds: { finding_id: string; type: string; engine: string; summary: string }[];
+  /** Enforcing engines that have not checked this invoice yet. */
+  waiting: string[];
+  transaction_node: string | null;
+};
+
+export type TrustHold = {
+  id: string;
+  finding_id: string;
+  type: string;
+  engine: string;
+  placed_at: string;
+};
+
+export type Dimension =
+  | "identity"
+  | "authorization"
+  | "reality"
+  | "price"
+  | "authenticity"
+  | "consistency";
+
+export type DimensionScore = {
+  /** 0..1, or null when there is nothing to judge it by. */
+  value: number | null;
+  /** An open hold-type finding in this dimension from an enforcing engine. */
+  hold: boolean;
+  drivers: string[];
+  note: string;
+};
+
+export type TrustScore = {
+  score_version: string;
+  computed_at: string;
+  /** Advisory only: the dimensions drive holds, never the composite. */
+  composite: number | null;
+  dimensions: Record<Dimension, DimensionScore>;
+  versions: Record<string, unknown>;
+  holds: string[];
+  mode: Record<string, string>;
+};
+
+/** A finding as the score route lists it under its dimension. */
+export type TransactionTrustFinding = Pick<
+  TrustFinding,
+  "id" | "type" | "status" | "summary" | "impact" | "currency" | "engine" | "hold"
+>;
+
+export type TransactionTrust = TrustScore & {
+  /** The trust_score node, and the invoice node it scores. */
+  node: string;
+  valid_from: string;
+  transaction_node: string;
+  hold: HoldDetail;
+  /** Keyed by dimension, plus "other" for types with none. */
+  findings: Record<Dimension | "other", TransactionTrustFinding[]>;
+};
+
+export type VendorTrustProfile = {
+  vendor: TrustVendor & { invoices: number; scored: number };
+  dimensions: Record<Dimension, number | null>;
+  findings_by_type: Record<string, { open: number; decided: number }>;
+  gst: { status: string | null; missed_periods: number | null; observed_at: string | null } | null;
+  bank_verified: boolean | null;
+  kyc: { node: string; document_id: string; subkind: string | null; score: number | null; observed_at: string | null }[];
+  network: { vendor: TrustVendor; shared: string[] }[];
+  timeline: { month: string; composite: number | null }[];
+};
+
+export type TrustPosture = {
+  since: string | null;
+  found: { count: number; impact: string };
+  prevented: string;
+  recovered: string;
+  written_off: string;
+  open_exposure: string;
+  by_type: Record<string, { count: number; impact: string }>;
+  by_vendor: { node: string; name: string | null; count: number; impact: string }[];
+  pre_payment_share: number | null;
+  provenance_distribution: Record<string, number>;
+  verification_coverage: { identity: number | null; reality: number | null; authenticity: number | null };
+  holds: { open: number; placed: number; lifted: number };
+};
+
+export type EngineReadiness = {
+  engine: string;
+  mode: string;
+  since: string | null;
+  days_in_mode: number | null;
+  findings: number;
+  would_have_held: number;
+  held: number;
+  open_holds: number;
+  triage: { decided: number; accepted: number; rejected: number; precision: number | null };
+  failures: number;
+  /** The suggested next mode (null = stay), and why. */
+  recommendation: { to: string | null; reason: string };
+};
+
+export type Readiness = { engines: EngineReadiness[] };
+
+export type EvidenceRequest = {
+  id: string;
+  finding_id: string;
+  owner: string;
+  due_date: string | null;
+  note: string | null;
+  status: "open" | "fulfilled" | "cancelled";
+  proof_document_id: string | null;
+  requested_by: string | null;
+  fulfilled_at: string | null;
+  overdue: boolean;
+  created_at: string | null;
+};
+
+export type ApiKey = {
+  id: string;
+  name: string;
+  prefix: string;
+  role: string;
+  created_by: string | null;
+  created_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+};
+
+/** Returned once, at creation: the only time the full key is shown. */
+export type ApiKeyCreated = ApiKey & { key: string };
+
+export type WebhookEndpoint = {
+  id: string;
+  url: string;
+  events: string[];
+  active: boolean;
+  description: string | null;
+  /** Masked except in the creation response. */
+  secret: string;
+  created_by: string | null;
+  created_at: string | null;
+};
+
+export type WebhookDelivery = {
+  id: string;
+  event: string;
+  attempts: number;
+  next_attempt_at: string | null;
+  delivered_at: string | null;
+  last_status: number | null;
+  last_error: string | null;
+  dead_at: string | null;
+  created_at: string | null;
+  payload: Record<string, unknown>;
+};
+
+// List envelopes for the Wave 3 routes (agreed with the backend branches).
+export type EvidenceRequestList = { requests: EvidenceRequest[] };
+
+/** A KYC document on file and its latest authenticity score. */
+export type VendorDocument = {
+  document_id: string;
+  subkind: string;
+  filename: string | null;
+  score: number | null;
+  uploaded_at: string | null;
+};
+export type VendorDocumentList = { documents: VendorDocument[] };
+export type ApiKeyList = { keys: ApiKey[] };
+export type WebhookEndpointList = { endpoints: WebhookEndpoint[] };
+export type WebhookDeliveryList = { deliveries: WebhookDelivery[] };
+
+
+// Agent control (Wave 5). Shapes from invoice_processing/trust/agents
+// (store._dict, mandates.annotate, ledger.agent_ledger / tenant_ledger).
+export type MandateScope = {
+  actions: string[];
+  currency: string;
+  counterparties: unknown[] | null;
+  caps: Record<string, unknown>;
+};
+export type Mandate = {
+  id: string;
+  agent_id: string;
+  version: number;
+  scope: MandateScope;
+  valid_from: string;
+  valid_to: string;
+  status: "proposed" | "active" | "revoked";
+  expired: boolean;
+  verified: boolean;
+  proposed_by: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  revoked_by: string | null;
+  revoked_at: string | null;
+  reason: string | null;
+};
+export type Agent = {
+  id: string;
+  name: string;
+  owner: string;
+  description: string | null;
+  kind: "api_key" | "user" | "external";
+  status: "proposed" | "active" | "rejected" | "revoked";
+  principal_id: string | null;
+  principal_email: string | null;
+  registered_by: string;
+  revoked_at: string | null;
+  revoked_by: string | null;
+  revoke_reason: string | null;
+  /** The current mandate (list and detail routes), or null. */
+  mandate: Mandate | null;
+};
+export type AgentList = { agents: Agent[] };
+export type MandateList = { mandates: Mandate[] };
+export type AgentAction = {
+  id: string;
+  action: string;
+  subject_ref: string;
+  vendor_key: string | null;
+  category: string | null;
+  amount: string | null;
+  currency: string | null;
+  decision: "ALLOW" | "ALLOW-WITH-REVIEW" | "BLOCK";
+  explanation: string;
+  mode: string;
+  source: "inline" | "log" | "dryrun";
+  occurred_at: string;
+  outcome: "executed" | "failed" | null;
+};
+export type AgentSpend = {
+  approved: string;
+  exported: string;
+  by_vendor: Record<string, string>;
+  by_category: Record<string, string>;
+};
+export type AgentLedger = {
+  agent: Agent;
+  mandate: Mandate | null;
+  since: string;
+  until: string;
+  /** Keyed by currency. */
+  spend: Record<string, AgentSpend>;
+  period: {
+    period: string;
+    currency: string;
+    cap: string;
+    used: string;
+    remaining: string;
+    since: string;
+    until: string;
+  } | null;
+  actions: AgentAction[];
+  exceptions: AgentAction[];
+};
+export type OwnerSpend = {
+  owner: string;
+  agents: number;
+  /** Keyed by currency. */
+  approved: Record<string, string>;
+  exported: Record<string, string>;
+  blocked: number;
+  reviewed: number;
+};
+export type TenantLedger = { since: string; until: string; owners: OwnerSpend[] };
+export type AgentBlockCount = {
+  blocked: number;
+  reviews: number;
+  window_hours: number;
 };

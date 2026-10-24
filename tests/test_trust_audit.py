@@ -1,6 +1,6 @@
 """Trust Audit (Wave 2): ledger + fee, scope and sampling, report, store, batch."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -130,7 +130,7 @@ def test_ledger_rows_keep_only_scope_money_events_and_totals_add_up():
 # -- scope + sampling ---------------------------------------------------------
 
 T = "tenant-acme"
-AT = datetime(2026, 10, 1, tzinfo=timezone.utc)
+AT = datetime(2026, 10, 1, tzinfo=UTC)
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="engine")
 
 
@@ -397,6 +397,7 @@ def test_assemble_reconciles_with_the_ledger_and_groups(graph_db):
         "payment",
         "provenance",
         "gst_itc",
+        "reality",
     ]
     pay = out["prevention"][1]
     assert pay["count"] == 2 and pay["impact"] == "80.00"
@@ -620,6 +621,8 @@ def test_lifted_settings_raise_requested_off_engines_to_advisory_only():
         "payment": "enforcing",
         "provenance": "advisory",
         "gst_itc": "off",  # not requested: does not run in this batch
+        "reality": "off",
+        "agents": "off",
     }
     assert out["other"] == 1
     assert batch.lifted(inner, []).get(T)["trust_engine_modes"] == {
@@ -627,6 +630,8 @@ def test_lifted_settings_raise_requested_off_engines_to_advisory_only():
         "payment": "enforcing",
         "provenance": "advisory",
         "gst_itc": "shadow",
+        "reality": "advisory",
+        "agents": "advisory",  # runs no per-invoice check: harmless
     }
 
 

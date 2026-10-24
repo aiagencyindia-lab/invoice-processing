@@ -4,7 +4,7 @@ last. Without rules the endpoint behaves as before: one approver, done."""
 import json
 import shutil
 import threading
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,10 +37,25 @@ TENANT = "tenant-acme"
 CASE = "case_005"
 
 
+def held(*codes):
+    """A gate that holds on these findings (ids = codes, for reading)."""
+    detail = {
+        "held": True,
+        "message": f"Payment is held: {'; '.join(codes)}.",
+        "holds": [
+            {"finding_id": c, "type": c, "engine": "payment", "summary": c}
+            for c in codes
+        ],
+        "waiting": [],
+        "transaction_node": "n-1",
+    }
+    return lambda t, c, **k: detail
+
+
 class FakeVerifier:
     def verify(self, token):
         role, _, who = token.partition(":")
-        if role not in ("viewer", "clerk", "approver", "admin"):
+        if role not in ("viewer", "clerk", "approver", "controller", "admin"):
             raise auth.AuthError("Invalid token")
         return {
             "sub": f"u-{token}",
@@ -586,9 +601,7 @@ def test_delegation_rules(env):
 def route_case(env):
     ctx = RunContext(tenant_id=TENANT, case_id=CASE)
     artifacts = service.get_cases().get_artifacts(ctx)
-    approval_flow.route(
-        ctx, artifacts, repo=env["repo"], now=datetime.now(timezone.utc)
-    )
+    approval_flow.route(ctx, artifacts, repo=env["repo"], now=datetime.now(UTC))
 
 
 def test_mine_for_a_group_member(env):
@@ -983,7 +996,7 @@ def escalate_a_to_b(env):
         session.query(models.User).filter_by(
             email="a@x.test"
         ).one().manager_email = "b@x.test"
-    later = datetime.now(timezone.utc) + timedelta(days=60)
+    later = datetime.now(UTC) + timedelta(days=60)
     assert approval_flow.escalate_overdue(env["repo"], None, now=later) == 1
     (step,) = env["repo"].chain(TENANT, CASE)
     assert step["escalated_to"] == "b@x.test"
@@ -1169,7 +1182,7 @@ def po_env(env, monkeypatch):
         TENANT,
         [PO_ORDER],
         uploaded_by="a@x.test",
-        now=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        now=datetime(2026, 10, 1, tzinfo=UTC),
     )
     orders.record_receipts(
         TENANT,
@@ -1485,9 +1498,7 @@ def test_an_unchecked_hold_refuses_on_any_live_hold_not_only_quantity(po_env):
 def test_final_approval_is_refused_while_payment_is_held(env, monkeypatch):
     from invoice_processing.trust import gate  # noqa: PLC0415
 
-    monkeypatch.setattr(
-        gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
-    )
+    monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-X"))
     two_tier(env)
     first = act(env, "approver:a")
     assert first.status_code == 200 and first.json()["completed"] is False
@@ -1499,8 +1510,38 @@ def test_final_approval_is_refused_while_payment_is_held(env, monkeypatch):
 def test_admin_override_with_reason_passes_a_payment_hold(env, monkeypatch):
     from invoice_processing.trust import gate  # noqa: PLC0415
 
-    monkeypatch.setattr(
-        gate, "payment_hold", lambda t, c, **k: "Payment is held: PAY-X."
-    )
+    monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-X"))
     r = act(env, "admin:boss", override_reason="Called the vendor on file")
     assert r.status_code == 200 and r.json()["completed"] is True
+
+
+def test_a_controller_decides_an_approver_step(env):
+    """No rule: the fallback chain asks for the approver role, and a
+    controller ranks with approver."""
+    env["add_users"]("cora@x.test", role="controller")
+    assert act(env, "controller:cora").status_code == 200, act
+    assert workflow(env)["decision"] == "approve"
+
+
+def test_a_controller_can_be_a_user_step_a_delegate_and_a_manager(env):
+    env["add_users"]("cora@x.test", role="controller")
+    assert (
+        make_rule(
+            env, steps=[{"kind": "user", "value": "cora@x.test"}]
+        ).status_code
+        == 201
+    )
+    r = delegation(env, "approver:a", delegate_email="cora@x.test")
+    assert r.status_code == 201, r.text
+    admin = env["client"]("admin:boss")
+    users = admin.get("/api/admin/users").json()["users"]
+    a = next(u for u in users if u["email"] == "a@x.test")
+    r = admin.patch(
+        f"/api/admin/users/{a['id']}", json={"manager_email": "cora@x.test"}
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_a_controller_role_step_is_refused(env):
+    r = make_rule(env, steps=[{"kind": "role", "value": "controller"}])
+    assert r.status_code == 400 and "controller" in r.text

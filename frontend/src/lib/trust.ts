@@ -46,7 +46,27 @@ export const ENGINE_LABELS: Record<string, string> = {
   payment: "Payment Trust",
   provenance: "Provenance",
   gst_itc: "GST / ITC",
+  reality: "Reality",
+  agents: "Agent control",
   trust: "Trust layer",
+};
+
+/** The six Transaction Trust Score dimensions (trust/types.py DIMENSIONS). */
+export const DIMENSION_LABELS: Record<string, string> = {
+  identity: "Identity",
+  authorization: "Authorization",
+  reality: "Reality",
+  price: "Price",
+  authenticity: "Authenticity",
+  consistency: "Consistency",
+};
+
+/** What a reality check found (trust/reality). */
+export const REALITY_LABELS: Record<string, string> = {
+  CORROBORATED: "Corroborated",
+  PARTIAL: "Partly corroborated",
+  NO_EVIDENCE: "No evidence",
+  CONTRADICTED: "Contradicted",
 };
 
 export const STAGE_LABELS: Record<string, string> = {

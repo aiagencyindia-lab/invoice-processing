@@ -2,7 +2,7 @@
 
 import logging
 import random
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -28,7 +28,7 @@ from invoice_processing.trust.providers.registry import Registry
 
 T = "tenant-gst"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="worker")
-AT = datetime(2026, 1, 1, tzinfo=timezone.utc)
+AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def gstin(first14: str) -> str:
@@ -436,7 +436,7 @@ def test_dedupe_keys_survive_an_invoice_reversion(env):
         kind="invoice",
         natural_key=old["natural_key"],
         attrs={**old["attrs"], "due_date": "2025-07-01"},
-        at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        at=datetime(2026, 2, 1, tzinfo=UTC),
     )
     assert new != inv
     env.graph.upsert_edge(

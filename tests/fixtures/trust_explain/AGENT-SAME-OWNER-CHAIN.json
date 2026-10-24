@@ -1,0 +1,87 @@
+{
+ "finding": {
+  "id": "f-agent-same-owner-chain",
+  "type": "AGENT-SAME-OWNER-CHAIN",
+  "transaction_node": "n-inv",
+  "status": "detected",
+  "impact": null,
+  "currency": "INR",
+  "confidence": null,
+  "engine_version": "agents-1",
+  "rule_version": "agents-rules-1",
+  "model_version": "",
+  "summary": "bot-ap: bot-ap and an earlier approver of this invoice share the owner ops@acme.test.",
+  "details": {
+   "engine": "agents",
+   "mode": "advisory",
+   "source": "inline",
+   "hold": false,
+   "action": "invoice.approve",
+   "action_id": "act-1",
+   "agent_id": "a1",
+   "decision": "BLOCK",
+   "reasons": [
+    {
+     "rule": "same-owner-chain",
+     "type": "AGENT-SAME-OWNER-CHAIN",
+     "severity": "BLOCK",
+     "message": "bot-ap and an earlier approver of this invoice share the owner ops@acme.test."
+    }
+   ],
+   "subject_ref": "i1"
+  },
+  "citations": [
+   {
+    "node_id": "n-agent",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-inv",
+    "excerpt": null
+   }
+  ]
+ },
+ "nodes": {
+  "n-agent": {
+   "kind": "agent",
+   "ref_table": "agents",
+   "ref_id": "a1",
+   "attrs": {
+    "name": "bot-ap",
+    "owner": "ops@acme.test",
+    "kind": "api_key",
+    "status": "active"
+   }
+  },
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "40000.00",
+    "currency": "INR",
+    "invoice_date": "2026-10-20",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ]
+ ],
+ "expect": {
+  "note": "no money is computed for this finding"
+ }
+}

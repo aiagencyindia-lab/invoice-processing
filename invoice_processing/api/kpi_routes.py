@@ -6,7 +6,7 @@ projection or a person deciding an invoice; nothing here changes an invoice.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -42,7 +42,7 @@ def _since(days: int) -> datetime | None:
         )
     if days == 0:
         return None
-    return datetime.now(timezone.utc) - timedelta(days=days)
+    return datetime.now(UTC) - timedelta(days=days)
 
 
 @router.get("/api/kpis")

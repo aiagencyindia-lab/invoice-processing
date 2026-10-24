@@ -10,7 +10,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ... import masking
 from ...ports import RunContext
@@ -48,7 +48,7 @@ class Registry:
             raise ValueError(
                 f"No provider {name!r} registered for {capability}."
             )
-        observed_at = datetime.now(timezone.utc)
+        observed_at = datetime.now(UTC)
         try:
             data = getattr(factory(), METHOD[capability])(*args, **kwargs)
             status = "ok"

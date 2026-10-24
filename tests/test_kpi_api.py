@@ -3,7 +3,7 @@ refuse plainly without a database."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -49,7 +49,7 @@ def db(scratch_db, monkeypatch):
                 case_id="c1",
                 routing="REVIEW",
                 decision="ACCEPT",
-                created_at=datetime.now(timezone.utc) - timedelta(days=2),
+                created_at=datetime.now(UTC) - timedelta(days=2),
                 fields={},
             )
         )

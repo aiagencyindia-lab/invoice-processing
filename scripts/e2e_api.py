@@ -33,7 +33,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -62,6 +62,8 @@ def environment(port: str) -> dict[str, str]:
     return {
         "INVOICE_DATA_DIR": str(SCRATCH),
         "DATABASE_URL": f"sqlite:///{SCRATCH / 'e2e.db'}",
+        # A fixed test key, so mandates can be approved and verified.
+        "TRUST_MANDATE_KEY": "e2e-mandate-key",
         # The browser cannot sign in to Identity Platform unattended, and the
         # sign-in gate itself is covered by tests/test_frontend_reaches_the_flow.py.
         "AUTH_DISABLED": "1",
@@ -94,6 +96,7 @@ def seed_database() -> None:
     from invoice_processing.db.repositories import (  # noqa: PLC0415
         PgCaseRepository,
         PgPurchaseOrderRepository,
+        PgVendorRepository,
     )
     from invoice_processing.db.session import tenant_session  # noqa: PLC0415
     from invoice_processing.ports import RunContext  # noqa: PLC0415
@@ -112,6 +115,8 @@ def seed_database() -> None:
             # A delegate decides in the seat, so must be able to approve.
             ("pat@e2e.test", "approver"),
             ("casey@e2e.test", "viewer"),
+            # The finance Controller who approves agent registrations.
+            ("cora@e2e.test", "controller"),
             # An admin may connect only their own sign-in domain.
             ("it@e2e-sso.test", "admin"),
         ):
@@ -141,6 +146,19 @@ def seed_database() -> None:
             book=po_book.DbBook(PgPurchaseOrderRepository(), TENANT),
         )
         target.project_case(ctx, {**artifacts, **(coded or {})})
+    # case_005's supplier in the vendor master, before seed_finding() syncs the
+    # graph, so the vendor gets a node and /vendors/[id] has a trust profile.
+    # The tax ID is the one the invoice prints, so check 3.2 still matches.
+    PgVendorRepository().upsert_many(
+        TENANT,
+        [
+            {
+                "name": "QuickFix HVAC Repairs",
+                "tax_id": "51 824 753 556",
+                "kind": "service",
+            }
+        ],
+    )
     seed_finding()
 
 
@@ -204,6 +222,61 @@ def seed_finding() -> None:
             citations=(Citation(node, "Line 1: 250 x INR 55.00"),),
         ),
     )
+    # Wave 3: a reality insight and a trust score, so the workbench's trust
+    # panel and the finding pages render without a worker or an engine run.
+    FindingStore().upsert(
+        ctx,
+        FindingSpec(
+            type="REAL-NO-EVIDENCE",
+            transaction_node=node,
+            dedupe_key=f"REAL-NO-EVIDENCE:invoices:{invoice_id}",
+            impact=None,
+            currency="INR",
+            confidence=0.6,
+            engine_version="reality-0",
+            rule_version="FR-23-v1",
+            model_version="none",
+            summary="No goods receipt or delivery corroborates the invoice",
+            details={
+                "engine": "reality",
+                "hold": False,
+                "mode": "advisory",
+                "result": "NO_EVIDENCE",
+                "kind": "goods",
+            },
+            citations=(Citation(node, "Invoice quantity 250"),),
+        ),
+    )
+    graph.upsert_node(
+        ctx,
+        kind="trust_score",
+        natural_key=f"trust_score:invoices:{invoice_id}",
+        attrs=_seed_score(),
+    )
+
+
+def _seed_score() -> dict:
+    """A trust_score node in the shape the score branch writes."""
+
+    def dim(value, note, hold=False):
+        return {"value": value, "hold": hold, "drivers": [], "note": note}
+
+    return {
+        "score_version": "score-1",
+        "computed_at": "2026-10-21T09:00:00+00:00",
+        "composite": 0.72,
+        "dimensions": {
+            "identity": dim(1.0, "Bank account verified."),
+            "authorization": dim(0.5, "Approval pending."),
+            "reality": dim(0.4, "No delivery evidence on record."),
+            "price": dim(0.55, "Line 1 billed above the contract rate."),
+            "authenticity": dim(0.9, "Known channel and template."),
+            "consistency": dim(0.95, "Amount in line with history."),
+        },
+        "versions": {"engines": {"leakage": "leakage-1"}},
+        "holds": [],
+        "mode": {"leakage": "advisory", "reality": "advisory"},
+    }
 
 
 def _golden_invoice() -> dict:
@@ -459,7 +532,7 @@ def seed_scans() -> None:
         session.execute(
             update(SupportingDocument)
             .where(SupportingDocument.id == orphan["id"])
-            .values(reviewed_at=datetime.now(timezone.utc) - timedelta(hours=1))
+            .values(reviewed_at=datetime.now(UTC) - timedelta(hours=1))
         )
 
 

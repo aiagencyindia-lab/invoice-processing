@@ -83,6 +83,19 @@ def _document(s, tenant_id: str, document_id: str) -> dict | None:
     }
 
 
+def _score(ectx: EngineContext, report: dict) -> None:
+    """The trust score after the engines ran. Never fails the run: a score
+    is a report on the findings, and the findings are already written."""
+    from . import score  # noqa: PLC0415
+
+    try:
+        score.compute(ectx, report)
+    except Exception as exc:
+        logger.warning(
+            "trust_score_failed", extra={"error": type(exc).__name__}
+        )
+
+
 def _owns_holds(name: str) -> bool:
     return name in HOLD_ENGINES or any(
         finding_model.TYPE_ENGINE.get(code) == name
@@ -107,11 +120,17 @@ def _engine_failed(name: str, node: str, version: str) -> FindingSpec:
     )
 
 
+# Waiting on proof is not a verdict (FR-23.5): the evidence decides it.
+AWAITING_EVIDENCE = "needs_vendor_input"
+
+
 def _release(ectx: EngineContext, f: dict, reason: str) -> None:
     if f["status"] == "detected":
         ectx.findings.transition(ectx.ctx, f["id"], "triaged", actor="system")
         f["status"] = "triaged"
-    if f["status"] == "triaged":
+    if f["status"] == AWAITING_EVIDENCE:
+        reason = f"Cleared by the evidence now on record. {reason}"
+    if f["status"] in ("triaged", AWAITING_EVIDENCE):
         ectx.findings.transition(
             ectx.ctx, f["id"], "rejected", actor="system", reason=reason
         )
@@ -121,12 +140,15 @@ def _release_cleared(ectx: EngineContext, name: str, emitted: set) -> None:
     """After a clean per-document run of an engine that can hold: lift its
     undecided findings on the invoice that it no longer finds (holds and the
     insights priced from them, e.g. ITC at risk), and its engine-failed hold.
-    A finding a person has decided is theirs and is left alone."""
+    A finding a person has decided is theirs and is left alone; one they
+    sent for vendor evidence is still open, so the evidence clearing it
+    releases it the same way (else the hold outlives its proof). Any mode
+    releases: mode decides whether a hold is placed, not what is found."""
     node = ectx.invoice_node
     if node is None:
         return
     for f in ectx.findings.list(ectx.ctx.tenant_id, transaction_node=node):
-        if f["status"] not in ("detected", "triaged"):
+        if f["status"] not in ("detected", "triaged", AWAITING_EVIDENCE):
             continue
         if f["dedupe_key"] == f"{ENGINE_FAILED}:{name}:{node}":
             _release(ectx, f, "The engine ran cleanly.")
@@ -305,11 +327,14 @@ def evaluate(
             # logged.
             if mode == "enforcing" and _owns_holds(name) and invoice_node:
                 base.findings.upsert(
-                    ctx, _engine_failed(name, invoice_node, f"{name}-?")
+                    ctx,
+                    _engine_failed(name, invoice_node, f"{name}-?"),
+                    hold=True,
                 )
             progress(name)
             continue
         for spec in specs:
+            holds = spec.type in finding_model.HOLD_TYPES
             base.findings.upsert(
                 ctx,
                 dataclasses.replace(
@@ -318,15 +343,19 @@ def evaluate(
                         **spec.details,
                         "mode": mode,
                         "engine": name,
-                        "hold": spec.type in finding_model.HOLD_TYPES,
+                        "hold": holds,
                     },
                 ),
+                # Only enforcing places the hold (§3.1.5); the gate agrees.
+                hold=holds and mode == "enforcing",
             )
         if _owns_holds(name):
             _release_cleared(ectx, name, {spec.dedupe_key for spec in specs})
         report[name] = {"mode": mode, "findings": len(specs)}
         found += len(specs)
         progress(name)
+    if any(isinstance(r, dict) for r in report.values()):
+        _score(base, report)
     if document_id is None or invoice_node is not None:
         # A contract's run checks no invoice; a batch run checks them all.
         _record_checked(

@@ -1,6 +1,6 @@
 """v1 rows and imported history become one graph; engines read one shape."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -20,7 +20,7 @@ from invoice_processing.trust.history.importer import HistoryImporter
 
 T = "tenant-acme"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="sync")
-NOW = datetime(2026, 10, 14, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 14, tzinfo=UTC)
 GSTIN = "27AAPFU0939F1ZV"
 
 
@@ -432,3 +432,105 @@ def test_imported_invoice_carries_its_tax_amount(env):
         if n["attrs"].get("doc_number") == "INV-T"
     ]
     assert Decimal(node["attrs"]["tax_amount"]) == Decimal("180")
+
+
+# -- Wave 3 seams --------------------------------------------------------------
+
+
+def test_invoice_nodes_carry_the_service_fields_and_line_units(env):
+    url, graph, _ = env
+    with tenant_session(T, url) as s:
+        s.add(
+            models.InvoiceLine(
+                tenant_id=T,
+                id="il-1",
+                invoice_id="inv-1",
+                line_number=1,
+                quantity=Decimal("40"),
+                unit_price=Decimal("25"),
+            )
+        )
+        s.get(models.Invoice, "inv-1").fields = {
+            "extraction": {
+                "invoice": {
+                    "service_period_start": "2026-01-01",
+                    "service_period_end": "2026-01-31",
+                    "work_authorization_reference": "WA-9",
+                    "project": "Atlas",
+                    "line_items": [{"unit": "hour"}],
+                }
+            }
+        }
+    sync(env)
+    inv = graph.node(T, graph.nodes_by_ref(T, "invoices", ["inv-1"])["inv-1"])
+    assert {
+        k: inv["attrs"][k]
+        for k in (
+            "service_period_start",
+            "service_period_end",
+            "work_authorization_reference",
+            "project",
+        )
+    } == {
+        "service_period_start": "2026-01-01",
+        "service_period_end": "2026-01-31",
+        "work_authorization_reference": "WA-9",
+        "project": "Atlas",
+    }
+    line = graph.node(
+        T, graph.nodes_by_ref(T, "invoice_lines", ["il-1"])["il-1"]
+    )
+    assert line["attrs"]["unit"] == "hour"
+
+
+def _import(url, kind, csv: bytes, mapping: dict):
+    HistoryImporter(url).import_file(
+        CTX,
+        kind=kind,
+        source_name="3pl",
+        filename=f"{kind}.csv",
+        data=csv,
+        mapping=mapping,
+    )
+
+
+def test_a_shipment_against_a_known_po_fulfils_it(env):
+    url, graph, _ = env
+    _import(
+        url,
+        "shipment",
+        b"AWB,PO,Supplier,Date,Qty,Status\nAWB1,PO-1,Acme Steel,2026-01-03,10,delivered\n",
+        {
+            "AWB": "doc_number",
+            "PO": "po_number",
+            "Supplier": "vendor_key",
+            "Date": "record_date",
+            "Qty": "quantity",
+            "Status": "status",
+        },
+    )
+    sync(env)
+    [ship] = graph.nodes(T, kind="shipment")
+    assert ship["attrs"]["quantity"] == "10" and ship["attrs"]["status"] == (
+        "delivered"
+    )
+    kinds = {e["kind"] for e in graph.edges(T, src=ship["id"])}
+    assert kinds == {"fulfils", "issued_by"}
+
+
+def test_a_timesheet_naming_no_known_po_only_names_its_vendor(env):
+    url, graph, _ = env
+    _import(
+        url,
+        "timesheet",
+        b"Vendor,Date,Hours,PO\nAcme Steel,2026-01-03,8,PO-404\n",
+        {
+            "Vendor": "vendor_key",
+            "Date": "record_date",
+            "Hours": "hours",
+            "PO": "po_number",
+        },
+    )
+    sync(env)
+    [sheet] = graph.nodes(T, kind="timesheet")
+    assert {e["kind"] for e in graph.edges(T, src=sheet["id"])} == {"issued_by"}

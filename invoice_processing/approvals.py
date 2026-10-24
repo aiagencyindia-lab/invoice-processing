@@ -16,8 +16,7 @@ import re
 from dataclasses import dataclass
 
 from . import po_matching
-
-ROLE_RANK = {"viewer": 0, "clerk": 1, "approver": 2, "admin": 3}
+from .roles import ROLE_RANK
 
 
 @dataclass(frozen=True)

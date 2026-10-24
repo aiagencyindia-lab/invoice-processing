@@ -294,6 +294,23 @@ def test_a_hold_no_longer_found_by_a_clean_run_is_released(env):
     assert f["status"] == "rejected"
 
 
+def test_a_clean_shadow_run_releases_a_hold_placed_while_enforcing(env):
+    """Policy (2026-10-22): mode decides whether a hold is placed, not what
+    the engine finds, so a clean run in any mode is a verdict and releases."""
+    url, _, _ = env
+    finding_model.register_type("T-HOLD8", "hold", engine="payment", hold=True)
+    state = {"emit": True}
+    ev.RUNNERS["payment"] = lambda ectx: (
+        [finding_for(ectx, "T-HOLD8")] if state["emit"] else []
+    )
+    run(env, modes={"payment": "enforcing"})
+    assert _held(url) == [("T-HOLD8", True)]
+    state["emit"] = False
+    run(env, modes={"payment": "shadow"})
+    assert FindingStore(url).list(T, type="T-HOLD8")[0]["status"] == "rejected"
+    assert _held(url) == [("T-HOLD8", False)]
+
+
 def test_a_human_decided_hold_is_not_released_by_the_engine(env):
     url, _, _ = env
     finding_model.register_type("T-HOLD4", "hold", engine="payment", hold=True)
@@ -310,6 +327,35 @@ def test_a_human_decided_hold_is_not_released_by_the_engine(env):
     state["emit"] = False
     run(env, modes={"payment": "enforcing"})
     assert store.list(T, type="T-HOLD4")[0]["status"] == "accepted"
+
+
+def test_a_hold_awaiting_vendor_proof_is_released_once_the_proof_clears_it(
+    env,
+):
+    """Asking for evidence parks the finding in needs_vendor_input; when the
+    evidence arrives and a clean run no longer finds it, the hold lifts
+    rather than waiting for someone to rule it wrong by hand."""
+    url, _, _ = env
+    finding_model.register_type("T-HOLD7", "hold", engine="payment", hold=True)
+    state = {"emit": True}
+    ev.RUNNERS["payment"] = lambda ectx: (
+        [finding_for(ectx, "T-HOLD7")] if state["emit"] else []
+    )
+    run(env, modes={"payment": "enforcing"})
+    store = FindingStore(url)
+    [f] = store.list(T, type="T-HOLD7")
+    human = RunContext(tenant_id=T, case_id="", run_id="h", actor="c@x.test")
+    store.transition(human, f["id"], "triaged", actor="c@x.test")
+    store.transition(human, f["id"], "needs_vendor_input", actor="c@x.test")
+    run(env, modes={"payment": "enforcing"})  # still found: still waiting
+    assert store.get(T, f["id"])["status"] == "needs_vendor_input"
+    state["emit"] = False
+    run(env, modes={"payment": "enforcing"})
+    out = store.get(T, f["id"])
+    assert out["status"] == "rejected"
+    assert out["events"][-1]["actor"] == "system"
+    assert "evidence" in out["events"][-1]["reason"]
+    assert _held(url) == [("T-HOLD7", False)]
 
 
 def test_a_clean_run_also_releases_a_hold_engines_cleared_insight(env):
@@ -423,3 +469,150 @@ def test_on_progress_is_not_called_when_every_engine_is_off(env):
     seen = []
     run(env, modes={}, on_progress=seen.append)
     assert seen == []
+
+
+# -- the hold ledger (Wave 3) ---------------------------------------------------
+
+
+def _held(url) -> list[tuple[str, bool]]:
+    with tenant_session(T, url) as s:
+        return [
+            (r.type, r.lifted_at is None) for r in s.query(models.TrustHold)
+        ]
+
+
+def test_only_an_enforcing_engine_places_a_hold(env):
+    url, _, _ = env
+    finding_model.register_type("T-HOLD5", "hold", engine="payment", hold=True)
+    ev.RUNNERS["payment"] = lambda ectx: [finding_for(ectx, "T-HOLD5")]
+    run(env, modes={"payment": "advisory"})
+    assert _held(url) == []
+    run(env, modes={"payment": "enforcing"})
+    assert _held(url) == [("T-HOLD5", True)]
+
+
+def test_an_insight_never_places_a_hold(env):
+    url, _, _ = env
+    finding_model.register_type("T-NOTE5", "note", engine="payment")
+    ev.RUNNERS["payment"] = lambda ectx: [finding_for(ectx, "T-NOTE5")]
+    run(env, modes={"payment": "enforcing"})
+    assert _held(url) == []
+
+
+def test_a_failing_enforcing_engine_is_held_in_the_ledger(env):
+    url, _, _ = env
+
+    def boom(ectx):
+        raise RuntimeError("down")
+
+    ev.RUNNERS["payment"] = boom
+    run(env, modes={"payment": "enforcing"})
+    assert _held(url) == [(finding_model.ENGINE_FAILED, True)]
+
+
+def test_a_clean_run_that_releases_a_finding_lifts_its_hold(env):
+    url, _, _ = env
+    finding_model.register_type("T-HOLD6", "hold", engine="payment", hold=True)
+    state = {"emit": True}
+    ev.RUNNERS["payment"] = lambda ectx: (
+        [finding_for(ectx, "T-HOLD6")] if state["emit"] else []
+    )
+    run(env, modes={"payment": "enforcing"})
+    state["emit"] = False
+    run(env, modes={"payment": "enforcing"})
+    assert _held(url) == [("T-HOLD6", False)]
+
+
+# -- the score hook (Wave 3) ------------------------------------------------------
+
+
+def test_the_score_is_computed_after_the_engines_ran(env, monkeypatch):
+    from invoice_processing.trust import score  # noqa: PLC0415
+
+    seen = []
+    monkeypatch.setattr(
+        score, "compute", lambda ectx, report: seen.append(report)
+    )
+    ev.RUNNERS["payment"] = lambda ectx: []
+    run(env, modes={"payment": "advisory"})
+    assert seen == [
+        {
+            "leakage": "off",
+            "payment": {"mode": "advisory", "findings": 0},
+            "provenance": "off",
+            "gst_itc": "off",
+            "reality": "off",
+            "agents": "off",
+        }
+    ]
+
+
+def test_a_failing_score_never_fails_the_run(env, monkeypatch):
+    from invoice_processing.trust import score  # noqa: PLC0415
+
+    def boom(ectx, report):
+        raise RuntimeError("score down")
+
+    monkeypatch.setattr(score, "compute", boom)
+    ev.RUNNERS["payment"] = lambda ectx: []
+    out = run(env, modes={"payment": "advisory"})
+    assert out["engines"]["payment"] == {"mode": "advisory", "findings": 0}
+
+
+def test_a_finding_the_engine_released_holds_again_when_found_again(env):
+    """Evidence can change (a proof withdrawn, a receipt reversed): a
+    finding the engine itself rejected reopens and re-holds when a later run
+    finds it again. A person's rejection stays theirs."""
+    url, _, _ = env
+    finding_model.register_type("T-HOLD8", "hold", engine="payment", hold=True)
+    state = {"emit": True}
+    ev.RUNNERS["payment"] = lambda ectx: (
+        [finding_for(ectx, "T-HOLD8")] if state["emit"] else []
+    )
+    run(env, modes={"payment": "enforcing"})
+    state["emit"] = False
+    run(env, modes={"payment": "enforcing"})
+    [f] = FindingStore(url).list(T, type="T-HOLD8")
+    assert f["status"] == "rejected"
+    state["emit"] = True
+    run(env, modes={"payment": "enforcing"})
+    out = FindingStore(url).get(T, f["id"])
+    assert out["status"] == "detected" and out["owner_id"] is None
+    assert [e["to_status"] for e in out["events"]][-1] == "detected"
+    assert _held(url) == [("T-HOLD8", False), ("T-HOLD8", True)]
+
+
+def test_an_engine_that_fails_again_after_a_clean_run_is_held_again(env):
+    url, _, _ = env
+    state = {"fail": True}
+
+    def payment(ectx):
+        if state["fail"]:
+            raise RuntimeError("provider down")
+        return []
+
+    ev.RUNNERS["payment"] = payment
+    run(env, modes={"payment": "enforcing"})
+    state["fail"] = False
+    run(env, modes={"payment": "enforcing"})
+    state["fail"] = True
+    run(env, modes={"payment": "enforcing"})
+    open_ = [t for t, is_open in _held(url) if is_open]
+    assert open_ == [finding_model.ENGINE_FAILED]
+
+
+def test_a_persons_rejection_is_never_reopened_by_the_engine(env):
+    url, _, _ = env
+    finding_model.register_type("T-HOLD9", "hold", engine="payment", hold=True)
+    ev.RUNNERS["payment"] = lambda ectx: [finding_for(ectx, "T-HOLD9")]
+    run(env, modes={"payment": "enforcing"})
+    store = FindingStore(url)
+    [f] = store.list(T, type="T-HOLD9")
+    human = RunContext(tenant_id=T, case_id="", run_id="h", actor="c@x.test")
+    store.transition(human, f["id"], "triaged", actor="c@x.test")
+    store.transition(
+        human, f["id"], "rejected", actor="c@x.test", reason="verified"
+    )
+    run(env, modes={"payment": "enforcing"})
+    assert store.get(T, f["id"])["status"] == "rejected"
+    assert [t for t, is_open in _held(url) if is_open] == []

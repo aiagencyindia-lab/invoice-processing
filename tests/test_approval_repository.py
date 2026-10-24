@@ -51,7 +51,7 @@ class TestSchema:
 # ---------------------------------------------------------------------------
 # Repository
 # ---------------------------------------------------------------------------
-from datetime import date, datetime, timedelta, timezone  # noqa: E402
+from datetime import UTC, date, datetime, timedelta  # noqa: E402
 from typing import ClassVar  # noqa: E402
 
 import pytest  # noqa: E402
@@ -73,7 +73,7 @@ from invoice_processing.db.session import (  # noqa: E402
 from invoice_processing.ports import RunContext  # noqa: E402
 
 T = "tenant-a"
-NOW = datetime(2026, 10, 8, 9, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
 
 
 @pytest.fixture

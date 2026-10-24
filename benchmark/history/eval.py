@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import sys
 import tempfile
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -49,6 +50,19 @@ def _explain_module():
     except ImportError:
         return None
     return explain
+
+
+def _measure_modules() -> dict:
+    """benchmark/history/{reality,score,agents}.py, each once its branch has
+    landed: `measure(...)` returns its measures and a `gates` dict (agents is
+    Wave 4's simulated fleet, AC-28)."""
+    found = {}
+    for name in ("reality", "score", "agents"):
+        try:
+            found[name] = importlib.import_module(f"{__package__}.{name}")
+        except ImportError:
+            continue
+    return found
 
 
 def _ratio(num: int, den: int) -> float:
@@ -184,6 +198,10 @@ def run(
         measured = explain.measure(tenant_id, graph, findings, manifest, url)
         out["gates"].update(measured.pop("gates", {}) or {})
         out["explain"] = measured
+    for name, module in _measure_modules().items():
+        measured = module.measure(tenant_id, graph, findings, manifest, url)
+        out["gates"].update(measured.pop("gates", {}) or {})
+        out[name] = measured
     out["passed"] = all(out["gates"].values())
     return out
 
@@ -306,7 +324,7 @@ def main(argv: list[str] | None = None) -> None:
         )
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     (out_dir / f"{stamp}.json").write_text(
         json.dumps(result, indent=2), encoding="utf-8"
     )

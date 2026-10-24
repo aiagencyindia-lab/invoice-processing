@@ -1,4 +1,4 @@
-"""Every Wave 1 engine threshold, with its default.
+"""Every engine threshold, with its default.
 
 Declared once here so four engines built in parallel never edit the settings
 module; a tenant overrides any of them through the `trust_thresholds` setting.
@@ -34,6 +34,36 @@ DEFAULTS: dict[str, float] = {
     "gst.risk_nonfiler": 0.5,
     "gst.risk_shared": 0.3,
     "gst.risk_new": 0.2,
+    # Reality checks (FR-23)
+    "reality.qty_tolerance_pct": 0.02,
+    "reality.hours_tolerance_pct": 0.10,
+    "reality.seats_tolerance_pct": 0.05,
+    "reality.evidence_window_days": 45,
+    "reality.price_jump_zscore": 3.0,
+    "reality.volume_zscore": 3.0,
+    "reality.min_history": 5,
+    # Agent control (FR-28.4): behavioural detection windows
+    "agents.velocity_window_minutes": 10,
+    "agents.velocity_max": 20,
+    "agents.split_window_days": 7,
+    "agents.split_min_count": 2,
+    "agents.injection_min_hits": 1,
+    # Wave 5: the shell banner's window, and how long the ledger keeps rows.
+    "agents.banner_window_hours": 24,
+    "agents.retention_days": 400,
+    # G1: an amount over factor times the agent's largest in the window (review).
+    "agents.drift_window_days": 90,
+    "agents.drift_min_history": 10,
+    "agents.drift_amount_factor": 3,
+    # /v2 requests per caller per minute (api/v2_guard.py).
+    "v2.rate_limit_per_minute": 120,
+    # Provenance v2 (FR-22)
+    "provenance.edits_suspect": 2,
+    # Mode progression: what the readiness report asks before recommending
+    "readiness.min_days": 14,
+    "readiness.min_findings": 20,
+    "readiness.min_decided": 10,
+    "readiness.min_precision": 0.8,
 }
 
 

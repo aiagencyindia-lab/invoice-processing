@@ -20,6 +20,7 @@ def wave0_only(monkeypatch):
     installed: those add rows, faults and gates of their own."""
     monkeypatch.setattr(faults, "modules", lambda: [])
     monkeypatch.setattr(history_eval, "_explain_module", lambda: None)
+    monkeypatch.setattr(history_eval, "_measure_modules", dict)
 
 
 def test_generator_is_deterministic_for_a_seed(tmp_path, wave0_only):
@@ -227,6 +228,7 @@ def test_a_wrong_impact_fails_the_impact_gate(
 def test_type_without_a_module_is_not_gated(tmp_path, scratch_db, monkeypatch):
     monkeypatch.setattr(faults, "modules", lambda: [])
     monkeypatch.setattr(history_eval, "_explain_module", lambda: None)
+    monkeypatch.setattr(history_eval, "_measure_modules", dict)
     data = tmp_path / "d"
     generate.generate(7, data)
     out = history_eval.run(scratch_db("bench7.db"), data)
@@ -266,3 +268,48 @@ def test_without_an_explain_module_nothing_is_gated(
     out = history_eval.run(scratch_db("bench9.db"), data)
     assert "explain" not in out
     assert "explanation_citation_coverage" not in out["gates"]
+
+
+def test_the_wave3_measure_modules_add_their_gates(
+    tmp_path, scratch_db, monkeypatch, wave0_only
+):
+    """The reality and score branches ship benchmark/history/{reality,
+    score}.py; each one's measures land under its name, its gates merged."""
+
+    def module(name):
+        return SimpleNamespace(
+            measure=lambda tenant_id, graph, findings, manifest, url: {
+                f"{name}_coverage": 1.0,
+                "gates": {f"{name}_coverage": True},
+            }
+        )
+
+    monkeypatch.setattr(
+        history_eval,
+        "_measure_modules",
+        lambda: {"reality": module("reality"), "score": module("score")},
+    )
+    data = tmp_path / "d"
+    generate.generate(7, data)
+    out = history_eval.run(scratch_db("bench10.db"), data)
+    assert out["reality"] == {"reality_coverage": 1.0}
+    assert out["score"] == {"score_coverage": 1.0}
+    assert out["gates"]["reality_coverage"] and out["gates"]["score_coverage"]
+
+
+def test_an_agents_measure_module_is_picked_up_when_present(monkeypatch):
+    """Wave 4's simulation branch ships benchmark/history/agents.py; until
+    then the slot is empty and nothing changes."""
+    import sys  # noqa: PLC0415
+
+    fake = SimpleNamespace(measure=lambda *a: {"gates": {}})
+    monkeypatch.setitem(sys.modules, "benchmark.history.agents", fake)
+    assert history_eval._measure_modules()["agents"] is fake
+
+
+def test_the_generator_knows_the_evidence_kinds():
+    from invoice_processing.trust.history import mapping  # noqa: PLC0415
+
+    assert set(generate.KINDS) == set(mapping.KINDS)
+    for kind in ("ticket", "timesheet", "shipment", "seat_count"):
+        assert generate.HEADERS[kind] == list(mapping.FIELDS[kind])

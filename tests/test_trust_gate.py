@@ -1,6 +1,6 @@
 """payment_hold: an open hold-type finding, from an engine in enforcing, stops payment."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -180,7 +180,7 @@ def test_the_newest_invoice_row_of_a_case_decides(env, evaluated):
                 case_id="case-1",
                 total_inc_tax=Decimal("1"),
                 status="done",
-                created_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+                created_at=datetime(2020, 1, 1, tzinfo=UTC),
             )
         )
     add(store, node, "T-PAYHOLD")
@@ -278,3 +278,69 @@ def test_an_invoice_not_yet_in_the_graph_is_held(env):
         T, "case-9", url=url, settings_store=Store({"payment": "enforcing"})
     )
     assert message and "until the trust checks" in message
+
+
+# -- the detail behind the message (Wave 3) -----------------------------------
+
+
+def detail(url, modes):
+    return gate.payment_hold_detail(
+        T, "case-1", url=url, settings_store=Store(modes)
+    )
+
+
+def test_detail_names_each_holding_finding(env, evaluated):
+    url, store, node = env
+    fid = add(store, node, "T-PAYHOLD")
+    add(store, node, "T-PAYNOTE")
+    out = detail(url, {"payment": "enforcing"})
+    assert out["held"] is True and out["waiting"] == []
+    assert out["holds"] == [
+        {
+            "finding_id": fid,
+            "type": "T-PAYHOLD",
+            "engine": "payment",
+            "summary": "T-PAYHOLD summary",
+        }
+    ]
+    assert out["transaction_node"] == node
+    assert out["message"] == hold(url, {"payment": "enforcing"})
+
+
+def test_detail_says_which_engines_have_not_checked(env):
+    url, _, node = env
+    out = detail(url, {"payment": "enforcing"})
+    assert out == {
+        "held": True,
+        "message": hold(url, {"payment": "enforcing"}),
+        "holds": [],
+        "waiting": ["payment"],
+        "transaction_node": node,
+    }
+
+
+def test_detail_when_nothing_is_enforcing(env, evaluated):
+    url, store, node = env
+    add(store, node, "T-PAYHOLD")
+    assert detail(url, {"payment": "advisory"}) == {
+        "held": False,
+        "message": None,
+        "holds": [],
+        "waiting": [],
+        "transaction_node": None,
+    }
+
+
+def test_the_gate_reads_tenant_settings_once(env, evaluated):
+    url, _, _ = env
+    reads = []
+
+    class Counting(Store):
+        def get(self, tenant_id):
+            reads.append(tenant_id)
+            return super().get(tenant_id)
+
+    gate.payment_hold_detail(
+        T, "case-1", url=url, settings_store=Counting({"payment": "enforcing"})
+    )
+    assert len(reads) == 1

@@ -71,7 +71,9 @@ class UserCreate(BaseModel):
 
 class UserPatch(BaseModel):
     manager_email: str | None = Field(default=None, max_length=320)
-    role: Literal["viewer", "clerk", "approver", "admin"] | None = None
+    role: (
+        Literal["viewer", "clerk", "approver", "controller", "admin"] | None
+    ) = None
     is_active: bool | None = None
 
 
@@ -235,7 +237,7 @@ def list_users(
     return {
         "users": users,
         "count": len(users),
-        "roles": ["viewer", "clerk", "approver", "admin"],
+        "roles": ["viewer", "clerk", "approver", "controller", "admin"],
     }
 
 

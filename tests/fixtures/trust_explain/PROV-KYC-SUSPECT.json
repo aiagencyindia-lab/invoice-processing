@@ -1,0 +1,67 @@
+{
+ "finding": {
+  "id": "f-prov-kyc-suspect",
+  "type": "PROV-KYC-SUSPECT",
+  "transaction_node": "n-ven",
+  "status": "detected",
+  "impact": null,
+  "currency": null,
+  "confidence": 0.71,
+  "engine_version": "provenance-2",
+  "rule_version": "FR-22-v2",
+  "model_version": "none",
+  "summary": "Vendor gst_certificate document: authenticity score 0.29 is below 0.50.",
+  "details": {
+   "score": 0.29,
+   "components": {
+    "channel": 0.6,
+    "template": 0.0,
+    "text": 0.0,
+    "meta": 0.0,
+    "producer": 0.3,
+    "edits": 0.2,
+    "fonts": 0.0
+   },
+   "subkind": "gst_certificate",
+   "fingerprint": "abcdef0123456789"
+  },
+  "citations": [
+   {
+    "node_id": "n-docv",
+    "excerpt": "authenticity score 0.29"
+   }
+  ]
+ },
+ "nodes": {
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-docv": {
+   "kind": "document_version",
+   "ref_table": "documents",
+   "ref_id": "doc-k",
+   "attrs": {
+    "kind": "kyc",
+    "subkind": "gst_certificate",
+    "filename": "gst.pdf",
+    "producer": "iLovePDF",
+    "score": 0.29
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-docv",
+   "n-ven",
+   "evidences"
+  ]
+ ],
+ "expect": {
+  "note": "no money is computed for this finding"
+ }
+}

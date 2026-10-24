@@ -162,7 +162,7 @@ ALL_TYPES = sorted(finding_model.TYPES)
 ENGINE_TYPES = {
     t
     for t, e in finding_model.TYPE_ENGINE.items()
-    if e in ("leakage", "payment", "provenance", "gst_itc")
+    if e in ("leakage", "payment", "provenance", "gst_itc", "reality", "agents")
 }
 
 
@@ -208,7 +208,7 @@ def test_every_type_explains(code):
     assert x.versions["engine_version"] == f["engine_version"]
     assert x.counterfactual is not None
     assert all(
-        a.kind in ("vendor", "person", "system", "engine", "provider")
+        a.kind in ("vendor", "person", "system", "engine", "provider", "agent")
         for a in x.caused_by
     )
     d = x.as_dict()
@@ -352,12 +352,12 @@ def test_caused_by_is_worded_as_likely_and_names_the_approver():
 # -- evidence pack + HTML -------------------------------------------------------
 
 import hashlib  # noqa: E402
-from datetime import datetime, timezone  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
 
 from invoice_processing.trust.explain import pack as xp  # noqa: E402
 from invoice_processing.trust.explain import render  # noqa: E402
 
-NOW = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
 RATING = {
     "rater": "clerk@x.test",
     "correct": True,

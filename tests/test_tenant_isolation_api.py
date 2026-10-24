@@ -19,7 +19,7 @@ import json
 import pathlib
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import ClassVar
 
 import pytest
@@ -40,14 +40,20 @@ from invoice_processing.api import (
     auth,
     config_routes,
     gl_routes,
+    integration_routes,
     kpi_routes,
     po_routes,
     service,
     supporting_routes,
     system,
+    trust_agent_routes,
     trust_audit_routes,
     trust_explain_routes,
+    trust_provenance_routes,
+    trust_reality_routes,
     trust_routes,
+    trust_score_routes,
+    v2_routes,
     vendor_routes,
 )
 from invoice_processing.api.service import app
@@ -370,7 +376,7 @@ class TestWritesDoNotCross:
             ctx,
             service.get_cases().get_artifacts(ctx),
             repo=approvals_db,
-            now=datetime.now(timezone.utc),
+            now=datetime.now(UTC),
         )
         assert approvals_db.chain(ACME, "case_005")
 
@@ -1426,7 +1432,7 @@ class TestTrustFindingsIsolation:
             source_system="leakage",
             provenance="model_inference",
             confidence=0.9,
-            observed_at=datetime.now(timezone.utc),
+            observed_at=datetime.now(UTC),
         )
         fid, _ = findings.upsert(
             ctx,
@@ -1491,6 +1497,36 @@ class TestTrustFindingsIsolation:
         assert probe.status_code == 404
         [kept] = acme.get("/api/trust/contracts/doc-acme/clauses").json()
         assert kept["params"] == {"price": "1"} and kept["reviewed"] is False
+
+
+def app_paths() -> set[str]:
+    """Every path the app serves, through included routers."""
+
+    def walk(routes, prefix: str = ""):
+        for route in routes:
+            if hasattr(route, "path"):
+                yield prefix + route.path
+            elif hasattr(route, "original_router"):  # an included router
+                yield from walk(
+                    route.original_router.routes,
+                    prefix + route.include_context.prefix,
+                )
+
+    return set(walk(app.routes))
+
+
+def branch_probed() -> set[str]:
+    """The routes the sibling route-test modules probe (each defines PROBED;
+    absent modules are branches that have not landed)."""
+    import importlib  # noqa: PLC0415
+
+    probed: set[str] = set()
+    for name in TestCoverage.EXTRA_PROBE_MODULES:
+        try:
+            probed |= set(importlib.import_module(name).PROBED)
+        except ImportError:
+            continue
+    return probed
 
 
 class TestCoverage:
@@ -1596,18 +1632,26 @@ class TestCoverage:
     EXTRA_PROBE_MODULES: ClassVar[tuple] = (
         "tests.test_trust_audit_routes",
         "tests.test_trust_explain_routes",
+        # Wave 3 branches (absent until each lands).
+        "tests.test_trust_reality_routes",
+        "tests.test_trust_provenance_routes",
+        "tests.test_trust_score_routes",
+        "tests.test_trust_api_routes",
+        # Wave 4.
+        "tests.test_trust_agent_routes",
     )
 
     def _probed(self) -> set:
-        import importlib  # noqa: PLC0415
+        return set(self.PROBED) | branch_probed()
 
-        probed = set(self.PROBED)
-        for name in self.EXTRA_PROBE_MODULES:
-            try:
-                probed |= set(importlib.import_module(name).PROBED)
-            except ImportError:
-                continue
-        return probed
+    def test_the_route_walk_sees_routes_mounted_from_routers(self):
+        """FastAPI 0.141 puts each included router on `app.routes` as one
+        entry with no path; a walk that skips it checks only the handful of
+        routes defined on the app itself."""
+        paths = app_paths()
+        assert "/api/trust/findings" in paths  # trust_routes, a router
+        assert "/api/invoices/{case_id}" in paths  # defined on the app
+        assert len(paths) > 100
 
     def test_every_route_is_covered(self):
         """A new endpoint cannot ship without an isolation probe.
@@ -1615,8 +1659,7 @@ class TestCoverage:
         This is the test that keeps the file honest: without it, coverage here
         decays silently as endpoints are added.
         """
-        routes = {r.path for r in app.routes if hasattr(r, "path")}
-        uncovered = routes - self._probed() - set(self.EXEMPT)
+        uncovered = app_paths() - self._probed() - set(self.EXEMPT)
         assert not uncovered, (
             f"These routes have no cross-tenant test: {sorted(uncovered)}. "
             "Add a probe above, or list it in EXEMPT with a reason."
@@ -1630,10 +1673,9 @@ class TestCoverage:
         `/api/{tenant_id}/...` -- a value the caller supplies.
         """
         offenders = [
-            r.path
-            for r in app.routes
-            if hasattr(r, "path")
-            and re.search(r"\{[^}]*tenant[^}]*\}", r.path, re.IGNORECASE)
+            path
+            for path in sorted(app_paths())
+            if re.search(r"\{[^}]*tenant[^}]*\}", path, re.IGNORECASE)
         ]
         assert not offenders, f"Routes taking a tenant in the path: {offenders}"
 
@@ -1644,13 +1686,19 @@ class TestCoverage:
             approval_routes,
             config_routes,
             gl_routes,
+            integration_routes,
             kpi_routes,
             po_routes,
             supporting_routes,
             system,
+            trust_agent_routes,
             trust_audit_routes,
             trust_explain_routes,
+            trust_provenance_routes,
+            trust_reality_routes,
             trust_routes,
+            trust_score_routes,
+            v2_routes,
             vendor_routes,
         ):
             source = pathlib.Path(module.__file__).read_text(encoding="utf-8")

@@ -8,7 +8,7 @@ we know on D" without reconstruction (PRD FR-19.5).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import or_, select, update
@@ -22,7 +22,7 @@ PROVENANCE = ("document", "system_record", "human_assertion", "model_inference")
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _iso(value):
@@ -168,17 +168,22 @@ class GraphStore:
             return _node_dict(row)
 
     def open_node(
-        self, tenant_id: str, kind: str, natural_key: str
+        self,
+        tenant_id: str,
+        kind: str,
+        natural_key: str,
+        as_of: datetime | None = None,
     ) -> dict | None:
+        """The version open now, or the one valid at `as_of`."""
         with tenant_session(tenant_id, self.url) as s:
-            row = s.scalars(
-                select(GraphNode).where(
-                    GraphNode.tenant_id == tenant_id,
-                    GraphNode.kind == kind,
-                    GraphNode.natural_key == natural_key,
-                    GraphNode.valid_to.is_(None),
-                )
-            ).first()
+            q = select(GraphNode).where(
+                GraphNode.tenant_id == tenant_id,
+                GraphNode.kind == kind,
+                GraphNode.natural_key == natural_key,
+            )
+            if as_of is None:
+                q = q.where(GraphNode.valid_to.is_(None))
+            row = s.scalars(_as_of(GraphNode, q, as_of)).first()
             return _node_dict(row) if row else None
 
     def nodes(

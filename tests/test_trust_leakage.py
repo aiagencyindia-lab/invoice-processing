@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -26,8 +26,8 @@ from invoice_processing.trust.leakage import clauses, dups
 
 T = "tenant-leak"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="worker")
-NOW = datetime(2025, 9, 1, tzinfo=timezone.utc)
-AT = datetime(2025, 1, 1, tzinfo=timezone.utc)
+NOW = datetime(2025, 9, 1, tzinfo=UTC)
+AT = datetime(2025, 1, 1, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -870,10 +870,7 @@ def test_radar_renewal_within_notice(env):
     assert f.transaction_node == cid and f.impact is None
     assert f.dedupe_key.endswith(":2025-10")
     assert (
-        found(
-            env, "RADAR-RENEWAL", now=datetime(2025, 6, 1, tzinfo=timezone.utc)
-        )
-        == []
+        found(env, "RADAR-RENEWAL", now=datetime(2025, 6, 1, tzinfo=UTC)) == []
     )
 
 

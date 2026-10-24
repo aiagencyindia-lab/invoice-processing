@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fresh_schema import fresh_schema
@@ -20,7 +20,7 @@ from invoice_processing.ports import RunContext
 
 ACME = "tenant-acme"
 GLOBEX = "tenant-globex"
-NOW = datetime(2026, 10, 12, 9, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 12, 9, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -66,7 +66,7 @@ class TestDirectory:
                 session,
                 email="PAT@acme.com",
                 role="approver",
-                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
         for _ in range(3):
             assert PgUserDirectory(db).find(ACME, "pat@acme.com")["role"] == (

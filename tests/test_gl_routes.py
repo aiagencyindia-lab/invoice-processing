@@ -4,7 +4,7 @@ call, closed once the invoice is decided, and every change is on the trail."""
 import json
 import shutil
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -313,7 +313,7 @@ def test_coding_reroutes_approvals(env):
         ctx,
         service.get_cases().get_artifacts(ctx),
         repo=approvals,
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
     )
     assert not any(
         s["assignee_value"] == "a@x.test" for s in approvals.chain(TENANT, CASE)

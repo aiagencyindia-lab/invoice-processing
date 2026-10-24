@@ -127,7 +127,188 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   - [ ] Engagement scope is a filter, not a FK: overlapping engagements
         count a recovery twice. Add `audit_id` to finding events if it bites.
   - [ ] `categories` scoping is keyword-weak (no category master in v1).
-- [ ] Waves 3–4 per the spec §2.
+- [x] **Wave 3 (Always-on)** — program plan
+      `docs/superpowers/plans/2026-10-21-v2-wave3-program.md`; specs
+      `docs/superpowers/specs/2026-10-21-v2-wave3-*-design.md`. Merged
+      2026-10-21/22: scaffold (#70), dependency floor (#71), stub-probe
+      hand-over (#77), reality (#78), provenance v2 (#76), trust score
+      (#75), API keys + `/v2` + webhooks (#74), frontend (#73), close-out
+      (this PR).
+  - [x] Scaffold (`v2/w3-scaffold`): hold ledger + webhook outbox, gate
+        detail (override by finding id), static type registry, mode writer
+        with readiness clock, API-key hook, evidence history kinds, route
+        stubs, worker sweep, benchmark hooks, frontend shell.
+  - [x] Reality checks (`v2/w3-reality`) · [x] Provenance v2
+        (`v2/w3-provenance`) · [x] Trust Score (`v2/w3-score`) · [x] API keys,
+        `/v2`, webhooks (`v2/w3-api`) · [x] Frontend (`v2/w3-frontend`).
+  - [x] Wave close: every Wave 3 code has its explain fixture and template
+        (the `WAVE3_PENDING` skips are gone), and the stub-isolation class is
+        gone (each built route is probed in its branch's own test module).
+  - [x] The API key resolver refuses keys of a tenant that is not `active`
+        (`suspended`/`purged`), tested in `tests/test_trust_api_keys.py`.
+  - [ ] An API key request costs one query per active tenant (FORCE RLS on
+        `api_keys` blocks a cross-tenant prefix lookup). Put the tenant in
+        the key (`ik_{tenant_slug}_{prefix}_{secret}`) or add a lookup
+        policy before tenants number in the hundreds.
+  - [x] Ruff's `target-version` is `py311`, matching `requires-python`
+        (every `timezone.utc` is now `UTC`).
+  - [x] Webhook hosts that resolve to internal addresses are refused on
+        save and skipped (a failed attempt) at every delivery
+        (`trust/webhooks/target.py`).
+  - [ ] DNS rebinding between that check and `requests`' own lookup still
+        gets through: pin the checked address in a transport adapter before
+        an attacker-run DNS server is in scope.
+  - [x] `?as_of` on a transaction's trust reads its own score node
+        (`GraphStore.open_node(..., as_of=)`), not every score node.
+  - [ ] PRD §9 endpoints not built in Wave 3 and not otherwise listed:
+        `POST /v2/bank-accounts/{id}/verify` and `POST /v2/evidence/sources`
+        (registering a live connector, which waits on real connectors).
+  - [ ] The `reality_coverage_*` benchmark gates are partly true by
+        construction (the reality fault family plants invoice lines from its
+        own evidence; a kind with nothing checked passes). Real coverage is
+        the AC-23 partner gate below.
+  - [ ] Evidence requests stay `open` when a finding is released by other
+        evidence (e.g. a GRN import) rather than by its uploaded proof;
+        cancel them on release if the open list gets noisy.
+  - [x] Decided (2026-10-22): a clean run in any mode releases the
+        engine's open findings, holds placed while enforcing included; mode
+        decides whether a hold is placed, not what is found. Pinned in
+        `tests/test_trust_engine.py`.
+  - [ ] Deferred from Wave 3: webhook outbox retention sweep; Slack /
+        WhatsApp / email notifications; public evidence-upload links;
+        copy-move and ML forensics; live connectors (OAuth). (Rate limits
+        and idempotency keys on `/v2` landed 2026-10-24; `/v2/agents*` in
+        Wave 4.)
+  - [ ] Partner gates: AC-23 reviewer agreement on reality checks, ≥ 70 %
+        of findings before payment, cost per transaction ≤ ₹6.
+- [x] **Wave 4 (Agent control plane, built dark)** — program plan
+      `docs/superpowers/plans/2026-10-22-v2-wave4-program.md`, specs
+      `docs/superpowers/specs/2026-10-22-v2-wave4-*-design.md`. Engine
+      `agents` is `off` by default; no screen.
+  - [x] Scaffold (#83) · [x] Registry, mandates, ledger, routes (#86) ·
+        [x] Behavioural detectors + explanations (#85) · [x] Structural
+        rules + guard wiring (#87) · [x] Simulated fleet, `/v2/agents*`,
+        docs (#90). Follow-ups: #84 (seam tests), #88 (CI test job 45 min),
+        #89 (e2e spec files run serially: they share one e2e database).
+  - [x] Wave close: `TestWave4StubsIsolation` removed (every agent route is
+        probed in `tests/test_trust_agent_routes.py`); the `WAVE4_PENDING`
+        explain skips went with the behaviour branch. AC-28 on `--seed 7`:
+        65/65 structural blocked, 20/20 behavioural flagged, 0/97 false
+        blocks, ~1 s. A 27-step live smoke passed (2026-10-22).
+  - [x] A new API key may not take a registered agent's name (its derived
+        email would act as the agent); refused in `apikeys.create`.
+  - [x] Mandate signatures are enforced (2026-10-23): `mandate_active`
+        blocks an agent whose mandate in force does not verify (unsigned,
+        changed after signing, or `TRUST_MANDATE_KEY` unset) or was replaced
+        by a later version by the action's time; the signature now covers
+        the state (`status`, `revoked_*`) and every approve, supersede and
+        revoke reseals the rows it changed.
+  - [ ] Signatures made before 2026-10-23 sign the digest alone and no
+        longer verify: re-approve (propose + approve a new version) any
+        mandate approved earlier. No database holds one yet (the Wave 4
+        tables were never deployed; production is on the v1 schema).
+  - [ ] Approve and revoke seal in a second session after the state change
+        commits. A revoke of the very version being approved, landing
+        between the two, can leave it revoked with an "active" seal: it then
+        never verifies (fails closed, silently). Lock the row while sealing
+        if this ever matters.
+  - [ ] Replaying an entire earlier mandate row (signature included) from a
+        backup is undetectable from inside the database when no later
+        version exists (e.g. un-revoking an agent's only mandate together
+        with the agent row). Needs an anchor outside the database (e.g. the
+        audit trail shipped off-box, or a signed revocation list).
+  - [x] Spend counts what happened (2026-10-23): approve/reject and export
+        stamp their ledger row `executed` or `failed` around the write
+        (`agent_actions.outcome`, migration `c3d4e5f6a7b8`); caps and the
+        ledger skip failed rows, unstamped rows (a crash, imported logs)
+        still count, and the ledger counts each invoice's export once.
+  - [ ] Velocity (`agents.velocity_max`) still counts failed attempts, by
+        design: a burst of refused retries is itself the behaviour it flags.
+        Two exports of one invoice with identical timestamps (imported logs
+        only) pick an arbitrary "latest" amount.
+  - [x] Injection is classified after the write (2026-10-23): the guard
+        queues `trust.agent.injection` once the governed write happened and
+        the worker reads the text and asks the model (`agents/later.py`);
+        a yes raises its own `AGENT-INJECTION` finding seconds later. An
+        unreachable queue leaves that action unscanned (logged).
+  - [ ] `PubSubQueue.publish` waits up to 30 s for the broker on the request
+        path (every enqueue, this one included); a slow Pub/Sub still breaks
+        the inline p95. Shorten it, or publish without waiting, if it shows.
+  - [x] Imported log rows are judged at their time (2026-10-23): an agent
+        is revoked only from its `revoked_at`.
+  - [x] `/actions/evaluate` and `/actions/import` answer 409 while the
+        engine is `off` and record nothing (2026-10-23).
+  - [x] A person refused under U9 raises one finding per invoice and
+        person; no ledger row, no `agent.action.blocked` (2026-10-23).
+  - [x] A structural rule that raises is the guard's failure (503 in
+        enforcing, logged no-op below, no finding); a behavioural detector
+        that raises is skipped (2026-10-23).
+  - [ ] A detector that keeps raising is now only the `agent_rule_failed`
+        warning (error type); alert on it once logs reach a monitor.
+  - [x] `replace_vendors` reads the vendor keys in one query (2026-10-23).
+  - [ ] FR-28.1 "our own agents register automatically" is moot: no
+        in-house agent performs a governed write today.
+  - [x] Deferred from Wave 4 → **Wave 5** (program plan
+        `docs/superpowers/plans/2026-10-23-v2-wave5-program.md`):
+    - [x] Scaffold (`v2/w5-scaffold`): `record()` is one transaction (the
+          ledger row, finding and event commit together, in the guard's lock
+          session; plain `FOR UPDATE`); `po.create` / `document.upload` kinds;
+          `Action.vendor_id`; banner count route; agents list carries the
+          current mandate; a refused item in a bulk request stamps the
+          earlier rows failed; `/v2/agents/actions` stub; Agents nav + stub
+          page (#100).
+    - [x] A screen (#101): agents view, mandates, spend by owner, dashboard
+          tiles, the block banner (notifications on blocks = in-app +
+          webhook).
+    - [x] B governed (#103): PO creation and document upload governed;
+          holds from log-based BLOCKs on invoices.
+    - [x] C intake (#104): `POST /v2/agents/actions` (the generic seam for
+          ERP observers; no vendor-specific adapter), counterparties by
+          vendor id, the mandate scope documented (in place of external
+          mandate-format adapters, which wait for a standard).
+    - [x] D hygiene (#102): `agent_actions` retention sweep; OCR text for
+          the worker's injection scan.
+    - [x] Wave close (2026-10-24): stub-isolation entry removed; an
+          18-step live smoke passed on the seeded e2e server (key agent →
+          name + id counterparties → two-admin approval, verified →
+          enforcing → PO import refused, nothing stored → intake log BLOCK
+          holds the invoice → banner count → finding decided, hold lifted →
+          ledger shows both).
+  - [ ] Wave 5 known limits: an agent hold bites only while agent control
+        is enforcing (the hold row stays open and bites again on return;
+        only a person's decision lifts it); OCR uses tesseract, which the
+        `Dockerfile` installs (a host without it gets no OCR signal); an approver key may log rows
+        for any named agent and `/v2` has a per-caller rate limit and
+        idempotency keys (2026-10-24); velocity counts every row, so a large PO import
+        can raise a velocity review; the log import and intake look up the
+        vendor and invoice node per row (fine at 5000 rows, revisit if
+        feeds grow).
+    - [x] Mandate expiry sweep: not needed. Expiry is computed on every
+          read, and rewriting `status` would break the mandate signature.
+  - [x] (G1) FR-28.4 "drift from mandate" (2026-10-24), read as drift from
+        the agent's own past: an approval or export over 3 times the largest
+        amount it handled in that currency over 90 days (at least 10 clean
+        past actions) raises an `AGENT-DRIFT` review. Thresholds per tenant.
+        Not built: a "first-time kind of action" signal (it flags ordinary
+        approve-then-export work; the mandate already scopes the kinds).
+  - [ ] Drift limits: it is not a limit — an agent can ratchet up 3 times
+        per step and each step becomes its new normal, so the per-action cap
+        stays the control; an amount drift flagged never becomes baseline,
+        even after a person accepts the finding (a lasting step-up keeps
+        flagging until the cap or the factor changes); the baseline reads the
+        newest 500 money actions in the window.
+  - [x] (G2) PRD "agent registration requires Controller approval"
+        (2026-10-24): a `controller` role (ranks with approver, never
+        admin) alone approves or rejects a registration; agents start
+        `proposed` and are blocked until then. Follow-up if wanted: a real
+        `role:controller` approval-chain step (refused today, because the
+        ladder would let approvers fill it).
+  - [ ] Partner gates (PRD §5): two design partners running agents in
+        production and one adopted external mandate standard before release.
+- [ ] `opentelemetry-api` 1.42.1 advisory (CVE-2026-114603 /
+      GHSA-xcq7-p3pf-p88h) waived until **2026-12-12**: the fix (1.45.1) is
+      blocked by google-adk's cap (≤ 1.42.1, still so in 2.12.0); the product
+      API never parses inbound trace headers. Upgrade when google-adk allows.
 - [ ] Remove the Postgres TCP proxy before the trust routes go live (it was
       added for bootstrap only).
 

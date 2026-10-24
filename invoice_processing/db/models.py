@@ -22,7 +22,8 @@ signal for accuracy measurement and the raw material for ALF rules.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -54,7 +55,7 @@ def _uuid() -> str:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
@@ -1221,6 +1222,278 @@ class TrustExplanationRating(Base, TenantMixin, TimestampMixin):
     note: Mapped[str | None] = mapped_column(String(500))
 
 
+class TrustHold(Base, TenantMixin, TimestampMixin):
+    """A payment hold placed or lifted: the ledger behind hold.placed and
+    hold.lifted. The gate still decides from the open findings; this records
+    when each hold began and ended."""
+
+    __tablename__ = "trust_holds"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_findings.id"), nullable=False, index=True
+    )
+    transaction_node: Mapped[str] = mapped_column(
+        String(36), nullable=False, index=True
+    )
+    engine: Mapped[str] = mapped_column(String(32), nullable=False)
+    type: Mapped[str] = mapped_column(String(64), nullable=False)
+    placed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+    placed_by: Mapped[str | None] = mapped_column(String(320))
+    lifted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lifted_by: Mapped[str | None] = mapped_column(String(320))
+    lift_reason: Mapped[str | None] = mapped_column(String(500))
+
+
+class TrustEvidenceRequest(Base, TenantMixin, TimestampMixin):
+    """Proof asked of a vendor or an internal owner for a finding (FR-23.5)."""
+
+    __tablename__ = "trust_evidence_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_findings.id"), nullable=False, index=True
+    )
+    owner: Mapped[str] = mapped_column(String(320), nullable=False)
+    due_date: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(String(500))
+    # open | fulfilled | cancelled
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="open"
+    )
+    proof_document_id: Mapped[str | None] = mapped_column(String(36))
+    requested_by: Mapped[str | None] = mapped_column(String(320))
+    fulfilled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+
+class ApiKey(Base, TenantMixin, TimestampMixin):
+    """A machine credential for the /v2 API. Only a hash of the secret is
+    kept; the prefix finds the row."""
+
+    __tablename__ = "api_keys"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "key_prefix", name="uq_api_keys_prefix"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    key_prefix: Mapped[str] = mapped_column(
+        String(12), nullable=False, index=True
+    )
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="viewer"
+    )
+    created_by: Mapped[str | None] = mapped_column(String(320))
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WebhookEndpoint(Base, TenantMixin, TimestampMixin):
+    """Where a tenant wants trust events sent, and which ones."""
+
+    __tablename__ = "webhook_endpoints"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    # Kept in the clear: it signs every delivery. Masked in every response.
+    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    events: Mapped[list] = mapped_column(JSONType, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    description: Mapped[str | None] = mapped_column(String(256))
+    created_by: Mapped[str | None] = mapped_column(String(320))
+
+
+class WebhookOutbox(Base, TenantMixin, TimestampMixin):
+    """One event for one endpoint, written with the change that caused it and
+    delivered by the worker's sweep."""
+
+    __tablename__ = "webhook_outbox"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    endpoint_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("webhook_endpoints.id"),
+        nullable=False,
+        index=True,
+    )
+    event: Mapped[str] = mapped_column(String(48), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONType, default=dict)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, index=True
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_status: Mapped[int | None] = mapped_column(Integer)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    dead_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Agent(Base, TenantMixin, TimestampMixin):
+    """A machine actor a tenant has registered for agent control (FR-28.1).
+    `principal_id` is the Principal's `user_id` it acts as; an external agent
+    (seen only through imported logs) has none."""
+
+    __tablename__ = "agents"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "principal_id", name="uq_agents_principal"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    owner: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    principal_id: Mapped[str | None] = mapped_column(String(64))
+    principal_email: Mapped[str | None] = mapped_column(String(320), index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active"
+    )
+    registered_by: Mapped[str | None] = mapped_column(String(320))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by: Mapped[str | None] = mapped_column(String(320))
+    revoke_reason: Mapped[str | None] = mapped_column(String(500))
+    graph_node: Mapped[str | None] = mapped_column(String(36))
+
+
+class AgentMandate(Base, TenantMixin, TimestampMixin):
+    """What a person authorised an agent to do, when, and for how much
+    (FR-28.5). Versioned; each version carries the previous one's digest."""
+
+    __tablename__ = "agent_mandates"
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_id", "version", name="uq_agent_mandates_version"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[dict] = mapped_column(JSONType, default=dict)
+    valid_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    valid_to: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="proposed"
+    )
+    proposed_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(320))
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    revoked_by: Mapped[str | None] = mapped_column(String(320))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(String(500))
+    prev_digest: Mapped[str | None] = mapped_column(String(64))
+    digest: Mapped[str | None] = mapped_column(String(64))
+    signature: Mapped[str | None] = mapped_column(String(64))
+
+
+class AgentAction(Base, TenantMixin, TimestampMixin):
+    """One evaluated agent action and the decision on it: the decision
+    ledger, written before the governed write (or from an imported log)."""
+
+    __tablename__ = "agent_actions"
+    __table_args__ = (
+        Index(
+            "ix_agent_actions_agent_time",
+            "tenant_id",
+            "agent_id",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id"), nullable=False, index=True
+    )
+    mandate_id: Mapped[str | None] = mapped_column(String(36))
+    mandate_version: Mapped[int | None] = mapped_column(Integer)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_table: Mapped[str | None] = mapped_column(String(32))
+    subject_ref: Mapped[str | None] = mapped_column(String(128), index=True)
+    transaction_node: Mapped[str | None] = mapped_column(String(36))
+    vendor_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    category: Mapped[str | None] = mapped_column(String(64))
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    currency: Mapped[str | None] = mapped_column(String(8))
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    reasons: Mapped[list] = mapped_column(JSONType, default=list)
+    explanation: Mapped[str | None] = mapped_column(String(1000))
+    mode: Mapped[str | None] = mapped_column(String(16))
+    source: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="inline"
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finding_id: Mapped[str | None] = mapped_column(String(36))
+    request_id: Mapped[str | None] = mapped_column(String(64))
+    # executed | failed, stamped by the call site after its write; unstamped
+    # (a crash, an imported log) still counts toward spend.
+    outcome: Mapped[str | None] = mapped_column(String(16))
+
+
+class ApiRateWindow(Base, TenantMixin, TimestampMixin):
+    """How many `/v2` requests one caller made in one minute (rate limit)."""
+
+    __tablename__ = "api_rate_windows"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "principal", "window_start", name="uq_api_rate_window"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    principal: Mapped[str] = mapped_column(String(128), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class ApiIdempotency(Base, TenantMixin, TimestampMixin):
+    """A `/v2` POST sent with an `Idempotency-Key`: its body's hash and, once
+    it finished, the answer a retry gets back. Kept 24 hours."""
+
+    __tablename__ = "api_idempotency"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "principal", "key", name="uq_api_idempotency_key"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    principal: Mapped[str] = mapped_column(String(128), nullable=False)
+    key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="in_progress"
+    )
+    status_code: Mapped[int | None] = mapped_column(Integer)
+    body: Mapped[dict | list | None] = mapped_column(JSONType)
+    content_type: Mapped[str | None] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 TENANT_TABLES = (
     "users",
     "record_locks",
@@ -1260,4 +1533,14 @@ TENANT_TABLES = (
     "trust_audit_runs",
     "trust_audit_samples",
     "trust_explanation_ratings",
+    "trust_holds",
+    "trust_evidence_requests",
+    "api_keys",
+    "webhook_endpoints",
+    "webhook_outbox",
+    "agents",
+    "agent_mandates",
+    "agent_actions",
+    "api_rate_windows",
+    "api_idempotency",
 )

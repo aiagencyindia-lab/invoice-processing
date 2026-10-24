@@ -196,3 +196,75 @@ def test_parse_amount_refuses_exponents_and_accepts_rupee_prefixes():
     assert parse_amount("INR 2,50,000.00") == Decimal("250000.00")
     with pytest.raises(ValueError):
         parse_amount("1e5")
+
+
+# -- evidence kinds (Wave 3 reality checks) ------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kind", "headers", "row", "fields"),
+    [
+        (
+            "ticket",
+            "Issue Key,Supplier,Date,Status,Hours",
+            "OPS-1,Acme,2026-01-05,done,6",
+            {"doc_number", "vendor_key", "record_date", "status", "hours"},
+        ),
+        (
+            "timesheet",
+            "Supplier,Date,Hours,Rate,Approved By",
+            "Acme,2026-01-05,8,1200,lead@x.test",
+            {"vendor_key", "record_date", "hours", "rate", "approved_by"},
+        ),
+        (
+            "shipment",
+            "AWB,PO,Date,Qty,Status,Courier",
+            "AWB-9,PO-1,2026-01-05,10,delivered,BlueDart",
+            {
+                "doc_number",
+                "po_number",
+                "record_date",
+                "quantity",
+                "status",
+                "carrier",
+            },
+        ),
+        (
+            "seat_count",
+            "Supplier,Date,Plan,Qty",
+            "Acme,2026-01-31,pro,25",
+            {"vendor_key", "record_date", "product", "quantity"},
+        ),
+    ],
+)
+def test_evidence_kinds_map_by_synonym_and_import(
+    importer, kind, headers, row, fields
+):
+    from invoice_processing.trust.decide import FakeDecider  # noqa: PLC0415
+    from invoice_processing.trust.history import mapping as mp  # noqa: PLC0415
+
+    proposed = mp.propose(
+        kind, headers.split(","), decider=FakeDecider({}, fail=True)
+    )
+    assert set(proposed.values()) >= fields, proposed
+    out = importer.import_file(
+        CTX,
+        kind=kind,
+        source_name="ops",
+        filename=f"{kind}.csv",
+        data=f"{headers}\n{row}\n".encode(),
+        mapping={h: f for h, f in proposed.items() if f},
+    )
+    assert (out.status, out.rows_ok) == ("complete", 1)
+
+
+def test_an_evidence_row_missing_its_required_fields_is_refused(importer):
+    with pytest.raises(ValueError):
+        importer.import_file(
+            CTX,
+            kind="timesheet",
+            source_name="ops",
+            filename="t.csv",
+            data=b"Supplier,Date\nAcme,2026-01-05\n",
+            mapping={"Supplier": "vendor_key", "Date": "record_date"},
+        )

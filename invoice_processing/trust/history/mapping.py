@@ -20,6 +20,11 @@ KINDS = (
     "grn",
     "bank_line",
     "vendor_statement_line",
+    # Evidence the reality checks corroborate an invoice against (FR-23).
+    "ticket",
+    "timesheet",
+    "shipment",
+    "seat_count",
 )
 
 FIELDS: dict[str, tuple[str, ...]] = {
@@ -87,6 +92,43 @@ FIELDS: dict[str, tuple[str, ...]] = {
         "currency",
         "record_date",
     ),
+    "ticket": (
+        "external_id",
+        "vendor_key",
+        "doc_number",
+        "record_date",
+        "status",
+        "hours",
+        "project",
+        "po_number",
+    ),
+    "timesheet": (
+        "external_id",
+        "vendor_key",
+        "record_date",
+        "hours",
+        "rate",
+        "project",
+        "po_number",
+        "approved_by",
+    ),
+    "shipment": (
+        "external_id",
+        "doc_number",
+        "po_number",
+        "vendor_key",
+        "record_date",
+        "quantity",
+        "status",
+        "carrier",
+    ),
+    "seat_count": (
+        "external_id",
+        "vendor_key",
+        "record_date",
+        "product",
+        "quantity",
+    ),
 }
 
 REQUIRED: dict[str, tuple[str, ...]] = {
@@ -97,6 +139,10 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "grn": ("doc_number", "po_number"),
     "bank_line": ("amount", "record_date"),
     "vendor_statement_line": ("vendor_key", "doc_number", "amount"),
+    "ticket": ("vendor_key", "doc_number"),
+    "timesheet": ("vendor_key", "record_date", "hours"),
+    "shipment": ("doc_number", "record_date"),
+    "seat_count": ("vendor_key", "record_date", "quantity"),
 }
 
 _SYNONYMS: dict[str, tuple[str, ...]] = {
@@ -112,6 +158,12 @@ _SYNONYMS: dict[str, tuple[str, ...]] = {
         "po number",
         "grn no",
         "statement ref",
+        "ticket",
+        "ticket id",
+        "issue key",
+        "awb",
+        "lr no",
+        "pod ref",
     ),
     "external_id": ("id", "record id", "guid", "master id"),
     "vendor_key": (
@@ -157,6 +209,13 @@ _SYNONYMS: dict[str, tuple[str, ...]] = {
     "line_number": ("line", "line no", "sr no", "s no"),
     "quantity": ("qty", "quantity"),
     "unit_price": ("rate", "unit price", "price"),
+    "hours": ("hours", "hrs", "time spent"),
+    "rate": ("rate", "hourly rate"),
+    "status": ("status", "state"),
+    "project": ("project", "project code"),
+    "product": ("product", "plan", "sku"),
+    "carrier": ("carrier", "courier", "transporter"),
+    "approved_by": ("approved by", "approver"),
 }
 
 

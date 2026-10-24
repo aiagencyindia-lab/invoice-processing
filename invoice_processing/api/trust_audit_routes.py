@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Annotated
 
@@ -350,7 +350,7 @@ def _report(principal: Principal, audit: dict) -> dict:
         events,
         graph=_graph(),
         run=runs[0] if runs else None,
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
         tenant_id=tenant,
         modes=modes,
         findings=_findings(),

@@ -35,7 +35,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager, nullcontext
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -99,6 +99,15 @@ _HTML_CSP = (
 
 
 _REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+@app.middleware("http")
+async def _v2_guard(request, call_next):
+    """Rate limits and idempotency keys on /v2. Registered before
+    `_identify_request`, so it runs inside it (with the request id set)."""
+    from . import v2_guard  # noqa: PLC0415
+
+    return await v2_guard.guard(request, call_next)
 
 
 @app.middleware("http")
@@ -241,6 +250,8 @@ _purchase_orders = None
 _supporting_documents = None
 _graph_store = None
 _finding_store = None
+_hold_store = None
+_agent_store = None
 _history_importer = None
 _rules = None
 _tenant_settings = None
@@ -549,6 +560,15 @@ def _sso_services():
 auth.set_sso_services(_sso_services)
 
 
+def _api_key(token: str):
+    from ..trust import apikeys  # noqa: PLC0415 - optional layer
+
+    return apikeys.resolve(token)
+
+
+auth.set_api_key_resolver(_api_key)
+
+
 def get_graph_store():
     """The v2 Evidence Graph. `None` without a database."""
     global _graph_store
@@ -561,6 +581,35 @@ def get_graph_store():
 
         _graph_store = GraphStore()
     return _graph_store
+
+
+def get_hold_store():
+    """The hold ledger module (trust layer). `None` without the table."""
+    global _hold_store
+    if (
+        _hold_store is None
+        and _database_configured()
+        and _table_exists("trust_holds", "Hold ledger", raise_on_error=True)
+    ):
+        from ..trust import holds  # noqa: PLC0415
+
+        _hold_store = holds
+    return _hold_store
+
+
+def get_agent_store():
+    """Agent control's registry and decision ledger. `None` without the
+    table."""
+    global _agent_store
+    if (
+        _agent_store is None
+        and _database_configured()
+        and _table_exists("agents", "Agent control", raise_on_error=True)
+    ):
+        from ..trust.agents.store import AgentStore  # noqa: PLC0415
+
+        _agent_store = AgentStore(graph=get_graph_store())
+    return _agent_store
 
 
 def get_finding_store():
@@ -1101,7 +1150,40 @@ def get_invoice(
             if (locks := get_locks())
             else None
         ),
+        # Whether the trust layer holds this payment, and on which findings,
+        # so the workbench shows it before anyone presses approve.
+        "hold": _hold_detail(principal.context(case_id)),
+        "trust_node": _trust_node(principal.tenant_id, case_id),
     }
+
+
+def _hold_detail(ctx) -> dict:
+    from ..trust import gate  # noqa: PLC0415 - optional layer
+
+    return gate.payment_hold_detail(ctx.tenant_id, ctx.case_id)
+
+
+def _trust_node(tenant_id: str, case_id: str) -> str | None:
+    """The invoice's Evidence Graph node, for the trust score panel."""
+    graph = get_graph_store()
+    if graph is None:
+        return None
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from ..db.models import Invoice  # noqa: PLC0415
+    from ..db.session import tenant_session  # noqa: PLC0415
+
+    with tenant_session(tenant_id) as s:
+        invoice_id = s.scalar(
+            select(Invoice.id)
+            .where(Invoice.tenant_id == tenant_id, Invoice.case_id == case_id)
+            .order_by(Invoice.created_at.desc())
+        )
+    if invoice_id is None:
+        return None
+    return graph.nodes_by_ref(tenant_id, "invoices", [invoice_id]).get(
+        invoice_id
+    )
 
 
 @app.get("/api/invoices/{case_id}/document")
@@ -1240,7 +1322,7 @@ def edit_fields(
             # corrections are accuracy evidence and must not be forgeable.
             "actor": principal.email,
             "tenant_id": principal.tenant_id,
-            "at": datetime.now(timezone.utc).isoformat(),
+            "at": datetime.now(UTC).isoformat(),
         }
         recorded.append(record)
         get_corrections().record(ctx, record)
@@ -1350,7 +1432,7 @@ def reroute(ctx, artifacts: dict, fields: list[str]) -> bool | str:
             ctx,
             artifacts,
             repo=repo,
-            now=datetime.now(timezone.utc),
+            now=datetime.now(UTC),
         )
         changed = shape() != before
     except Exception as exc:
@@ -1580,153 +1662,173 @@ def act(
     artifacts = get_cases().get_artifacts(ctx)
     if not artifacts:
         raise HTTPException(status_code=404, detail=f"Unknown case {case_id}")
+    from ..trust.agents import guard  # noqa: PLC0415 - optional layer
 
-    # From the artifacts already in hand rather than a second read.
-    previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
-    hold_overridden = None
-    # Held from the re-check to the projection that bills this invoice, so
-    # two final approvals on one PO cannot both pass against the same units.
-    with _final_approval_lock(principal.tenant_id, artifacts, request.action):
-        try:
-            repo = get_approvals()
-        except Exception:
-            logger.exception("Approval routing could not be reached")
-            raise HTTPException(
-                status_code=503, detail="Approval routing is unavailable."
-            ) from None
-        if repo is not None:
-            if previous.get("decision"):
-                raise HTTPException(
-                    status_code=409, detail="This invoice was already decided."
-                )
+    # Before routing: the decision is ledgered even when routing refuses.
+    decision = guard.check(
+        principal,
+        lambda: guard.invoice_action(
+            ctx, artifacts, f"invoice.{request.action}"
+        ),
+    )
+    with guard.settling(principal, decision) as settle:
+        # From the artifacts already in hand rather than a second read.
+        previous = artifacts.get(WORKFLOW_ARTIFACT) or {}
+        hold_overridden = None
+        # Held from the re-check to the projection that bills this invoice, so
+        # two final approvals on one PO cannot both pass against the same units.
+        with _final_approval_lock(
+            principal.tenant_id, artifacts, request.action
+        ):
             try:
-                outcome = approval_flow.decide(
-                    ctx,
-                    principal,
-                    artifacts,
-                    repo=repo,
-                    documents=get_documents(),
-                    corrections=get_corrections(),
-                    approve=request.action == "approve",
-                    note=request.reason,
-                    override_reason=request.override_reason,
-                    now=datetime.now(timezone.utc),
-                )
-            except (
-                approval_flow.AlreadyDecided,
-                approval_flow.OverBilled,
-                approval_flow.PaymentHold,
-            ) as exc:
+                repo = get_approvals()
+            except Exception:
+                logger.exception("Approval routing could not be reached")
                 raise HTTPException(
-                    status_code=409, detail=exc.detail
+                    status_code=503, detail="Approval routing is unavailable."
                 ) from None
-            except approval_flow.BookUnavailable as exc:
-                raise HTTPException(
-                    status_code=503, detail=exc.detail
-                ) from None
-            except approval_flow.Refused as exc:
-                raise HTTPException(
-                    status_code=403, detail=exc.detail
-                ) from None
-            step = outcome.step
-            get_audit().emit(
-                ctx,
-                "approval_overridden"
-                if outcome.overridden
-                else "approval_step_decided",
-                {
-                    "step": step["position"],
-                    "assignee": f"{step['assignee_kind']}:{step['assignee_value']}",
-                    "action": request.action,
-                    "why": outcome.why,
-                    "acting_for": step.get("acting_for"),
-                    **(
-                        {"override_reason": request.override_reason}
-                        if outcome.overridden
-                        else {}
-                    ),
-                },
-            )
-            if not outcome.completed:
-                return {
-                    "case_id": case_id,
-                    "action": request.action,
-                    "completed": False,
-                    "step": step["position"],
-                    "next": repo.current(principal.tenant_id, case_id),
-                }
-            hold_overridden = outcome.hold_overridden
-            get_audit().emit(
-                ctx, "approval_chain_completed", {"action": request.action}
-            )
-            if outcome.three_way is not None:
-                # An "unchecked" hold, matched live by the approval: stored
-                # before the workflow decision is written, under the PO lock,
-                # so billed counts this invoice's lines once it is approved.
-                artifacts = {
-                    **artifacts,
-                    "phase2": _store_three_way(ctx, outcome.three_way),
-                }
-        if repo is None and request.action == "approve":
-            # No approval chain on this deployment: this is the final
-            # approval, so the trust layer's hold is asked here instead.
-            held = approval_flow.payment_hold(ctx)
-            if held and not (
-                principal.can("admin") and request.override_reason
-            ):
-                raise HTTPException(status_code=409, detail=held)
-            if held:
+            if repo is not None:
+                if previous.get("decision"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This invoice was already decided.",
+                    )
+                try:
+                    outcome = approval_flow.decide(
+                        ctx,
+                        principal,
+                        artifacts,
+                        repo=repo,
+                        documents=get_documents(),
+                        corrections=get_corrections(),
+                        approve=request.action == "approve",
+                        note=request.reason,
+                        override_reason=request.override_reason,
+                        now=datetime.now(UTC),
+                    )
+                except (
+                    approval_flow.AlreadyDecided,
+                    approval_flow.OverBilled,
+                    approval_flow.PaymentHold,
+                ) as exc:
+                    raise HTTPException(
+                        status_code=409, detail=exc.detail
+                    ) from None
+                except approval_flow.BookUnavailable as exc:
+                    raise HTTPException(
+                        status_code=503, detail=exc.detail
+                    ) from None
+                except approval_flow.Refused as exc:
+                    raise HTTPException(
+                        status_code=403, detail=exc.detail
+                    ) from None
+                settle.written()  # the step decision is stored
+                step = outcome.step
                 get_audit().emit(
                     ctx,
-                    "approval_overridden",
-                    {"hold": held, "override_reason": request.override_reason},
+                    "approval_overridden"
+                    if outcome.overridden
+                    else "approval_step_decided",
+                    {
+                        "step": step["position"],
+                        "assignee": f"{step['assignee_kind']}:{step['assignee_value']}",
+                        "action": request.action,
+                        "why": outcome.why,
+                        "acting_for": step.get("acting_for"),
+                        **(
+                            {"override_reason": request.override_reason}
+                            if outcome.overridden
+                            else {}
+                        ),
+                    },
                 )
-            hold_overridden = held
-        state = _record_workflow(
-            ctx,
-            # Export lets through exactly the hold that was overridden; a
-            # finding raised later holds again.
-            hold_overridden=hold_overridden
-            if request.action == "approve"
-            else None,
-            decision=request.action,
-            decided_by=principal.email,
-            decided_at=datetime.now(timezone.utc).isoformat(),
-            reason=request.reason,
-            reason_category=category,
+                if not outcome.completed:
+                    return {
+                        "case_id": case_id,
+                        "action": request.action,
+                        "completed": False,
+                        "step": step["position"],
+                        "next": repo.current(principal.tenant_id, case_id),
+                    }
+                hold_overridden = outcome.hold_overridden
+                get_audit().emit(
+                    ctx, "approval_chain_completed", {"action": request.action}
+                )
+                if outcome.three_way is not None:
+                    # An "unchecked" hold, matched live by the approval: stored
+                    # before the workflow decision is written, under the PO lock,
+                    # so billed counts this invoice's lines once it is approved.
+                    artifacts = {
+                        **artifacts,
+                        "phase2": _store_three_way(ctx, outcome.three_way),
+                    }
+            if repo is None and request.action == "approve":
+                # No approval chain on this deployment: this is the final
+                # approval, so the trust layer's hold is asked here instead.
+                held = approval_flow.payment_hold(ctx)
+                if held and not (
+                    principal.can("admin") and request.override_reason
+                ):
+                    raise HTTPException(status_code=409, detail=held["message"])
+                hold_overridden = approval_flow.override_of(held)
+                if held:
+                    get_audit().emit(
+                        ctx,
+                        "approval_overridden",
+                        {
+                            "hold": held["message"],
+                            "finding_ids": hold_overridden["finding_ids"],
+                            "override_reason": request.override_reason,
+                        },
+                    )
+            state = _record_workflow(
+                ctx,
+                # Export lets through exactly the hold that was overridden; a
+                # finding raised later holds again.
+                hold_overridden=hold_overridden
+                if request.action == "approve"
+                else None,
+                decision=request.action,
+                decided_by=principal.email,
+                decided_at=datetime.now(UTC).isoformat(),
+                reason=request.reason,
+                reason_category=category,
+            )
+            settle.written()  # the workflow decision is stored
+            # The columns as well as the artifact. "Show me every invoice where a
+            # person overruled the pipeline" is the question this whole feature is
+            # built on, and answering it by scanning a JSON path over every row is the
+            # wrong answer to it.
+            _reproject(ctx, {**artifacts, WORKFLOW_ARTIFACT: state})
+        agreement = case_projection.agreement(
+            {**artifacts, WORKFLOW_ARTIFACT: state}
         )
-        # The columns as well as the artifact. "Show me every invoice where a
-        # person overruled the pipeline" is the question this whole feature is
-        # built on, and answering it by scanning a JSON path over every row is the
-        # wrong answer to it.
-        _reproject(ctx, {**artifacts, WORKFLOW_ARTIFACT: state})
-    agreement = case_projection.agreement(
-        {**artifacts, WORKFLOW_ARTIFACT: state}
-    )
-    _propose_rule_if_warranted(principal, case_id, category, agreement, state)
-    # Spelled out rather than built from the action: `f"invoice_{action}d"`
-    # produced "invoice_rejectd", and an audit trail is immutable, so the typo
-    # is now permanent in every row already written.
-    get_audit().emit(
-        ctx,
-        "invoice_approved"
-        if request.action == "approve"
-        else "invoice_rejected",
-        {
+        _propose_rule_if_warranted(
+            principal, case_id, category, agreement, state
+        )
+        # Spelled out rather than built from the action: `f"invoice_{action}d"`
+        # produced "invoice_rejectd", and an audit trail is immutable, so the typo
+        # is now permanent in every row already written.
+        get_audit().emit(
+            ctx,
+            "invoice_approved"
+            if request.action == "approve"
+            else "invoice_rejected",
+            {
+                "reason": request.reason,
+                "reason_category": category,
+                "agreement": agreement,
+            },
+            before={"decision": previous.get("decision")} if previous else None,
+        )
+        return {
+            "case_id": case_id,
+            "action": request.action,
             "reason": request.reason,
             "reason_category": category,
             "agreement": agreement,
-        },
-        before={"decision": previous.get("decision")} if previous else None,
-    )
-    return {
-        "case_id": case_id,
-        "action": request.action,
-        "reason": request.reason,
-        "reason_category": category,
-        "agreement": agreement,
-        "completed": True,
-    }
+            "completed": True,
+        }
 
 
 class BankChangeFromInvoice(BaseModel):
@@ -1846,6 +1948,18 @@ def _store_three_way(ctx, entry: dict) -> dict:
         return {"phase2": {**phase2, "validations": validations}}
 
     return get_cases().update_artifacts(ctx, swap)["phase2"]
+
+
+def _override_covers(stored, held: dict) -> bool:
+    """Whether the override recorded at approval covers this hold: every
+    holding finding was one it named, and no enforcing engine is still to
+    check. A message stored before overrides named findings covers nothing:
+    it was matched as text, which any change to a summary broke."""
+    if not isinstance(stored, dict) or held["waiting"]:
+        return False
+    return {h["finding_id"] for h in held["holds"]} <= set(
+        stored.get("finding_ids") or ()
+    )
 
 
 def _record_workflow(ctx, **changes) -> dict:
@@ -2011,80 +2125,95 @@ def export_invoice(
             ),
         )
     held = approval_flow.payment_hold(ctx)
-    if held and held != state.get("hold_overridden"):
+    if held and not _override_covers(state.get("hold_overridden"), held):
         # Raised after approval (a later evaluation): nothing is posted
         # while a trust engine in enforcing mode holds the payment.
-        raise HTTPException(status_code=409, detail=held)
+        raise HTTPException(status_code=409, detail=held["message"])
     if held:
         get_audit().emit(
-            ctx, "payment_hold_overridden_at_export", {"hold": held}
+            ctx,
+            "payment_hold_overridden_at_export",
+            {
+                "hold": held["message"],
+                "finding_ids": [h["finding_id"] for h in held["holds"]],
+            },
         )
-    invoice = _with_gl(
-        ctx, (artifacts.get("extraction") or {}).get("invoice") or {}, artifacts
+    from ..trust.agents import guard  # noqa: PLC0415 - optional layer
+
+    decision = guard.check(
+        principal,
+        lambda: guard.invoice_action(ctx, artifacts, "invoice.export"),
     )
-
-    if request.target == "csv":
-        buffer = io.StringIO()
-        writer = csv.writer(buffer)
-        writer.writerow(CSV_COLUMNS)
-        writer.writerows(_csv_rows(case_id, invoice))
-        get_audit().emit(ctx, "invoice_exported", {"target": "csv"})
-        return {
-            "case_id": case_id,
-            "target": "csv",
-            "status": "created",
-            "csv": buffer.getvalue(),
-        }
-
-    if request.target != "xero":
-        raise HTTPException(
-            status_code=400, detail="target must be 'csv' or 'xero'"
+    with guard.settling(principal, decision) as settle:
+        invoice = _with_gl(
+            ctx,
+            (artifacts.get("extraction") or {}).get("invoice") or {},
+            artifacts,
         )
 
-    exporter = get_exporter(principal.tenant_id)
-    if exporter is None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Xero is not configured for this tenant. Set XERO_ACCESS_TOKEN "
-                "and XERO_TENANT_ID, or export to CSV."
-            ),
-        )
+        if request.target == "csv":
+            buffer = io.StringIO()
+            writer = csv.writer(buffer)
+            writer.writerow(CSV_COLUMNS)
+            writer.writerows(_csv_rows(case_id, invoice))
+            get_audit().emit(ctx, "invoice_exported", {"target": "csv"})
+            return {
+                "case_id": case_id,
+                "target": "csv",
+                "status": "created",
+                "csv": buffer.getvalue(),
+            }
 
-    result = exporter.export(
-        invoice, approved=True, external_id=state.get("external_id")
-    )
-    if result.status == "failed":
+        if request.target != "xero":
+            raise HTTPException(
+                status_code=400, detail="target must be 'csv' or 'xero'"
+            )
+
+        exporter = get_exporter(principal.tenant_id)
+        if exporter is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Xero is not configured for this tenant. Set XERO_ACCESS_TOKEN "
+                    "and XERO_TENANT_ID, or export to CSV."
+                ),
+            )
+
+        result = exporter.export(
+            invoice, approved=True, external_id=state.get("external_id")
+        )
+        if result.status == "failed":
+            get_audit().emit(
+                ctx,
+                "invoice_export_failed",
+                {"target": "xero", "message": result.message},
+            )
+            raise HTTPException(status_code=502, detail=result.message)
+        settle.written()  # the bill is in Xero
+
+        _record_workflow(
+            ctx,
+            external_id=result.external_id,
+            exported_at=datetime.now(UTC).isoformat(),
+            exported_by=principal.email,
+            export_target="xero",
+        )
         get_audit().emit(
             ctx,
-            "invoice_export_failed",
-            {"target": "xero", "message": result.message},
+            "invoice_exported",
+            {
+                "target": "xero",
+                "external_id": result.external_id,
+                "status": result.status,
+            },
         )
-        raise HTTPException(status_code=502, detail=result.message)
-
-    _record_workflow(
-        ctx,
-        external_id=result.external_id,
-        exported_at=datetime.now(timezone.utc).isoformat(),
-        exported_by=principal.email,
-        export_target="xero",
-    )
-    get_audit().emit(
-        ctx,
-        "invoice_exported",
-        {
+        return {
+            "case_id": case_id,
             "target": "xero",
-            "external_id": result.external_id,
             "status": result.status,
-        },
-    )
-    return {
-        "case_id": case_id,
-        "target": "xero",
-        "status": result.status,
-        "external_id": result.external_id,
-        "message": result.message,
-    }
+            "external_id": result.external_id,
+            "message": result.message,
+        }
 
 
 from .admin_routes import router as admin_router  # noqa: E402
@@ -2092,6 +2221,7 @@ from .approval_routes import router as approval_router  # noqa: E402
 from .config_routes import router as config_router  # noqa: E402
 from .gl_routes import router as gl_router  # noqa: E402
 from .ingest import router as ingest_router  # noqa: E402
+from .integration_routes import router as integration_router  # noqa: E402
 from .kpi_routes import router as kpi_router  # noqa: E402
 from .po_routes import router as po_router  # noqa: E402
 from .rules import router as rules_router  # noqa: E402
@@ -2099,9 +2229,16 @@ from .sheet import router as sheet_router  # noqa: E402
 from .signup import router as signup_router  # noqa: E402
 from .supporting_routes import router as supporting_router  # noqa: E402
 from .system import router as system_router  # noqa: E402
+from .trust_agent_routes import router as trust_agent_router  # noqa: E402
 from .trust_audit_routes import router as trust_audit_router  # noqa: E402
 from .trust_explain_routes import router as trust_explain_router  # noqa: E402
+from .trust_provenance_routes import (  # noqa: E402
+    router as trust_provenance_router,
+)
+from .trust_reality_routes import router as trust_reality_router  # noqa: E402
 from .trust_routes import router as trust_router  # noqa: E402
+from .trust_score_routes import router as trust_score_router  # noqa: E402
+from .v2_routes import router as v2_router  # noqa: E402
 from .vendor_routes import router as vendor_router  # noqa: E402
 
 app.include_router(ingest_router)
@@ -2119,6 +2256,12 @@ app.include_router(po_router)
 app.include_router(trust_router)
 app.include_router(trust_audit_router)
 app.include_router(trust_explain_router)
+app.include_router(trust_score_router)
+app.include_router(trust_reality_router)
+app.include_router(trust_provenance_router)
+app.include_router(trust_agent_router)
+app.include_router(integration_router)
+app.include_router(v2_router)
 app.include_router(supporting_router)
 
 

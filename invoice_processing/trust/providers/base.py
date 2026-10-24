@@ -67,6 +67,11 @@ class Logistics(Protocol):
     def track(self, reference: str) -> dict: ...
 
 
+@runtime_checkable
+class Usage(Protocol):
+    def seats(self, vendor: str, period: str) -> dict: ...
+
+
 # The one method each capability exposes; the registry calls it by name.
 METHOD = {
     "bank_verification": "verify",
@@ -78,4 +83,5 @@ METHOD = {
     "tickets": "search",
     "timesheets": "hours",
     "logistics": "track",
+    "usage": "seats",
 }

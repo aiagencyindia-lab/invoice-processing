@@ -1,6 +1,6 @@
 """Findings, node, lineage, contract-file and clause routes (Wave 2 scaffold)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -21,7 +21,7 @@ from invoice_processing.trust.graph.store import GraphStore
 
 T = "tenant-acme"
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="engine")
-AT = datetime(2026, 10, 1, tzinfo=timezone.utc)
+AT = datetime(2026, 10, 1, tzinfo=UTC)
 PDF = b"%PDF-1.4\n% contract\n"
 
 

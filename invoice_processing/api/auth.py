@@ -39,12 +39,12 @@ from fastapi import Depends, HTTPException, Request
 
 from .. import observability
 from ..ports import RunContext
+from ..roles import ROLE_RANK  # re-exported: callers import the ladder here
 
 logger = logging.getLogger(__name__)
 
 # Ascending privilege. A role not in this map is treated as no privilege at all,
 # so a typo in a claim locks a user out rather than promoting them.
-ROLE_RANK = {"viewer": 0, "clerk": 1, "approver": 2, "admin": 3}
 
 # The only environments in which authentication may be disabled. An allow-list,
 # because the cost of an unlisted-but-safe value is an inconvenience and the
@@ -292,6 +292,29 @@ def get_verifier() -> TokenVerifier:
     return _verifier
 
 
+# Machine credentials for the /v2 API (trust/apikeys.py). Registered by
+# `api.service`; None until it is, which refuses every key.
+API_KEY_HEADER = "X-API-Key"
+API_KEY_PREFIX = "ik_"
+_api_key_resolver = None
+
+
+def set_api_key_resolver(resolver) -> None:
+    """`resolver(token) -> Principal | None`; None means no such key."""
+    global _api_key_resolver
+    _api_key_resolver = resolver
+
+
+def api_key_token(request: Request, bearer: str | None) -> str | None:
+    """The API key this request presents, if it presents one instead of a
+    user's token. A signed-in user's bearer always wins: a key header next
+    to it is ignored, so a key can never move a user to another tenant."""
+    if bearer:
+        return bearer if bearer.startswith(API_KEY_PREFIX) else None
+    key = (request.headers.get(API_KEY_HEADER) or "").strip()
+    return key or None
+
+
 def bearer_token(request: Request) -> str | None:
     header = request.headers.get("authorization") or ""
     scheme, _, token = header.partition(" ")
@@ -325,7 +348,11 @@ def current_principal(request: Request) -> Principal:
     token still identifies the real user rather than being shadowed by the
     bypass.
     """
-    principal = _resolve_principal(request)
+    # The /v2 guard has already resolved this request's caller: reuse it, so
+    # an API key is looked up once.
+    principal = getattr(request.state, "principal", None) or _resolve_principal(
+        request
+    )
     # For the request's log line. Not a ContextVar: this dependency runs in a
     # threadpool with a copied context, so a value set here would never reach
     # the middleware that writes the line. The scope's state is shared.
@@ -335,6 +362,13 @@ def current_principal(request: Request) -> Principal:
 
 def _resolve_principal(request: Request) -> Principal:
     token = bearer_token(request)
+    key = api_key_token(request, token)
+    if key is not None:
+        resolver = _api_key_resolver
+        principal = resolver(key) if resolver is not None else None
+        if principal is None:
+            raise AuthError("Invalid API key.")
+        return principal
     if token:
         from .. import sso  # noqa: PLC0415
 
@@ -364,29 +398,59 @@ def require_role(required: str):
     ) -> Principal:
         if principal.can(required):
             return principal
-        services = _services()
-        if services is not None and services.audit is not None:
-            route = request.scope.get("route")
-            try:
-                services.audit.emit(
-                    principal.context(),
-                    "access_denied",
-                    {
-                        # The template, so one line covers every invoice.
-                        "path": getattr(route, "path", request.url.path),
-                        "method": request.method,
-                        "required_role": required,
-                        "actual_role": principal.role,
-                    },
-                )
-            except Exception as exc:
-                from .. import sso  # noqa: PLC0415
-
-                raise sso._unavailable(exc) from exc
-        raise AuthError(
+        _deny(
+            request,
+            principal,
+            required,
             f"Role '{principal.role}' cannot perform this action; "
             f"'{required}' or higher is required.",
-            status_code=403,
         )
 
     return dependency
+
+
+def require_exact_role(role: str):
+    """Dependency factory for a power one role holds alone, whatever the
+    ladder says (an admin outranks a controller and still cannot approve an
+    agent's registration). A person only: an API key never passes."""
+
+    def dependency(
+        request: Request,
+        principal: Annotated[Principal, Depends(current_principal)],
+    ) -> Principal:
+        if principal.role == role and not (principal.user_id or "").startswith(
+            "api-key:"
+        ):
+            return principal
+        _deny(
+            request,
+            principal,
+            role,
+            f"Only a {role} can perform this action.",
+        )
+
+    return dependency
+
+
+def _deny(request: Request, principal: Principal, required: str, message: str):
+    """403, written to the audit trail when there is one."""
+    services = _services()
+    if services is not None and services.audit is not None:
+        route = request.scope.get("route")
+        try:
+            services.audit.emit(
+                principal.context(),
+                "access_denied",
+                {
+                    # The template, so one line covers every invoice.
+                    "path": getattr(route, "path", request.url.path),
+                    "method": request.method,
+                    "required_role": required,
+                    "actual_role": principal.role,
+                },
+            )
+        except Exception as exc:
+            from .. import sso  # noqa: PLC0415
+
+            raise sso._unavailable(exc) from exc
+    raise AuthError(message, status_code=403)

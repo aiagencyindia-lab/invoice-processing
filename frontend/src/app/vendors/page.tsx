@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Fragment, useRef, useState } from "react";
 import {
   api,
@@ -343,7 +344,14 @@ export default function VendorsPage() {
     return (
       <>
         <tr>
-          <td>{vendor.name}</td>
+          <td>
+            {/* A file-backed master has no ids, so nothing to open. */}
+            {vendor.id ? (
+              <Link href={`/vendors/${encodeURIComponent(vendor.id)}`}>{vendor.name}</Link>
+            ) : (
+              vendor.name
+            )}
+          </td>
           <td>{vendor.tax_id}</td>
           <td>{vendor.kind}</td>
           <td>

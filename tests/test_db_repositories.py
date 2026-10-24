@@ -13,7 +13,7 @@ all, so they exercise the application-layer half; the policy half is covered by
 test_rls_policies.py.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 from fresh_schema import fresh_schema
@@ -933,11 +933,11 @@ class TestTheTrailCanAnswerWhatChanged:
         assert event.entity_type == "document"
 
     def test_query_narrows_to_a_window_and_pages_by_cursor(self, db):
-        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        from datetime import datetime, timedelta  # noqa: PLC0415
 
         from invoice_processing.db.models import AuditEvent  # noqa: PLC0415
 
-        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        t0 = datetime(2026, 10, 1, tzinfo=UTC)
         with tenant_session(ACME, db) as s:
             for i in range(5):
                 s.add(

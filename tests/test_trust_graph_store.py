@@ -1,6 +1,6 @@
 """Graph rows are never updated in place; the past stays queryable."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fresh_schema import fresh_schema
@@ -12,7 +12,7 @@ from invoice_processing.trust.graph.links import LinkStore
 from invoice_processing.trust.graph.store import GraphStore
 
 T = "tenant-acme"
-T0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+T0 = datetime(2026, 10, 1, tzinfo=UTC)
 T1 = T0 + timedelta(days=1)
 CTX = RunContext(tenant_id=T, case_id="", run_id="r", actor="t")
 
@@ -49,6 +49,14 @@ def test_changed_attrs_closes_old_row_and_as_of_sees_it(store):
         n["attrs"]["name"] for n in store.nodes(T, kind="vendor", as_of=T0)
     ] == ["Acme"]
     assert store.node(T, a)["valid_to"] is not None
+
+
+def test_open_node_as_of_reads_the_version_valid_then(store):
+    a = vendor(store, "Acme", T0)
+    b = vendor(store, "Acme Ltd", T1)
+    assert store.open_node(T, "vendor", "v1", as_of=T0)["id"] == a
+    assert store.open_node(T, "vendor", "v1", as_of=T1)["id"] == b
+    assert store.open_node(T, "vendor", "v1", as_of=T0 - T0.resolution) is None
 
 
 def test_bank_attrs_are_masked_in_graph(store):

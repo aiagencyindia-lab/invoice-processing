@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -109,9 +109,10 @@ def _fold(email: str) -> str:
     return email.strip().casefold()
 
 
-# Roles that can decide a step. Anyone else named on a chain would be a seat
-# nobody can fill: the act endpoint needs approver.
-APPROVING = ("approver", "admin")
+def _approving(role) -> bool:
+    """Whether this role can decide a step. Anyone else named on a chain
+    would be a seat nobody can fill: the act endpoint needs approver."""
+    return ROLE_RANK.get(role, -1) >= ROLE_RANK["approver"]
 
 
 def _need_users(
@@ -129,10 +130,10 @@ def _need_users(
             raise HTTPException(
                 400, f"{e} is not a user of this account, so {what}."
             )
-        if approving and known[e] not in APPROVING:
+        if approving and not _approving(known[e]):
             raise HTTPException(
                 400,
-                f"{e} is a {known[e]}, so {what}; only an approver or admin "
+                f"{e} is a {known[e]}, so {what}; only an approver, controller or admin "
                 "can approve.",
             )
     return out
@@ -218,6 +219,13 @@ def _check_rule(repo, tenant_id: str, kind, match, steps) -> tuple[dict, list]:
                 400,
                 f"Approver group {v!r} has no members, so nobody could approve.",
             )
+        elif k == "role" and v == "controller":
+            # The ladder would let every approver and admin fill it.
+            raise HTTPException(
+                400,
+                "A controller step is not supported; name the controller "
+                "as a user step.",
+            )
         elif k == "role" and v not in ROLE_RANK:
             raise HTTPException(
                 400,
@@ -237,7 +245,7 @@ def my_queue(
     from . import service  # noqa: PLC0415
 
     repo, t = _repo(), principal.tenant_id
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     steps = repo.mine(
         t,
         email=principal.email,
@@ -274,7 +282,7 @@ def my_queue(
         overdue = False
         if due:
             when = datetime.fromisoformat(due)
-            overdue = when.replace(tzinfo=when.tzinfo or timezone.utc) < now
+            overdue = when.replace(tzinfo=when.tzinfo or UTC) < now
         items.append(
             {
                 "case_id": s["case_id"],
@@ -313,7 +321,7 @@ def invoice_chain(
         steps,
         repo=repo,
         documents=service.get_documents(),
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
     )
     if current is not None and not principal.can("approver"):
         # act needs the approver role before any seat counts; a seat holder

@@ -9,7 +9,7 @@ never as an explanation.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -76,7 +76,7 @@ def get_evidence_pack(
             findings=store,
             ratings=RatingStore(store.url).list(tenant, finding_id),
             links=LinkStore(),
-            now=datetime.now(timezone.utc),
+            now=datetime.now(UTC),
         )
     except Uncited as exc:
         _uncited(f, exc)

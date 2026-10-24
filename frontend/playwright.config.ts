@@ -20,6 +20,12 @@ export default defineConfig({
   testDir: "./e2e",
   // A failing smoke test is a signal to look, not to retry until it passes.
   retries: 0,
+  // One spec file at a time: every file shares one API server and one
+  // scratch database, and two files acting on the same seeded invoice at
+  // once made golden-path flaky (an export racing another file's approval).
+  // ponytail: serial costs a few minutes; per-file seeded tenants if the
+  // suite grows past what one worker runs in the job's 20 minutes.
+  workers: 1,
   timeout: 30_000,
   expect: { timeout: 10_000 },
   reporter: process.env.CI ? "list" : "line",

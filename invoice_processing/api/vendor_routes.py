@@ -25,6 +25,8 @@ from ..db import repositories as repos
 # Last four only: the queue is read by clerks who must not be able to copy
 # a full account number out of the UI. Shared so every surface masks alike.
 from ..masking import mask_bank as mask
+from ..trust.agents import guard
+from ..trust.agents.policy import Action
 from .auth import Principal, require_role
 
 router = APIRouter()
@@ -196,6 +198,26 @@ def replace_vendors(
         for r in request.vendors
     ]
     repo = _repo()
+    if repo is not None:
+
+        def creates() -> list[Action]:
+            # Keeping a vendor that already exists is not a create.
+            known = repo.normalized_names(principal.tenant_id)
+            keys = [po_matching.normalize_vendor(r["name"]) for r in plain]
+            return [
+                Action(
+                    kind="vendor.create",
+                    subject_table="vendors",
+                    subject_ref=f"vendors:{key}",
+                    vendor_key=key,
+                    category=r["kind"].lower() or None,
+                )
+                for key, r in zip(keys, plain, strict=True)
+                if key not in known
+            ]
+
+        # Every create is checked before any is written.
+        guard.check(principal, creates)
     if repo is None:
         from .. import paths  # noqa: PLC0415
 
@@ -245,6 +267,22 @@ def decide_bank_change(
         raise HTTPException(
             400, "A rejection needs a note the proposer can act on."
         )
+
+    def deciding() -> Action:
+        change = repo.get_change(principal.tenant_id, change_id) or {}
+        return Action(
+            kind="bank_change.decide",
+            subject_table="vendor_bank_changes",
+            subject_ref=f"vendor_bank_changes:{change_id}",
+            vendor_key=po_matching.normalize_vendor(
+                change.get("vendor_name") or ""
+            )
+            or None,
+            vendor_id=change.get("vendor_id"),
+            initiated_by=change.get("proposed_by"),
+        )
+
+    guard.check(principal, deciding)
     try:
         change = repo.decide(
             principal.tenant_id,
@@ -283,6 +321,17 @@ def patch_vendor(
     before = repo.get(principal.tenant_id, vendor_id)
     if before is None:
         raise HTTPException(404, "Unknown vendor")
+    guard.check(
+        principal,
+        lambda: Action(
+            kind="vendor.patch",
+            subject_table="vendors",
+            subject_ref=f"vendors:{vendor_id}",
+            vendor_key=po_matching.normalize_vendor(before["name"]),
+            vendor_id=vendor_id,
+            category=before.get("kind") or None,
+        ),
+    )
     after = repo.patch(
         principal.tenant_id, vendor_id, email_domain=request.email_domain
     )
@@ -318,6 +367,20 @@ def propose_change(
         ctx = principal.context(proposal.source_case_id)
         if not service.get_cases().get_artifacts(ctx):
             raise HTTPException(400, "Unknown invoice")
+
+    def proposed() -> Action:
+        vendor = repo.get(principal.tenant_id, vendor_id) or {}
+        return Action(
+            kind="bank_change.propose",
+            subject_table="vendors",
+            subject_ref=f"vendors:{vendor_id}",
+            vendor_key=po_matching.normalize_vendor(vendor.get("name") or "")
+            or None,
+            vendor_id=vendor_id,
+            category=vendor.get("kind") or None,
+        )
+
+    guard.check(principal, proposed)
     try:
         change = repo.propose(
             principal.tenant_id,

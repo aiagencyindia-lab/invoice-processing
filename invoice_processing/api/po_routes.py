@@ -45,6 +45,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from .. import po_matching
+from ..trust.agents import guard
 from . import auth
 from .auth import Principal, require_role
 
@@ -439,17 +440,26 @@ def _refused(exc: ValueError, records) -> HTTPException:
 
 
 def store_orders(repo, principal: Principal, records, *, replace=False) -> dict:
-    """Validate the whole upload, then upsert it in one transaction."""
+    """Validate the whole upload, ask the agent guard about each new PO,
+    then upsert it in one transaction."""
     problems = validate_orders(records)
     if problems:
         raise HTTPException(400, "; ".join(problems))
+    clean = _clean_orders(records)
+    # Every create is checked before any is written (FR-28.2).
+    decision = guard.check(
+        principal, lambda: guard.po_action(principal.context(), clean, repo)
+    )
     try:
-        return repo.upsert_orders(
-            principal.tenant_id,
-            _clean_orders(records),
-            uploaded_by=principal.email,
-            replace=replace,
-        )
+        with guard.settling(principal, decision) as settle:
+            out = repo.upsert_orders(
+                principal.tenant_id,
+                clean,
+                uploaded_by=principal.email,
+                replace=replace,
+            )
+            settle.written()
+            return out
     except ValueError as exc:
         raise _refused(exc, records) from None
 
