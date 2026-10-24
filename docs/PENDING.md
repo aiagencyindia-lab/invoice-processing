@@ -254,19 +254,34 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
           session; plain `FOR UPDATE`); `po.create` / `document.upload` kinds;
           `Action.vendor_id`; banner count route; agents list carries the
           current mandate; a refused item in a bulk request stamps the
-          earlier rows failed; velocity counts requests; `/v2/agents/actions`
-          stub; Agents nav + stub page.
-    - [ ] A `v2/w5-screen`: agents view, mandates, spend by owner, dashboard
+          earlier rows failed; `/v2/agents/actions` stub; Agents nav + stub
+          page (#100).
+    - [x] A screen (#101): agents view, mandates, spend by owner, dashboard
           tiles, the block banner (notifications on blocks = in-app +
           webhook).
-    - [ ] B `v2/w5-governed`: PO creation and document upload governed;
+    - [x] B governed (#103): PO creation and document upload governed;
           holds from log-based BLOCKs on invoices.
-    - [ ] C `v2/w5-intake`: `POST /v2/agents/actions` (the generic seam for
+    - [x] C intake (#104): `POST /v2/agents/actions` (the generic seam for
           ERP observers; no vendor-specific adapter), counterparties by
           vendor id, the mandate scope documented (in place of external
           mandate-format adapters, which wait for a standard).
-    - [ ] D `v2/w5-hygiene`: `agent_actions` retention sweep; OCR text for
+    - [x] D hygiene (#102): `agent_actions` retention sweep; OCR text for
           the worker's injection scan.
+    - [x] Wave close (2026-10-24): stub-isolation entry removed; an
+          18-step live smoke passed on the seeded e2e server (key agent →
+          name + id counterparties → two-admin approval, verified →
+          enforcing → PO import refused, nothing stored → intake log BLOCK
+          holds the invoice → banner count → finding decided, hold lifted →
+          ledger shows both).
+  - [ ] Wave 5 known limits: an agent hold bites only while agent control
+        is enforcing (the hold row stays open and bites again on return;
+        only a person's decision lifts it); OCR needs tesseract in the
+        worker image (absent → no signal); an approver key may log rows
+        for any named agent and `/v2` still has no rate limit or
+        idempotency key; velocity counts every row, so a large PO import
+        can raise a velocity review; the log import and intake look up the
+        vendor and invoice node per row (fine at 5000 rows, revisit if
+        feeds grow).
     - [x] Mandate expiry sweep: not needed. Expiry is computed on every
           read, and rewriting `status` would break the mandate signature.
   - [ ] Surfaced by Wave 5, not built: (G1) FR-28.4 "drift from mandate" —
