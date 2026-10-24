@@ -7,6 +7,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 const ADMIN = "dev@localhost:admin";
 const SECOND = "it@e2e-sso.test:admin";
+const CONTROLLER = "cora@e2e.test:controller";
 const AGENT = "E2E bot";
 
 async function goto(page: Page, path: string) {
@@ -47,6 +48,29 @@ test.describe.serial("agents", () => {
     });
     expect(agent.status, JSON.stringify(agent.body)).toBe(201);
     agentId = agent.body.id;
+    expect(agent.body.status).toBe("proposed");
+
+    // A registration waits for the Controller: an admin sees no Approve.
+    await as(page, ADMIN);
+    await goto(page, "/agents");
+    const agents = page.getByRole("table", { name: "Agents" });
+    await expect(agents.getByRole("row", { name: new RegExp(AGENT) })).toContainText("awaiting Controller");
+    await agents.getByRole("row", { name: new RegExp(AGENT) }).click();
+    const waiting = page.getByRole("region", { name: `Agent ${AGENT}` });
+    await expect(waiting.getByText("A Controller approves new agents.")).toBeVisible();
+    await expect(waiting.getByRole("button", { name: "Approve agent" })).toHaveCount(0);
+    expect((await call(page, "post", `/api/trust/agents/${agentId}/approve`, ADMIN)).status).toBe(403);
+
+    // Cora, the Controller, approves it.
+    await as(page, CONTROLLER);
+    await goto(page, "/agents");
+    await page.getByRole("table", { name: "Agents" }).getByRole("row", { name: new RegExp(AGENT) }).click();
+    await page.getByRole("region", { name: `Agent ${AGENT}` }).getByRole("button", { name: "Approve agent" }).click();
+    await page.getByRole("dialog", { name: "Approve agent" }).getByRole("button", { name: "Approve agent" }).click();
+    await expect(page.getByRole("status").filter({ hasText: `${AGENT} approved.` })).toBeVisible();
+    await expect(page.getByRole("table", { name: "Agents" }).getByRole("row", { name: new RegExp(AGENT) })).toContainText("active");
+    await as(page, ADMIN);
+
     const now = Date.now();
     const mandate = await call(page, "post", `/api/trust/agents/${agentId}/mandates`, ADMIN, {
       scope: { actions: ["vendor.create"], currency: "INR", counterparties: null, caps: {} },

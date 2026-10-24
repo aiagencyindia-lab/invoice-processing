@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 CHANNEL = {"api": 0.8, "upload": 0.6}
 OTHER = 0.3
 # KYC documents and proofs are uploads; who uploaded them is the channel.
-ROLE_CHANNEL = {"clerk": 0.6, "approver": 0.8, "admin": 0.8}
+ROLE_CHANNEL = {"clerk": 0.6, "approver": 0.8, "controller": 0.8, "admin": 0.8}
 WEIGHTS = {
     "channel": 0.3,
     "template": 0.2,

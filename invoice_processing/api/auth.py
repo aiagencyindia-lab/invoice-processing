@@ -39,12 +39,12 @@ from fastapi import Depends, HTTPException, Request
 
 from .. import observability
 from ..ports import RunContext
+from ..roles import ROLE_RANK  # re-exported: callers import the ladder here
 
 logger = logging.getLogger(__name__)
 
 # Ascending privilege. A role not in this map is treated as no privilege at all,
 # so a typo in a claim locks a user out rather than promoting them.
-ROLE_RANK = {"viewer": 0, "clerk": 1, "approver": 2, "admin": 3}
 
 # The only environments in which authentication may be disabled. An allow-list,
 # because the cost of an unlisted-but-safe value is an inconvenience and the
@@ -394,29 +394,59 @@ def require_role(required: str):
     ) -> Principal:
         if principal.can(required):
             return principal
-        services = _services()
-        if services is not None and services.audit is not None:
-            route = request.scope.get("route")
-            try:
-                services.audit.emit(
-                    principal.context(),
-                    "access_denied",
-                    {
-                        # The template, so one line covers every invoice.
-                        "path": getattr(route, "path", request.url.path),
-                        "method": request.method,
-                        "required_role": required,
-                        "actual_role": principal.role,
-                    },
-                )
-            except Exception as exc:
-                from .. import sso  # noqa: PLC0415
-
-                raise sso._unavailable(exc) from exc
-        raise AuthError(
+        _deny(
+            request,
+            principal,
+            required,
             f"Role '{principal.role}' cannot perform this action; "
             f"'{required}' or higher is required.",
-            status_code=403,
         )
 
     return dependency
+
+
+def require_exact_role(role: str):
+    """Dependency factory for a power one role holds alone, whatever the
+    ladder says (an admin outranks a controller and still cannot approve an
+    agent's registration). A person only: an API key never passes."""
+
+    def dependency(
+        request: Request,
+        principal: Annotated[Principal, Depends(current_principal)],
+    ) -> Principal:
+        if principal.role == role and not (principal.user_id or "").startswith(
+            "api-key:"
+        ):
+            return principal
+        _deny(
+            request,
+            principal,
+            role,
+            f"Only a {role} can perform this action.",
+        )
+
+    return dependency
+
+
+def _deny(request: Request, principal: Principal, required: str, message: str):
+    """403, written to the audit trail when there is one."""
+    services = _services()
+    if services is not None and services.audit is not None:
+        route = request.scope.get("route")
+        try:
+            services.audit.emit(
+                principal.context(),
+                "access_denied",
+                {
+                    # The template, so one line covers every invoice.
+                    "path": getattr(route, "path", request.url.path),
+                    "method": request.method,
+                    "required_role": required,
+                    "actual_role": principal.role,
+                },
+            )
+        except Exception as exc:
+            from .. import sso  # noqa: PLC0415
+
+            raise sso._unavailable(exc) from exc
+    raise AuthError(message, status_code=403)

@@ -68,6 +68,13 @@ def _revoked(action, agent, now) -> bool:
 
 
 def mandate_active(action, agent, mandate, store, settings, now, decider):
+    status = agent.get("status")
+    if status in ("proposed", "rejected"):
+        # A Controller approves a registration before anything it does counts.
+        said = "is not approved yet" if status == "proposed" else "was rejected"
+        return _block(
+            "mandate_active", "AGENT-OUT-OF-MANDATE", f"{agent['name']} {said}."
+        )
     if _revoked(action, agent, now):
         return _block(
             "mandate_active",

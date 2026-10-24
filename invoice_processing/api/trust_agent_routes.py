@@ -25,13 +25,15 @@ from ..trust.agents.policy import evaluate_action as evaluate
 from ..trust.agents.store import MandateConflict, SelfApproval
 from ..trust.history.readers import read_table
 from ..trust.modes import engine_mode
-from .auth import Principal, require_role
+from .auth import Principal, require_exact_role, require_role
 from .integration_routes import Admin
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 Approver = Annotated[Principal, Depends(require_role("approver"))]
 Anyone = Annotated[Principal, Depends(require_role("viewer"))]
+# A power the controller alone holds (PRD §4: Controller approval of agents).
+Controller = Annotated[Principal, Depends(require_exact_role("controller"))]
 NEEDS_DB = "Agent control needs a database. Configure DATABASE_URL."
 OFF = (
     "Agent control is off for this tenant; turn it on (shadow or higher) first."
@@ -385,8 +387,10 @@ def register_agent(body: AgentCreate, principal: Admin):
 
 @router.get("/api/trust/agents")
 def list_agents(principal: Approver, status: str | None = None):
-    if status not in (None, "active", "revoked"):
-        raise HTTPException(400, "status must be active or revoked.")
+    if status not in (None, "proposed", "active", "rejected", "revoked"):
+        raise HTTPException(
+            400, "status must be proposed, active, rejected or revoked."
+        )
     now, tenant = _now(), principal.tenant_id
     # Each row with its current mandate, so the agents screen needs one call.
     return {
@@ -415,13 +419,38 @@ def revoke_agent(agent_id: str, body: Reason, principal: Admin):
         )
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from None
+    except registry.NotProposed as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.post("/api/trust/agents/{agent_id}/approve")
+def approve_agent(agent_id: str, principal: Controller):
+    return _settle(principal, agent_id, approve=True)
+
+
+@router.post("/api/trust/agents/{agent_id}/reject")
+def reject_agent(agent_id: str, body: Reason, principal: Controller):
+    return _settle(principal, agent_id, approve=False, reason=body.reason)
+
+
+def _settle(principal, agent_id: str, **kw):
+    try:
+        return registry.settle(
+            principal.context(), agent_id, store=_store(), audit=_audit(), **kw
+        )
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from None
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from None
+    except registry.NotProposed as exc:
+        raise HTTPException(409, str(exc)) from None
 
 
 @router.post("/api/trust/agents/{agent_id}/mandates", status_code=201)
 def propose_mandate(agent_id: str, body: MandateCreate, principal: Admin):
     agent = _agent(principal, agent_id)
     if agent["status"] != "active":
-        raise HTTPException(409, "A revoked agent takes no new mandate.")
+        raise HTTPException(409, "Only an active agent takes a mandate.")
     try:
         scope, start, end = mandates.validate(
             body.model_dump(),

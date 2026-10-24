@@ -39,6 +39,8 @@ PROBED = {
     "/api/trust/agents/actions/import",
     "/api/trust/agents/{agent_id}",
     "/api/trust/agents/{agent_id}/revoke",
+    "/api/trust/agents/{agent_id}/approve",
+    "/api/trust/agents/{agent_id}/reject",
     "/api/trust/agents/{agent_id}/mandates",
     "/api/trust/agents/{agent_id}/mandates/{mandate_id}/approve",
     "/api/trust/agents/{agent_id}/mandates/{mandate_id}/revoke",
@@ -47,7 +49,7 @@ PROBED = {
 }
 
 NOW = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
-ROLES = ("viewer", "clerk", "approver", "admin")
+ROLES = ("viewer", "clerk", "approver", "controller", "admin")
 SCOPE = {
     "actions": ["invoice.approve", "invoice.export"],
     "caps": {
@@ -129,12 +131,21 @@ def env(tmp_path, monkeypatch, scratch_db):
     return out
 
 
-def register(slug, key_id=None, name="payables-bot", **extra):
+def register(slug, key_id=None, name="payables-bot", approve=True, **extra):
+    """Register (an admin) and, unless `approve=False`, have the tenant's
+    Controller approve it: a registration starts `proposed`."""
     body = {"name": name, "owner": f"ops@{slug}.test", **extra}
     if key_id:
         body["principal"] = {"api_key_id": key_id}
     r = bearer(f"{slug}:admin").post("/api/trust/agents", json=body)
     assert r.status_code == 201, r.text
+    agent = r.json()
+    if not approve:
+        return agent
+    r = bearer(f"{slug}:controller").post(
+        f"/api/trust/agents/{agent['id']}/approve"
+    )
+    assert r.status_code == 200, r.text
     return r.json()
 
 
@@ -1157,3 +1168,139 @@ def test_the_agent_list_carries_each_current_mandate(env):
     assert rows[bare["id"]]["mandate"] is None
     current = rows[agent["id"]]["mandate"]
     assert current["id"] == m["id"] and current["verified"] is True
+
+
+# -- Controller approval of registration (G2) ----------------------------------
+
+
+def test_a_registration_waits_for_a_controller(env):
+    agent = register("acme", approve=False)
+    assert agent["status"] == "proposed"
+    base = f"/api/trust/agents/{agent['id']}"
+    for who in ("acme:admin:2", "acme:approver"):
+        assert bearer(who).post(f"{base}/approve").status_code == 403, who
+    key = env["acme"]["keys"]["approver-key"]["key"]
+    assert keyed(key).post(f"{base}/approve").status_code == 403
+    # Nothing it does succeeds, and it takes no mandate, until approved.
+    r = evaluate(bearer("acme:approver"), agent["id"], source="dryrun")
+    assert r.json()["decision"] == "BLOCK"
+    assert "not approved yet" in r.json()["explanation"]
+    r = bearer("acme:admin").post(
+        f"{base}/mandates",
+        json={
+            "scope": SCOPE,
+            "valid_from": NOW.isoformat(),
+            "valid_to": (NOW + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert r.status_code == 409
+    listed = bearer("acme:approver").get("/api/trust/agents?status=proposed")
+    assert [a["id"] for a in listed.json()["agents"]] == [agent["id"]]
+    r = bearer("acme:controller").post(f"{base}/approve")
+    assert r.status_code == 200 and r.json()["status"] == "active"
+    assert "agent_approved" in audit_events(env)
+    assert bearer("acme:controller").post(f"{base}/approve").status_code == 409
+
+
+def test_a_controller_rejects_and_the_key_stays_governed(env):
+    key = env["acme"]["keys"]["bot"]
+    agent = register("acme", key["id"], approve=False)
+    base = f"/api/trust/agents/{agent['id']}"
+    assert (
+        bearer("acme:controller").post(f"{base}/reject", json={}).status_code
+        == 422
+    )
+    r = bearer("acme:controller").post(
+        f"{base}/reject", json={"reason": "Wrong owner"}
+    )
+    assert r.status_code == 200, r.text
+    rejected = r.json()
+    assert rejected["status"] == "rejected"
+    assert rejected["revoke_reason"] == "Wrong owner"
+    # Still bound: the key is not set free to act as a plain approver.
+    assert rejected["principal_id"] == f"api-key:{key['id']}"
+    assert "agent_rejected" in audit_events(env)
+    assert (
+        bearer("acme:controller")
+        .post(f"{base}/reject", json={"reason": "again"})
+        .status_code
+        == 409
+    )
+    r = evaluate(bearer("acme:approver"), agent["id"], source="dryrun")
+    assert "was rejected" in r.json()["explanation"]
+    # The same key cannot be registered again; a fresh key can.
+    same = bearer("acme:admin").post(
+        "/api/trust/agents",
+        json={
+            "name": "payables-bot-2",
+            "owner": "ops@acme.test",
+            "principal": {"api_key_id": key["id"]},
+        },
+    )
+    assert same.status_code == 409
+    fresh = env["acme"]["keys"]["approver-key"]
+    again = register("acme", fresh["id"], name="payables-bot-2", approve=False)
+    assert again["status"] == "proposed"
+
+
+def test_the_registrant_cannot_approve_even_as_a_controller(env, monkeypatch):
+    agent = register("acme", approve=False)
+    store = service._agent_store
+    with tenant_session("tenant-acme", env["url"]) as s:
+        row = s.get(models.Agent, agent["id"])
+        row.registered_by = "controller1@acme.test"
+    r = bearer("acme:controller").post(
+        f"/api/trust/agents/{agent['id']}/approve"
+    )
+    assert r.status_code == 403, r.text
+    assert store.get("tenant-acme", agent["id"])["status"] == "proposed"
+    assert "access_denied" in audit_events(env)
+
+
+def test_another_tenants_controller_finds_nothing(env):
+    agent = register("acme", approve=False)
+    base = f"/api/trust/agents/{agent['id']}"
+    assert (
+        bearer("globex:controller").post(f"{base}/approve").status_code == 404
+    )
+    assert (
+        bearer("globex:controller")
+        .post(f"{base}/reject", json={"reason": "x"})
+        .status_code
+        == 404
+    )
+
+
+def test_an_admin_revokes_only_an_active_agent(env):
+    """Revoking is not a way round the Controller's answer."""
+    proposed = register("acme", approve=False)
+    r = bearer("acme:admin").post(
+        f"/api/trust/agents/{proposed['id']}/revoke", json={"reason": "x"}
+    )
+    assert r.status_code == 409
+    rejected = register("acme", name="other-bot", approve=False)
+    bearer("acme:controller").post(
+        f"/api/trust/agents/{rejected['id']}/reject", json={"reason": "No"}
+    )
+    r = bearer("acme:admin").post(
+        f"/api/trust/agents/{rejected['id']}/revoke", json={"reason": "x"}
+    )
+    assert r.status_code == 409
+    row = service._agent_store.get("tenant-acme", rejected["id"])
+    assert row["revoke_reason"] == "No"
+
+
+def test_settling_a_registration_locks_the_agent(env, monkeypatch):
+    from invoice_processing.trust.agents import store as store_module  # noqa: PLC0415
+
+    locked = []
+    real = store_module._lock_query
+
+    def spy(tenant_id, agent_id):
+        locked.append(agent_id)
+        return real(tenant_id, agent_id)
+
+    monkeypatch.setattr(store_module, "_lock_query", spy)
+    agent = register("acme", approve=False)
+    bearer("acme:controller").post(f"/api/trust/agents/{agent['id']}/approve")
+    assert locked == [agent["id"]]

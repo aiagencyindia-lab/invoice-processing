@@ -73,7 +73,7 @@ SCOPE = {
     "caps": {"per_action": "50000"},
     "currency": "INR",
 }
-ROLES = ("viewer", "clerk", "approver", "admin")
+ROLES = ("viewer", "clerk", "approver", "controller", "admin")
 
 
 class FakeVerifier:
@@ -486,6 +486,13 @@ def test_agent_registry_writes_match_their_api_routes(env):
     assert _without(made[0], "id", "name", "graph_node") == _without(
         made[1], "id", "name", "graph_node"
     )
+    # Both start proposed: a Controller approves on /api (a person's act).
+    assert {a["status"] for a in made} == {"proposed"}
+    for agent in made:
+        r = bearer("acme:controller").post(
+            f"/api/trust/agents/{agent['id']}/approve"
+        )
+        assert r.status_code == 200, r.text
     proposed = []
     for prefix, agent in zip(
         ("/v2/agents", "/api/trust/agents"), made, strict=True

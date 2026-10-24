@@ -133,6 +133,7 @@ class AgentStore:
         principal_id: str | None = None,
         principal_email: str | None = None,
         description: str | None = None,
+        status: str = "active",
     ) -> dict:
         with tenant_session(ctx.tenant_id, self.url) as s:
             row = Agent(
@@ -143,12 +144,36 @@ class AgentStore:
                 principal_id=principal_id,
                 principal_email=_fold(principal_email) or None,
                 description=description,
-                status="active",
+                status=status,
                 registered_by=_fold(ctx.actor),
             )
             s.add(row)
             s.flush()
             agent_id = row.id
+        return self._renode(ctx, agent_id)
+
+    def settle_registration(
+        self, ctx, agent_id: str, *, approve: bool, reason: str | None = None
+    ) -> dict | None:
+        """A Controller's answer to a proposed agent: `active` or `rejected`.
+        A rejected agent keeps its principal, so the key or user stays bound
+        and blocked rather than acting as a plain person; register a fresh one
+        to try again. Locked, so two answers cannot interleave. None when the
+        agent is not this tenant's; ValueError when it is not proposed."""
+        with tenant_session(ctx.tenant_id, self.url) as s:
+            s.execute(_lock_query(ctx.tenant_id, agent_id))
+            row = self._agent(s, ctx.tenant_id, agent_id)
+            if row is None:
+                return None
+            if row.status != "proposed":
+                raise ValueError(f"The agent is {row.status}, not proposed.")
+            if approve:
+                row.status = "active"
+            else:
+                row.status = "rejected"
+                row.revoked_at = _now()
+                row.revoked_by = ctx.actor
+                row.revoke_reason = reason
         return self._renode(ctx, agent_id)
 
     def _renode(self, ctx, agent_id: str) -> dict:

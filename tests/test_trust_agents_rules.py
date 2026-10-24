@@ -624,3 +624,13 @@ def test_a_naive_log_time_is_read_as_utc(env, monkeypatch):
     finally:
         monkeypatch.delenv("TZ")
         time.tzset()
+
+
+@pytest.mark.parametrize(
+    ("status", "words"),
+    [("proposed", "not approved yet"), ("rejected", "was rejected")],
+)
+def test_an_unapproved_or_rejected_agent_is_blocked(env, status, words):
+    agent = {**env["bot"], "status": status}
+    r = run(rules.mandate_active, env, approve(), sealed(env), agent=agent)
+    assert r.type == "AGENT-OUT-OF-MANDATE" and words in r.message
