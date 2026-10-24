@@ -102,6 +102,15 @@ _REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 @app.middleware("http")
+async def _v2_guard(request, call_next):
+    """Rate limits and idempotency keys on /v2. Registered before
+    `_identify_request`, so it runs inside it (with the request id set)."""
+    from . import v2_guard  # noqa: PLC0415
+
+    return await v2_guard.guard(request, call_next)
+
+
+@app.middleware("http")
 async def _identify_request(request, call_next):
     """Give one request one id, and remember where it came from.
 

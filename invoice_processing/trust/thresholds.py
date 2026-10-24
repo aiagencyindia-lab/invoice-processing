@@ -55,6 +55,8 @@ DEFAULTS: dict[str, float] = {
     "agents.drift_window_days": 90,
     "agents.drift_min_history": 10,
     "agents.drift_amount_factor": 3,
+    # /v2 requests per caller per minute (api/v2_guard.py).
+    "v2.rate_limit_per_minute": 120,
     # Provenance v2 (FR-22)
     "provenance.edits_suspect": 2,
     # Mode progression: what the readiness report asks before recommending

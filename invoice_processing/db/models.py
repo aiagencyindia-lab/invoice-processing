@@ -1450,6 +1450,50 @@ class AgentAction(Base, TenantMixin, TimestampMixin):
     outcome: Mapped[str | None] = mapped_column(String(16))
 
 
+class ApiRateWindow(Base, TenantMixin, TimestampMixin):
+    """How many `/v2` requests one caller made in one minute (rate limit)."""
+
+    __tablename__ = "api_rate_windows"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "principal", "window_start", name="uq_api_rate_window"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    principal: Mapped[str] = mapped_column(String(128), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class ApiIdempotency(Base, TenantMixin, TimestampMixin):
+    """A `/v2` POST sent with an `Idempotency-Key`: its body's hash and, once
+    it finished, the answer a retry gets back. Kept 24 hours."""
+
+    __tablename__ = "api_idempotency"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "principal", "key", name="uq_api_idempotency_key"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    principal: Mapped[str] = mapped_column(String(128), nullable=False)
+    key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="in_progress"
+    )
+    status_code: Mapped[int | None] = mapped_column(Integer)
+    body: Mapped[dict | list | None] = mapped_column(JSONType)
+    content_type: Mapped[str | None] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 TENANT_TABLES = (
     "users",
     "record_locks",
@@ -1497,4 +1541,6 @@ TENANT_TABLES = (
     "agents",
     "agent_mandates",
     "agent_actions",
+    "api_rate_windows",
+    "api_idempotency",
 )

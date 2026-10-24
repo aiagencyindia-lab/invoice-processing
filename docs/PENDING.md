@@ -176,8 +176,9 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         `tests/test_trust_engine.py`.
   - [ ] Deferred from Wave 3: webhook outbox retention sweep; Slack /
         WhatsApp / email notifications; public evidence-upload links;
-        copy-move and ML forensics; live connectors (OAuth); rate limiting
-        and idempotency keys on `/v2`; `/v2/agents*` (Wave 4).
+        copy-move and ML forensics; live connectors (OAuth). (Rate limits
+        and idempotency keys on `/v2` landed 2026-10-24; `/v2/agents*` in
+        Wave 4.)
   - [ ] Partner gates: AC-23 reviewer agreement on reality checks, ≥ 70 %
         of findings before payment, cost per transaction ≤ ₹6.
 - [x] **Wave 4 (Agent control plane, built dark)** — program plan
@@ -277,8 +278,8 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         is enforcing (the hold row stays open and bites again on return;
         only a person's decision lifts it); OCR needs tesseract in the
         worker image (absent → no signal); an approver key may log rows
-        for any named agent and `/v2` still has no rate limit or
-        idempotency key; velocity counts every row, so a large PO import
+        for any named agent and `/v2` has a per-caller rate limit and
+        idempotency keys (2026-10-24); velocity counts every row, so a large PO import
         can raise a velocity review; the log import and intake look up the
         vendor and invoice node per row (fine at 5000 rows, revisit if
         feeds grow).

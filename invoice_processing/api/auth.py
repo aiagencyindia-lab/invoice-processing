@@ -348,7 +348,11 @@ def current_principal(request: Request) -> Principal:
     token still identifies the real user rather than being shadowed by the
     bypass.
     """
-    principal = _resolve_principal(request)
+    # The /v2 guard has already resolved this request's caller: reuse it, so
+    # an API key is looked up once.
+    principal = getattr(request.state, "principal", None) or _resolve_principal(
+        request
+    )
     # For the request's log line. Not a ContextVar: this dependency runs in a
     # threadpool with a copied context, so a value set here would never reach
     # the middleware that writes the line. The scope's state is shared.
