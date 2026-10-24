@@ -184,3 +184,14 @@ def test_an_absurd_retention_keeps_everything_without_raising(env, caplog):
     env["worker"]._purge_agent_actions_if_due()
     assert len(ages(env, A)) == 4 and ages(env, B) == KEPT
     assert "failed for a tenant" not in caplog.text
+
+
+def test_the_daily_sweep_also_purges_v2_limits(env, monkeypatch):
+    from invoice_processing.api import v2_guard  # noqa: PLC0415
+
+    seen = []
+    monkeypatch.setattr(
+        v2_guard, "purge_expired", lambda t: seen.append(t) or 0
+    )
+    env["worker"]._purge_agent_actions_if_due()
+    assert sorted(seen) == sorted([A, B])

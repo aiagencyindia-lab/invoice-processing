@@ -1413,6 +1413,10 @@ class Worker:
                         logger.info(
                             "agent_actions_purged", extra={"rows": rows}
                         )
+                    from ..api import v2_guard  # noqa: PLC0415
+
+                    # The same daily pass clears /v2's expired keys and windows.
+                    v2_guard.purge_expired(tenant_id)
                 except Exception:
                     logger.exception(
                         "Agent-action retention sweep failed for a tenant; "

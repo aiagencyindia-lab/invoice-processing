@@ -188,3 +188,29 @@ def test_no_key_changes_nothing(env):
     assert admin.post("/v2/agents", json=BODY).status_code == 201
     assert admin.post("/v2/agents", json=BODY).status_code == 201
     assert len(agents_named(env["url"], "idem-bot")) == 2
+
+
+def test_expired_keys_and_old_windows_are_purged(env):
+    now = datetime.now(UTC)
+    with tenant_session(ACME, env["url"]) as s:
+        for key, expires in (
+            ("old", now - timedelta(seconds=1)),
+            ("live", now + timedelta(hours=1)),
+        ):
+            s.add(models.ApiIdempotency(
+                tenant_id=ACME, principal="p", key=key, request_hash="h" * 64,
+                status="done", expires_at=expires,
+            ))  # fmt: skip
+        for start in (
+            now - timedelta(days=2),
+            now.replace(second=0, microsecond=0),
+        ):
+            s.add(models.ApiRateWindow(
+                tenant_id=ACME, principal="p", window_start=start, count=1,
+            ))  # fmt: skip
+    assert v2_guard.purge_expired(ACME) == 2
+    with tenant_session(ACME, env["url"]) as s:
+        assert [r.key for r in s.scalars(select(models.ApiIdempotency))] == [
+            "live"
+        ]
+        assert len(s.scalars(select(models.ApiRateWindow)).all()) == 1

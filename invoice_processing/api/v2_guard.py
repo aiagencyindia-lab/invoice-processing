@@ -168,6 +168,26 @@ def _finish(tenant_id, principal, key, status_code, body, content_type):
             row.content_type = content_type
 
 
+def purge_expired(tenant_id: str) -> int:
+    """Daily housekeeping (the worker's retention sweep): idempotency keys
+    past their 24 hours and rate windows over a day old. Returns rows gone."""
+    now = _now()
+    with tenant_session(tenant_id) as s:
+        keys = s.execute(
+            delete(ApiIdempotency).where(
+                ApiIdempotency.tenant_id == tenant_id,
+                ApiIdempotency.expires_at <= now,
+            )
+        ).rowcount
+        windows = s.execute(
+            delete(ApiRateWindow).where(
+                ApiRateWindow.tenant_id == tenant_id,
+                ApiRateWindow.window_start < now - timedelta(days=1),
+            )
+        ).rowcount
+    return int(keys or 0) + int(windows or 0)
+
+
 def _resolve(request):
     try:
         return auth._resolve_principal(request)

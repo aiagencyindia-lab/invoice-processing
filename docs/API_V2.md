@@ -23,7 +23,9 @@ Authorization: Bearer ik_…
 - An unknown key, a malformed key, a revoked key and the key of a suspended tenant all get **401**. If the database cannot be reached, the request gets **503**.
 - Revoke a key with `DELETE /api/integrations/api-keys/{id}`. Creating and revoking keys are both audited.
 
-There is no rate limit and no idempotency key yet. Transitions take `expect` (on `/api`) to guard against concurrent changes.
+**Rate limits.** Every `/v2` request counts against a per-caller budget (each API key, or each signed-in user) of **120 requests per minute** by default; an administrator can change it per tenant (`v2.rate_limit_per_minute` in the trust thresholds). Every answer carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset` (seconds until the minute's window resets). Over the budget the answer is `429` with `Retry-After`; wait that many seconds. `/api` is not limited.
+
+**Idempotency keys.** Any `/v2` POST may carry `Idempotency-Key: <1 to 128 visible characters>`, unique per operation (a UUID is a good choice). For 24 hours, a retry with the same key and the same body gets the first answer back, marked `Idempotent-Replay: true`, and nothing runs twice. The same key with a different body is `422`; a retry while the first request is still running is `409` (retry shortly). If the first attempt failed (any non-2xx answer), the key is free and the retry runs. Keys are scoped to the caller and tenant. Without the header, a POST behaves as before. Transitions also take `expect` (on `/api`) to guard against concurrent changes.
 
 ## Routes
 
