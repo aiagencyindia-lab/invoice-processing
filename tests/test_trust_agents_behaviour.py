@@ -642,7 +642,7 @@ def history(store, a, n=10, amount="10000", **cols):
             store,
             a,
             amount=Decimal(amount),
-            currency=cols.pop("currency", "INR") if i == 0 else "INR",
+            currency="INR",
             occurred_at=NOW - timedelta(days=1, minutes=i),
             **cols,
         )
@@ -710,12 +710,38 @@ def test_drift_counts_exports_in_the_history(store):
 
 
 def test_a_flagged_outlier_does_not_become_the_new_normal(store):
-    """Only clean (ALLOW) actions define the agent's past: an outlier sent for
-    review must not raise the bar for the next one."""
+    """An outlier drift itself flagged must not raise the bar for the next."""
     a = agent(store)
     history(store, a)
+    flagged = [{"rule": "drift", "type": "AGENT-DRIFT",
+                "severity": "REVIEW", "message": "big"}]  # fmt: skip
     ledger(store, a, amount=Decimal("50000"), currency="INR",
-           decision="ALLOW-WITH-REVIEW", occurred_at=NOW - timedelta(minutes=1))  # fmt: skip
+           decision="ALLOW-WITH-REVIEW", reasons=flagged,
+           occurred_at=NOW - timedelta(minutes=1))  # fmt: skip
     assert (
         run(store, behaviour.drift, approve("50000"), a).type == "AGENT-DRIFT"
+    )
+
+
+def test_drift_learns_from_actions_other_detectors_sent_for_review(store):
+    """A busy bot whose ordinary approvals trip velocity still has a past:
+    only drift's own flags are left out of it."""
+    a = agent(store)
+    velocity = [{"rule": "velocity", "type": "AGENT-VELOCITY",
+                 "severity": "REVIEW", "message": "fast"}]  # fmt: skip
+    history(store, a, decision="ALLOW-WITH-REVIEW", reasons=velocity)
+    assert (
+        run(store, behaviour.drift, approve("30001"), a).type == "AGENT-DRIFT"
+    )
+
+
+def test_drift_counts_a_row_stamped_at_the_actions_own_time(store):
+    a = agent(store)
+    for i in range(9):
+        ledger(store, a, amount=Decimal("10000"), currency="INR",
+               occurred_at=NOW - timedelta(days=1, minutes=i))  # fmt: skip
+    ledger(store, a, amount=Decimal("10000"), currency="INR", occurred_at=NOW)
+    assert (
+        run(store, behaviour.drift, approve("30001", at=NOW), a).type
+        == "AGENT-DRIFT"
     )

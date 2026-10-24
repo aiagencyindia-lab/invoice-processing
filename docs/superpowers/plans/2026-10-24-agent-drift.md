@@ -20,7 +20,7 @@
 
 - An agent with fewer than `agents.drift_min_history` prior actions → never flagged (a new agent is not drift).
 - A larger amount in a different currency → not compared (no FX).
-- Blocked prior actions do not count as history (only ALLOW / ALLOW-WITH-REVIEW).
+- Blocked prior actions do not count as history (only ALLOW / ALLOW-WITH-REVIEW), and neither do rows drift itself flagged (changed in review: counting only ALLOW left busy agents with no baseline).
 - An action exactly at the factor × max boundary → not flagged (strictly greater).
 - A missing or non-positive amount → no flag.
 

@@ -155,15 +155,18 @@ def drift(action, agent, mandate, store, settings, now, decider):
             agent["tenant_id"],
             agent_id=agent["id"],
             since=at - timedelta(days=days),
-            until=at,
-            # Clean actions only: an outlier sent for review is not yet the
-            # agent's normal, or it would raise the bar for the next one.
-            decisions=("ALLOW",),
+            until=at + _TICK,
+            decisions=("ALLOW", "ALLOW-WITH-REVIEW"),
             sources=("inline", "log"),
+            # ponytail: the newest 500 rows only (an agent past ~6 money
+            # actions a day); a count/max aggregate if baselines must see more.
         )
         if r["action"] in MONEY_KINDS
         and r["amount"] is not None
         and r["currency"] == action.currency
+        # Drift's own flags never become the normal, or one outlier would
+        # raise the bar for the next. Other detectors' reviews still count.
+        and not any(x.get("rule") == "drift" for x in r.get("reasons") or [])
     ]
     if len(past) < settings["agents.drift_min_history"]:
         return None

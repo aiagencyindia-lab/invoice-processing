@@ -290,6 +290,12 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         past actions) raises an `AGENT-DRIFT` review. Thresholds per tenant.
         Not built: a "first-time kind of action" signal (it flags ordinary
         approve-then-export work; the mandate already scopes the kinds).
+  - [ ] Drift limits: it is not a limit — an agent can ratchet up 3 times
+        per step and each step becomes its new normal, so the per-action cap
+        stays the control; an amount drift flagged never becomes baseline,
+        even after a person accepts the finding (a lasting step-up keeps
+        flagging until the cap or the factor changes); the baseline reads the
+        newest 500 money actions in the window.
   - [x] (G2) PRD "agent registration requires Controller approval"
         (2026-10-24): a `controller` role (ranks with approver, never
         admin) alone approves or rejects a registration; agents start
