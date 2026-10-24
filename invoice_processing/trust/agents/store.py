@@ -155,11 +155,13 @@ class AgentStore:
     def settle_registration(
         self, ctx, agent_id: str, *, approve: bool, reason: str | None = None
     ) -> dict | None:
-        """A Controller's answer to a proposed agent: `active`, or `rejected`
-        with the principal released (it never acted, and one principal binds
-        one agent). None when the agent is not this tenant's; ValueError when
-        it is not proposed."""
+        """A Controller's answer to a proposed agent: `active` or `rejected`.
+        A rejected agent keeps its principal, so the key or user stays bound
+        and blocked rather than acting as a plain person; register a fresh one
+        to try again. Locked, so two answers cannot interleave. None when the
+        agent is not this tenant's; ValueError when it is not proposed."""
         with tenant_session(ctx.tenant_id, self.url) as s:
+            s.execute(_lock_query(ctx.tenant_id, agent_id))
             row = self._agent(s, ctx.tenant_id, agent_id)
             if row is None:
                 return None
@@ -172,8 +174,6 @@ class AgentStore:
                 row.revoked_at = _now()
                 row.revoked_by = ctx.actor
                 row.revoke_reason = reason
-                row.principal_id = None
-                row.principal_email = None
         return self._renode(ctx, agent_id)
 
     def _renode(self, ctx, agent_id: str) -> dict:

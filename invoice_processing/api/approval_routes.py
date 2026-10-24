@@ -133,7 +133,7 @@ def _need_users(
         if approving and not _approving(known[e]):
             raise HTTPException(
                 400,
-                f"{e} is a {known[e]}, so {what}; only an approver or admin "
+                f"{e} is a {known[e]}, so {what}; only an approver, controller or admin "
                 "can approve.",
             )
     return out

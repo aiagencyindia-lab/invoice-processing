@@ -419,6 +419,8 @@ def revoke_agent(agent_id: str, body: Reason, principal: Admin):
         )
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from None
+    except registry.NotProposed as exc:
+        raise HTTPException(409, str(exc)) from None
 
 
 @router.post("/api/trust/agents/{agent_id}/approve")

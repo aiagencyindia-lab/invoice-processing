@@ -362,7 +362,7 @@ class Provisioner:
                 if ROLE_RANK.get(role, -1) < ROLE_RANK["approver"]:
                     raise ProvisioningError(
                         f"{manager} is a {role}, so they cannot be a manager "
-                        "for approvals; only an approver or admin can approve."
+                        "for approvals; only an approver, controller or admin can approve."
                     )
             previous = user.manager_email
             user.manager_email = manager

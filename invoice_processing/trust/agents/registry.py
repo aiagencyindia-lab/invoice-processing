@@ -109,6 +109,12 @@ def settle(ctx, agent_id: str, *, approve: bool, reason=None, store, audit):
     if (agent.get("registered_by") or "").casefold() == (
         ctx.actor or ""
     ).strip().casefold():
+        # The two-person rule broken: an auditor wants to see the attempt.
+        audit.emit(
+            ctx,
+            "access_denied",
+            {"action": "agent_registration", "reason": "registrant"},
+        )
         raise PermissionError(
             "The person who registered an agent cannot answer it."
         )
@@ -140,6 +146,11 @@ def revoke(ctx, agent_id: str, reason: str, *, store, audit) -> dict:
         raise LookupError("Unknown agent.")
     if agent["status"] == "revoked":
         return agent
+    if agent["status"] != "active":
+        # A proposed or rejected agent is the Controller's to answer.
+        raise NotProposed(
+            f"A {agent['status']} agent is not revoked; a Controller answers it."
+        )
     agent = store.revoke(ctx, agent_id, reason)
     if agent is None:  # deleted since the read above
         raise LookupError("Unknown agent.")

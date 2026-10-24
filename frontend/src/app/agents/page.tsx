@@ -495,7 +495,7 @@ function ConfirmDialog({
       : pending.kind === "reject-agent"
         ? {
             title: "Reject agent",
-            text: `Rejecting ${agent.name} releases its key or user so it can be registered again correctly.`,
+            text: `Rejecting ${agent.name} keeps its key or user blocked. To try again, register it with a fresh key or user.`,
             path: `${base}/reject`,
             button: "Reject agent",
             done: `${agent.name} rejected.`,
