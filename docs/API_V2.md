@@ -54,6 +54,8 @@ Agent control is **off** unless an admin turns the `agents` engine on (`shadow`,
 
 An **agent** is a machine actor an admin registered: `{name, owner, description?, principal}`. `owner` is the email of the person answerable for it. `principal` binds it to who it acts as: `{"api_key_id": "…"}` (one of the tenant's live keys), `{"user_id", "email"}` (a service account), or `null` (an outside agent known only from imported logs). One principal belongs to at most one agent (409).
 
+A registered agent starts **`proposed`**: nothing it does is allowed, and it takes no mandate, until a user with the **controller** role approves it on `/api` (`POST /api/trust/agents/{agent_id}/approve`, or `…/reject` with a `reason`; admins cannot, and neither can the person who registered it). A rejected agent's principal is released, so the same key or user can be registered again.
+
 A **mandate** is what a person authorised the agent to do. An admin proposes it with `POST /v2/agents/{agent_id}/mandates`:
 
 ```json

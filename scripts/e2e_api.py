@@ -115,6 +115,8 @@ def seed_database() -> None:
             # A delegate decides in the seat, so must be able to approve.
             ("pat@e2e.test", "approver"),
             ("casey@e2e.test", "viewer"),
+            # The finance Controller who approves agent registrations.
+            ("cora@e2e.test", "controller"),
             # An admin may connect only their own sign-in domain.
             ("it@e2e-sso.test", "admin"),
         ):

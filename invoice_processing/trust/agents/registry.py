@@ -82,6 +82,8 @@ def register(ctx, body: dict, *, store, audit, url=None) -> dict:
             principal_id=principal_id,
             principal_email=email,
             description=body.get("description"),
+            # A Controller approves it before it can do anything (PRD §4).
+            status="proposed",
         )
     except IntegrityError:
         raise AgentConflict("That principal is already an agent.") from None
@@ -90,6 +92,45 @@ def register(ctx, body: dict, *, store, audit, url=None) -> dict:
         "agent_registered",
         {"name": name, "kind": kind, "owner": agent["owner"]},
     )
+    return agent
+
+
+class NotProposed(ValueError):
+    """Only a proposed agent takes a Controller's answer."""
+
+
+def settle(ctx, agent_id: str, *, approve: bool, reason=None, store, audit):
+    """A Controller approves or rejects a proposed agent. The person who
+    registered it never answers it (one person holds one role, but the row
+    says who registered)."""
+    agent = store.get(ctx.tenant_id, agent_id)
+    if agent is None:
+        raise LookupError("Unknown agent.")
+    if (agent.get("registered_by") or "").casefold() == (
+        ctx.actor or ""
+    ).strip().casefold():
+        raise PermissionError(
+            "The person who registered an agent cannot answer it."
+        )
+    try:
+        agent = store.settle_registration(
+            ctx, agent_id, approve=approve, reason=reason
+        )
+    except ValueError as exc:
+        verb = "approved" if approve else "rejected"
+        raise NotProposed(f"Only a proposed agent can be {verb}.") from exc
+    if agent is None:  # deleted since the read above
+        raise LookupError("Unknown agent.")
+    if approve:
+        audit.emit(
+            ctx,
+            "agent_approved",
+            {"name": agent["name"], "owner": agent["owner"]},
+        )
+    else:
+        audit.emit(
+            ctx, "agent_rejected", {"name": agent["name"], "reason": reason}
+        )
     return agent
 
 
