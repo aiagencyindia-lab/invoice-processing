@@ -149,29 +149,20 @@ def drift(action, agent, mandate, store, settings, now, decider):
         return None
     at = _at(action, now)
     days = settings["agents.drift_window_days"]
-    past = [
-        Decimal(r["amount"])
-        for r in store.actions(
-            agent["tenant_id"],
-            agent_id=agent["id"],
-            since=at - timedelta(days=days),
-            until=at + _TICK,
-            decisions=("ALLOW", "ALLOW-WITH-REVIEW"),
-            sources=("inline", "log"),
-            # ponytail: the newest 500 rows only (an agent past ~6 money
-            # actions a day); a count/max aggregate if baselines must see more.
-        )
-        if r["action"] in MONEY_KINDS
-        and r["amount"] is not None
-        and r["currency"] == action.currency
+    n, largest = store.baseline(
+        agent["tenant_id"],
+        agent["id"],
+        since=at - timedelta(days=days),
+        until=at + _TICK,
+        currency=action.currency,
         # Drift's own flags never become the normal, or one outlier would
-        # raise the bar for the next. Other detectors' reviews still count.
-        and not any(x.get("rule") == "drift" for x in r.get("reasons") or [])
-    ]
-    if len(past) < settings["agents.drift_min_history"]:
+        # raise the bar for the next (left out by the store). Other
+        # detectors' reviews still count.
+        kinds=MONEY_KINDS,
+    )
+    if n < settings["agents.drift_min_history"]:
         return None
     factor = Decimal(str(settings["agents.drift_amount_factor"]))
-    largest = max(past)
     if amount <= factor * largest:
         return None
     return policy.Reason(
@@ -180,7 +171,7 @@ def drift(action, agent, mandate, store, settings, now, decider):
         "REVIEW",
         f"{agent['name']} handled {amount} {action.currency or ''}".rstrip()
         + f", more than {factor:g} times the largest ({largest}) of its last "
-        f"{len(past)} actions in {int(days)} days.",
+        f"{n} actions in {int(days)} days.",
     )
 
 

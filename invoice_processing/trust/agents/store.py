@@ -8,7 +8,7 @@ import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from sqlalchemy import and_, delete, exists, func, or_, select
+from sqlalchemy import String, and_, cast, delete, exists, func, or_, select
 
 from ...db.models import Agent, AgentAction, AgentMandate, TrustHold
 from ...db.repositories import SelfApproval
@@ -486,6 +486,41 @@ class AgentStore:
             q = q.where(AgentAction.category == category)
         with tenant_session(tenant_id, self.url) as s:
             return Decimal(str(s.scalar(q)))
+
+    def baseline(
+        self,
+        tenant_id: str,
+        agent_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+        currency: str | None,
+        kinds: tuple[str, ...],
+    ) -> tuple[int, Decimal | None]:
+        """How many clean money actions the agent took in the window, in
+        this currency, and the largest. Rows drift itself flagged are left
+        out: matched on the reason type, whose quotes JSON never leaves
+        bare inside another reason's message."""
+        flagged = func.coalesce(cast(AgentAction.reasons, String), "").like(
+            '%"AGENT-DRIFT"%'
+        )
+        q = select(func.count(), func.max(AgentAction.amount)).where(
+            AgentAction.tenant_id == tenant_id,
+            AgentAction.agent_id == agent_id,
+            AgentAction.action.in_(kinds),
+            AgentAction.amount.is_not(None),
+            AgentAction.currency.is_(None)
+            if currency is None
+            else AgentAction.currency == currency,
+            AgentAction.decision.in_(("ALLOW", "ALLOW-WITH-REVIEW")),
+            AgentAction.source.in_(("inline", "log")),
+            AgentAction.occurred_at >= since,
+            AgentAction.occurred_at < until,
+            ~flagged,
+        )
+        with tenant_session(tenant_id, self.url) as s:
+            n, largest = s.execute(q).one()
+        return int(n), None if largest is None else Decimal(str(largest))
 
     def count_since(
         self, tenant_id: str, agent_id: str, *, since: datetime, until: datetime
