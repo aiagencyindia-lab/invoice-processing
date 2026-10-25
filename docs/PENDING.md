@@ -43,13 +43,11 @@ processes run with `RUN_MIGRATIONS` off.
 - [ ] **Docs PR**: backup retention and the smoke-test result in
       `SECURITY.md` / `deployment/BACKUP_RESTORE.md`; the project ids in
       `deployment/README.md`.
-- [ ] **Deploy settings into git** (2026-10-25): `deployment/railway.api.json`
-      holds the API service's start command, pre-deploy migrate, health
-      check, 60 s draining and restart policy (checked by
-      `tests/test_railway_config.py`). Remaining: set `invoice-processing`'s
-      config-file path to `/deployment/railway.api.json` and confirm the
-      next deploy shows the settings coming from the file. `app` reads no
-      file. Variables stay in Railway.
+- [x] **Deploy settings into git** (2026-10-26): `.railway/railway.ts`
+      (Railway IaC, variables unmanaged) describes the live project;
+      `railway config plan` showed no changes. Applied by hand with
+      `railway config apply`, never on push (`deployment/README.md`).
+      Railway refuses `railway.json` config files now.
 
 Gotchas found on the first deploy:
 - A Postgres added with `railway add --database postgres` has **no TCP
