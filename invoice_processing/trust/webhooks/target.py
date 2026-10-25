@@ -17,6 +17,8 @@ import certifi
 import urllib3
 from urllib3.util import parse_url
 
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
 
 class Refused(Exception):
     """The url is internal or ambiguous; nothing was sent."""
@@ -28,9 +30,11 @@ def addresses(host: str) -> list[str]:
 
 def _inward(address: str) -> bool:
     ip = ipaddress.ip_address(address.split("%", 1)[0])
-    # An IPv4-mapped address counts as the IPv4 address it carries.
+    # An IPv4-mapped or NAT64 address counts as the IPv4 address it carries.
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
         ip = ip.ipv4_mapped
+    elif isinstance(ip, ipaddress.IPv6Address) and ip in _NAT64:
+        ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
     return not ip.is_global
 
 
@@ -111,15 +115,27 @@ def post(url: str, *, data: str, headers: dict, timeout: float, resolve=None):
         raise Refused(url)
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     shown = f"[{name}]" if ":" in name else name
-    response = _pool(parsed.scheme, found[0], port, name, timeout).urlopen(
-        "POST",
-        parsed.request_uri,
-        body=data,
-        headers={
-            **headers,
-            "Host": shown if parsed.port is None else f"{shown}:{port}",
-        },
-        redirect=False,
-        retries=False,
-    )
+    headers = {k: v for k, v in headers.items() if k.lower() != "host"}
+    headers["Host"] = shown if parsed.port is None else f"{shown}:{port}"
+    # Every answer was checked above, so any is safe to try: one with no
+    # route (an AAAA on an IPv4-only worker) falls through to the next.
+    candidates = list(dict.fromkeys(found))
+    for i, address in enumerate(candidates):
+        try:
+            with _pool(parsed.scheme, address, port, name, timeout) as pool:
+                response = pool.urlopen(
+                    "POST",
+                    parsed.request_uri,
+                    body=data,
+                    headers=headers,
+                    redirect=False,
+                    retries=False,
+                )
+            break
+        except (
+            urllib3.exceptions.NewConnectionError,
+            urllib3.exceptions.ConnectTimeoutError,
+        ):
+            if i == len(candidates) - 1:
+                raise
     return SimpleNamespace(status_code=response.status)

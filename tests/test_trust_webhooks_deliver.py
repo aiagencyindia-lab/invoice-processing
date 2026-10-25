@@ -379,6 +379,12 @@ def test_deliveries_go_out_through_the_pinned_send(env, monkeypatch):
     opened = []
 
     class Pool:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
         def urlopen(self, method, path, **kw):
             assert kw["redirect"] is False  # a 3xx is a failed attempt
             return type("R", (), {"status": 204})()

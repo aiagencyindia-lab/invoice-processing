@@ -87,6 +87,12 @@ class FakePool:
         self.opened = (scheme, address, port, name, timeout)
         self.sent = None
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
     def urlopen(self, method, path, body=None, headers=None, **kw):
         self.sent = (method, path, body, headers, kw)
         return type("R", (), {"status": 204})()
@@ -190,3 +196,60 @@ def test_the_https_pool_checks_the_certificate_against_the_name():
     assert pool.conn_kw["server_hostname"] == "hooks.example.com"
     assert pool.assert_hostname == "hooks.example.com"
     assert pool.cert_reqs == "CERT_REQUIRED"
+
+
+def test_an_ip_literal_is_not_looked_up(pools):
+    target.post("https://93.184.216.34/in", data="{}", headers={}, timeout=10,
+                resolve=lambda h: pytest.fail("resolved"))  # fmt: skip
+    assert pools[0].opened[1] == "93.184.216.34"
+
+
+def test_a_dead_address_falls_through_to_the_next_checked_one(monkeypatch):
+    """Every answer was checked, so any of them is safe to try."""
+    import urllib3  # noqa: PLC0415
+
+    tried = []
+
+    class Pool:
+        def __init__(self, address):
+            self.address = address
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def urlopen(self, *a, **kw):
+            tried.append(self.address)
+            if self.address == "2606:2800:220:1::1":
+                raise urllib3.exceptions.NewConnectionError(None, "no route")
+            return type("R", (), {"status": 200})()
+
+    monkeypatch.setattr(
+        target, "_pool", lambda s, address, p, n, t: Pool(address)
+    )
+    r = target.post("https://hooks.example.com/", data="{}", headers={},
+                    timeout=10, resolve=lambda h: ["2606:2800:220:1::1",
+                                                   "93.184.216.34"])  # fmt: skip
+    assert r.status_code == 200
+    assert tried == ["2606:2800:220:1::1", "93.184.216.34"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://0.0.0.0/", "http://[::]/", "http://[64:ff9b::7f00:1]/"],
+)
+def test_unspecified_and_nat64_inward_addresses_are_refused(pools, url):
+    with pytest.raises(target.Refused):
+        target.post(url, data="{}", headers={}, timeout=10)
+    assert pools == []
+
+
+def test_a_callers_host_header_is_replaced(pools):
+    target.post("https://hooks.example.com/", data="{}",
+                headers={"host": "evil.example"}, timeout=10,
+                resolve=lambda h: ["93.184.216.34"])  # fmt: skip
+    sent = pools[0].sent[3]
+    assert [k for k in sent if k.lower() == "host"] == ["Host"]
+    assert sent["Host"] == "hooks.example.com"
