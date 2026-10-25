@@ -745,3 +745,12 @@ def test_drift_counts_a_row_stamped_at_the_actions_own_time(store):
         run(store, behaviour.drift, approve("30001", at=NOW), a).type
         == "AGENT-DRIFT"
     )
+
+
+def test_drift_sees_past_the_newest_500_actions(store):
+    """The baseline is the whole window, not the latest page of it."""
+    a = agent(store)
+    ledger(store, a, amount=Decimal("100000"), currency="INR",
+           occurred_at=NOW - timedelta(days=10))  # fmt: skip
+    history(store, a, n=500)
+    assert run(store, behaviour.drift, approve("150000"), a) is None
