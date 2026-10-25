@@ -378,8 +378,16 @@ def decide(
         documents=documents,
         now=now,
     )
+    # An admin's override stands in for an absent approver, never for a
+    # controller: that seat is finance sign-off (approvals.fills).
+    controller_seat = why is None and (
+        current["assignee_kind"],
+        current["assignee_value"],
+    ) == ("role", "controller")
     overridden = bool(refusal and override_reason)
-    if refusal and not (principal.can("admin") and override_reason):
+    if refusal and (
+        controller_seat or not (principal.can("admin") and override_reason)
+    ):
         raise Refused(refusal)
     pending = [s for s in repo.chain(t, case) if s["status"] == "pending"]
     recheck = None

@@ -105,6 +105,29 @@ def _tenant_users(tenant_id: str) -> dict[str, str]:
     }
 
 
+def _active_controllers(tenant_id: str) -> list[str]:
+    from .admin_routes import _provisioner  # noqa: PLC0415
+
+    return [
+        u["email"].casefold()
+        for u in _provisioner().list_users(tenant_id)
+        if u["role"] == "controller" and u["is_active"]
+    ]
+
+
+def controller_needed(tenant_id: str) -> bool:
+    """Whether a rule names a controller step or an invoice waits on one:
+    then the account must keep an active controller, since no approver or
+    admin can sign that step off in their place."""
+    repo = _repo()
+    return any(
+        s.get("kind") == "role" and s.get("value") == "controller"
+        for r in repo.list_rules(tenant_id)
+        if r["enabled"]
+        for s in r["steps"]
+    ) or repo.has_pending(tenant_id, "role", "controller")
+
+
 def _fold(email: str) -> str:
     return email.strip().casefold()
 
@@ -219,12 +242,17 @@ def _check_rule(repo, tenant_id: str, kind, match, steps) -> tuple[dict, list]:
                 400,
                 f"Approver group {v!r} has no members, so nobody could approve.",
             )
-        elif k == "role" and v == "controller":
-            # The ladder would let every approver and admin fill it.
+        elif (
+            k == "role"
+            and v == "controller"
+            and not _active_controllers(tenant_id)
+        ):
+            # Only a controller fills it (approvals.fills): with none, it is
+            # a seat nobody can fill.
             raise HTTPException(
                 400,
-                "A controller step is not supported; name the controller "
-                "as a user step.",
+                "There is no active controller, so nobody could approve a "
+                "controller step.",
             )
         elif k == "role" and v not in ROLE_RANK:
             raise HTTPException(
@@ -495,7 +523,10 @@ def update_rule(
     # Re-validate only what the caller changed: a user who has since left must
     # not block disabling the rule that names them. A new kind or match is
     # checked against the merged rule so the two cannot disagree.
-    if {"kind", "match", "steps"} & request.model_fields_set:
+    # Switching a rule on puts its seats back in play: a controller step
+    # needs an active controller again (`_check_rule`).
+    enabling = request.enabled is True and not before["enabled"]
+    if enabling or {"kind", "match", "steps"} & request.model_fields_set:
         kind = request.kind or before["kind"]
         match, steps = _check_rule(
             repo,

@@ -1542,6 +1542,91 @@ def test_a_controller_can_be_a_user_step_a_delegate_and_a_manager(env):
     assert r.status_code == 200, r.text
 
 
-def test_a_controller_role_step_is_refused(env):
-    r = make_rule(env, steps=[{"kind": "role", "value": "controller"}])
+CONTROLLER_STEP = {"kind": "role", "value": "controller"}
+
+
+def set_user(env, email, **patch):
+    admin = env["client"]("admin:boss")
+    users = admin.get("/api/admin/users").json()["users"]
+    user = next(u for u in users if u["email"] == email)
+    return admin.patch(f"/api/admin/users/{user['id']}", json=patch)
+
+
+def test_a_controller_role_step_needs_an_active_controller(env):
+    r = make_rule(env, steps=[CONTROLLER_STEP])
     assert r.status_code == 400 and "controller" in r.text
+    env["add_users"]("cora@x.test", role="controller")
+    assert set_user(env, "cora@x.test", is_active=False).status_code == 200
+    assert make_rule(env, steps=[CONTROLLER_STEP]).status_code == 400
+    assert set_user(env, "cora@x.test", is_active=True).status_code == 200
+    assert make_rule(env, steps=[CONTROLLER_STEP]).status_code == 201
+
+
+def test_only_a_controller_decides_a_controller_step(env):
+    """Not an admin, not an approver: the ladder does not reach this seat."""
+    env["add_users"]("cora@x.test", role="controller")
+    assert make_rule(env, steps=[CONTROLLER_STEP]).status_code == 201
+    for token in ("admin:boss", "approver:a"):
+        r = act(env, token)
+        assert r.status_code == 403, (token, r.text)
+        assert "role:controller" in r.json()["detail"]
+    r = act(env, "controller:cora")
+    assert r.status_code == 200, r.text
+    assert workflow(env)["decision"] == "approve"
+
+
+def test_an_admin_override_does_not_pass_a_controller_step(env):
+    """The override exists for an absent approver; a controller step is
+    finance sign-off that an admin never gives in their place."""
+    env["add_users"]("cora@x.test", role="controller")
+    assert make_rule(env, steps=[CONTROLLER_STEP]).status_code == 201
+    r = act(env, "admin:boss", override_reason="The CFO asked")
+    assert r.status_code == 403 and "role:controller" in r.json()["detail"]
+    assert env["repo"].current(TENANT, CASE)["status"] == "pending"
+
+
+def test_a_disabled_controller_rule_does_not_hold_the_last_controller(env):
+    env["add_users"]("cora@x.test", role="controller")
+    rule = make_rule(env, steps=[CONTROLLER_STEP]).json()
+    admin = env["client"]("admin:boss")
+    r = admin.patch(
+        f"/api/approvals/rules/{rule['id']}", json={"enabled": False}
+    )
+    assert r.status_code == 200, r.text
+    assert set_user(env, "cora@x.test", role="approver").status_code == 200
+
+
+def test_enabling_a_controller_rule_needs_an_active_controller(env):
+    env["add_users"]("cora@x.test", role="controller")
+    rule = make_rule(env, steps=[CONTROLLER_STEP]).json()
+    admin = env["client"]("admin:boss")
+    path = f"/api/approvals/rules/{rule['id']}"
+    assert admin.patch(path, json={"enabled": False}).status_code == 200
+    assert set_user(env, "cora@x.test", role="approver").status_code == 200
+    r = admin.patch(path, json={"enabled": True})
+    assert r.status_code == 400 and "controller" in r.text
+
+
+def test_the_last_controller_cannot_be_removed_while_a_rule_needs_one(env):
+    env["add_users"]("cora@x.test", role="controller")
+    assert make_rule(env, steps=[CONTROLLER_STEP]).status_code == 201
+    r = set_user(env, "cora@x.test", role="approver")
+    assert r.status_code == 409 and "controller" in r.json()["detail"]
+    assert set_user(env, "cora@x.test", is_active=False).status_code == 409
+    env["add_users"]("carl@x.test", role="controller")
+    assert set_user(env, "cora@x.test", role="approver").status_code == 200
+
+
+def test_the_last_controller_cannot_be_removed_while_a_step_waits(env):
+    """The rule is gone, but an invoice already waits on a controller."""
+    env["add_users"]("cora@x.test", role="controller")
+    rule = make_rule(env, steps=[CONTROLLER_STEP]).json()
+    act(env, "approver:a")  # routes the invoice: the step now exists
+    assert env["repo"].current(TENANT, CASE)["assignee_value"] == "controller"
+    env["repo"].delete_rule(TENANT, rule["id"])
+    assert set_user(env, "cora@x.test", role="approver").status_code == 409
+
+
+def test_the_last_controller_can_go_when_nothing_needs_one(env):
+    env["add_users"]("cora@x.test", role="controller")
+    assert set_user(env, "cora@x.test", role="approver").status_code == 200

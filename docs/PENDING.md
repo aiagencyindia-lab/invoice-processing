@@ -305,9 +305,12 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   - [x] (G2) PRD "agent registration requires Controller approval"
         (2026-10-24): a `controller` role (ranks with approver, never
         admin) alone approves or rejects a registration; agents start
-        `proposed` and are blocked until then. Follow-up if wanted: a real
-        `role:controller` approval-chain step (refused today, because the
-        ladder would let approvers fill it).
+        `proposed` and are blocked until then. A `role:controller`
+        approval-chain step (2026-10-25) is decided only by a controller,
+        never an approver or admin, even overdue (admins are notified); a
+        rule needs an active controller, and the last one cannot be demoted
+        or deactivated while a rule or waiting step needs one (unlocked
+        check: two simultaneous demotions can still leave none).
   - [ ] Partner gates (PRD §5): two design partners running agents in
         production and one adopted external mandate standard before release.
 - [ ] `opentelemetry-api` 1.42.1 advisory (CVE-2026-114603 /

@@ -500,7 +500,13 @@ function InvoicesWorkbench() {
                         >
                           Reject<kbd>r</kbd>
                         </button>
-                        {can(me, "admin") && currentStep ? (
+                        {can(me, "admin") &&
+                        currentStep &&
+                        // Only a controller signs a controller step off; no override.
+                        !(
+                          currentStep.assignee_kind === "role" &&
+                          currentStep.assignee_value === "controller"
+                        ) ? (
                           <button
                             type="button"
                             className="btn-chip"

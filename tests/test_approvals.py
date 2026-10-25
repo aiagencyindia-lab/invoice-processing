@@ -491,3 +491,37 @@ class TestGlRules:
     def test_gl_rule_does_not_pull_a_touchless_invoice_to_a_person(self):
         r = rule("gl", {"gl_prefix": "6"}, [IT], rid="gl")
         assert not ap.needs_person(self.GL, [r])
+
+
+class TestControllerSeat:
+    """A controller step is finance sign-off: only a controller decides it,
+    whatever the ladder says and however late it is."""
+
+    STEP: ClassVar[dict] = {
+        "assignee_kind": "role",
+        "assignee_value": "controller",
+    }
+
+    def test_only_a_controller_fills_a_controller_seat(self):
+        assert ap.fills("controller", "controller")
+        assert not ap.fills("admin", "controller")
+        assert not ap.fills("approver", "controller")
+        assert ap.fills("controller", "approver")
+        assert ap.fills("admin", "approver")
+        assert not ap.fills("clerk", "approver")
+        assert not ap.fills("nobody", "approver")
+
+    def _why(self, role, step):
+        return ap.satisfaction(
+            "x@a.test", role, step, groups={}, delegators_of=[]
+        )
+
+    def test_a_controller_step_is_decided_by_a_controller_only(self):
+        assert self._why("controller", self.STEP) == "has the controller role"
+        assert self._why("admin", self.STEP) is None
+        assert self._why("approver", self.STEP) is None
+
+    def test_an_escalated_controller_step_stays_controller_only(self):
+        step = {**self.STEP, "escalated_to": "role:admin"}
+        assert self._why("admin", step) is None
+        assert self._why("controller", step) == "has the controller role"

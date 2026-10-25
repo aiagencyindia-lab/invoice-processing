@@ -1572,6 +1572,23 @@ class PgApprovalRepository:
             query = query.with_for_update()
         return list(session.scalars(query))
 
+    def has_pending(self, tenant_id: str, kind: str, value: str) -> bool:
+        """Whether any invoice waits on a step held by this seat."""
+        with tenant_session(tenant_id, self.url) as session:
+            return (
+                session.scalar(
+                    select(ApprovalStep.id)
+                    .where(
+                        ApprovalStep.tenant_id == tenant_id,
+                        ApprovalStep.status == ApprovalStep.PENDING,
+                        ApprovalStep.assignee_kind == kind,
+                        ApprovalStep.assignee_value == value,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+
     def chain(self, tenant_id: str, case_id: str) -> list[dict]:
         with tenant_session(tenant_id, self.url) as session:
             return [
