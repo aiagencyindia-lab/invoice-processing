@@ -408,6 +408,17 @@ def test_a_person_deciding_also_cancels_open_requests_but_not_fulfilled(env):
     store.transition(human, f["id"], "accepted", actor="c@x.test")
     assert requests.get(T, done["id"])["status"] == "fulfilled"
     assert requests.get(T, still["id"])["status"] == "cancelled"
+    # Each request closed this way leaves its own audit row, as a manual
+    # cancel does.
+    with tenant_session(T, url) as s:
+        rows = s.query(models.AuditEvent).all()
+    cancelled = [
+        r.after for r in rows if r.action == "trust_evidence_cancelled"
+    ]
+    assert cancelled == [
+        {"request_id": still["id"], "finding_id": f["id"],
+         "cause": "finding_accepted"}
+    ]  # fmt: skip
 
 
 def test_a_clean_run_also_releases_a_hold_engines_cleared_insight(env):
