@@ -20,19 +20,24 @@ connected to `invoice-processing` and `app`. The pre-deploy step migrates
 (checked 2026-10-25: `main` 0eacd9d running, schema at `d4e5f6a7b8c9`); the
 processes run with `RUN_MIGRATIONS` off.
 
-- [ ] **Restore check** against live production, *before* sealing: it only
-      reads (schema version, forced RLS, policies, the app role's limits).
-      Postgres has no TCP proxy, so `railway run` from a laptop cannot reach
-      it; run it inside the service instead. Expect PASS:
+- [x] **Restore check** against live production (2026-10-25): **PASS**
+      (schema version, forced RLS, every policy, the app role's limits).
+      The database holds no tenants yet. Run inside the service over SSH
+      (key `vineet-mac` registered on aixaitools):
       ```bash
-      railway ssh -p 9bd2d348-41a3-412a-9484-20a7e1077b75 -e production -s invoice-processing -- sh -c './.venv/bin/python -m invoice_processing.db.restore_check --restored "$MIGRATE_DATABASE_URL"'
+      railway ssh -p 9bd2d348-41a3-412a-9484-20a7e1077b75 -e production -s invoice-processing -- sh -c 'cd /app && ./.venv/bin/python -m invoice_processing.db.restore_check --restored "$MIGRATE_DATABASE_URL"'
       ```
+      Run it again against a restored copy once backups exist.
 - [ ] **Seal** `DATABASE_URL`, `MIGRATE_DATABASE_URL`,
-      `GOOGLE_CREDENTIALS_JSON` on `invoice-processing` (operator; still
-      readable on 2026-10-25).
-- [ ] **Backups**: `Postgres` → point-in-time recovery + daily;
-      `ledgerly-volume` → daily schedule (operator). Record the retention.
-      Not verifiable from the CLI.
+      `GOOGLE_CREDENTIALS_JSON` on `invoice-processing` (operator, in the
+      dashboard: Variables → ⋮ → Seal). The CLI's `environment edit`
+      ignores `isSealed`; the API patch would need the values re-sent.
+      Irreversible: the values cannot be read back afterwards.
+- [ ] **Backups**: none exist (checked 2026-10-25). Volume backup
+      schedules need a **Railway Pro** workspace; point-in-time recovery
+      for `Postgres` also needs a bucket. Decide on Pro, then: daily +
+      weekly on `postgres-volume` and `ledgerly-volume`
+      (`volumeInstanceBackupScheduleUpdate`), and record the retention.
 - [x] **No public database endpoint** (2026-10-25): `Postgres` has no TCP
       proxy and no domain.
 - [ ] **Docs PR**: backup retention and the smoke-test result in
