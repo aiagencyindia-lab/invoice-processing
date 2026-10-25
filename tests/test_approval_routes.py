@@ -1568,10 +1568,43 @@ def test_only_a_controller_decides_a_controller_step(env):
     assert make_rule(env, steps=[CONTROLLER_STEP]).status_code == 201
     for token in ("admin:boss", "approver:a"):
         r = act(env, token)
-        assert r.status_code in (403, 409), (token, r.text)
+        assert r.status_code == 403, (token, r.text)
+        assert "role:controller" in r.json()["detail"]
     r = act(env, "controller:cora")
     assert r.status_code == 200, r.text
     assert workflow(env)["decision"] == "approve"
+
+
+def test_an_admin_override_does_not_pass_a_controller_step(env):
+    """The override exists for an absent approver; a controller step is
+    finance sign-off that an admin never gives in their place."""
+    env["add_users"]("cora@x.test", role="controller")
+    assert make_rule(env, steps=[CONTROLLER_STEP]).status_code == 201
+    r = act(env, "admin:boss", override_reason="The CFO asked")
+    assert r.status_code == 403 and "role:controller" in r.json()["detail"]
+    assert env["repo"].current(TENANT, CASE)["status"] == "pending"
+
+
+def test_a_disabled_controller_rule_does_not_hold_the_last_controller(env):
+    env["add_users"]("cora@x.test", role="controller")
+    rule = make_rule(env, steps=[CONTROLLER_STEP]).json()
+    admin = env["client"]("admin:boss")
+    r = admin.patch(
+        f"/api/approvals/rules/{rule['id']}", json={"enabled": False}
+    )
+    assert r.status_code == 200, r.text
+    assert set_user(env, "cora@x.test", role="approver").status_code == 200
+
+
+def test_enabling_a_controller_rule_needs_an_active_controller(env):
+    env["add_users"]("cora@x.test", role="controller")
+    rule = make_rule(env, steps=[CONTROLLER_STEP]).json()
+    admin = env["client"]("admin:boss")
+    path = f"/api/approvals/rules/{rule['id']}"
+    assert admin.patch(path, json={"enabled": False}).status_code == 200
+    assert set_user(env, "cora@x.test", role="approver").status_code == 200
+    r = admin.patch(path, json={"enabled": True})
+    assert r.status_code == 400 and "controller" in r.text
 
 
 def test_the_last_controller_cannot_be_removed_while_a_rule_needs_one(env):

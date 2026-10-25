@@ -123,6 +123,7 @@ def controller_needed(tenant_id: str) -> bool:
     return any(
         s.get("kind") == "role" and s.get("value") == "controller"
         for r in repo.list_rules(tenant_id)
+        if r["enabled"]
         for s in r["steps"]
     ) or repo.has_pending(tenant_id, "role", "controller")
 
@@ -522,7 +523,10 @@ def update_rule(
     # Re-validate only what the caller changed: a user who has since left must
     # not block disabling the rule that names them. A new kind or match is
     # checked against the merged rule so the two cannot disagree.
-    if {"kind", "match", "steps"} & request.model_fields_set:
+    # Switching a rule on puts its seats back in play: a controller step
+    # needs an active controller again (`_check_rule`).
+    enabling = request.enabled is True and not before["enabled"]
+    if enabling or {"kind", "match", "steps"} & request.model_fields_set:
         kind = request.kind or before["kind"]
         match, steps = _check_rule(
             repo,
