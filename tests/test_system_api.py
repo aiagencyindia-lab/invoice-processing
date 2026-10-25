@@ -1180,3 +1180,41 @@ class TestHeartbeatCrossesContainers:
 
         monkeypatch.setattr(runner, "_write_heartbeat_row", explode)
         write_heartbeat()  # must not raise
+
+
+class TestHealthz:
+    """The platform's deploy check: no sign-in, and nothing but a status."""
+
+    def _get(self):
+        return TestClient(app).get("/healthz")
+
+    def test_up_with_no_database_configured(self, monkeypatch):
+        monkeypatch.setattr(service, "_database_configured", lambda: False)
+        r = self._get()
+        assert r.status_code == 200 and r.json() == {"status": "ok"}
+
+    def test_up_when_the_database_answers(self, monkeypatch, tmp_path):
+        from sqlalchemy import create_engine  # noqa: PLC0415
+
+        from invoice_processing.db import session  # noqa: PLC0415
+
+        engine = create_engine(f"sqlite:///{tmp_path / 'up.db'}")
+        monkeypatch.setattr(service, "_database_configured", lambda: True)
+        monkeypatch.setattr(session, "get_engine", lambda: engine)
+        r = self._get()
+        assert r.status_code == 200 and r.json() == {"status": "ok"}
+
+    def test_unavailable_when_the_database_does_not_answer(
+        self, monkeypatch, tmp_path
+    ):
+        """A broken DATABASE_URL must fail the deploy, and say nothing
+        about why to whoever is asking."""
+        from sqlalchemy import create_engine  # noqa: PLC0415
+
+        from invoice_processing.db import session  # noqa: PLC0415
+
+        engine = create_engine(f"sqlite:///{tmp_path / 'missing' / 'x.db'}")
+        monkeypatch.setattr(service, "_database_configured", lambda: True)
+        monkeypatch.setattr(session, "get_engine", lambda: engine)
+        r = self._get()
+        assert r.status_code == 503 and r.json() == {"status": "unavailable"}
