@@ -480,6 +480,7 @@ class TestMigration:
             ("b2c3d4e5f6a7", 3),
             ("c3d4e5f6a7b8", 0),
             ("d4e5f6a7b8c9", 2),
+            ("a8d4e6f1b2c3", 0),
         ],
     )
     def test_migration_protects_exactly_the_tables_it_creates(
@@ -940,6 +941,7 @@ class TestMigration:
                     ).scalars()
                     assert list(left) == [b]
 
+                # By name: a later migration would make "-1" undo that one.
                 down = db.alembic("downgrade c9d5e2f3a4b6")
                 assert down.returncode == 0, down.stderr[-2000:]
                 with su.connect() as c:

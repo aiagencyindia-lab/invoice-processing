@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ApiError, api } from "@/lib/api";
 import {
   firebaseConfigured,
   redirectSignInError,
   signInWithGoogle,
+  signInWithMicrosoft,
 } from "@/lib/auth";
 
 /** The Google button, plus the two states that are not "press this".
@@ -25,6 +27,8 @@ export function SignIn({
 }) {
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // null: the Microsoft button; a string: its work-email field.
+  const [msEmail, setMsEmail] = useState<string | null>(null);
 
   // A redirect that failed comes back as a fresh page load, so the error has
   // to be collected here rather than at the click that started it.
@@ -48,6 +52,33 @@ export function SignIn({
       onSignedIn();
     } catch (caught) {
       setProblem(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Which customer's provider this address signs in through, then that
+   *  provider: one per Microsoft customer, so the address has to come first. */
+  async function microsoft() {
+    if (!msEmail) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      // A POST body, so the address is not in a URL that proxies log.
+      const { provider_id } = await api<{ provider_id: string }>(
+        "/api/sso/microsoft",
+        { method: "POST", body: JSON.stringify({ email: msEmail }) },
+      );
+      await signInWithMicrosoft(provider_id, msEmail);
+      onSignedIn();
+    } catch (caught) {
+      setProblem(
+        caught instanceof ApiError
+          ? caught.friendly
+          : caught instanceof Error
+            ? caught.message
+            : String(caught),
+      );
     } finally {
       setBusy(false);
     }
@@ -105,14 +136,39 @@ export function SignIn({
       </button>
 
       {process.env.NEXT_PUBLIC_SSO_MICROSOFT === "1" ? (
-        <button
-          type="button"
-          className="btn-secondary"
-          style={{ width: "100%", marginTop: 10 }}
-          disabled
-        >
-          Sign in with Microsoft
-        </button>
+        msEmail === null ? (
+          <button
+            type="button"
+            className="btn-secondary"
+            style={{ width: "100%", marginTop: 10 }}
+            disabled={busy}
+            onClick={() => setMsEmail("")}
+          >
+            Sign in with Microsoft
+          </button>
+        ) : (
+          <form
+            className="stack"
+            style={{ gap: 8, marginTop: 10 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              void microsoft();
+            }}
+          >
+            <input
+              className="input-field"
+              type="email"
+              aria-label="Microsoft work email"
+              placeholder="you@company.com"
+              value={msEmail}
+              onChange={(e) => setMsEmail(e.target.value)}
+              required
+            />
+            <button type="submit" className="btn-secondary" disabled={busy}>
+              {busy ? "Opening Microsoft…" : "Continue with Microsoft"}
+            </button>
+          </form>
+        )
       ) : null}
 
       {problem ? (

@@ -38,6 +38,12 @@ _DOMAIN = re.compile(
 LOGIN_TOUCH = timedelta(minutes=15)
 GOOGLE = "google.com"
 MICROSOFT = "microsoft.com"
+# Identity Platform OIDC providers, one per Microsoft customer; the provider
+# id is the proof of which Entra tenant a person came from.
+OIDC_PREFIX = "oidc."
+MICROSOFT_NOT_CONNECTED = (
+    "This Microsoft account's organisation isn't connected to Ledgerly."
+)
 
 
 class SsoServices(NamedTuple):
@@ -234,23 +240,56 @@ def resolve_principal(
     email = str(claims.get("email") or "").strip().lower()
     if not email:
         raise AuthError("Token carries no email claim.", status_code=403)
-    if claims.get("email_verified") is not True:
+    provider = str((claims.get("firebase") or {}).get("sign_in_provider") or "")
+    oidc = provider.startswith(OIDC_PREFIX)
+    # Entra sends no email_verified; for an OIDC provider the provider match
+    # below is what vouches for the address (its tenant owns its users).
+    if not oidc and claims.get("email_verified") is not True:
         raise AuthError("Email address is not verified.", status_code=403)
-    provider = (claims.get("firebase") or {}).get("sign_in_provider")
     if provider == MICROSOFT:
         raise AuthError(
             "Microsoft sign-in is not enabled yet.", status_code=403
         )
-    if provider != GOOGLE:
+    if provider != GOOGLE and not oidc:
         return principal_from_claims(claims)  # raises the usual 403
     try:
         bound = services.directory.domain(domain_of(email))
     except Exception as exc:
         raise _unavailable(exc) from exc
-    if bound is None or bound.get("provider") != "google":
+    if oidc:
+        # The Entra tenant the token came from, when Firebase passes it on:
+        # a provider set up with a multi-tenant issuer must not let another
+        # tenant's directory vouch for this domain.
+        # ponytail: checked only when present; require it once the live test
+        # shows where Identity Platform puts `tid`.
+        tid = (
+            (claims.get("firebase") or {}).get("sign_in_attributes") or {}
+        ).get("tid")
+        if (
+            bound is None
+            or bound.get("provider") != "microsoft"
+            or bound.get("idp_provider_id") != provider
+            or (
+                tid
+                and bound.get("idp_tenant_id")
+                and tid != bound["idp_tenant_id"]
+            )
+        ):
+            raise AuthError(MICROSOFT_NOT_CONNECTED, status_code=403)
+    elif bound is None or bound.get("provider") != "google":
         # A binding for another provider never admits a Google account.
         return principal_from_claims(claims)  # raises the usual 403
+    return _join(claims, services, now, email, bound)
 
+
+def _join(
+    claims: dict[str, Any],
+    services: SsoServices,
+    now: datetime,
+    email: str,
+    bound: dict,
+) -> Principal:
+    """Provision or link a person through a binding that admitted them."""
     from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
 
     tenant_id = bound["tenant_id"]

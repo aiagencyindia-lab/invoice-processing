@@ -67,17 +67,24 @@ Gotchas found on the first deploy:
 
 ## Microsoft sign-in
 
-Branch `phase3/microsoft-sign-in` (no PR): built and reviewed; spec
+Branch `phase3/microsoft-sign-in`: built and reviewed; spec
 `docs/superpowers/specs/2026-10-14-microsoft-sign-in-design.md`.
 
-- [ ] Rebase onto `main` (expect conflicts in docs/`SECURITY.md` and the
-      `restore_check` head test).
+- [x] `main` merged in (2026-10-25); the provider-id migration revises
+      `d4e5f6a7b8c9`. Second review: no cross-tenant or privilege defect;
+      an unfinished Microsoft binding answers "not set up", and a token's
+      Entra `tid` must match the binding's when both are present.
 - [ ] Live test. The operator provides the Entra tenant id and email
       domain, and creates OIDC provider `oidc.entra-test` on `rasayan`
       (issuer `https://login.microsoftonline.com/<tid>/v2.0`, code flow,
       Entra optional `email` claim, redirect
       `https://rasayan.firebaseapp.com/__/auth/handler`).
 - [ ] PR, review, merge.
+- [ ] After the live test: require the `tid` check (today it applies only
+      when Firebase passes `firebase.sign_in_attributes.tid`), once the
+      token shows where it lands.
+- [ ] The public provider lookup (`POST /api/sso/microsoft`) has no rate
+      limit (one query per call; reveals only that a domain uses Microsoft).
 
 ## v2 Trust layer
 
@@ -326,9 +333,9 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
 - One container on Railway (scale up, not out); documents on one volume.
   Upgrade path: S3 adapter + shared queue + separate worker.
 - `GET /healthz` (2026-10-25) answers 200 when the database answers, 503
-  otherwise, with no sign-in. Not yet Railway's health check: set
-  Healthcheck Path `/healthz` on `invoice-processing` (operator) so a deploy
-  with a broken database is never switched to.
+  otherwise, with no sign-in. It is Railway's Healthcheck Path on
+  `invoice-processing` (set 2026-10-25): a deploy whose database does not
+  answer is never switched to.
 - No rate limit on the Microsoft provider lookup (branch).
 - Logs: thread-pool lines carry blank ids; a client disconnect logs at
   ERROR; `AUTH_DISABLED` warns per request locally.

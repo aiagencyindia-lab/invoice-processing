@@ -858,3 +858,48 @@ class TestNullStateIsRefused:
             "user_role_changed",
             "user_deactivated",
         } & set(names)
+
+
+def test_a_tenant_admin_cannot_create_a_microsoft_binding(env):
+    """Microsoft bindings name an operator-created provider; only the
+    operator makes them (provision bind-microsoft)."""
+    r = env["client"]("admin").post(
+        "/api/admin/sso-domains",
+        json={
+            "domain": "x.test",
+            "provider": "microsoft",
+            "default_role": "viewer",
+        },
+    )
+    assert r.status_code == 422
+
+
+def test_a_microsoft_binding_is_listed_and_can_be_disconnected(env, tmp_path):
+    """The runbook's self-serve disconnect: the admin sees support's binding
+    and may remove it, which only ever removes access."""
+    from invoice_processing.db.repositories import (  # noqa: PLC0415
+        PgSsoDomainRepository,
+    )
+
+    url = env["provisioner"].url
+    PgSsoDomainRepository(url).add(
+        env["acme"]["id"],
+        domain="acme-ms.test",
+        provider="microsoft",
+        default_role="clerk",
+        created_by="operator:vineet",
+        idp_provider_id="oidc.acme",
+        idp_tenant_id="11111111-2222-3333-4444-555555555555",
+    )
+    client = env["client"]("admin")
+    [listed] = client.get("/api/admin/sso-domains").json()["domains"]
+    assert (listed["provider"], listed["idp_provider_id"]) == (
+        "microsoft",
+        "oidc.acme",
+    )
+    assert (
+        client.delete(f"/api/admin/sso-domains/{listed['id']}").status_code
+        == 204
+    )
+    assert client.get("/api/admin/sso-domains").json()["domains"] == []
+    assert "sso_domain_removed" in (tmp_path / "audit.jsonl").read_text()

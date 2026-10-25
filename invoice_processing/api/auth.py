@@ -178,7 +178,15 @@ def principal_from_claims(claims: dict[str, Any]) -> Principal:
     email = claims.get("email")
     if not email:
         raise AuthError("Token carries no email claim.", status_code=403)
-    if claims.get("email_verified") is not True:
+    provider = str((claims.get("firebase") or {}).get("sign_in_provider") or "")
+    # An Identity Platform OIDC provider (one per Microsoft customer) carries
+    # no email_verified: Entra does not send it. The customer's own tenant
+    # vouches for its users, and only an operator-made binding to that exact
+    # provider ever gave such a token its tenant (sso.resolve_principal).
+    if (
+        not provider.startswith("oidc.")
+        and claims.get("email_verified") is not True
+    ):
         # Unverified email means anyone who can receive at that address can
         # claim it, and our audit trail is keyed on email.
         # Absent or non-boolean counts as unverified: we only trust what Google asserted.

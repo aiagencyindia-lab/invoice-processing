@@ -728,8 +728,11 @@ class SsoDomain(Base, TenantMixin):
         String(16), nullable=False
     )  # google|microsoft
     default_role: Mapped[str] = mapped_column(String(32), nullable=False)
-    # The Entra tenant id, for the Microsoft follow-up. Unused in this slice.
+    # The customer's Entra tenant id, for the record (Microsoft bindings).
     idp_tenant_id: Mapped[str | None] = mapped_column(String(64))
+    # The Identity Platform OIDC provider a Microsoft binding trusts
+    # (`oidc.<name>`); its issuer is the customer's Entra tenant. Operator-set.
+    idp_provider_id: Mapped[str | None] = mapped_column(String(64))
     created_by: Mapped[str] = mapped_column(String(320), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now

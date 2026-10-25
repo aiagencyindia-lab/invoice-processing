@@ -24,7 +24,7 @@ import re
 import unicodedata
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel
 
 from .auth import verified_claims
@@ -73,6 +73,54 @@ def slug_for(organisation: str, taken: set[str]) -> str:
         if candidate not in taken:
             return candidate
     raise HTTPException(status_code=409, detail="Could not allocate a name.")
+
+
+MICROSOFT_NOT_SET_UP = (
+    "Microsoft sign-in isn't set up for {domain}. Ask your administrator."
+)
+
+
+@router.post("/api/sso/microsoft")
+def microsoft_provider(email: str = Body("", embed=True)) -> dict:
+    """Which OIDC provider a work address signs in through.
+
+    Public, before sign-in: the login page needs it to open the right
+    customer's Microsoft provider. It reveals only whether a domain uses
+    Ledgerly through Microsoft (SECURITY.md); a Google binding, an unbound
+    or public-mailbox domain and a malformed, missing or over-long address
+    all answer the same. POST, so the address is not in a URL a proxy logs.
+    """
+    from .. import sso  # noqa: PLC0415
+    from . import auth  # noqa: PLC0415
+
+    email = email if isinstance(email, str) and len(email) <= 320 else ""
+    raw = sso.domain_of(email) if "@" in email else ""
+    not_set_up = HTTPException(
+        status_code=404,
+        detail=MICROSOFT_NOT_SET_UP.format(domain=raw or "that address"),
+    )
+    try:
+        domain = sso.normalize_domain(raw)
+    except ValueError:
+        raise not_set_up from None
+    services = auth._services()
+    if services is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Microsoft sign-in needs a database, which is not "
+            "configured.",
+        )
+    try:
+        bound = services.directory.domain(domain)
+    except Exception as exc:
+        raise sso._unavailable(exc) from exc
+    if (
+        bound is None
+        or bound.get("provider") != "microsoft"
+        or not bound.get("idp_provider_id")
+    ):
+        raise not_set_up
+    return {"provider_id": bound["idp_provider_id"]}
 
 
 @router.post("/api/signup")

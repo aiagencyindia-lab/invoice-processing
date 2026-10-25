@@ -58,6 +58,32 @@ account numbers, and no line names an email address on purpose. Exception text i
 logged as raised, so a database error can repeat a value it was given (a
 duplicate address, say); that is the one way such a value reaches a log.
 
+## Sign-in
+
+Identity Platform verifies every token's signature and audience; the users
+row then decides role and active status on every request. A person with no
+tenant yet joins one only through a domain binding:
+
+- **Google:** a verified address at a domain the tenant's admin bound (an
+  admin may bind only their own sign-in domain).
+- **Microsoft:** through the Identity Platform OIDC provider created for the
+  customer's own Entra tenant, *and* at the bound domain. The provider is
+  the proof of tenant: another Entra tenant can give a user any address, but
+  signs in through its own provider, which no other customer's binding
+  accepts. Only the operator binds a Microsoft domain
+  (`provision bind-microsoft`; deployment/MICROSOFT_SIGN_IN.md). The generic
+  `microsoft.com` provider admits nobody.
+
+The login page asks `POST /api/sso/microsoft` (the address in the body,
+never in a URL) which provider a work address uses. It answers before
+sign-in, so it reveals whether a domain uses Ledgerly through Microsoft; it
+is not rate limited (a known gap). A provider admits only one tenant's
+users: `bind-microsoft` refuses a provider another tenant already trusts.
+
+Entra sends no `email_verified`, so for OIDC providers Ledgerly does not
+require it, on the first sign-in or after; every other provider must assert
+a verified address.
+
 ## Data lifecycle
 
 **Retention.** Customer data is kept for the life of the account. The

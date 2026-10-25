@@ -665,3 +665,189 @@ class TestClosedTenants:
             sso.resolve_principal(claims, services, now=NOW)
         assert exc.value.detail == sso.SUSPENDED
         assert directory.provisioned == []
+
+
+MS_BOUND = dict(
+    BOUND,
+    id="d-ms",
+    provider="microsoft",
+    default_role="clerk",
+    idp_provider_id="oidc.acme",
+)
+
+
+def from_entra(provider="oidc.acme", **extra):
+    """An OIDC token: Entra sends no email_verified, so Firebase may not."""
+    return unclaimed(
+        email_verified=False,
+        firebase={"sign_in_provider": provider},
+        **extra,
+    )
+
+
+class TestMicrosoftThroughOidc:
+    def test_the_bound_provider_provisions_and_writes_claims(self):
+        d, c = FakeDirectory(domains=[MS_BOUND]), FakeClaims()
+        p = sso.resolve_principal(from_entra(), sso.SsoServices(d, c), now=NOW)
+        assert (p.tenant_id, p.role) == (ACME, "clerk")
+        assert d.provisioned[0]["uid"] == "fb-9"
+        assert c.written == [("fb-9", {"tenant_id": ACME, "role": "clerk"})]
+        assert d.audits[0][1] == "user_provisioned_by_sso"
+
+    def test_another_tenants_provider_is_refused_whatever_the_email(self):
+        """The attacker case: an Entra tenant that is not Acme's can give a
+        user an @acme.com address, but signs in through its own provider."""
+        d = FakeDirectory(domains=[MS_BOUND])
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                from_entra(provider="oidc.evil"), services(directory=d)
+            )
+        assert exc.value.status_code == 403
+        assert exc.value.detail == sso.MICROSOFT_NOT_CONNECTED
+        assert d.provisioned == []
+
+    def test_a_google_binding_never_admits_an_oidc_token(self):
+        d = FakeDirectory(domains=[dict(BOUND, idp_provider_id=None)])
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(from_entra(), services(directory=d))
+        assert exc.value.detail == sso.MICROSOFT_NOT_CONNECTED
+        assert d.provisioned == []
+
+    def test_a_microsoft_binding_never_admits_a_google_token(self):
+        d = FakeDirectory(domains=[MS_BOUND])
+        with pytest.raises(AuthError):
+            sso.resolve_principal(unclaimed(), services(directory=d))
+        assert d.provisioned == []
+
+    def test_each_provider_reaches_only_its_own_tenant(self):
+        globex = dict(
+            MS_BOUND,
+            id="d-gx",
+            tenant_id="tenant-globex",
+            domain="globex.com",
+            idp_provider_id="oidc.globex",
+        )
+        d = FakeDirectory(domains=[MS_BOUND, globex])
+        with pytest.raises(AuthError):
+            sso.resolve_principal(
+                from_entra(provider="oidc.globex"), services(directory=d)
+            )
+        p = sso.resolve_principal(
+            from_entra(provider="oidc.globex", email="new@globex.com"),
+            sso.SsoServices(d, FakeClaims()),
+            now=NOW,
+        )
+        assert p.tenant_id == "tenant-globex"
+
+    def test_a_token_from_another_entra_tenant_is_refused(self):
+        """Belt and braces: should the provider be set up with a multi-tenant
+        issuer, the Entra tenant id on the token must still be Acme's."""
+        d = FakeDirectory(domains=[dict(MS_BOUND, idp_tenant_id="tid-acme")])
+
+        def token(tid):
+            return unclaimed(
+                email_verified=False,
+                firebase={
+                    "sign_in_provider": "oidc.acme",
+                    "sign_in_attributes": {"tid": tid},
+                },
+            )
+
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(token("tid-evil"), services(directory=d))
+        assert exc.value.detail == sso.MICROSOFT_NOT_CONNECTED
+        assert d.provisioned == []
+        p = sso.resolve_principal(
+            token("tid-acme"), sso.SsoServices(d, FakeClaims()), now=NOW
+        )
+        assert p.tenant_id == ACME
+
+    def test_the_generic_microsoft_provider_is_still_refused(self):
+        d = FakeDirectory(domains=[MS_BOUND])
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                from_entra(provider="microsoft.com"), services(directory=d)
+            )
+        assert exc.value.status_code == 403
+        assert d.provisioned == []
+
+    def test_an_uppercase_address_matches_its_binding(self):
+        d = FakeDirectory(domains=[MS_BOUND])
+        p = sso.resolve_principal(
+            from_entra(email="New@ACME.com"),
+            sso.SsoServices(d, FakeClaims()),
+            now=NOW,
+        )
+        assert p.email == "new@acme.com"
+
+    def test_an_address_with_no_domain_is_refused_not_crashed(self):
+        d = FakeDirectory(domains=[MS_BOUND])
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                from_entra(email="no-at-sign"), services(directory=d)
+            )
+        assert exc.value.status_code == 403
+
+    def test_a_returning_user_is_linked_not_duplicated(self):
+        d = FakeDirectory(
+            users=[dict(ROW, email="new@acme.com", uid=None)],
+            domains=[MS_BOUND],
+        )
+        c = FakeClaims()
+        p = sso.resolve_principal(from_entra(), sso.SsoServices(d, c), now=NOW)
+        assert d.provisioned == []
+        assert d.linked == [(ROW["id"], "fb-9")]
+        assert c.written == [("fb-9", {"tenant_id": ACME, "role": p.role})]
+
+    def test_a_directory_failure_is_a_503(self):
+        d = FakeDirectory(domains=[MS_BOUND], fail=True)
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(from_entra(), services(directory=d))
+        assert exc.value.status_code == 503
+
+    def test_a_suspended_tenants_binding_provisions_no_one(self):
+        d = FakeDirectory(domains=[MS_BOUND])
+        d.tenant_statuses[ACME] = "suspended"
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(from_entra(), services(directory=d))
+        assert exc.value.detail == sso.SUSPENDED
+        assert d.provisioned == []
+
+    def test_a_google_token_still_needs_a_verified_email(self):
+        d = FakeDirectory(domains=[BOUND])
+        with pytest.raises(AuthError, match="not verified"):
+            sso.resolve_principal(
+                unclaimed(email_verified=False), services(directory=d)
+            )
+
+
+class TestClaimedOidcTokens:
+    """After the first sign-in writes claims, every later token carries a
+    tenant; Entra still sends no email_verified. Review finding: these were
+    refused for ever with "Email address is not verified."."""
+
+    def test_a_claimed_oidc_token_is_admitted_by_its_users_row(self):
+        d = FakeDirectory(users=[dict(ROW, email="new@acme.com", uid="fb-9")])
+        p = sso.resolve_principal(
+            from_entra(tenant_id=ACME, role="clerk"),
+            sso.SsoServices(d, FakeClaims()),
+            now=NOW,
+        )
+        assert (p.tenant_id, p.role) == (ACME, ROW["role"])
+
+    def test_a_claimed_oidc_token_of_a_deactivated_user_is_refused(self):
+        d = FakeDirectory(
+            users=[dict(ROW, email="new@acme.com", uid="fb-9", is_active=False)]
+        )
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(
+                from_entra(tenant_id=ACME, role="clerk"), services(directory=d)
+            )
+        assert "deactivated" in exc.value.detail
+
+    def test_a_claimed_google_token_still_needs_a_verified_email(self):
+        d = FakeDirectory(users=[ROW])
+        with pytest.raises(AuthError, match="not verified"):
+            sso.resolve_principal(
+                claimed(email_verified=False), services(directory=d)
+            )

@@ -418,3 +418,24 @@ def test_the_content_security_policy_is_enforced():
     config = (FRONTEND.parent / "next.config.ts").read_text(encoding="utf-8")
     assert '{ key: "Content-Security-Policy", value: CSP }' in config
     assert "Report-Only" not in config
+
+
+class TestMicrosoftSignIn:
+    def test_the_button_asks_which_provider_then_signs_in_through_it(self):
+        sign_in = (FRONTEND / "components" / "SignIn.tsx").read_text(
+            encoding="utf-8"
+        )
+        auth = (FRONTEND / "lib" / "auth.ts").read_text(encoding="utf-8")
+        assert "/api/sso/microsoft" in sign_in
+        # A POST body: the address is kept out of URLs that proxies log.
+        assert 'method: "POST"' in sign_in
+        assert "signInWithMicrosoft" in sign_in
+        assert "new mod.OAuthProvider(providerId)" in auth
+        assert "login_hint" in auth
+
+    def test_the_admin_form_offers_google_only(self):
+        admin = (FRONTEND / "app" / "admin" / "page.tsx").read_text(
+            encoding="utf-8"
+        )
+        assert 'value="microsoft"' not in admin
+        assert "set up by Ledgerly support" in admin

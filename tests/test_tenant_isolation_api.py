@@ -1541,6 +1541,8 @@ class TestCoverage:
         "/redoc": "schema only; absent when deployed",
         "/webhooks/email": "provider callback, covered in test_ingestion.py",
         "/api/documents": "upload, covered in test_ingestion.py",
+        "/api/sso/microsoft": "pre-auth lookup; reveals only whether a "
+        "domain uses Ledgerly through Microsoft (test_signup_api.py)",
     }
 
     PROBED: ClassVar[set] = {
