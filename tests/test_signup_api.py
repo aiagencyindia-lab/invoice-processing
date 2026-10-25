@@ -420,6 +420,12 @@ class TestMicrosoftLookup:
             domain=domain
         )
 
+    def test_an_unfinished_microsoft_binding_is_not_set_up(self, env):
+        """A Microsoft row with no provider (made before the operator flow)
+        answers like any miss, not with a null the login page chokes on."""
+        self._bind(env, provider_id=None)
+        assert self._get("pat@acme.com").status_code == 404
+
     def test_a_google_binding_is_not_set_up_for_microsoft(self, env):
         self._bind(env, provider="google")
         assert self._get("pat@acme.com").status_code == 404

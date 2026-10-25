@@ -114,7 +114,11 @@ def microsoft_provider(email: str = Body("", embed=True)) -> dict:
         bound = services.directory.domain(domain)
     except Exception as exc:
         raise sso._unavailable(exc) from exc
-    if bound is None or bound.get("provider") != "microsoft":
+    if (
+        bound is None
+        or bound.get("provider") != "microsoft"
+        or not bound.get("idp_provider_id")
+    ):
         raise not_set_up
     return {"provider_id": bound["idp_provider_id"]}
 

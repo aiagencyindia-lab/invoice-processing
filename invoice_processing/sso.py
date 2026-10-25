@@ -257,10 +257,23 @@ def resolve_principal(
     except Exception as exc:
         raise _unavailable(exc) from exc
     if oidc:
+        # The Entra tenant the token came from, when Firebase passes it on:
+        # a provider set up with a multi-tenant issuer must not let another
+        # tenant's directory vouch for this domain.
+        # ponytail: checked only when present; require it once the live test
+        # shows where Identity Platform puts `tid`.
+        tid = (
+            (claims.get("firebase") or {}).get("sign_in_attributes") or {}
+        ).get("tid")
         if (
             bound is None
             or bound.get("provider") != "microsoft"
             or bound.get("idp_provider_id") != provider
+            or (
+                tid
+                and bound.get("idp_tenant_id")
+                and tid != bound["idp_tenant_id"]
+            )
         ):
             raise AuthError(MICROSOFT_NOT_CONNECTED, status_code=403)
     elif bound is None or bound.get("provider") != "google":

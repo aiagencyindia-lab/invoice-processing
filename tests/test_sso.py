@@ -739,6 +739,29 @@ class TestMicrosoftThroughOidc:
         )
         assert p.tenant_id == "tenant-globex"
 
+    def test_a_token_from_another_entra_tenant_is_refused(self):
+        """Belt and braces: should the provider be set up with a multi-tenant
+        issuer, the Entra tenant id on the token must still be Acme's."""
+        d = FakeDirectory(domains=[dict(MS_BOUND, idp_tenant_id="tid-acme")])
+
+        def token(tid):
+            return unclaimed(
+                email_verified=False,
+                firebase={
+                    "sign_in_provider": "oidc.acme",
+                    "sign_in_attributes": {"tid": tid},
+                },
+            )
+
+        with pytest.raises(AuthError) as exc:
+            sso.resolve_principal(token("tid-evil"), services(directory=d))
+        assert exc.value.detail == sso.MICROSOFT_NOT_CONNECTED
+        assert d.provisioned == []
+        p = sso.resolve_principal(
+            token("tid-acme"), sso.SsoServices(d, FakeClaims()), now=NOW
+        )
+        assert p.tenant_id == ACME
+
     def test_the_generic_microsoft_provider_is_still_refused(self):
         d = FakeDirectory(domains=[MS_BOUND])
         with pytest.raises(AuthError) as exc:
