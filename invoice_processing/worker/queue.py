@@ -47,6 +47,11 @@ DEFAULT_ACK_DEADLINE_SECONDS = 600
 # so a timed-out message may still arrive later: never compensate for it.
 PUBLISH_TIMEOUT_SECONDS = 5
 
+# A batch of publishes on one request stops trying after this many failures
+# in a row: one stall is retried past, but a dead broker must not cost a
+# timeout per item.
+OUTAGE_AFTER_FAILURES = 2
+
 
 @dataclass
 class Message:
