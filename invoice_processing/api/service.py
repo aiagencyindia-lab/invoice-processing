@@ -165,7 +165,8 @@ async def _identify_request(request, call_next):
         route = getattr(request.scope.get("route"), "path", "<unmatched>")
         # Every open tab polls the status every few seconds; at INFO that
         # would be most of the retained log. Failures still show.
-        quiet = route == "/api/system/status" and status == 200
+        # The platform's health probe likewise.
+        quiet = route in ("/api/system/status", "/healthz") and status == 200
         logger.log(
             logging.DEBUG if quiet else logging.INFO,
             "request",
@@ -2263,6 +2264,28 @@ app.include_router(trust_agent_router)
 app.include_router(integration_router)
 app.include_router(v2_router)
 app.include_router(supporting_router)
+
+
+@app.get("/healthz")
+def healthz() -> JSONResponse:
+    """For the platform's deploy check: the process is up and the database
+    answers. Public, so it says nothing else (no version, no error)."""
+    if _database_configured():
+        from sqlalchemy import text  # noqa: PLC0415
+
+        from ..db import session  # noqa: PLC0415
+
+        try:
+            # ponytail: no timeout of its own; a hung database is caught by
+            # the platform's check timeout. Add connect_timeout if it hangs.
+            with session.get_engine().connect() as connection:
+                connection.execute(text("SELECT 1"))
+        except Exception:
+            logger.warning("Health check: the database did not answer")
+            return JSONResponse(
+                status_code=503, content={"status": "unavailable"}
+            )
+    return JSONResponse(content={"status": "ok"})
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -317,15 +317,17 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
       GHSA-xcq7-p3pf-p88h) waived until **2026-12-12**: the fix (1.45.1) is
       blocked by google-adk's cap (≤ 1.42.1, still so in 2.12.0); the product
       API never parses inbound trace headers. Upgrade when google-adk allows.
-- [ ] Remove the Postgres TCP proxy before the trust routes go live (it was
-      added for bootstrap only).
+- [x] Remove the Postgres TCP proxy before the trust routes go live: the
+      live project has none (checked 2026-10-25).
 
 ## Known gaps
 
 - One container on Railway (scale up, not out); documents on one volume.
   Upgrade path: S3 adapter + shared queue + separate worker.
-- No unauthenticated health route; deploys are gated by the start script
-  exiting.
+- `GET /healthz` (2026-10-25) answers 200 when the database answers, 503
+  otherwise, with no sign-in. Not yet Railway's health check: set
+  Healthcheck Path `/healthz` on `invoice-processing` (operator) so a deploy
+  with a broken database is never switched to.
 - No rate limit on the Microsoft provider lookup (branch).
 - Logs: thread-pool lines carry blank ids; a client disconnect logs at
   ERROR; `AUTH_DISABLED` warns per request locally.

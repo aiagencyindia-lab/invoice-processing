@@ -1534,6 +1534,7 @@ class TestCoverage:
     # exempt. Anything not listed must be probed above.
     EXEMPT: ClassVar[dict] = {
         "/": "static UI shell, no tenant data",
+        "/healthz": "deploy health check, a status word only",
         "/openapi.json": "schema only; absent when deployed",
         "/docs": "schema only; absent when deployed",
         "/docs/oauth2-redirect": "schema only; absent when deployed",
