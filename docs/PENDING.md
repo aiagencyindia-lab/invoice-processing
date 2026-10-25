@@ -191,7 +191,10 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         engine's open findings, holds placed while enforcing included; mode
         decides whether a hold is placed, not what is found. Pinned in
         `tests/test_trust_engine.py`.
-  - [ ] Deferred from Wave 3: webhook outbox retention sweep; Slack /
+  - [x] Webhook outbox retention (2026-10-26): the worker's daily sweep
+        drops delivered or dead rows older than 90 days
+        (`outbox.purge_finished`); rows still owed a delivery stay.
+  - [ ] Deferred from Wave 3: Slack /
         WhatsApp / email notifications; public evidence-upload links;
         copy-move and ML forensics; live connectors (OAuth). (Rate limits
         and idempotency keys on `/v2` landed 2026-10-24; `/v2/agents*` in
