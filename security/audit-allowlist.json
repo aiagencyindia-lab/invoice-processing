@@ -1,7 +1,1 @@
-[
-  {
-    "id": "CVE-2026-114603",
-    "reason": "opentelemetry-api 1.42.1 (GHSA-xcq7-p3pf-p88h): quadratic tracestate parsing. Fixed in 1.45.1, but every google-adk release (2.12.0 latest) caps opentelemetry-api at 1.42.1. Unreachable here: only ADK's own dev server (google/adk/cli/fast_api.py) parses inbound trace headers; the product API never uses OpenTelemetry. Lift when google-adk allows >=1.45.1.",
-    "expires": "2026-12-12"
-  }
-]
+[]

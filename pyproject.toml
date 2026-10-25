@@ -13,7 +13,7 @@ authors = [
 ]
 
 dependencies = [
-    "google-adk>=2.0,<3",
+    "google-adk>=2.13,<3",
     "google-genai>=2.0,<3",
     "sentry-sdk>=2.72,<3",
     "sqlalchemy>=2.0.0",
@@ -60,6 +60,16 @@ example_question = "Process the invoice for case_001."
 
 [tool.agent-starter-pack.settings]
 agent_directory = "invoice_processing"
+
+[tool.uv]
+# google-adk (2.13.0 latest) caps opentelemetry at <=1.44, below the 1.45.1
+# fix for GHSA-xcq7-p3pf-p88h. OpenTelemetry's API is stable across 1.x and
+# ADK only uses its tracing API (the suite and benchmark pass on 1.45.1).
+# Drop this once google-adk allows >=1.45.1.
+override-dependencies = [
+    "opentelemetry-api>=1.45.1,<2",
+    "opentelemetry-sdk>=1.45.1,<2",
+]
 
 [[tool.uv.index]]
 name = "default"
