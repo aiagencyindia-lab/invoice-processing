@@ -89,15 +89,31 @@ migrates as the owner) → §2 → read VERIFY.
 
 ## Deploy settings
 
-The API service's deploy settings live in `deployment/railway.api.json`
-(start command, pre-deploy migrate, health check, draining, restart policy);
-the `invoice-processing` service's config-file path
-(`/deployment/railway.api.json`, from the repo root) points at it, so the file
-wins over the dashboard. Change them there, in a PR. The `app` service reads
-no config file (root directory `frontend`); keep any default-named
-`railway.json` or `railway.toml` out of the repo, or Railway would apply it to
-`app` as well. Variables stay in Railway. The image always builds from the
-root `Dockerfile`.
+The Railway project is described in `.railway/railway.ts` (Railway
+Infrastructure as Code): both services, Postgres, the volumes, the API's start
+command, pre-deploy migrate, `/healthz` health check and 60 s draining, and the
+frontend's `frontend` root directory. Variables are unmanaged: they stay in
+Railway and never appear in the file.
+
+Railway does not apply it on push. To change a setting, edit the file in a PR,
+then from a checkout linked to the project (`railway link`), with Railway's
+SDK installed (`npm install railway`, outside the repo is fine):
+
+```bash
+railway config plan     # must show only the change you meant
+railway config apply
+```
+
+An apply covers the whole project: anything live that the file does not list
+(a database or volume added in the dashboard since) is planned for
+**deletion**. Run `railway config pull --variables unmanaged --force` before
+editing so the file starts from what is live, read the plan, and never pass
+`--yes --confirm-destructive`.
+
+`railway config plan` against the live project showed no changes when the file
+was added (2026-10-26). Railway no longer accepts `railway.json` /
+`railway.toml` config files. The image always builds from the root
+`Dockerfile`.
 
 ## Health
 
