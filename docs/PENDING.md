@@ -333,9 +333,9 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
 - One container on Railway (scale up, not out); documents on one volume.
   Upgrade path: S3 adapter + shared queue + separate worker.
 - `GET /healthz` (2026-10-25) answers 200 when the database answers, 503
-  otherwise, with no sign-in. Not yet Railway's health check: set
-  Healthcheck Path `/healthz` on `invoice-processing` (operator) so a deploy
-  with a broken database is never switched to.
+  otherwise, with no sign-in. It is Railway's Healthcheck Path on
+  `invoice-processing` (set 2026-10-25): a deploy whose database does not
+  answer is never switched to.
 - No rate limit on the Microsoft provider lookup (branch).
 - Logs: thread-pool lines carry blank ids; a client disconnect logs at
   ERROR; `AUTH_DISABLED` warns per request locally.
