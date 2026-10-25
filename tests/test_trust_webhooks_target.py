@@ -77,3 +77,179 @@ def test_a_plain_public_url_is_not_refused():
         "https://ERP.example:8443/in?x=1", resolve=lambda h: ["8.8.8.8"]
     )
     assert target.host("https://ERP.example:8443/in") == "erp.example"
+
+
+# -- the pinned send: resolve once, check, connect to what was checked --------
+
+
+class FakePool:
+    def __init__(self, scheme, address, port, name, timeout):
+        self.opened = (scheme, address, port, name, timeout)
+        self.sent = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def urlopen(self, method, path, body=None, headers=None, **kw):
+        self.sent = (method, path, body, headers, kw)
+        return type("R", (), {"status": 204})()
+
+
+@pytest.fixture
+def pools(monkeypatch):
+    made = []
+
+    def pool(*args):
+        made.append(FakePool(*args))
+        return made[-1]
+
+    monkeypatch.setattr(target, "_pool", pool)
+    return made
+
+
+def test_it_connects_to_the_address_it_checked(pools):
+    looked_up = []
+
+    def resolve(host):
+        looked_up.append(host)
+        return ["93.184.216.34"]
+
+    r = target.post(
+        "https://hooks.example.com/in?x=1",
+        data="{}",
+        headers={"X-Trust-Event": "e"},
+        timeout=10,
+        resolve=resolve,
+    )
+    assert r.status_code == 204 and looked_up == ["hooks.example.com"]
+    (pool,) = pools
+    # The checked address, the real name for SNI and the certificate.
+    assert pool.opened == (
+        "https",
+        "93.184.216.34",
+        443,
+        "hooks.example.com",
+        10,
+    )
+    method, path, body, headers, kw = pool.sent
+    assert (method, path, body) == ("POST", "/in?x=1", "{}")
+    assert headers["Host"] == "hooks.example.com"
+    assert headers["X-Trust-Event"] == "e"
+    assert kw["redirect"] is False and kw["retries"] is False
+
+
+def test_a_rebound_name_is_refused_without_connecting(pools):
+    """The first lookup was public when the endpoint was saved; this one
+    answers inward. Nothing is opened."""
+    with pytest.raises(target.Refused):
+        target.post(
+            "https://hooks.example.com/in",
+            data="{}",
+            headers={},
+            timeout=10,
+            resolve=lambda h: ["93.184.216.34", "10.0.0.5"],
+        )
+    assert pools == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost/x",
+        "http://169.254.169.254/latest",
+        "ftp://hooks.example.com/x",
+        "https://user:pw@hooks.example.com/x",
+    ],
+)
+def test_internal_or_odd_urls_are_refused_without_connecting(pools, url):
+    with pytest.raises(target.Refused):
+        target.post(url, data="{}", headers={}, timeout=10,
+                    resolve=lambda h: ["93.184.216.34"])  # fmt: skip
+    assert pools == []
+
+
+def test_a_port_and_plain_http_carry_through(pools):
+    target.post(
+        "http://hooks.example.com:8080/in",
+        data="{}",
+        headers={},
+        timeout=5,
+        resolve=lambda h: ["93.184.216.34"],
+    )
+    (pool,) = pools
+    assert pool.opened == (
+        "http",
+        "93.184.216.34",
+        8080,
+        "hooks.example.com",
+        5,
+    )
+    assert pool.sent[3]["Host"] == "hooks.example.com:8080"
+
+
+def test_the_https_pool_checks_the_certificate_against_the_name():
+    pool = target._pool("https", "93.184.216.34", 443, "hooks.example.com", 10)
+    assert pool.host == "93.184.216.34"
+    assert pool.conn_kw["server_hostname"] == "hooks.example.com"
+    assert pool.assert_hostname == "hooks.example.com"
+    assert pool.cert_reqs == "CERT_REQUIRED"
+
+
+def test_an_ip_literal_is_not_looked_up(pools):
+    target.post("https://93.184.216.34/in", data="{}", headers={}, timeout=10,
+                resolve=lambda h: pytest.fail("resolved"))  # fmt: skip
+    assert pools[0].opened[1] == "93.184.216.34"
+
+
+def test_a_dead_address_falls_through_to_the_next_checked_one(monkeypatch):
+    """Every answer was checked, so any of them is safe to try."""
+    import urllib3  # noqa: PLC0415
+
+    tried = []
+
+    class Pool:
+        def __init__(self, address):
+            self.address = address
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def urlopen(self, *a, **kw):
+            tried.append(self.address)
+            if self.address == "2606:2800:220:1::1":
+                raise urllib3.exceptions.NewConnectionError(None, "no route")
+            return type("R", (), {"status": 200})()
+
+    monkeypatch.setattr(
+        target, "_pool", lambda s, address, p, n, t: Pool(address)
+    )
+    r = target.post("https://hooks.example.com/", data="{}", headers={},
+                    timeout=10, resolve=lambda h: ["2606:2800:220:1::1",
+                                                   "93.184.216.34"])  # fmt: skip
+    assert r.status_code == 200
+    assert tried == ["2606:2800:220:1::1", "93.184.216.34"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://0.0.0.0/", "http://[::]/", "http://[64:ff9b::7f00:1]/"],
+)
+def test_unspecified_and_nat64_inward_addresses_are_refused(pools, url):
+    with pytest.raises(target.Refused):
+        target.post(url, data="{}", headers={}, timeout=10)
+    assert pools == []
+
+
+def test_a_callers_host_header_is_replaced(pools):
+    target.post("https://hooks.example.com/", data="{}",
+                headers={"host": "evil.example"}, timeout=10,
+                resolve=lambda h: ["93.184.216.34"])  # fmt: skip
+    sent = pools[0].sent[3]
+    assert [k for k in sent if k.lower() == "host"] == ["Host"]
+    assert sent["Host"] == "hooks.example.com"

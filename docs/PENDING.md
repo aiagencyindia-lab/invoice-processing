@@ -170,9 +170,11 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   - [x] Webhook hosts that resolve to internal addresses are refused on
         save and skipped (a failed attempt) at every delivery
         (`trust/webhooks/target.py`).
-  - [ ] DNS rebinding between that check and `requests`' own lookup still
-        gets through: pin the checked address in a transport adapter before
-        an attacker-run DNS server is in scope.
+  - [x] DNS rebinding (2026-10-25): deliveries go out through
+        `target.post`, which resolves once, refuses any inward answer and
+        connects to the checked address (TLS server name and certificate
+        still checked against the real host; no redirects). Proxies
+        (`HTTPS_PROXY`) are not honoured on that path.
   - [x] `?as_of` on a transaction's trust reads its own score node
         (`GraphStore.open_node(..., as_of=)`), not every score node.
   - [ ] PRD §9 endpoints not built in Wave 3 and not otherwise listed:

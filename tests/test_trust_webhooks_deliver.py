@@ -36,11 +36,9 @@ class FakePost:
         self.statuses = list(statuses)
         self.calls = []
 
-    def __call__(self, url, *, data, headers, timeout, allow_redirects):
+    def __call__(self, url, *, data, headers, timeout):
         self.calls.append({"url": url, "data": data, "headers": headers})
         assert timeout == 10
-        # A redirect would re-send the signed body wherever it points.
-        assert allow_redirects is False
         status = self.statuses.pop(0) if self.statuses else 200
         if isinstance(status, Exception):
             raise status
@@ -371,3 +369,46 @@ def test_a_backslash_url_saved_before_the_check_is_never_posted(env):
     deliver.due(NOW, post=post, audit=audit, url=url)
     assert post.calls == []
     assert rows(url)[0].attempts == 1
+
+
+def test_deliveries_go_out_through_the_pinned_send(env, monkeypatch):
+    """No second DNS lookup between the check and the connection."""
+    url, audit, _ = env
+    endpoint(url)
+    emit(url)
+    opened = []
+
+    class Pool:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def urlopen(self, method, path, **kw):
+            assert kw["redirect"] is False  # a 3xx is a failed attempt
+            return type("R", (), {"status": 204})()
+
+    def pool(scheme, address, port, name, timeout):
+        opened.append((scheme, address, name))
+        return Pool()
+
+    monkeypatch.setattr(target, "_pool", pool)
+    assert deliver.due(NOW, audit=audit, url=url) == 1
+    assert opened == [("https", "93.184.216.34", "tenant-acme.example")]
+    assert rows(url)[0].delivered_at is not None
+
+
+def test_a_name_that_rebinds_at_send_time_is_not_sent(env):
+    """The check passed; the send's own lookup answered inward."""
+    url, audit, _ = env
+    endpoint(url)
+    emit(url)
+
+    def post(target_url, **kw):
+        raise target.Refused(target_url)
+
+    assert deliver.due(NOW, post=post, audit=audit, url=url) == 1
+    (row,) = rows(url)
+    assert row.delivered_at is None
+    assert row.last_error == "The url is internal or ambiguous; not sent."
