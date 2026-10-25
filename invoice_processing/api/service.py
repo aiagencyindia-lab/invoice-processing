@@ -2281,7 +2281,9 @@ def healthz() -> JSONResponse:
             with session.get_engine().connect() as connection:
                 connection.execute(text("SELECT 1"))
         except Exception:
-            logger.warning("Health check: the database did not answer")
+            logger.warning(
+                "Health check: the database did not answer", exc_info=True
+            )
             return JSONResponse(
                 status_code=503, content={"status": "unavailable"}
             )
