@@ -128,7 +128,7 @@ export function ApiKeysPanel() {
                     <tr key={key.id}>
                       <td>{key.name}</td>
                       <td>
-                        <code>ik_{key.prefix}_…</code>
+                        <code>ik_…_{key.prefix}_…</code>
                       </td>
                       <td>{key.role}</td>
                       <td>{key.created_at ? new Date(key.created_at).toLocaleDateString() : "—"}</td>

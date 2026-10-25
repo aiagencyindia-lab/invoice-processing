@@ -1,7 +1,9 @@
 """Per-tenant API keys for the /v2 API (PRD §9, FR-30).
 
-A key is `ik_{prefix}_{secret}`. Only `sha256(secret)` is stored; the prefix
-finds the row. `api.service` registers `resolve` with
+A key is `ik_{tenant_slug}_{prefix}_{secret}`. Only `sha256(secret)` is
+stored; the slug names the tenant and the prefix finds the row, so a lookup
+reads one tenant. Keys made before the slug was added (`ik_{prefix}_{secret}`)
+still resolve, by asking each active tenant in turn. `api.service` registers `resolve` with
 `auth.set_api_key_resolver`, so a presented key becomes a Principal of the
 key's tenant and role, or a 401.
 """
@@ -26,7 +28,12 @@ logger = logging.getLogger(__name__)
 PREFIX = "ik_"
 # A key never outranks the people who administer it.
 ROLES = ("viewer", "clerk", "approver")
-_TOKEN = re.compile(r"^ik_([0-9a-f]{8})_([A-Za-z0-9_-]{16,})$")
+# Slugs are `[a-z0-9][a-z0-9-]{1,62}` (provision.SLUG_PATTERN): no `_`, so
+# the first one ends the slug.
+_TOKEN = re.compile(
+    r"^ik_([a-z0-9][a-z0-9-]{1,62})_([0-9a-f]{8})_([A-Za-z0-9_-]{16,})$"
+)
+_LEGACY = re.compile(r"^ik_([0-9a-f]{8})_([A-Za-z0-9_-]{16,})$")
 
 
 def _prefix() -> str:
@@ -74,6 +81,9 @@ def create(
             raise ValueError(
                 "An active agent already uses this key name; pick another."
             )
+        slug = s.scalar(select(Tenant.slug).where(Tenant.id == ctx.tenant_id))
+        if not slug:
+            raise ValueError("The tenant has no slug to put in the key.")
         key = ApiKey(
             tenant_id=ctx.tenant_id,
             name=name,
@@ -91,7 +101,7 @@ def create(
             "api_key_created",
             {"name": name, "role": role, "prefix": prefix},
         )
-    return row, f"{PREFIX}{prefix}_{secret}"
+    return row, f"{PREFIX}{slug}_{prefix}_{secret}"
 
 
 def list_keys(tenant_id: str, url=None) -> list[dict]:
@@ -127,46 +137,69 @@ def revoke(ctx, key_id: str, *, audit=None, url=None) -> dict | None:
     return row
 
 
+def _find(tenant_id: str, prefix: str, digest: str, url=None):
+    """The Principal for this prefix and secret hash in one tenant, or None."""
+    from ..api.auth import Principal  # noqa: PLC0415
+
+    with tenant_session(tenant_id, url) as s:
+        for key in s.scalars(
+            select(ApiKey).where(
+                ApiKey.tenant_id == tenant_id,
+                ApiKey.key_prefix == prefix,
+                ApiKey.revoked_at.is_(None),
+            )
+        ):
+            if hmac.compare_digest(key.key_hash, digest):
+                return Principal(
+                    user_id=f"api-key:{key.id}",
+                    email=f"{key.name}@api-key.{tenant_id}",
+                    tenant_id=tenant_id,
+                    role=key.role,
+                )
+    return None
+
+
+def _scan(prefix: str, digest: str, url=None):
+    """A key without a slug: ask each active tenant in turn. `tenants` has
+    no RLS; `api_keys` forces it and the app role cannot bypass it.
+    ponytail: O(active tenants) queries, only for keys made before slugs."""
+    with Session(get_engine(url)) as s:
+        tenants = s.scalars(
+            select(Tenant.id).where(Tenant.status == "active")
+        ).all()
+    for tenant_id in tenants:
+        found = _find(tenant_id, prefix, digest, url)
+        if found is not None:
+            return found
+    return None
+
+
 def resolve(token: str, url=None):
     """The Principal a key stands for, or None when there is no such key, it
     is revoked, or its tenant is not active. An unreachable database is a
     503, never a guess."""
-    from ..api.auth import AuthError, Principal  # noqa: PLC0415
+    from ..api.auth import AuthError  # noqa: PLC0415
 
-    match = _TOKEN.match(token or "")
-    if match is None:
+    token = token or ""
+    new, legacy = _TOKEN.match(token), _LEGACY.match(token)
+    if new is None and legacy is None:
         return None
-    prefix, digest = match.group(1), _hash(match.group(2))
     try:
-        # `tenants` has no RLS; `api_keys` forces it and the app role cannot
-        # bypass it, so the prefix is looked up inside each tenant's session.
-        # ponytail: O(active tenants) queries per key request, stopping at the
-        # first match. Upgrade: put the tenant in the key
-        # (`ik_{tenant_slug}_{prefix}_{secret}`) or add a lookup policy.
-        with Session(get_engine(url)) as s:
-            tenants = s.scalars(
-                select(Tenant.id).where(Tenant.status == "active")
-            ).all()
         found = None
-        for tenant_id in tenants:
-            with tenant_session(tenant_id, url) as s:
-                for key in s.scalars(
-                    select(ApiKey).where(
-                        ApiKey.tenant_id == tenant_id,
-                        ApiKey.key_prefix == prefix,
-                        ApiKey.revoked_at.is_(None),
+        if new is not None:
+            slug, prefix, secret = new.groups()
+            with Session(get_engine(url)) as s:
+                tenant_id = s.scalar(
+                    select(Tenant.id).where(
+                        Tenant.slug == slug, Tenant.status == "active"
                     )
-                ):
-                    if hmac.compare_digest(key.key_hash, digest):
-                        found = Principal(
-                            user_id=f"api-key:{key.id}",
-                            email=f"{key.name}@api-key.{tenant_id}",
-                            tenant_id=tenant_id,
-                            role=key.role,
-                        )
-                        break
-            if found is not None:
-                break
+                )
+            if tenant_id is not None:
+                found = _find(tenant_id, prefix, _hash(secret), url)
+        # A legacy secret can happen to read as `{slug}_{prefix}_...`; only
+        # when the slug form found nothing is the old form tried.
+        if found is None and legacy is not None:
+            found = _scan(legacy.group(1), _hash(legacy.group(2)), url)
     except Exception as exc:
         logger.error("API key lookup failed: %s", type(exc).__name__)
         raise AuthError(
