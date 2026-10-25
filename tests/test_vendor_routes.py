@@ -7,6 +7,7 @@ import shutil
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 from golden import GOLDEN_CASES
 
 from invoice_processing import master_files, paths, vendor_master
@@ -19,11 +20,10 @@ from invoice_processing.db.repositories import (
     entity_type_for,
 )
 from invoice_processing.db.session import (
-    create_all,
-    get_engine,
     tenant_session,
 )
 from invoice_processing.ports import RunContext
+from invoice_processing.trust.graph.store import GraphStore
 
 TENANT = "tenant-acme"
 ACME = {
@@ -56,8 +56,7 @@ class FakeVerifier:
 def env(tmp_path, monkeypatch, scratch_db):
     url = scratch_db("vendors.db")
     # CI reruns these on a shared Postgres, so start from an empty schema.
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(
             models.Tenant(id=TENANT, name="Acme", slug="acme", status="active")
@@ -81,6 +80,7 @@ def env(tmp_path, monkeypatch, scratch_db):
         "repo": repo,
         "vendor_id": vendor_id,
         "tmp": tmp_path,
+        "url": url,
     }
 
 
@@ -100,6 +100,24 @@ class TestList:
             v["bank_status"] == "unverified"
             and v["bank_account_masked"] is None
         )
+
+    def test_rows_carry_their_graph_node(self, env, monkeypatch):
+        """The Trust Audit scope is a list of vendor graph nodes; the vendor
+        master is where a person picks them by name."""
+        graph = GraphStore(env["url"])
+        monkeypatch.setattr(service, "_graph_store", graph)
+        (before,) = env["client"]("clerk").get("/api/vendors").json()["vendors"]
+        assert before["node"] is None
+        node = graph.upsert_node(
+            RunContext(tenant_id=TENANT, run_id="t", actor="t"),
+            kind="vendor",
+            natural_key=f"vendors:{env['vendor_id']}",
+            ref_table="vendors",
+            ref_id=env["vendor_id"],
+            attrs={"name": ACME["name"]},
+        )
+        (after,) = env["client"]("clerk").get("/api/vendors").json()["vendors"]
+        assert after["node"] == node
 
     def test_viewer_cannot_list(self, env):
         assert env["client"]("viewer").get("/api/vendors").status_code == 403

@@ -19,7 +19,7 @@ import csv
 import io
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import sheet_columns
@@ -102,7 +102,7 @@ def write_csv(columns: list[str], rows: list[dict], labels: dict) -> bytes:
 
 def write_json(columns: list[str], rows: list[dict], labels: dict) -> bytes:
     payload = {
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "columns": [
             {"key": key, "label": labels.get(key, key)} for key in columns
         ],
@@ -257,7 +257,7 @@ def run(job_id: str, tenant_id: str) -> dict:
             status="done",
             row_count=len(rows),
             storage_key=key,
-            finished_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(UTC),
         )
         service.get_audit().emit(
             RunContext(tenant_id=tenant_id, actor=job["requested_by"]),
@@ -272,7 +272,7 @@ def run(job_id: str, tenant_id: str) -> dict:
             job_id,
             status="failed",
             error=str(exc)[:2000],
-            finished_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(UTC),
         )
         try:
             service.get_audit().emit(

@@ -2,16 +2,16 @@
 
 from inspect import signature as inspect_signature
 
+from fresh_schema import fresh_schema
 from sqlalchemy import inspect
 
 from invoice_processing.db import models
-from invoice_processing.db.session import create_all, get_engine
+from invoice_processing.db.session import get_engine
 
 
 def test_table_is_a_tenant_table_and_builds_with_the_links(scratch_db):
     url = scratch_db("sd.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     insp = inspect(get_engine(url))
     assert "supporting_documents" in models.TENANT_TABLES
     assert insp.has_table("supporting_documents")
@@ -59,8 +59,7 @@ GRN = {
 @pytest.fixture
 def env(scratch_db):
     url = scratch_db("sdr.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     docs = PgDocumentRepository(url)
     ids = {}
     for t in ("t1", "t2"):

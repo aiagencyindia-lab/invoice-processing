@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { AuditEvent, Stats, SystemStatus } from "@/lib/api";
+import { can, type AgentBlockCount, type AuditEvent, type Me, type Stats, type SystemStatus } from "@/lib/api";
 import { Tile } from "@/components/Tile";
 import { usePoll } from "@/lib/hooks";
 
@@ -26,6 +26,12 @@ export default function DashboardPage() {
   const { data: audit } = usePoll<{ events: AuditEvent[] }>(
     "/api/audit?limit=8",
     POLL_MS,
+  );
+  const { data: me } = usePoll<Me>("/api/me");
+  // Agent counts are for approvers; below that nothing is asked.
+  const { data: agents } = usePoll<AgentBlockCount>(
+    me && can(me, "approver") ? "/api/trust/agents/blocks/count" : null,
+    60_000,
   );
 
   const events = audit?.events ?? [];
@@ -77,6 +83,24 @@ export default function DashboardPage() {
           hint="Dead-lettered — retry from Documents"
           href="/documents"
         />
+        {agents ? (
+          <>
+            <Tile
+              label="Agent blocks"
+              value={String(agents.blocked)}
+              hint={`Stopped · last ${agents.window_hours} h`}
+              href="/agents"
+              testId="agent-blocks"
+            />
+            <Tile
+              label="Agent reviews"
+              value={String(agents.reviews)}
+              hint={`Need a look · last ${agents.window_hours} h`}
+              href="/agents"
+              testId="agent-reviews"
+            />
+          </>
+        ) : null}
       </div>
 
       <section className="stack" style={{ gap: 10 }}>

@@ -12,17 +12,18 @@ record, and the admin's ability to break a lock somebody left behind.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 from sqlalchemy import select
 
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
-from invoice_processing.db.models import Base, Invoice, Tenant
+from invoice_processing.db.models import Invoice, Tenant
 from invoice_processing.db.repositories import PgCaseRepository, PgRecordLocks
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import LockHeld, RunContext
 
 TENANT = "tenant-acme"
@@ -57,9 +58,7 @@ def db(scratch_db, monkeypatch):
     url = scratch_db("locks.db")
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
-    engine = get_engine(url)
-    Base.metadata.drop_all(engine)
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(Tenant(id=TENANT, slug="acme", name="Acme"))
     with tenant_session(TENANT, url) as session:
@@ -211,7 +210,7 @@ class TestExpiry:
         _, lock = PgRecordLocks(db).acquire(TENANT, CASE, "dana@acme.test")
 
         expires = datetime.fromisoformat(lock["expires_at"])
-        remaining = expires - datetime.now(timezone.utc)
+        remaining = expires - datetime.now(UTC)
         assert timedelta(minutes=14) < remaining <= timedelta(minutes=15)
 
 

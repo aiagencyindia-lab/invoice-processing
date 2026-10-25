@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from itertools import zip_longest
 from types import SimpleNamespace
 from typing import Annotated
@@ -625,7 +625,7 @@ STILL_STORING = timedelta(minutes=5)
 def _still_storing(row: dict) -> bool:
     reviewed = row["reviewed_at"]
     return bool(reviewed) and (
-        datetime.now(timezone.utc) - _aware(datetime.fromisoformat(reviewed))
+        datetime.now(UTC) - _aware(datetime.fromisoformat(reviewed))
         < STILL_STORING
     )
 
@@ -688,7 +688,7 @@ def reopen_supporting_document(
 
 
 def _aware(at: datetime) -> datetime:
-    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+    return at if at.tzinfo else at.replace(tzinfo=UTC)
 
 
 def _emit(principal: Principal, event: str, payload: dict) -> None:

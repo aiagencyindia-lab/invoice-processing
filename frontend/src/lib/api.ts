@@ -142,12 +142,20 @@ export const ROLE_RANK: Record<string, number> = {
   viewer: 0,
   clerk: 1,
   approver: 2,
+  // A finance role: ranks with approver, never as admin.
+  controller: 2,
   admin: 3,
 };
 
 export function can(me: Me | null, required: string): boolean {
   if (!me) return false;
   return (ROLE_RANK[me.role] ?? -1) >= (ROLE_RANK[required] ?? 99);
+}
+
+/** The Controller's own power (approving agent registrations) is an exact
+ *  role, not a rank: an admin outranks a controller and still cannot. */
+export function isController(me: Me | null): boolean {
+  return me?.role === "controller";
 }
 
 export type Stats = {
@@ -369,6 +377,9 @@ export type Workflow = {
   decided_at?: string;
   reason?: string | null;
   reason_category?: string;
+  /** The trust hold an administrator overrode at approval, and the findings
+   *  it covered; a finding raised later holds export again. */
+  hold_overridden?: { message: string; finding_ids: string[] } | null;
 };
 
 export type InvoiceDetail = InvoiceSummary & {
@@ -388,6 +399,11 @@ export type InvoiceDetail = InvoiceSummary & {
   lock: RecordLock | null;
   /** Per-line GL coding; absent on a case coded before GL coding existed. */
   gl_coding?: GlCoding | null;
+  /** Whether the trust layer holds this payment, and on which findings.
+   *  Absent from an API older than Wave 3. */
+  hold?: HoldDetail | null;
+  /** The invoice's Evidence Graph node (for the trust score), or null. */
+  trust_node?: string | null;
 };
 
 /** A tenant rule that codes invoice lines to a GL account. At least one of
@@ -527,6 +543,8 @@ export type Vendor = {
   bank_verified_at: string | null;
   bank_verified_by: string | null;
   pending_change_id: string | null;
+  /** The vendor's Evidence Graph node, once the graph has synced it. */
+  node: string | null;
 };
 export type VendorList = { vendors: Vendor[]; count: number; source: string };
 export type BankChange = {
@@ -829,4 +847,619 @@ export type ActionResult = {
   completed: boolean;
   step?: number;
   next?: ApprovalStep | null;
+};
+
+// -- v2 trust layer (Wave 2) ------------------------------------------------
+// Shapes of /api/trust/*: the findings queue, finding detail, lineage, the
+// Why engine and the Trust Audit workspace. The Python side is the source of
+// truth; a change there lands here first, then in the pages.
+
+export type TrustVendor = { node: string; name: string | null };
+
+export type TrustFindingEvent = {
+  from_status: string | null;
+  to_status: string;
+  amount: string | null;
+  actor: string;
+  reason: string | null;
+  at: string | null;
+};
+
+export type TrustCitation = {
+  node_id: string;
+  excerpt: string | null;
+  node?: GraphNodeRecord | null;
+  source?: EvidenceSource | null;
+};
+
+export type EvidenceSource = { document_url: string; page: number | null };
+
+export type GraphNodeRecord = {
+  id: string;
+  kind: string;
+  natural_key: string;
+  ref_table: string | null;
+  ref_id: string | null;
+  attrs: Record<string, unknown>;
+  natural_keys: Record<string, unknown>;
+  valid_from: string;
+  valid_to: string | null;
+};
+
+export type GraphEdgeRecord = {
+  id: string;
+  src: string;
+  dst: string;
+  kind: string;
+  source_system: string;
+  observed_at: string;
+  provenance: string;
+  confidence: number;
+  attrs: Record<string, unknown>;
+};
+
+export type TrustFinding = {
+  id: string;
+  type: string;
+  transaction_node: string;
+  status: string;
+  impact: string | null;
+  currency: string | null;
+  confidence: number | null;
+  owner_id: string | null;
+  engine_version: string | null;
+  rule_version: string | null;
+  model_version: string | null;
+  dedupe_key: string;
+  summary: string | null;
+  details: Record<string, unknown>;
+  decided_at: string | null;
+  citations: TrustCitation[];
+  events: TrustFindingEvent[];
+  vendor: TrustVendor | null;
+  engine: string | null;
+  hold: boolean;
+};
+
+export type TrustFindingPage = {
+  findings: TrustFinding[];
+  total: number;
+  offset: number;
+  limit: number;
+};
+
+export type TrustFindingSummary = {
+  by_status: Record<string, number>;
+  by_type: Record<string, number>;
+  hold_open: number;
+  vendors: (TrustVendor & { count: number })[];
+};
+
+export type LineageLink = {
+  stage: string;
+  status: "found" | "no_evidence" | "contradicts";
+  node_id: string | null;
+  note: string;
+};
+
+export type TrustFindingDetail = TrustFinding & {
+  transaction: { node: GraphNodeRecord | null; source: EvidenceSource | null };
+  lineage: LineageLink[];
+  allowed_transitions: string[];
+  previous?: string;
+};
+
+export type TrustFindingFilters = {
+  status?: string;
+  open?: boolean;
+  type?: string;
+  engine?: string;
+  vendor?: string;
+  hold?: boolean;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export function findingsQuery(filters: TrustFindingFilters): string {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "" || value === false) return;
+    params.set(key, String(value));
+  });
+  return params.toString();
+}
+
+export type TransitionRequest = {
+  to_status: string;
+  reason?: string;
+  amount?: string;
+  expect?: string;
+};
+
+export type NodeView = {
+  node: GraphNodeRecord;
+  source: EvidenceSource | null;
+  edges_out: GraphEdgeRecord[];
+  edges_in: GraphEdgeRecord[];
+};
+
+export type Lineage = { node_id: string; links: LineageLink[] };
+
+export type ContractClause = {
+  node_id: string;
+  type: string | null;
+  params: Record<string, string>;
+  page: number | null;
+  excerpt: string | null;
+  confidence: number | null;
+  reviewed: boolean;
+  since: string | null;
+};
+
+export type ContractRow = {
+  contract_node: string;
+  document_id: string;
+  filename: string | null;
+  vendor_id: string | null;
+  since: string;
+};
+
+// The Why engine (trust/explain; the v2/w2-explain branch fills these in).
+export type ExplanationStep = { text: string; node_id: string };
+export type ExplanationActor = {
+  kind: "vendor" | "person" | "system" | "engine" | "provider" | "agent";
+  label: string;
+  node_id: string | null;
+};
+export type ExplanationEvidence = {
+  node_id: string;
+  kind: string;
+  label: string;
+  excerpt: string | null;
+  source: EvidenceSource | null;
+};
+export type Counterfactual = {
+  currency: string | null;
+  payable_now: string | null;
+  payable_correct: string | null;
+  delta: string | null;
+  formula: string;
+  note: string | null;
+};
+export type Explanation = {
+  finding_id: string;
+  type: string;
+  version: string;
+  what_happened: string;
+  why: ExplanationStep[];
+  caused_by: ExplanationActor[];
+  evidence: ExplanationEvidence[];
+  confidence: number | null;
+  confidence_note: string;
+  next_action: string;
+  would_change: string[];
+  counterfactual: Counterfactual | null;
+  versions: Record<string, string>;
+  transaction_node: string;
+};
+export type EvidencePack = {
+  pack_version: number;
+  generated_at: string;
+  finding: TrustFinding;
+  explanation: Explanation;
+  lineage: LineageLink[];
+  nodes: GraphNodeRecord[];
+  edges: GraphEdgeRecord[];
+  versions: Record<string, string>;
+  decision: {
+    status: string;
+    owner_id: string | null;
+    decided_at: string | null;
+    events: TrustFindingEvent[];
+  };
+  ratings: { rater: string; correct: boolean; useful: boolean; note: string | null; at: string | null }[];
+  sha256: string;
+};
+export type RatingSummary = {
+  by_type: Record<string, { rated: number; correct: number; useful: number }>;
+};
+
+// The Trust Audit workspace (trust/audit; the v2/w2-audit branch fills these in).
+export type AuditTerms = {
+  recovered_pct: string;
+  prevented_pct: string;
+  cap: string | null;
+  minimum: string | null;
+};
+export type TrustAudit = {
+  id: string;
+  name: string;
+  status: "draft" | "active" | "closed";
+  period_from: string | null;
+  period_to: string | null;
+  vendors: string[];
+  categories: string[];
+  terms: AuditTerms;
+  approver: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+export type AuditRunProgress = {
+  engines_done: number;
+  engines_total: number;
+  engine: string | null;
+  findings_so_far: number;
+  per_engine: Record<string, { mode: string; findings: number } | "off" | "failed" | "missing">;
+};
+export type AuditRun = {
+  id: string;
+  audit_id: string;
+  status: "queued" | "running" | "done" | "failed";
+  engines: string[];
+  progress: AuditRunProgress;
+  error: string | null;
+  requested_by: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+};
+export type AuditSample = {
+  id: string;
+  audit_id: string;
+  size: number;
+  seed: string | null;
+  finding_ids: string[];
+  verdicts: Record<string, boolean | null>;
+  validated: number;
+  true: number;
+  false: number;
+  precision: number | null;
+  created_by: string | null;
+  created_at: string;
+};
+export type TrustAuditDetail = TrustAudit & { runs: AuditRun[]; samples: AuditSample[] };
+export type AuditReportRow = {
+  type?: string;
+  engine?: string;
+  vendor?: string | null;
+  vendor_node?: string;
+  count: number;
+  impact: string;
+  recovered: string;
+  prevented: string;
+};
+export type AuditReport = {
+  report_version: number;
+  generated_at: string;
+  audit: TrustAudit;
+  run: AuditRun | null;
+  summary: {
+    findings: number;
+    detected_impact: string;
+    accepted_impact: string;
+    recovered: string;
+    prevented: string;
+    written_off: string;
+    at_risk_holds: string;
+    currency: string | null;
+  };
+  by_type: AuditReportRow[];
+  by_vendor: AuditReportRow[];
+  top_recoveries: (Pick<TrustFinding, "id" | "type" | "impact" | "status" | "summary"> & {
+    vendor: string | null;
+    citations: ExplanationEvidence[];
+  })[];
+  prevention: {
+    engine: string;
+    finding_types: string[];
+    count: number;
+    impact: string;
+    mode_now: string;
+    mode_suggested: string;
+    thresholds_hint: string[];
+  }[];
+  itc_exposure: { count: number; impact: string; by_vendor: AuditReportRow[] };
+  ledger: LedgerExport;
+};
+export type LedgerRow = {
+  finding_id: string;
+  type: string;
+  vendor: string | null;
+  to_status: string;
+  amount: string | null;
+  attested_by: string;
+  at: string | null;
+  reason: string | null;
+};
+export type LedgerExport = {
+  rows: LedgerRow[];
+  totals: { recovered: string; prevented: string; written_off: string; claimed: string };
+  fee: {
+    fee_recovered: string;
+    fee_prevented: string;
+    gross: string;
+    capped: string;
+    due: string;
+  };
+};
+
+
+// Wave 3 (always-on trust): holds, the Transaction Trust Score, posture,
+// engine readiness, evidence requests, API keys and webhooks. The shapes the
+// scaffold fixed in docs/superpowers/specs/2026-10-21-v2-wave3-*-design.md.
+
+export type HoldDetail = {
+  held: boolean;
+  message: string | null;
+  holds: { finding_id: string; type: string; engine: string; summary: string }[];
+  /** Enforcing engines that have not checked this invoice yet. */
+  waiting: string[];
+  transaction_node: string | null;
+};
+
+export type TrustHold = {
+  id: string;
+  finding_id: string;
+  type: string;
+  engine: string;
+  placed_at: string;
+};
+
+export type Dimension =
+  | "identity"
+  | "authorization"
+  | "reality"
+  | "price"
+  | "authenticity"
+  | "consistency";
+
+export type DimensionScore = {
+  /** 0..1, or null when there is nothing to judge it by. */
+  value: number | null;
+  /** An open hold-type finding in this dimension from an enforcing engine. */
+  hold: boolean;
+  drivers: string[];
+  note: string;
+};
+
+export type TrustScore = {
+  score_version: string;
+  computed_at: string;
+  /** Advisory only: the dimensions drive holds, never the composite. */
+  composite: number | null;
+  dimensions: Record<Dimension, DimensionScore>;
+  versions: Record<string, unknown>;
+  holds: string[];
+  mode: Record<string, string>;
+};
+
+/** A finding as the score route lists it under its dimension. */
+export type TransactionTrustFinding = Pick<
+  TrustFinding,
+  "id" | "type" | "status" | "summary" | "impact" | "currency" | "engine" | "hold"
+>;
+
+export type TransactionTrust = TrustScore & {
+  /** The trust_score node, and the invoice node it scores. */
+  node: string;
+  valid_from: string;
+  transaction_node: string;
+  hold: HoldDetail;
+  /** Keyed by dimension, plus "other" for types with none. */
+  findings: Record<Dimension | "other", TransactionTrustFinding[]>;
+};
+
+export type VendorTrustProfile = {
+  vendor: TrustVendor & { invoices: number; scored: number };
+  dimensions: Record<Dimension, number | null>;
+  findings_by_type: Record<string, { open: number; decided: number }>;
+  gst: { status: string | null; missed_periods: number | null; observed_at: string | null } | null;
+  bank_verified: boolean | null;
+  kyc: { node: string; document_id: string; subkind: string | null; score: number | null; observed_at: string | null }[];
+  network: { vendor: TrustVendor; shared: string[] }[];
+  timeline: { month: string; composite: number | null }[];
+};
+
+export type TrustPosture = {
+  since: string | null;
+  found: { count: number; impact: string };
+  prevented: string;
+  recovered: string;
+  written_off: string;
+  open_exposure: string;
+  by_type: Record<string, { count: number; impact: string }>;
+  by_vendor: { node: string; name: string | null; count: number; impact: string }[];
+  pre_payment_share: number | null;
+  provenance_distribution: Record<string, number>;
+  verification_coverage: { identity: number | null; reality: number | null; authenticity: number | null };
+  holds: { open: number; placed: number; lifted: number };
+};
+
+export type EngineReadiness = {
+  engine: string;
+  mode: string;
+  since: string | null;
+  days_in_mode: number | null;
+  findings: number;
+  would_have_held: number;
+  held: number;
+  open_holds: number;
+  triage: { decided: number; accepted: number; rejected: number; precision: number | null };
+  failures: number;
+  /** The suggested next mode (null = stay), and why. */
+  recommendation: { to: string | null; reason: string };
+};
+
+export type Readiness = { engines: EngineReadiness[] };
+
+export type EvidenceRequest = {
+  id: string;
+  finding_id: string;
+  owner: string;
+  due_date: string | null;
+  note: string | null;
+  status: "open" | "fulfilled" | "cancelled";
+  proof_document_id: string | null;
+  requested_by: string | null;
+  fulfilled_at: string | null;
+  overdue: boolean;
+  created_at: string | null;
+};
+
+export type ApiKey = {
+  id: string;
+  name: string;
+  prefix: string;
+  role: string;
+  created_by: string | null;
+  created_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+};
+
+/** Returned once, at creation: the only time the full key is shown. */
+export type ApiKeyCreated = ApiKey & { key: string };
+
+export type WebhookEndpoint = {
+  id: string;
+  url: string;
+  events: string[];
+  active: boolean;
+  description: string | null;
+  /** Masked except in the creation response. */
+  secret: string;
+  created_by: string | null;
+  created_at: string | null;
+};
+
+export type WebhookDelivery = {
+  id: string;
+  event: string;
+  attempts: number;
+  next_attempt_at: string | null;
+  delivered_at: string | null;
+  last_status: number | null;
+  last_error: string | null;
+  dead_at: string | null;
+  created_at: string | null;
+  payload: Record<string, unknown>;
+};
+
+// List envelopes for the Wave 3 routes (agreed with the backend branches).
+export type EvidenceRequestList = { requests: EvidenceRequest[] };
+
+/** A KYC document on file and its latest authenticity score. */
+export type VendorDocument = {
+  document_id: string;
+  subkind: string;
+  filename: string | null;
+  score: number | null;
+  uploaded_at: string | null;
+};
+export type VendorDocumentList = { documents: VendorDocument[] };
+export type ApiKeyList = { keys: ApiKey[] };
+export type WebhookEndpointList = { endpoints: WebhookEndpoint[] };
+export type WebhookDeliveryList = { deliveries: WebhookDelivery[] };
+
+
+// Agent control (Wave 5). Shapes from invoice_processing/trust/agents
+// (store._dict, mandates.annotate, ledger.agent_ledger / tenant_ledger).
+export type MandateScope = {
+  actions: string[];
+  currency: string;
+  counterparties: unknown[] | null;
+  caps: Record<string, unknown>;
+};
+export type Mandate = {
+  id: string;
+  agent_id: string;
+  version: number;
+  scope: MandateScope;
+  valid_from: string;
+  valid_to: string;
+  status: "proposed" | "active" | "revoked";
+  expired: boolean;
+  verified: boolean;
+  proposed_by: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  revoked_by: string | null;
+  revoked_at: string | null;
+  reason: string | null;
+};
+export type Agent = {
+  id: string;
+  name: string;
+  owner: string;
+  description: string | null;
+  kind: "api_key" | "user" | "external";
+  status: "proposed" | "active" | "rejected" | "revoked";
+  principal_id: string | null;
+  principal_email: string | null;
+  registered_by: string;
+  revoked_at: string | null;
+  revoked_by: string | null;
+  revoke_reason: string | null;
+  /** The current mandate (list and detail routes), or null. */
+  mandate: Mandate | null;
+};
+export type AgentList = { agents: Agent[] };
+export type MandateList = { mandates: Mandate[] };
+export type AgentAction = {
+  id: string;
+  action: string;
+  subject_ref: string;
+  vendor_key: string | null;
+  category: string | null;
+  amount: string | null;
+  currency: string | null;
+  decision: "ALLOW" | "ALLOW-WITH-REVIEW" | "BLOCK";
+  explanation: string;
+  mode: string;
+  source: "inline" | "log" | "dryrun";
+  occurred_at: string;
+  outcome: "executed" | "failed" | null;
+};
+export type AgentSpend = {
+  approved: string;
+  exported: string;
+  by_vendor: Record<string, string>;
+  by_category: Record<string, string>;
+};
+export type AgentLedger = {
+  agent: Agent;
+  mandate: Mandate | null;
+  since: string;
+  until: string;
+  /** Keyed by currency. */
+  spend: Record<string, AgentSpend>;
+  period: {
+    period: string;
+    currency: string;
+    cap: string;
+    used: string;
+    remaining: string;
+    since: string;
+    until: string;
+  } | null;
+  actions: AgentAction[];
+  exceptions: AgentAction[];
+};
+export type OwnerSpend = {
+  owner: string;
+  agents: number;
+  /** Keyed by currency. */
+  approved: Record<string, string>;
+  exported: Record<string, string>;
+  blocked: number;
+  reviewed: number;
+};
+export type TenantLedger = { since: string; until: string; owners: OwnerSpend[] };
+export type AgentBlockCount = {
+  blocked: number;
+  reviews: number;
+  window_hours: number;
 };

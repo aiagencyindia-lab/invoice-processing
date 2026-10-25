@@ -1,47 +1,70 @@
 # Backup and restore
 
-Targets (SECURITY.md): RPO minutes, RTO 4 hours, a drill every 6 months
-and after any production restore.
+Targets (SECURITY.md): database RPO minutes (point-in-time recovery),
+documents RPO up to 24 hours (daily volume backups), RTO 4 hours, a drill
+every 6 months and after any production restore.
 
 ## What is backed up
 
-- **Cloud SQL:** automated daily backups, 7 retained; point-in-time
-  recovery with 7 days of transaction logs. Check both are on: Cloud SQL →
-  instance → Backups.
-- **Cloud Storage (documents):** soft delete, 7 days. Documents are written
-  once and never modified, so soft delete covers accidental deletion; there
-  is no object versioning.
+Production runs on Railway (deployment/README.md).
+
+- **Postgres point-in-time recovery** (the database): enable it during
+  setup (Railway → `Postgres` → Backups → Point-in-time recovery). It
+  archives the write-ahead log to a Railway bucket (storage is billed) and
+  restores to any moment in its window into a new Postgres service.
+- **Postgres volume backups**: a daily schedule as a second line, plus a
+  manual backup before any risky change (a migration, a purge, a bulk
+  import). Check: Railway → `Postgres` → Volume → Backups.
+- **`ledgerly` `/data` volume** (uploaded documents and the local job
+  queue): the same daily schedule. Documents are written once and never
+  modified, so a backup up to a day old loses at most that day's uploads.
+
+Retention at the time of writing (check when configuring): daily backups
+6 days, weekly 27, monthly 89; point-in-time recovery about four weeks.
 
 ## Restoring the database
 
-1. Restore into a **new instance** (Backups → Restore, or point-in-time
-   clone to the moment before the incident). Never over the live one.
-2. Run `db/bootstrap.sql` §2 on it as the admin user (the command is in
+1. **Before anything else, take a manual backup** of the current volume, so
+   the restore itself can be undone.
+2. Point in time: Railway → `Postgres` → Backups → restore to the moment
+   before the incident, into a new Postgres service, then point
+   `DATABASE_URL` and `MIGRATE_DATABASE_URL` at it. Or a volume backup:
+   `Postgres` → Volume → Backups → Restore (Railway redeploys the service
+   onto the restored volume).
+3. Run `db/bootstrap.sql` §2 as `postgres` (the command is in
    deployment/README.md). A restore carries the tables; re-running §2 is
    what guarantees the app role's grants and the audit REVOKE.
-3. Check it, as the owner role:
+4. Check it, as the owner role:
 
        python -m invoice_processing.db.restore_check \
-           --restored "<owner url of the new instance>"
+           --restored "<owner url>"
 
    Exit 0 and `PASS`, or stop and read each `FAIL` line. Note the
    "newest audit event" (the effective restore point) and every
    "not active" tenant.
-4. **Re-purge.** A backup taken before a purge brings that tenant back as
+5. **Re-purge.** A backup taken before a purge brings that tenant back as
    `suspended`, because its record lives in the same database. For every
    entry in the offboarding register whose `purged_at` is after the
    restore point, run `purge-tenant --tenant <slug> --operator <you>
    --confirm <slug> --skip-grace --reason "re-purge after restore"`
-   (deployment/OFFBOARDING.md). Backups last 7 days, so the exposure is
-   at most 7 days old. A tenant listed as `purged` that still shows rows
-   in the counts is purged again the same way (no `--skip-grace` needed).
-5. Point `DATABASE_URL` and `MIGRATE_DATABASE_URL` (Railway, both
-   services) at the new instance and redeploy.
+   (deployment/OFFBOARDING.md). A tenant listed as `purged` that still
+   shows rows in the counts is purged again the same way.
+6. Redeploy `ledgerly` so it reconnects.
+
+## Restoring both
+
+The database and the documents are backed up separately. Restore the
+database first, run `restore_check`, and use its "newest audit event" as
+the point to reconcile against; then restore the `/data` backup closest to
+it. Documents newer than the database have no rows (re-upload them);
+queued jobs for documents the database already processed are skipped by
+the worker's claims.
 
 ## Restoring documents
 
-Cloud Storage → bucket → Soft-deleted objects → restore. A purge's
-deletions are also soft-deleted for 7 days; do not restore those.
+Railway → `ledgerly` → Volume → Backups → Restore, after a manual backup
+of the current volume. A purge's deleted documents come back with an older
+backup too: re-run the purge for those tenants (step 5) after restoring.
 
 ## Local drill
 

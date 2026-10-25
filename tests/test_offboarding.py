@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from fresh_schema import fresh_schema
 from sqlalchemy import (
     Boolean,
     Date,
@@ -30,18 +31,16 @@ from invoice_processing.adapters import LocalBlobStore
 from invoice_processing.admin.provision import Provisioner
 from invoice_processing.db.models import TENANT_TABLES, Base, Tenant
 from invoice_processing.db.repositories import PgAuditSink
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import get_engine, tenant_session
 from tests.pg_roles import bootstrapped_database, pg_only
 
-NOW = datetime(2026, 10, 13, 9, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 13, 9, 0, tzinfo=UTC)
 
 
 @pytest.fixture
 def url(scratch_db):
     target = scratch_db("offboarding.db")
-    engine = get_engine(target)
-    Base.metadata.drop_all(engine)
-    create_all(target)
+    fresh_schema(target)
     return target
 
 

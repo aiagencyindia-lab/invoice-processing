@@ -10,22 +10,23 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import ClassVar
 
 import openpyxl
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 
 from invoice_processing import exports
 from invoice_processing.api import auth, service
 from invoice_processing.api.service import app
-from invoice_processing.db.models import Base, ExportJob, Invoice, Tenant
+from invoice_processing.db.models import ExportJob, Invoice, Tenant
 from invoice_processing.db.repositories import (
     STALE_EXPORT_AFTER,
     PgExportJobs,
 )
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 
 TENANT = "tenant-acme"
 CLAIMS = {
@@ -75,9 +76,7 @@ def db(scratch_db, monkeypatch):
     url = scratch_db("exports.db")
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
-    engine = get_engine(url)
-    Base.metadata.drop_all(engine)
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(Tenant(id=TENANT, slug="acme", name="Acme"))
     monkeypatch.delenv("AUTH_DISABLED", raising=False)
@@ -442,7 +441,7 @@ class TestAStuckJobCanBeRestarted:
     def test_an_unfinished_job_goes_stale(self, db, client):
         seed(db, 1)
         job = export(client, format="csv")
-        long_ago = datetime.now(timezone.utc) - STALE_EXPORT_AFTER * 2
+        long_ago = datetime.now(UTC) - STALE_EXPORT_AFTER * 2
         with tenant_session(TENANT, db) as session:
             row = session.get(ExportJob, job["id"])
             row.status = "running"

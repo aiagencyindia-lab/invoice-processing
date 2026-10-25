@@ -2,12 +2,13 @@
 the hold only when nothing else holds the invoice."""
 
 import pytest
+from fresh_schema import fresh_schema
 
 from invoice_processing import rematch, vendor_master
 from invoice_processing.adapters import FsCaseRepository
 from invoice_processing.db import models
 from invoice_processing.db.repositories import PgCaseRepository
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.shared_libraries.acting import general_invoice_agent
 from invoice_processing.shared_libraries.acting.general_invoice_agent import (
@@ -40,8 +41,7 @@ def _config(book):
 @pytest.fixture
 def cases(scratch_db):
     url = scratch_db("rematch.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(
             models.Tenant(id=TENANT, name="Acme", slug="acme", status="active")

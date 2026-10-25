@@ -24,6 +24,8 @@ import {
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { DecisionDialog } from "@/components/DecisionDialog";
+import { HoldBanner } from "@/components/trust/HoldBanner";
+import { TrustPanel } from "@/components/trust/TrustPanel";
 
 /** The queue refreshes on its own so an invoice a worker just finished shows
  *  up, but slowly: this screen is where someone is typing, and a fast poll
@@ -263,10 +265,15 @@ function InvoicesWorkbench() {
       URL.revokeObjectURL(url);
       say(`Exported ${detail.case_id}.csv`);
     } catch (caught) {
-      // 409 means unapproved. Saying "failed" would hide that approving is one
-      // keystroke away.
+      // 409 means unapproved, or approved but held by the trust layer. Saying
+      // "failed" would hide that approving is one keystroke away, and saying
+      // "approve it" to a held invoice would send someone the wrong way.
       if (caught instanceof ApiError && caught.status === 409) {
-        say("Approve the invoice before exporting");
+        say(
+          detail.hold?.held
+            ? (detail.hold.message ?? caught.friendly)
+            : "Approve the invoice before exporting",
+        );
       } else {
         say(caught instanceof ApiError ? caught.friendly : String(caught));
       }
@@ -493,7 +500,13 @@ function InvoicesWorkbench() {
                         >
                           Reject<kbd>r</kbd>
                         </button>
-                        {can(me, "admin") && currentStep ? (
+                        {can(me, "admin") &&
+                        currentStep &&
+                        // Only a controller signs a controller step off; no override.
+                        !(
+                          currentStep.assignee_kind === "role" &&
+                          currentStep.assignee_value === "controller"
+                        ) ? (
                           <button
                             type="button"
                             className="btn-chip"
@@ -518,6 +531,8 @@ function InvoicesWorkbench() {
                     </button>
                   </div>
                 </div>
+
+                <HoldBanner hold={detail.hold} isAdmin={can(me, "admin")} />
 
                 {canAct && notMine ? (
                   <span className="muted" style={{ fontSize: 12.5 }}>
@@ -583,6 +598,8 @@ function InvoicesWorkbench() {
                   }}
                 />
                 <Findings findings={detail.findings} />
+                {/* Keyed so the last invoice's score never shows under the next one. */}
+                <TrustPanel key={detail.trust_node ?? detail.case_id} node={detail.trust_node} />
                 {chain && chain.steps.length > 0 ? (
                   <ApprovalPanel chain={chain} />
                 ) : null}
@@ -919,7 +936,7 @@ function BankChangeShortcut({
     return (
       <div className="muted" style={{ fontSize: 12.5 }}>
         A bank change for this vendor is awaiting approval.{" "}
-        <a href="/vendors">Open vendors</a>
+        <Link href="/vendors">Open vendors</Link>
       </div>
     );
   }

@@ -295,7 +295,7 @@ invoice-processing/
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - [uv](https://docs.astral.sh/uv/) for dependency management
 - Google Cloud project with Vertex AI API enabled
 - [Google ADK](https://google.github.io/adk-docs/)
@@ -428,6 +428,8 @@ The chain order is fixed: vendor rules (by normalised vendor name), then entity 
 
 Steps are sequential and the lowest pending one is current. An assignee is a user, a group (any member may decide) or a role. An active delegate of the assignee may decide, and the decision is recorded as acting for them. Each step has a due date (`approval_sla_days`, default 3); the worker escalates an overdue step to the assignee's manager or, failing that, to admins. Nothing is ever auto-approved.
 
+Roles: viewer, clerk, approver, **controller** and admin. A controller is a finance role that ranks with approver for every approval above (it can be a step, a delegate or a manager), is never an admin, and alone approves or rejects the registration of an automated agent (agent control): an agent an admin registers does nothing until a controller approves it. API keys never hold the controller role, and a `role:controller` chain step is decided only by a controller (never an approver or admin, even when it is overdue). Such a rule needs an active controller, and the last one cannot be demoted or deactivated while a rule or a waiting invoice needs one.
+
 Segregation: the uploader is refused at every step; whoever decided an earlier step cannot decide the next; someone who corrected the invoice's fields cannot be the sole approver, so a second step is added. Admins may override, with a recorded reason.
 
 Completing the chain writes the same workflow decision as before, so export, the approved sheet and the learning loop are unchanged. A rejection at any step ends the chain. Editing the total, vendor, customer or currency re-routes the pending steps; decided steps stay, and a decided invoice is never re-opened.
@@ -501,6 +503,10 @@ See [`deployment/README.md`](deployment/README.md) for details.
 ---
 
 ## Production: GCS Integration
+
+> Production now runs on Railway with documents on a volume, not GCS:
+> see [deployment/README.md](deployment/README.md). GCS remains supported
+> when `GCS_BUCKET` is set.
 
 In local development, all data lives inside the agent package (`invoice_processing/data/` and `invoice_processing/exemplary_data/`). For production deployment, these directories should be replaced with Google Cloud Storage (GCS) buckets so that:
 

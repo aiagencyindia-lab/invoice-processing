@@ -10,6 +10,7 @@ import {
   api,
   can,
   setTokenProvider,
+  type AgentBlockCount,
   type Me,
   type SystemStatus,
 } from "@/lib/api";
@@ -42,6 +43,12 @@ const NAV = [
   { href: "/rules", label: "Rules", glyph: "◇", min: "approver" },
   { href: "/purchase-orders", label: "Purchase orders", glyph: "◈", min: "clerk" },
   { href: "/vendors", label: "Vendors", glyph: "◆", min: "clerk" },
+  { href: "/findings", label: "Findings", glyph: "⚑" },
+  { href: "/trust-audit", label: "Trust audit", glyph: "◎", min: "approver" },
+  { href: "/trust-posture", label: "Trust posture", glyph: "◉" },
+  { href: "/trust-engines", label: "Trust engines", glyph: "◐", min: "admin" },
+  { href: "/agents", label: "Agents", glyph: "⌁", min: "approver" },
+  { href: "/integrations", label: "Integrations", glyph: "⇄", min: "admin" },
   { href: "/settings", label: "Settings", glyph: "⚙", min: "admin" },
   { href: "/admin", label: "Admin", glyph: "✦", min: "admin" },
 ];
@@ -144,6 +151,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { data: status } = usePoll<SystemStatus>(
     me ? "/api/system/status" : null,
     POLL_MS,
+  );
+  // Time-windowed, not acknowledged: it clears when the window passes.
+  const { data: agentBlocks } = usePoll<AgentBlockCount>(
+    me && can(me, "approver") ? "/api/trust/agents/blocks/count" : null,
+    60_000,
   );
 
   // Signed in but refused goes to /signup, which explains what is missing
@@ -286,6 +298,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="banner" role="status">
             <span aria-hidden="true">⚠</span>
             {paused}
+          </div>
+        ) : null}
+        {agentBlocks && agentBlocks.blocked + agentBlocks.reviews > 0 ? (
+          <div className="banner" role="status">
+            <span aria-hidden="true">⚠</span>
+            <span>
+              {agentBlocks.blocked} agent action(s) blocked and {agentBlocks.reviews} need review in the last{" "}
+              {agentBlocks.window_hours} h · <Link href="/agents">Agents</Link>
+            </span>
           </div>
         ) : null}
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 
 from invoice_processing.api import auth, service
 from invoice_processing.api import rules as rules_api
@@ -23,12 +24,12 @@ from invoice_processing.api.service import app
 from invoice_processing.core.prompts import (
     RULE_DISCOVERY_SYSTEM_PROMPT as prompt,
 )
-from invoice_processing.db.models import Base, Tenant
+from invoice_processing.db.models import Tenant
 from invoice_processing.db.repositories import (
     PgCaseRepository,
     PgRuleRepository,
 )
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 
 TENANT = "tenant-acme"
@@ -80,9 +81,7 @@ def db(scratch_db, monkeypatch):
     url = scratch_db("proposals.db")
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
-    engine = get_engine(url)
-    Base.metadata.drop_all(engine)
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(Tenant(id=TENANT, slug="acme", name="Acme"))
 

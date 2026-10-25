@@ -12,9 +12,11 @@ them: whether a worker is running at all.
 
 import json
 import time
+from datetime import UTC
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 
 from invoice_processing.adapters import (
     FsCaseRepository,
@@ -560,6 +562,18 @@ class TestRetry:
             == 403
         )
 
+    def test_a_queue_that_times_out_answers_503(self, env, monkeypatch):
+        """A stalled broker gets "try again", not a bare 500."""
+        doc_id = add_document(env, sha="r8")
+
+        def stalled(payload, **attributes):
+            raise TimeoutError
+
+        monkeypatch.setattr(env["queue"], "publish", stalled)
+        r = env["client"]("approver").post(f"/api/documents/{doc_id}/retry")
+        assert r.status_code == 503
+        assert "retry" in r.json()["detail"].lower()
+
     def test_unknown_document_is_404(self, env):
         assert (
             env["client"]("approver")
@@ -673,7 +687,7 @@ class TestAudit:
         self, env, scratch_db, monkeypatch
     ):
         """The Postgres path end to end: serialisation, full-page rule, cursor."""
-        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        from datetime import datetime, timedelta  # noqa: PLC0415
 
         from invoice_processing.db.models import (  # noqa: PLC0415
             AuditEvent,
@@ -683,16 +697,14 @@ class TestAudit:
             PgAuditSink,
         )
         from invoice_processing.db.session import (  # noqa: PLC0415
-            create_all,
             tenant_session,
         )
 
         url = scratch_db("audit_api.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         with tenant_session(TENANT, url) as s:
             s.add(Tenant(id=TENANT, slug="acme", name="Acme"))
-        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        t0 = datetime(2026, 10, 1, tzinfo=UTC)
         with tenant_session(TENANT, url) as s:
             for i in range(3):
                 s.add(
@@ -726,10 +738,10 @@ class TestAudit:
     ):
         """Postgres stamps carry "+00:00"; pasted unencoded into a URL the
         "+" arrives as a space. A cursor the server issued must still page."""
-        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        from datetime import datetime, timedelta  # noqa: PLC0415
         from types import SimpleNamespace  # noqa: PLC0415
 
-        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        t0 = datetime(2026, 10, 1, tzinfo=UTC)
         events = [
             SimpleNamespace(
                 id=f"e{i}",
@@ -840,10 +852,10 @@ class TestAudit:
     def test_an_export_pages_and_quotes_nested_values(self, env, monkeypatch):
         import csv  # noqa: PLC0415
         import io  # noqa: PLC0415
-        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        from datetime import datetime, timedelta  # noqa: PLC0415
         from types import SimpleNamespace  # noqa: PLC0415
 
-        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        t0 = datetime(2026, 10, 1, tzinfo=UTC)
         events = [
             SimpleNamespace(
                 id=f"e{i:04d}",
@@ -894,13 +906,13 @@ class TestAudit:
     def test_spreadsheet_formulas_in_cells_are_defused(self, env, monkeypatch):
         import csv  # noqa: PLC0415
         import io  # noqa: PLC0415
-        from datetime import datetime, timezone  # noqa: PLC0415
+        from datetime import datetime  # noqa: PLC0415
         from types import SimpleNamespace  # noqa: PLC0415
 
         def ev(i, **kw):
             base = dict(  # noqa: C408
                 id=f"e{i}",
-                occurred_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                occurred_at=datetime(2026, 10, 1, tzinfo=UTC),
                 actor="a",
                 actor_type="user",
                 action="x",
@@ -941,10 +953,10 @@ class TestAudit:
     def test_a_failure_after_the_first_page_aborts_the_download(
         self, env, monkeypatch, caplog
     ):
-        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        from datetime import datetime, timedelta  # noqa: PLC0415
         from types import SimpleNamespace  # noqa: PLC0415
 
-        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        t0 = datetime(2026, 10, 1, tzinfo=UTC)
         full = [
             SimpleNamespace(
                 id=f"e{i:04d}",

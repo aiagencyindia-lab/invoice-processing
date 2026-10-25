@@ -31,7 +31,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any
@@ -481,16 +481,24 @@ def retry_document(
     )
     service.get_claim_store().release(principal.tenant_id, document_id)
 
-    message_id = enqueue_document(
-        service.get_queue(),
-        principal.context(document_id),
-        SimpleNamespace(
-            document_id=document_id,
-            sha256=document.get("sha256", ""),
-            storage_key=document.get("storage_key", ""),
-        ),
-        force_invoice=force_invoice,
-    )
+    try:
+        message_id = enqueue_document(
+            service.get_queue(),
+            principal.context(document_id),
+            SimpleNamespace(
+                document_id=document_id,
+                sha256=document.get("sha256", ""),
+                storage_key=document.get("storage_key", ""),
+            ),
+            force_invoice=force_invoice,
+        )
+    except Exception:
+        # A timed-out publish may still arrive later; a second retry is safe
+        # (the worker's claim makes it a no-op once the first one runs).
+        logger.exception("%s not requeued", document_id)
+        raise HTTPException(
+            503, "The document could not be queued; retry it."
+        ) from None
     service.get_audit().emit(
         principal.context(document_id),
         "document_retried",
@@ -736,7 +744,7 @@ def export_audit(
 
 
 def _as_utc(stamp: datetime) -> datetime:
-    return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
+    return stamp.replace(tzinfo=UTC) if stamp.tzinfo is None else stamp
 
 
 def _read_jsonl_audit(

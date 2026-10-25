@@ -39,6 +39,21 @@ EXEMPLARY_DIR = AGENT_PKG_DIR / "exemplary_data"
 # the rule base), so a relocated tree must be seeded from this one rather than
 # created empty.
 DATA_DIR = Path(os.getenv("INVOICE_DATA_DIR") or (AGENT_PKG_DIR / "data"))
+
+
+def state_dir() -> Path:
+    """Where durable runtime state lives: uploaded documents, the local job
+    queue and the worker heartbeat.
+
+    `STATE_DIR` -- a mounted volume in production (Railway: `/data`) -- when
+    set; otherwise `DATA_DIR`, as before. Tracked files (the rules book, the
+    rule base) stay under `DATA_DIR`, in the image, so a fresh volume does
+    not hide them. Read at call time, like the callers' `DATA_DIR`.
+    """
+    raw = os.getenv("STATE_DIR", "").strip()
+    return Path(raw) if raw else DATA_DIR
+
+
 AGENTIC_FLOW_OUT = DATA_DIR / "agent_output"
 ALF_OUT_DIR = DATA_DIR / "alf_output"
 INVESTIGATION_OUT_DIR = DATA_DIR / "investigation_output"
@@ -81,18 +96,32 @@ def tenant_file(directory: Path, tenant_id: str) -> Path:
     return directory / f"{safe or 'default'}.json"
 
 
+def _durable(directory: Path, name: str) -> Path:
+    """A reference-data directory: under `STATE_DIR` when set (a volume;
+    these files are written at run time and must survive a deploy), else
+    `directory`, as before."""
+    raw = os.getenv("STATE_DIR", "").strip()
+    return Path(raw) / name if raw else directory
+
+
 def vendor_master_file(tenant_id: str) -> Path:
     """This tenant's vendors: names and tax registrations.
 
     Step 3.2 needs it to answer the half of the question a checksum cannot:
     this identifier is well-formed, but is it *this supplier's*?
     """
-    return tenant_file(VENDOR_MASTER_DIR, tenant_id)
+    return tenant_file(_durable(VENDOR_MASTER_DIR, "vendors"), tenant_id)
 
 
 def work_authorization_file(tenant_id: str) -> Path:
     """This tenant's work authorizations: who may bill what, at what rate."""
-    return tenant_file(WORK_AUTHORIZATION_DIR, tenant_id)
+    return tenant_file(
+        _durable(WORK_AUTHORIZATION_DIR, "work_authorizations"), tenant_id
+    )
+
+
+def purchase_order_dir() -> Path:
+    return _durable(PURCHASE_ORDER_DIR, "purchase_orders")
 
 
 def purchase_order_file(tenant_id: str):
@@ -105,7 +134,7 @@ def purchase_order_file(tenant_id: str):
     Falls back to the legacy shared file when a tenant has none of its own, so
     an existing local setup keeps matching without being migrated.
     """
-    scoped = tenant_file(PURCHASE_ORDER_DIR, tenant_id)
+    scoped = tenant_file(purchase_order_dir(), tenant_id)
     if scoped.exists() or not PURCHASE_ORDER_FILE.exists():
         return scoped
     return PURCHASE_ORDER_FILE

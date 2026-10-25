@@ -27,7 +27,9 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The suite runs twice here (Tests, then inside the acceptance sweep):
+    # ~25 min on a normal runner, so 30 left no room for a slow one.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -71,10 +73,17 @@ jobs:
             --skip-llm \
             --require-baseline
 
+      # v2 trust layer: the generated history must import and link (AC-19).
+      - name: Trust history gate
+        run: uv run python -m benchmark.history.eval --seed 7 --out /tmp/history-gate
+
       # The acceptance sweep: exercises the wiring, which unit tests cannot.
       # Offline tier only -- the live tier needs Cloud SQL and GCS.
       - name: Phase 1 acceptance sweep
         run: uv run python scripts/verify_phase1.py
+        env:
+          # The Tests step above already ran the suite on this commit.
+          SUITE_ALREADY_RAN: "1"
 
       - name: Secret scan
         run: |
@@ -100,7 +109,7 @@ jobs:
   # are the same files, pointed at Postgres by TEST_DATABASE_URL.
   postgres:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -176,6 +185,8 @@ jobs:
                         tests/test_signup_api.py \
                         tests/test_offboarding.py \
                         tests/test_restore_check.py \
+                        tests/test_trust_*.py \
+                        tests/test_benchmark_history.py \
                         "tests/test_gcs_and_migrations.py::TestMigration::test_new_tenant_tables_have_forced_isolation_policies_after_upgrade" \
                         "tests/test_gcs_and_migrations.py::TestMigration::test_decided_at_backfill_sees_rows_under_forced_rls" \
                         "tests/test_gcs_and_migrations.py::TestMigration::test_sso_lookup_sentinel_reads_domains_and_nothing_else" \

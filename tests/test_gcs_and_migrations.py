@@ -474,6 +474,12 @@ class TestMigration:
             ("b8c4d1e2f3a5", 0),
             ("c9d5e2f3a4b6", 1),
             ("d1a2b3c4e5f6", 0),
+            ("e2f3a4b5c6d7", 8),
+            ("f4a5b6c7d8e9", 4),
+            ("a1b2c3d4e5f6", 5),
+            ("b2c3d4e5f6a7", 3),
+            ("c3d4e5f6a7b8", 0),
+            ("d4e5f6a7b8c9", 2),
             ("a8d4e6f1b2c3", 0),
         ],
     )
@@ -550,6 +556,14 @@ class TestMigration:
                 "grn_lines",
                 "supporting_documents",
                 "sso_domains",
+                "graph_nodes",
+                "graph_edges",
+                "entity_links",
+                "trust_history_imports",
+                "history_records",
+                "trust_findings",
+                "trust_finding_citations",
+                "trust_finding_events",
             ]
             with engine.connect() as c:
                 policies = {

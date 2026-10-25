@@ -16,8 +16,7 @@ import re
 from dataclasses import dataclass
 
 from . import po_matching
-
-ROLE_RANK = {"viewer": 0, "clerk": 1, "approver": 2, "admin": 3}
+from .roles import ROLE_RANK
 
 
 @dataclass(frozen=True)
@@ -188,6 +187,15 @@ def build_chain(invoice: dict, rules: list[dict]) -> list[StepSpec]:
     return chain or [ROLE_FALLBACK]
 
 
+def fills(role: str, seat: str) -> bool:
+    """Whether someone with `role` may sit in a `role:<seat>` step. The
+    ladder, except a controller seat: finance sign-off that no approver or
+    admin stands in for."""
+    if seat == "controller":
+        return role == "controller"
+    return ROLE_RANK.get(role, -1) >= ROLE_RANK.get(seat, 99)
+
+
 def satisfaction(
     email: str,
     role: str,
@@ -220,16 +228,19 @@ def satisfaction(
         why = direct(who)
         if why:
             return why
-    if kind == "role" and ROLE_RANK.get(role, -1) >= ROLE_RANK.get(value, 99):
+    if kind == "role" and fills(role, value):
         return f"has the {value} role"
+    if kind == "role" and value == "controller":
+        # Overdue, it is escalated so admins hear of it; they still cannot
+        # sign it off in the controller's place.
+        return None
     target = step.get("escalated_to")
     if isinstance(target, str) and target:
         # Named after the seat it came from (a user, group or role), which is
         # what the escalation target needs to know about the step.
-        if (
-            target.startswith("role:")
-            and ROLE_RANK.get(role, -1) >= ROLE_RANK.get(target[5:], 99)
-        ) or (not target.startswith("role:") and _email(target) == me):
+        if (target.startswith("role:") and fills(role, target[5:])) or (
+            not target.startswith("role:") and _email(target) == me
+        ):
             return f"escalated from {value}"
     return None
 

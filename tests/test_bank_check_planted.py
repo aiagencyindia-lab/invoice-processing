@@ -3,7 +3,7 @@ account, then a different IFSC, from what a real extraction printed. Both must
 hold the invoice for review."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from invoice_processing.shared_libraries.acting import general_invoice_agent
@@ -87,7 +87,7 @@ def test_the_real_master_passes(tmp_path, monkeypatch):
 
 
 def test_zero_recent_days_means_zero_not_thirty(tmp_path, monkeypatch):
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    yesterday = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     changed = {"last_bank_change_at": yesterday}
     step, _ = _hold(tmp_path, monkeypatch, changed)
     assert step["signals"] == ["recent_bank_change"]

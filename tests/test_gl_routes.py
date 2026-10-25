@@ -4,10 +4,11 @@ call, closed once the invoice is decided, and every change is on the trail."""
 import json
 import shutil
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 from golden import GOLDEN_CASES
 
 from invoice_processing import approval_flow, gl_coding
@@ -26,7 +27,7 @@ from invoice_processing.db.repositories import (
     PgGlRuleRepository,
     entity_type_for,
 )
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 
 TENANT = "tenant-acme"
@@ -72,8 +73,7 @@ def _files(tmp_path, monkeypatch):
 @pytest.fixture
 def env(tmp_path, monkeypatch, scratch_db):
     url = scratch_db("gl.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(
             models.Tenant(id=TENANT, name="Acme", slug="acme", status="active")
@@ -313,7 +313,7 @@ def test_coding_reroutes_approvals(env):
         ctx,
         service.get_cases().get_artifacts(ctx),
         repo=approvals,
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
     )
     assert not any(
         s["assignee_value"] == "a@x.test" for s in approvals.chain(TENANT, CASE)

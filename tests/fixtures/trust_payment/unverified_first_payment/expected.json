@@ -1,0 +1,1 @@
+{"types": ["PAY-ANOMALY", "PAY-UNVERIFIED"], "holds": ["PAY-UNVERIFIED"], "signals": {"PAY-ANOMALY": ["first_time_vendor"]}, "details": {"PAY-UNVERIFIED": {"provider_status": "ok", "result": "unknown", "account": "\u20267891"}}}

@@ -1,19 +1,19 @@
 """Purchase orders, their lines and goods receipts are tenant tables."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
+from fresh_schema import fresh_schema
 from sqlalchemy import inspect
 
 from invoice_processing.db import models
 from invoice_processing.db.repositories import PgPurchaseOrderRepository
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import get_engine, tenant_session
 
 
 def test_tables_are_tenant_tables_and_build(scratch_db):
     url = scratch_db("po.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     names = ("purchase_orders", "po_lines", "goods_receipts", "grn_lines")
     assert set(names) <= set(models.TENANT_TABLES)
     assert all(inspect(get_engine(url)).has_table(n) for n in names)
@@ -22,8 +22,7 @@ def test_tables_are_tenant_tables_and_build(scratch_db):
 @pytest.fixture
 def repo(scratch_db):
     url = scratch_db("po_repo.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     for tenant_id in ("t1", "t2"):
         with tenant_session(tenant_id, url) as session:
             session.add(
@@ -219,7 +218,7 @@ def test_billed_counts_only_invoices_approved_after_upload(repo):
         "t1",
         [ORDER],
         uploaded_by="a@x",
-        now=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        now=datetime(2026, 10, 1, tzinfo=UTC),
     )
     lines23 = [{"line_number": 1, "po_line_number": 1, "quantity": 3}]
     with tenant_session("t1", url) as s:
@@ -323,7 +322,7 @@ def test_billed_reads_the_record_not_the_projected_columns(repo):
         "t1",
         [ORDER],
         uploaded_by="a@x",
-        now=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        now=datetime(2026, 10, 1, tzinfo=UTC),
     )
     approved(url, "c-unprojected", "2026-10-02T00:00:00+00:00")
     approved(url, "c-other-po", "2026-10-02T00:00:00+00:00", po="PO-2")
@@ -336,7 +335,7 @@ def test_a_reupload_never_moves_the_billed_counting_point(repo):
         "t1",
         [ORDER],
         uploaded_by="a@x",
-        now=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        now=datetime(2026, 10, 1, tzinfo=UTC),
     )
     approved(url, "c-before", "2026-10-02T00:00:00+00:00")
     for replace in (False, True):
@@ -344,7 +343,7 @@ def test_a_reupload_never_moves_the_billed_counting_point(repo):
             "t1",
             [ORDER],
             uploaded_by="b@x",
-            now=datetime(2026, 10, 5, tzinfo=timezone.utc),
+            now=datetime(2026, 10, 5, tzinfo=UTC),
             replace=replace,
         )
         # Opening still comes from the upload; the approval still counts.

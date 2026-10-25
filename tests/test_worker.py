@@ -18,6 +18,7 @@ import time
 from typing import ClassVar
 
 import pytest
+from fresh_schema import fresh_schema
 
 from invoice_processing import approval_flow, rematch, tenant_settings
 from invoice_processing.adapters import FsCaseRepository
@@ -26,8 +27,6 @@ from invoice_processing.core.config import ARTIFACT_MAP
 from invoice_processing.db import models
 from invoice_processing.db.repositories import PgApprovalRepository
 from invoice_processing.db.session import (
-    create_all,
-    get_engine,
     tenant_session,
 )
 from invoice_processing.ports import RunContext
@@ -1109,8 +1108,7 @@ class TestRoutingAfterProjection:
         url = scratch_db("route.db")
         # tenant_settings (the SLA) reads the same database the repo uses.
         monkeypatch.setenv("DATABASE_URL", url)
-        models.Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         with tenant_session("t", url) as session:
             session.add(models.Tenant(id="t", name="t", slug="t"))
         repo = PgApprovalRepository(url)
@@ -1788,9 +1786,7 @@ class TestClosedTenants:
 class TestEscalationSweepSkipsClosedTenants:
     def test_only_active_tenants_are_swept(self, scratch_db):
         url = scratch_db("sweep.db")
-        engine = get_engine(url)
-        models.Base.metadata.drop_all(engine)
-        create_all(url)
+        fresh_schema(url)
         with tenant_session("", url) as session:
             session.add(models.Tenant(id="t-open", slug="open", name="Open"))
             session.add(

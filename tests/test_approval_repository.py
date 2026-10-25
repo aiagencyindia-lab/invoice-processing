@@ -2,6 +2,7 @@
 API and the worker are separate containers, and "what is waiting for me" and
 "what is overdue" are queries, not scans of every case."""
 
+from fresh_schema import fresh_schema
 from sqlalchemy import inspect
 
 from invoice_processing.db import models
@@ -50,7 +51,7 @@ class TestSchema:
 # ---------------------------------------------------------------------------
 # Repository
 # ---------------------------------------------------------------------------
-from datetime import date, datetime, timedelta, timezone  # noqa: E402
+from datetime import UTC, date, datetime, timedelta  # noqa: E402
 from typing import ClassVar  # noqa: E402
 
 import pytest  # noqa: E402
@@ -67,20 +68,18 @@ from invoice_processing.db.repositories import (  # noqa: E402
     entity_type_for,
 )
 from invoice_processing.db.session import (  # noqa: E402
-    get_engine,
     tenant_session,
 )
 from invoice_processing.ports import RunContext  # noqa: E402
 
 T = "tenant-a"
-NOW = datetime(2026, 10, 8, 9, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
 
 
 @pytest.fixture
 def repo(scratch_db):
     url = scratch_db("approvals.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     for tenant_id, slug in ((T, "a"), ("tenant-b", "b")):
         with tenant_session(tenant_id, url) as session:
             session.add(models.Tenant(id=tenant_id, name=slug, slug=slug))

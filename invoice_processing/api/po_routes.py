@@ -45,6 +45,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from .. import po_matching
+from ..trust.agents import guard
 from . import auth
 from .auth import Principal, require_role
 
@@ -439,17 +440,26 @@ def _refused(exc: ValueError, records) -> HTTPException:
 
 
 def store_orders(repo, principal: Principal, records, *, replace=False) -> dict:
-    """Validate the whole upload, then upsert it in one transaction."""
+    """Validate the whole upload, ask the agent guard about each new PO,
+    then upsert it in one transaction."""
     problems = validate_orders(records)
     if problems:
         raise HTTPException(400, "; ".join(problems))
+    clean = _clean_orders(records)
+    # Every create is checked before any is written (FR-28.2).
+    decision = guard.check(
+        principal, lambda: guard.po_action(principal.context(), clean, repo)
+    )
     try:
-        return repo.upsert_orders(
-            principal.tenant_id,
-            _clean_orders(records),
-            uploaded_by=principal.email,
-            replace=replace,
-        )
+        with guard.settling(principal, decision) as settle:
+            out = repo.upsert_orders(
+                principal.tenant_id,
+                clean,
+                uploaded_by=principal.email,
+                replace=replace,
+            )
+            settle.written()
+            return out
     except ValueError as exc:
         raise _refused(exc, records) from None
 
@@ -460,30 +470,47 @@ def queue_rematches(principal: Principal, po_numbers: list[str]) -> int:
     The receipts are already stored, so a failure here is logged and audited
     rather than refused; the invoices simply stay held.
     """
+    from ..worker.queue import OUTAGE_AFTER_FAILURES  # noqa: PLC0415
     from ..worker.runner import enqueue_rematch  # noqa: PLC0415
     from . import service  # noqa: PLC0415
 
-    queued = 0
+    queued, failed, error, in_a_row = 0, 0, None, 0
     try:
         cases, queue = service.get_cases(), service.get_queue()
         for po_number in po_numbers:
             for case_id in cases.held_by_receipt(
                 principal.tenant_id, po_number
             ):
-                enqueue_rematch(
-                    queue,
-                    principal.tenant_id,
-                    case_id,
-                    po_number,
-                    request_id=auth.current_request_id.get(""),
-                )
-                queued += 1
+                # One stalled publish must not leave the rest unqueued; a
+                # dead broker leaves them all, without a wait for each.
+                if in_a_row >= OUTAGE_AFTER_FAILURES:
+                    failed += 1
+                    continue
+                try:
+                    enqueue_rematch(
+                        queue,
+                        principal.tenant_id,
+                        case_id,
+                        po_number,
+                        request_id=auth.current_request_id.get(""),
+                    )
+                    queued, in_a_row = queued + 1, 0
+                except Exception as exc:
+                    failed, error, in_a_row = failed + 1, exc, in_a_row + 1
+                    logger.exception("A re-match job could not be queued")
     except Exception as exc:
+        error = exc
         logger.exception("Re-match jobs could not be queued")
+    if error is not None:
         _audit().emit(
             principal.context(),
             "three_way_rematch_enqueue_failed",
-            {"po_numbers": po_numbers, "queued": queued, "error": str(exc)},
+            {
+                "po_numbers": po_numbers,
+                "queued": queued,
+                "failed": failed,
+                "error": str(error),
+            },
         )
     return queued
 

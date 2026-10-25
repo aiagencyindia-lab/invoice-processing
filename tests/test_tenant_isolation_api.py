@@ -19,11 +19,12 @@ import json
 import pathlib
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 from golden import GOLDEN_CASES
 from sqlalchemy.orm import Session
 
@@ -39,11 +40,20 @@ from invoice_processing.api import (
     auth,
     config_routes,
     gl_routes,
+    integration_routes,
     kpi_routes,
     po_routes,
     service,
     supporting_routes,
     system,
+    trust_agent_routes,
+    trust_audit_routes,
+    trust_explain_routes,
+    trust_provenance_routes,
+    trust_reality_routes,
+    trust_routes,
+    trust_score_routes,
+    v2_routes,
     vendor_routes,
 )
 from invoice_processing.api.service import app
@@ -58,7 +68,6 @@ from invoice_processing.db.repositories import (
     PgVendorRepository,
 )
 from invoice_processing.db.session import (
-    create_all,
     get_engine,
 )
 from invoice_processing.db.session import tenant_session as db_session
@@ -283,8 +292,7 @@ class TestWritesDoNotCross:
     @pytest.fixture
     def vendor_db(self, scratch_db, monkeypatch):
         url = scratch_db("iso-vendors.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tid, url) as session:
                 session.add(
@@ -318,8 +326,7 @@ class TestWritesDoNotCross:
     @pytest.fixture
     def approvals_db(self, scratch_db, monkeypatch):
         url = scratch_db("iso-approvals.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tid, url) as session:
                 session.add(
@@ -369,7 +376,7 @@ class TestWritesDoNotCross:
             ctx,
             service.get_cases().get_artifacts(ctx),
             repo=approvals_db,
-            now=datetime.now(timezone.utc),
+            now=datetime.now(UTC),
         )
         assert approvals_db.chain(ACME, "case_005")
 
@@ -403,8 +410,7 @@ class TestWritesDoNotCross:
     @pytest.fixture
     def gl_db(self, scratch_db, monkeypatch):
         url = scratch_db("iso-gl.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tid, url) as session:
                 session.add(
@@ -448,8 +454,7 @@ class TestWritesDoNotCross:
     @pytest.fixture
     def po_db(self, scratch_db, monkeypatch):
         url = scratch_db("iso-po.db")
-        Base.metadata.drop_all(get_engine(url))
-        create_all(url)
+        fresh_schema(url)
         for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tid, url) as session:
                 session.add(
@@ -969,9 +974,7 @@ class TestSheetIsolation:
         url = scratch_db("sheet.db")
         monkeypatch.setenv("DATABASE_URL", url)
         monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
-        engine = get_engine(url)
-        Base.metadata.drop_all(engine)
-        create_all(url)
+        fresh_schema(url)
 
         approved = {
             "workflow": {
@@ -1202,9 +1205,7 @@ class TestRuleIsolation:
         url = scratch_db("rules.db")
         monkeypatch.setenv("DATABASE_URL", url)
         monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
-        engine = get_engine(url)
-        Base.metadata.drop_all(engine)
-        create_all(url)
+        fresh_schema(url)
         for tenant_id, slug in ((ACME, "acme"), (GLOBEX, "globex")):
             with db_session(tenant_id, url) as session:
                 session.add(Tenant(id=tenant_id, slug=slug, name=slug))
@@ -1273,6 +1274,259 @@ class TestRuleIsolation:
         client_for, _ = rule_clients
 
         assert client_for("globex").get("/api/rules").json()["rules"] == []
+
+
+class TestTrustHistoryIsolation:
+    @pytest.fixture
+    def history_db(self, scratch_db, monkeypatch):
+        from invoice_processing.trust.history.importer import (  # noqa: PLC0415
+            HistoryImporter,
+        )
+
+        url = scratch_db("iso-history.db")
+        fresh_schema(url)
+        for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
+            with db_session(tid, url) as session:
+                session.add(
+                    Tenant(id=tid, name=slug, slug=slug, status="active")
+                )
+        monkeypatch.setattr(service, "_history_importer", HistoryImporter(url))
+        monkeypatch.setenv("DATABASE_URL", url)
+
+    def test_imports_stay_with_their_tenant(self, clients, history_db):
+        csv = b"Bill No,Supplier,Amount\nINV-1,Acme,10\n"
+        mapping = (
+            '{"Bill No":"doc_number","Supplier":"vendor_key","Amount":"amount"}'
+        )
+        r = clients("acme", "clerk").post(
+            "/api/trust/history/import",
+            files={"file": ("a.csv", csv, "text/csv")},
+            data={"kind": "ap_invoice", "source_name": "t", "mapping": mapping},
+        )
+        assert r.status_code == 201
+        assert clients("globex").get("/api/trust/history/imports").json() == []
+        mine = clients("acme").get("/api/trust/history/imports").json()
+        assert mine[0]["rows_ok"] == 1
+        probe = clients("globex", "clerk").post(
+            "/api/trust/history/mapping",
+            files={"file": ("a.csv", csv, "text/csv")},
+            data={"kind": "ap_invoice", "source_name": "t"},
+        )
+        assert probe.status_code == 200 and probe.json()["saved"] is None
+
+
+class TestTrustContractIsolation:
+    @pytest.fixture
+    def contract_db(self, scratch_db, monkeypatch, tmp_path):
+        from invoice_processing.adapters import LocalBlobStore  # noqa: PLC0415
+        from invoice_processing.db.models import Vendor  # noqa: PLC0415
+        from invoice_processing.db.repositories import (  # noqa: PLC0415
+            PgDocumentRepository,
+        )
+        from invoice_processing.trust.graph.store import GraphStore  # noqa: PLC0415
+
+        url = scratch_db("iso-contracts.db")
+        fresh_schema(url)
+        for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
+            with db_session(tid, url) as session:
+                session.add(
+                    Tenant(id=tid, name=slug, slug=slug, status="active")
+                )
+        with db_session(ACME, url) as session:
+            session.add(
+                Vendor(
+                    tenant_id=ACME,
+                    id="ven-acme",
+                    name="Acme Steel",
+                    normalized_name="acme steel",
+                    tax_id="27AAPFU0939F1ZV",
+                )
+            )
+        monkeypatch.setattr(service, "_graph_store", GraphStore(url))
+        monkeypatch.setattr(service, "_documents", PgDocumentRepository(url))
+        blobs = LocalBlobStore(tmp_path / "blobs")
+        monkeypatch.setattr(service, "get_blobs", lambda tenant_id: blobs)
+        monkeypatch.setenv("DATABASE_URL", url)
+
+    def test_contracts_stay_with_their_tenant(self, clients, contract_db):
+        pdf = b"%PDF-1.4\n% msa\n"
+        r = clients("acme", "clerk").post(
+            "/api/trust/contracts",
+            files={"file": ("msa.pdf", pdf, "application/pdf")},
+            data={"vendor_id": "ven-acme"},
+        )
+        assert r.status_code == 201, r.text
+        assert clients("globex").get("/api/trust/contracts").json() == []
+        assert len(clients("acme").get("/api/trust/contracts").json()) == 1
+        # Another tenant's vendor id is unknown here, not borrowed.
+        probe = clients("globex", "clerk").post(
+            "/api/trust/contracts",
+            files={"file": ("x.pdf", pdf + b"x", "application/pdf")},
+            data={"vendor_id": "ven-acme"},
+        )
+        assert probe.status_code == 404
+
+
+class TestTrustFindingsIsolation:
+    @pytest.fixture
+    def findings_db(self, scratch_db, monkeypatch, tmp_path):
+        from decimal import Decimal  # noqa: PLC0415
+
+        from invoice_processing.adapters import LocalBlobStore  # noqa: PLC0415
+        from invoice_processing.db.models import Document  # noqa: PLC0415
+        from invoice_processing.db.repositories import (  # noqa: PLC0415
+            PgDocumentRepository,
+        )
+        from invoice_processing.trust.findings.model import (  # noqa: PLC0415
+            Citation,
+            FindingSpec,
+        )
+        from invoice_processing.trust.findings.store import (  # noqa: PLC0415
+            FindingStore,
+        )
+        from invoice_processing.trust.graph.store import GraphStore  # noqa: PLC0415
+
+        url = scratch_db("iso-findings.db")
+        fresh_schema(url)
+        for tid, slug in ((ACME, "acme"), (GLOBEX, "globex")):
+            with db_session(tid, url) as session:
+                session.add(
+                    Tenant(id=tid, name=slug, slug=slug, status="active")
+                )
+        with db_session(ACME, url) as session:
+            session.add(
+                Document(
+                    tenant_id=ACME,
+                    id="doc-acme",
+                    sha256="a" * 64,
+                    storage_key="contracts/a.pdf",
+                    kind="contract",
+                )
+            )
+        graph, findings = GraphStore(url), FindingStore(url)
+        ctx = RunContext(tenant_id=ACME, case_id="", run_id="r", actor="e")
+        invoice = graph.upsert_node(
+            ctx,
+            kind="invoice",
+            natural_key="invoices:i",
+            attrs={"case_id": "c"},
+        )
+        contract = graph.upsert_node(
+            ctx,
+            kind="contract",
+            natural_key="documents:doc-acme",
+            ref_table="documents",
+            ref_id="doc-acme",
+        )
+        clause = graph.upsert_node(
+            ctx,
+            kind="contract_clause",
+            natural_key="clause:a",
+            attrs={"type": "rate", "params": {"price": "1"}, "page": 1},
+        )
+        graph.upsert_edge(
+            ctx,
+            src=clause,
+            dst=contract,
+            kind="part_of",
+            source_system="leakage",
+            provenance="model_inference",
+            confidence=0.9,
+            observed_at=datetime.now(UTC),
+        )
+        fid, _ = findings.upsert(
+            ctx,
+            FindingSpec(
+                type="BENCH-IMPORT",
+                transaction_node=invoice,
+                dedupe_key="BENCH-IMPORT:i",
+                impact=Decimal("10"),
+                currency="INR",
+                confidence=1.0,
+                engine_version="e",
+                rule_version="r",
+                model_version="none",
+                summary="acme's",
+                citations=(Citation(invoice),),
+            ),
+        )
+        monkeypatch.setattr(service, "_graph_store", graph)
+        monkeypatch.setattr(service, "_finding_store", findings)
+        monkeypatch.setattr(service, "_documents", PgDocumentRepository(url))
+        blobs = LocalBlobStore(tmp_path / "blobs")
+        blobs.put("contracts/a.pdf", b"%PDF-1.4\n")
+        monkeypatch.setattr(service, "get_blobs", lambda tenant_id: blobs)
+        monkeypatch.setenv("DATABASE_URL", url)
+        return {"finding": fid, "invoice": invoice, "clause": clause}
+
+    def test_findings_nodes_and_contracts_stay_with_their_tenant(
+        self, clients, findings_db
+    ):
+        acme, globex = clients("acme"), clients("globex")
+        fid, inv, clause = (
+            findings_db["finding"],
+            findings_db["invoice"],
+            findings_db["clause"],
+        )
+        assert acme.get("/api/trust/findings").json()["total"] == 1
+        assert globex.get("/api/trust/findings").json()["total"] == 0
+        assert (
+            globex.get("/api/trust/findings/summary").json()["by_status"] == {}
+        )
+        assert globex.get(f"/api/trust/findings/{fid}").status_code == 404
+        probe = globex.post(
+            f"/api/trust/findings/{fid}/transition",
+            json={"to_status": "triaged"},
+        )
+        assert probe.status_code == 404
+        assert acme.get(f"/api/trust/findings/{fid}").json()["status"] == (
+            "detected"
+        )
+        assert globex.get(f"/api/trust/nodes/{inv}").status_code == 404
+        assert globex.get(f"/api/trust/lineage/{inv}").status_code == 404
+        assert (
+            globex.get("/api/trust/contracts/doc-acme/file").status_code == 404
+        )
+        assert (
+            globex.get("/api/trust/contracts/doc-acme/clauses").status_code
+            == 404
+        )
+        probe = globex.patch(
+            f"/api/trust/clauses/{clause}", json={"params": {"price": "9"}}
+        )
+        assert probe.status_code == 404
+        [kept] = acme.get("/api/trust/contracts/doc-acme/clauses").json()
+        assert kept["params"] == {"price": "1"} and kept["reviewed"] is False
+
+
+def app_paths() -> set[str]:
+    """Every path the app serves, through included routers."""
+
+    def walk(routes, prefix: str = ""):
+        for route in routes:
+            if hasattr(route, "path"):
+                yield prefix + route.path
+            elif hasattr(route, "original_router"):  # an included router
+                yield from walk(
+                    route.original_router.routes,
+                    prefix + route.include_context.prefix,
+                )
+
+    return set(walk(app.routes))
+
+
+def branch_probed() -> set[str]:
+    """The routes the sibling route-test modules probe (each defines PROBED;
+    absent modules are branches that have not landed)."""
+    import importlib  # noqa: PLC0415
+
+    probed: set[str] = set()
+    for name in TestCoverage.EXTRA_PROBE_MODULES:
+        try:
+            probed |= set(importlib.import_module(name).PROBED)
+        except ImportError:
+            continue
+    return probed
 
 
 class TestCoverage:
@@ -1360,7 +1614,46 @@ class TestCoverage:
         "/api/sheet/exports/{job_id}",
         "/api/sheet/exports/{job_id}/download",
         "/api/sheet/exports/{job_id}/retry",
+        "/api/trust/history/mapping",
+        "/api/trust/history/import",
+        "/api/trust/history/imports",
+        "/api/trust/contracts",
+        "/api/trust/findings",
+        "/api/trust/findings/summary",
+        "/api/trust/findings/{finding_id}",
+        "/api/trust/findings/{finding_id}/transition",
+        "/api/trust/nodes/{node_id}",
+        "/api/trust/lineage/{node_id}",
+        "/api/trust/contracts/{document_id}/file",
+        "/api/trust/contracts/{document_id}/clauses",
+        "/api/trust/clauses/{node_id}",
     }
+
+    # Sibling test modules that own routes and carry their own two-tenant
+    # probes (the Wave 2 audit and explain branches); each defines PROBED.
+    EXTRA_PROBE_MODULES: ClassVar[tuple] = (
+        "tests.test_trust_audit_routes",
+        "tests.test_trust_explain_routes",
+        # Wave 3 branches (absent until each lands).
+        "tests.test_trust_reality_routes",
+        "tests.test_trust_provenance_routes",
+        "tests.test_trust_score_routes",
+        "tests.test_trust_api_routes",
+        # Wave 4.
+        "tests.test_trust_agent_routes",
+    )
+
+    def _probed(self) -> set:
+        return set(self.PROBED) | branch_probed()
+
+    def test_the_route_walk_sees_routes_mounted_from_routers(self):
+        """FastAPI 0.141 puts each included router on `app.routes` as one
+        entry with no path; a walk that skips it checks only the handful of
+        routes defined on the app itself."""
+        paths = app_paths()
+        assert "/api/trust/findings" in paths  # trust_routes, a router
+        assert "/api/invoices/{case_id}" in paths  # defined on the app
+        assert len(paths) > 100
 
     def test_every_route_is_covered(self):
         """A new endpoint cannot ship without an isolation probe.
@@ -1368,8 +1661,7 @@ class TestCoverage:
         This is the test that keeps the file honest: without it, coverage here
         decays silently as endpoints are added.
         """
-        routes = {r.path for r in app.routes if hasattr(r, "path")}
-        uncovered = routes - self.PROBED - set(self.EXEMPT)
+        uncovered = app_paths() - self._probed() - set(self.EXEMPT)
         assert not uncovered, (
             f"These routes have no cross-tenant test: {sorted(uncovered)}. "
             "Add a probe above, or list it in EXEMPT with a reason."
@@ -1383,10 +1675,9 @@ class TestCoverage:
         `/api/{tenant_id}/...` -- a value the caller supplies.
         """
         offenders = [
-            r.path
-            for r in app.routes
-            if hasattr(r, "path")
-            and re.search(r"\{[^}]*tenant[^}]*\}", r.path, re.IGNORECASE)
+            path
+            for path in sorted(app_paths())
+            if re.search(r"\{[^}]*tenant[^}]*\}", path, re.IGNORECASE)
         ]
         assert not offenders, f"Routes taking a tenant in the path: {offenders}"
 
@@ -1397,10 +1688,19 @@ class TestCoverage:
             approval_routes,
             config_routes,
             gl_routes,
+            integration_routes,
             kpi_routes,
             po_routes,
             supporting_routes,
             system,
+            trust_agent_routes,
+            trust_audit_routes,
+            trust_explain_routes,
+            trust_provenance_routes,
+            trust_reality_routes,
+            trust_routes,
+            trust_score_routes,
+            v2_routes,
             vendor_routes,
         ):
             source = pathlib.Path(module.__file__).read_text(encoding="utf-8")

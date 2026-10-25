@@ -9,7 +9,7 @@ decided: the account an approver signed off is the account that is exported.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -256,7 +256,7 @@ def code_line(
                 "source": "manual",
                 "rule_id": None,
                 "coded_by": principal.email,
-                "coded_at": datetime.now(timezone.utc).isoformat(),
+                "coded_at": datetime.now(UTC).isoformat(),
             }
         )
         entries.sort(key=lambda e: e["line_number"])

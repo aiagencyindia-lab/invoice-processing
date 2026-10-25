@@ -1,0 +1,85 @@
+{
+ "finding": {
+  "id": "f-prov-tamper",
+  "type": "PROV-TAMPER",
+  "transaction_node": "n-inv",
+  "status": "detected",
+  "impact": "1000.00",
+  "currency": "INR",
+  "confidence": 1.0,
+  "engine_version": "provenance-1",
+  "rule_version": "r",
+  "model_version": "none",
+  "summary": "Invoice INV-1041 was approved earlier with a different document; this copy may have been altered.",
+  "details": {
+   "approved_twins": 1
+  },
+  "citations": [
+   {
+    "node_id": "n-inv",
+    "excerpt": "submitted, sha 0123456789ab"
+   },
+   {
+    "node_id": "n-inv0",
+    "excerpt": "approved, sha fedcba987654"
+   },
+   {
+    "node_id": "n-docv",
+    "excerpt": "document version"
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-inv0": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i0",
+   "attrs": {
+    "invoice_number": "INV-1040",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-01",
+    "case_id": "case-0"
+   }
+  },
+  "n-docv": {
+   "kind": "document_version",
+   "attrs": {
+    "case_id": "case-1",
+    "score": 0.3
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ]
+ ],
+ "expect": {
+  "payable_now": "1000.00",
+  "payable_correct": "1000.00",
+  "delta": "1000.00"
+ }
+}

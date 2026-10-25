@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from fresh_schema import fresh_schema
 
 from invoice_processing.db import repositories
 from invoice_processing.db.models import (
     ApprovalStep,
-    Base,
     Document,
     Finding,
     Invoice,
@@ -22,11 +22,11 @@ from invoice_processing.db.repositories import (
     exception_bucket,
     percentile,
 )
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 
 ACME = "tenant-acme"
 GLOBEX = "tenant-globex"
-NOW = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
 
 
 def days_ago(n: float) -> datetime:
@@ -36,9 +36,7 @@ def days_ago(n: float) -> datetime:
 @pytest.fixture
 def db(scratch_db):
     url = scratch_db("kpi.db")
-    engine = get_engine(url)
-    Base.metadata.drop_all(engine)
-    create_all(url)
+    fresh_schema(url)
     for tenant_id, slug in ((ACME, "acme"), (GLOBEX, "globex")):
         with tenant_session(tenant_id, url) as session:
             session.add(Tenant(id=tenant_id, slug=slug, name=slug))

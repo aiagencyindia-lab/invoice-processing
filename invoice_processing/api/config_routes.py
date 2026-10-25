@@ -33,6 +33,7 @@ from .. import (
     tenant_settings,
     wa_matching,
 )
+from ..trust import modes
 from .auth import Principal, current_principal, require_role
 
 logger = logging.getLogger(__name__)
@@ -138,8 +139,27 @@ def update_settings(
 
     store = service.get_tenant_settings()
     before = dict(store.get(principal.tenant_id) or {})
+    rest = {k: v for k, v in cleaned.items() if k != "trust_engine_modes"}
     try:
-        store.put(principal.tenant_id, cleaned)
+        # Modes go through the one writer that stamps when each engine
+        # entered its mode and places or lifts holds across enforcing.
+        # The submitted dict is the whole of it: an engine left out is off.
+        if "trust_engine_modes" in cleaned:
+            wanted = cleaned["trust_engine_modes"]
+            current = before.get("trust_engine_modes") or {}
+            for engine in modes.ENGINES:
+                mode = wanted.get(engine, "off")
+                if mode != current.get(engine, "off"):
+                    modes.set_engine_mode(
+                        principal.context(),
+                        engine,
+                        mode,
+                        store=store,
+                        audit=service.get_audit(),
+                        reason="settings",
+                    )
+        if rest:
+            store.put(principal.tenant_id, rest)
     except tenant_settings.SettingsError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -320,7 +340,7 @@ def replace_purchase_orders(
     safe = "".join(
         c if c.isalnum() or c in "-_" else "_" for c in principal.tenant_id
     )
-    path = paths.PURCHASE_ORDER_DIR / f"{safe or 'default'}.json"
+    path = paths.purchase_order_dir() / f"{safe or 'default'}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(

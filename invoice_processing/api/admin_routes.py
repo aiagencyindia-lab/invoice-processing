@@ -71,7 +71,9 @@ class UserCreate(BaseModel):
 
 class UserPatch(BaseModel):
     manager_email: str | None = Field(default=None, max_length=320)
-    role: Literal["viewer", "clerk", "approver", "admin"] | None = None
+    role: (
+        Literal["viewer", "clerk", "approver", "controller", "admin"] | None
+    ) = None
     is_active: bool | None = None
 
 
@@ -236,7 +238,7 @@ def list_users(
     return {
         "users": users,
         "count": len(users),
-        "roles": ["viewer", "clerk", "approver", "admin"],
+        "roles": ["viewer", "clerk", "approver", "controller", "admin"],
     }
 
 
@@ -284,6 +286,35 @@ def create_user(
     return record
 
 
+def _keep_a_controller(tenant_id: str, current: dict, request, fields):
+    """Refuse removing the last active controller while a controller step
+    needs one: nobody else may sign it off, so it would wait forever."""
+    from .approval_routes import (  # noqa: PLC0415
+        _active_controllers,
+        controller_needed,
+    )
+
+    stays = (
+        request.role if "role" in fields else current["role"]
+    ) == "controller" and (
+        request.is_active if "is_active" in fields else current["is_active"]
+    )
+    if current["role"] != "controller" or not current["is_active"] or stays:
+        return
+    # ponytail: check then write, unlocked; two admins demoting the last two
+    # controllers at the same moment can leave none (the step's escalation
+    # still tells the admins). Lock the tenant's users if it ever matters.
+    others = set(_active_controllers(tenant_id)) - {current["email"].casefold()}
+    if not others and controller_needed(tenant_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{current['email']} is the only controller and a rule or a "
+                "waiting step needs one; make someone else a controller first."
+            ),
+        )
+
+
 @router.patch("/api/admin/users/{user_id}")
 def patch_user(
     user_id: str,
@@ -314,6 +345,7 @@ def patch_user(
                 status_code=409,
                 detail="You cannot change your own role or deactivate yourself; ask another admin.",
             )
+        _keep_a_controller(principal.tenant_id, current, request, fields)
     record: dict = {"id": user_id}
     if "manager_email" in fields:
         try:

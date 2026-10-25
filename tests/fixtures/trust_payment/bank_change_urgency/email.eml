@@ -1,0 +1,1 @@
+{"FromFull": {"Email": "ap@acme-steel.in", "Name": "Acme Steel Accounts"}, "To": "invoices@acme.ledgerly.test", "OriginalRecipient": "invoices@acme.ledgerly.test", "Subject": "Invoice INV-7", "TextBody": "URGENT: our bank account has changed as advised last week. Please release payment for INV-7 immediately.", "HtmlBody": "", "MessageID": "pm-1", "Attachments": []}

@@ -13,9 +13,10 @@ all, so they exercise the application-layer half; the policy half is covered by
 test_rls_policies.py.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
+from fresh_schema import fresh_schema
 from sqlalchemy.exc import DatabaseError
 
 from invoice_processing.adapters import JsonDocumentRepository
@@ -44,7 +45,7 @@ from invoice_processing.db.repositories import (
     entity_type_for,
 )
 from invoice_processing.db.rls import enable_rls_statements
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import (
     AuditSink,
     CaseRepository,
@@ -63,9 +64,7 @@ GLOBEX = "tenant-globex"
 def db(scratch_db):
     """A fresh database with two tenants."""
     url = scratch_db("test.db")
-    engine = get_engine(url)
-    Base.metadata.drop_all(engine)
-    create_all(url)
+    fresh_schema(url)
     for tenant_id, slug in ((ACME, "acme"), (GLOBEX, "globex")):
         with tenant_session(tenant_id, url) as session:
             session.add(Tenant(id=tenant_id, slug=slug, name=slug.title()))
@@ -934,11 +933,11 @@ class TestTheTrailCanAnswerWhatChanged:
         assert event.entity_type == "document"
 
     def test_query_narrows_to_a_window_and_pages_by_cursor(self, db):
-        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        from datetime import datetime, timedelta  # noqa: PLC0415
 
         from invoice_processing.db.models import AuditEvent  # noqa: PLC0415
 
-        t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        t0 = datetime(2026, 10, 1, tzinfo=UTC)
         with tenant_session(ACME, db) as s:
             for i in range(5):
                 s.add(
@@ -1100,3 +1099,17 @@ class TestDocumentGet:
         assert repo.get(ACME, doc_id)["source_ref"] == "up@x.test"
         assert repo.get(GLOBEX, doc_id) is None
         assert repo.get(ACME, "missing") is None
+
+
+def test_switching_databases_closes_the_previous_engines_pool(
+    tmp_path, monkeypatch
+):
+    """A replaced engine must release its connections; on Postgres a pool per
+    switch otherwise piles up until the server refuses new clients."""
+    from invoice_processing.db import session as db_session  # noqa: PLC0415
+
+    first = db_session.get_engine(f"sqlite:///{tmp_path / 'a.db'}")
+    disposed = []
+    monkeypatch.setattr(first, "dispose", lambda *a, **k: disposed.append(1))
+    db_session.get_engine(f"sqlite:///{tmp_path / 'b.db'}")
+    assert disposed == [1]

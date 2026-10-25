@@ -4,8 +4,10 @@ Three settings fail *open and silent* if they are dropped from a deployment,
 and each produces a system that reports itself healthy while quietly not doing
 its job:
 
-* `GCS_BUCKET` unset -- documents are written to container-local disk and
-  vanish on the next restart. Nothing logs; the upload returns 200.
+* Neither `GCS_BUCKET` nor a mounted `STATE_DIR` -- documents are written to
+  container-local disk and vanish on the next restart. Nothing logs; the
+  upload returns 200. A `STATE_DIR` that is missing or read-only (a volume
+  that did not mount) is the same failure and is refused the same way.
 * Neither `DATABASE_URL` nor `CLOUD_SQL_INSTANCE` -- the engine falls back to
   in-memory SQLite. Row-level security does not exist there, so tenant
   isolation rests entirely on the repositories remembering to filter, and the
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +58,30 @@ def check_configuration(env: str | None = None) -> list[str]:
 
     problems = []
 
-    if not os.getenv("GCS_BUCKET"):
+    state = os.getenv("STATE_DIR", "").strip()
+    if state:
+        # A mounted volume stands in for a bucket (Railway); a missing or
+        # read-only one would lose every document on the next restart.
+        if Path(state).exists() and not Path(state).is_dir():
+            problems.append(
+                f"STATE_DIR={state} is not a directory: point it at the "
+                "volume's mount path."
+            )
+        elif not Path(state).is_dir():
+            problems.append(
+                f"STATE_DIR={state} does not exist: is the volume mounted? "
+                "Documents and the job queue would be lost on restart."
+            )
+        elif not os.access(state, os.W_OK):
+            problems.append(
+                f"STATE_DIR={state} is not writable: documents and the job "
+                "queue could not be kept."
+            )
+    elif not os.getenv("GCS_BUCKET"):
         problems.append(
             "GCS_BUCKET is not set: documents will be written to local disk and "
-            "lost when the container restarts."
+            "lost when the container restarts. Set GCS_BUCKET, or STATE_DIR to "
+            "a mounted volume."
         )
 
     if not (os.getenv("DATABASE_URL") or os.getenv("CLOUD_SQL_INSTANCE")):

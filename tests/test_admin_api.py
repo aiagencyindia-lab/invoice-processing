@@ -39,7 +39,7 @@ class FakeVerifier:
     def verify(self, token):
         token, _, email = token.partition("#")
         role, _, tenant = token.partition("@")
-        if role not in ("viewer", "clerk", "approver", "admin"):
+        if role not in ("viewer", "clerk", "approver", "controller", "admin"):
             raise auth.AuthError("Invalid token")
         return {
             "sub": f"u-{token}",
@@ -575,6 +575,20 @@ class TestRoleAndActive:
         assert len(changed) == 1
         assert changed[0]["payload"]["email"] == "pat@acme.com"
         assert changed[0]["before"] == {"role": "clerk"}
+
+    def test_an_admin_can_make_a_controller(self, env):
+        client = env["client"]("admin")
+        r = client.post(
+            "/api/admin/users",
+            json={"email": "cora@acme.com", "role": "controller"},
+        )
+        assert r.status_code in (200, 201), r.text
+        pat = self._user(env)
+        r = client.patch(
+            f"/api/admin/users/{pat['id']}", json={"role": "controller"}
+        )
+        assert r.status_code == 200 and r.json()["role"] == "controller"
+        assert "controller" in client.get("/api/admin/users").json()["roles"]
 
     def test_deactivate_and_reactivate(self, env, tmp_path):
         pat = self._user(env)

@@ -489,6 +489,10 @@ def misconfiguration_is_refused():
 
 # -- Part D -----------------------------------------------------------------
 def the_suite_passes():
+    # CI's Tests step runs the whole suite on this commit just before the
+    # sweep; running it again doubled the job and outgrew this timeout.
+    if os.getenv("SUITE_ALREADY_RAN"):
+        raise Skip("the CI Tests step ran the suite on this commit")
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "tests/", "-q"],
         cwd=REPO,

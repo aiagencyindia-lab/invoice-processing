@@ -22,7 +22,8 @@ signal for accuracy measurement and the raw material for ALF rules.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -54,7 +55,7 @@ def _uuid() -> str:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
@@ -905,6 +906,597 @@ class SupportingDocument(Base, TenantMixin, TimestampMixin):
     note: Mapped[str | None] = mapped_column(String(500))
 
 
+# ---------------------------------------------------------------------------
+# v2 Trust layer (Wave 0). Time-travel tables are never updated in place: a
+# change closes the current row (valid_to) and inserts a new one, so "what did
+# we know on date D" is a filter, not a reconstruction.
+# ---------------------------------------------------------------------------
+
+
+def _open(name: str, *cols: str, when: str = "valid_to IS NULL") -> Index:
+    """One open row per key; closed rows may repeat the key."""
+    return Index(
+        name,
+        *cols,
+        unique=True,
+        postgresql_where=text(when),
+        sqlite_where=text(when),
+    )
+
+
+class GraphNode(Base, TenantMixin, TimestampMixin):
+    """An artefact or party in the Evidence Graph (PRD FR-19.1)."""
+
+    __tablename__ = "graph_nodes"
+    __table_args__ = (
+        _open("uq_graph_nodes_open", "tenant_id", "kind", "natural_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    natural_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Backed by an existing row: nothing is copied, only pointed at.
+    ref_table: Mapped[str | None] = mapped_column(String(64))
+    ref_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    attrs: Mapped[dict] = mapped_column(JSONType, default=dict)
+    natural_keys: Mapped[dict] = mapped_column(JSONType, default=dict)
+    valid_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GraphEdge(Base, TenantMixin, TimestampMixin):
+    """A link between two nodes, with where it came from and how sure we are."""
+
+    __tablename__ = "graph_edges"
+    __table_args__ = (
+        _open(
+            "uq_graph_edges_open",
+            "tenant_id",
+            "src",
+            "dst",
+            "kind",
+            "source_system",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    src: Mapped[str] = mapped_column(
+        String(36), ForeignKey("graph_nodes.id"), nullable=False, index=True
+    )
+    dst: Mapped[str] = mapped_column(
+        String(36), ForeignKey("graph_nodes.id"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_system: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    # document | system_record | human_assertion | model_inference
+    provenance: Mapped[str] = mapped_column(String(16), nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    attrs: Mapped[dict] = mapped_column(JSONType, default=dict)
+    valid_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EntityLink(Base, TenantMixin, TimestampMixin):
+    """Two nodes judged to be one entity. Never deletes a node; reversible."""
+
+    __tablename__ = "entity_links"
+    __table_args__ = (
+        _open(
+            "uq_entity_links_open",
+            "tenant_id",
+            "node_a",
+            "node_b",
+            when="reversed_at IS NULL",
+        ),
+    )
+
+    AUTO, PROPOSED, ACCEPTED, REJECTED = (
+        "auto",
+        "proposed",
+        "accepted",
+        "rejected",
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    node_a: Mapped[str] = mapped_column(
+        String(36), ForeignKey("graph_nodes.id"), nullable=False, index=True
+    )
+    node_b: Mapped[str] = mapped_column(
+        String(36), ForeignKey("graph_nodes.id"), nullable=False, index=True
+    )
+    score: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    method: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=PROPOSED
+    )
+    decided_by: Mapped[str | None] = mapped_column(String(320))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reversed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    reason: Mapped[str | None] = mapped_column(String(500))
+
+
+class TrustHistoryImport(Base, TenantMixin, TimestampMixin):
+    """One uploaded history file. Re-uploading the same bytes is a no-op."""
+
+    __tablename__ = "trust_history_imports"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "file_sha256", name="uq_trust_history_imports_sha"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    source_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    file_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    filename: Mapped[str | None] = mapped_column(String(255))
+    mapping: Mapped[dict] = mapped_column(JSONType, default=dict)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="complete"
+    )
+    rows_ok: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rows_bad: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[list] = mapped_column(JSONType, default=list)
+    created_by: Mapped[str | None] = mapped_column(String(320))
+
+
+class HistoryRecord(Base, TenantMixin, TimestampMixin):
+    """One normalised row of imported history."""
+
+    __tablename__ = "history_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "import_id",
+            "row_number",
+            name="uq_history_records_row",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    import_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("trust_history_imports.id"),
+        nullable=False,
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    external_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    fields: Mapped[dict] = mapped_column(JSONType, default=dict)
+    amount: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    currency: Mapped[str | None] = mapped_column(String(8))
+    record_date: Mapped[date | None] = mapped_column(Date)
+    vendor_key: Mapped[str | None] = mapped_column(String(512), index=True)
+    doc_number: Mapped[str | None] = mapped_column(String(128), index=True)
+
+
+class TrustFinding(Base, TenantMixin, TimestampMixin):
+    """A quantified, cited claim that money is being lost (PRD FR-20.7)."""
+
+    __tablename__ = "trust_findings"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "dedupe_key", name="uq_trust_findings_dedupe"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    transaction_node: Mapped[str] = mapped_column(
+        String(36), ForeignKey("graph_nodes.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="detected", index=True
+    )
+    impact: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    currency: Mapped[str | None] = mapped_column(String(8))
+    confidence: Mapped[float | None] = mapped_column(Numeric(5, 4))
+    owner_id: Mapped[str | None] = mapped_column(String(320))
+    engine_version: Mapped[str | None] = mapped_column(String(32))
+    rule_version: Mapped[str | None] = mapped_column(String(32))
+    model_version: Mapped[str | None] = mapped_column(String(64))
+    dedupe_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+    details: Mapped[dict] = mapped_column(JSONType, default=dict)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TrustFindingCitation(Base, TenantMixin):
+    """Why we believe a finding: a graph node and an excerpt. At least one each."""
+
+    __tablename__ = "trust_finding_citations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_findings.id"), nullable=False, index=True
+    )
+    node_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("graph_nodes.id"), nullable=False, index=True
+    )
+    excerpt: Mapped[str | None] = mapped_column(Text)
+
+
+class TrustFindingEvent(Base, TenantMixin, TimestampMixin):
+    """Every status change with the money at that stage: the recovery ledger."""
+
+    __tablename__ = "trust_finding_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_findings.id"), nullable=False, index=True
+    )
+    from_status: Mapped[str | None] = mapped_column(String(32))
+    to_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    amount: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    actor: Mapped[str] = mapped_column(String(320), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(500))
+
+
+class TrustAudit(Base, TenantMixin, TimestampMixin):
+    """A Trust Audit engagement: scope, contingency terms, approver (FR-29.1)."""
+
+    __tablename__ = "trust_audits"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="draft"
+    )
+    period_from: Mapped[date | None] = mapped_column(Date)
+    period_to: Mapped[date | None] = mapped_column(Date)
+    # Vendor graph node ids; empty means every vendor.
+    vendors: Mapped[list] = mapped_column(JSONType, default=list)
+    categories: Mapped[list] = mapped_column(JSONType, default=list)
+    # Decimal strings: recovered_pct, prevented_pct, cap, minimum.
+    terms: Mapped[dict] = mapped_column(JSONType, default=dict)
+    approver: Mapped[str | None] = mapped_column(String(320))
+    created_by: Mapped[str | None] = mapped_column(String(320))
+
+
+class TrustAuditRun(Base, TenantMixin, TimestampMixin):
+    """One batch run of the engines over the tenant's history (FR-29.2)."""
+
+    __tablename__ = "trust_audit_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    audit_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_audits.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="queued"
+    )
+    engines: Mapped[list] = mapped_column(JSONType, default=list)
+    progress: Mapped[dict] = mapped_column(JSONType, default=dict)
+    error: Mapped[str | None] = mapped_column(String(500))
+    requested_by: Mapped[str | None] = mapped_column(String(320))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+
+class TrustAuditSample(Base, TenantMixin, TimestampMixin):
+    """A random sample of findings a controller validates for precision."""
+
+    __tablename__ = "trust_audit_samples"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    audit_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_audits.id"), nullable=False, index=True
+    )
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    seed: Mapped[str | None] = mapped_column(String(32))
+    finding_ids: Mapped[list] = mapped_column(JSONType, default=list)
+    # finding_id -> true | false | null (not yet validated)
+    verdicts: Mapped[dict] = mapped_column(JSONType, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(320))
+
+
+class TrustExplanationRating(Base, TenantMixin, TimestampMixin):
+    """A reviewer's verdict on an explanation (FR-24.5): one per rater."""
+
+    __tablename__ = "trust_explanation_ratings"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "finding_id",
+            "rater",
+            name="uq_trust_explanation_ratings_rater",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_findings.id"), nullable=False, index=True
+    )
+    rater: Mapped[str] = mapped_column(String(320), nullable=False)
+    correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    useful: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500))
+
+
+class TrustHold(Base, TenantMixin, TimestampMixin):
+    """A payment hold placed or lifted: the ledger behind hold.placed and
+    hold.lifted. The gate still decides from the open findings; this records
+    when each hold began and ended."""
+
+    __tablename__ = "trust_holds"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_findings.id"), nullable=False, index=True
+    )
+    transaction_node: Mapped[str] = mapped_column(
+        String(36), nullable=False, index=True
+    )
+    engine: Mapped[str] = mapped_column(String(32), nullable=False)
+    type: Mapped[str] = mapped_column(String(64), nullable=False)
+    placed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+    placed_by: Mapped[str | None] = mapped_column(String(320))
+    lifted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lifted_by: Mapped[str | None] = mapped_column(String(320))
+    lift_reason: Mapped[str | None] = mapped_column(String(500))
+
+
+class TrustEvidenceRequest(Base, TenantMixin, TimestampMixin):
+    """Proof asked of a vendor or an internal owner for a finding (FR-23.5)."""
+
+    __tablename__ = "trust_evidence_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trust_findings.id"), nullable=False, index=True
+    )
+    owner: Mapped[str] = mapped_column(String(320), nullable=False)
+    due_date: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(String(500))
+    # open | fulfilled | cancelled
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="open"
+    )
+    proof_document_id: Mapped[str | None] = mapped_column(String(36))
+    requested_by: Mapped[str | None] = mapped_column(String(320))
+    fulfilled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+
+class ApiKey(Base, TenantMixin, TimestampMixin):
+    """A machine credential for the /v2 API. Only a hash of the secret is
+    kept; the prefix finds the row."""
+
+    __tablename__ = "api_keys"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "key_prefix", name="uq_api_keys_prefix"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    key_prefix: Mapped[str] = mapped_column(
+        String(12), nullable=False, index=True
+    )
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="viewer"
+    )
+    created_by: Mapped[str | None] = mapped_column(String(320))
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WebhookEndpoint(Base, TenantMixin, TimestampMixin):
+    """Where a tenant wants trust events sent, and which ones."""
+
+    __tablename__ = "webhook_endpoints"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    # Kept in the clear: it signs every delivery. Masked in every response.
+    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    events: Mapped[list] = mapped_column(JSONType, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    description: Mapped[str | None] = mapped_column(String(256))
+    created_by: Mapped[str | None] = mapped_column(String(320))
+
+
+class WebhookOutbox(Base, TenantMixin, TimestampMixin):
+    """One event for one endpoint, written with the change that caused it and
+    delivered by the worker's sweep."""
+
+    __tablename__ = "webhook_outbox"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    endpoint_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("webhook_endpoints.id"),
+        nullable=False,
+        index=True,
+    )
+    event: Mapped[str] = mapped_column(String(48), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONType, default=dict)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, index=True
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_status: Mapped[int | None] = mapped_column(Integer)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    dead_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Agent(Base, TenantMixin, TimestampMixin):
+    """A machine actor a tenant has registered for agent control (FR-28.1).
+    `principal_id` is the Principal's `user_id` it acts as; an external agent
+    (seen only through imported logs) has none."""
+
+    __tablename__ = "agents"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "principal_id", name="uq_agents_principal"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    owner: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    principal_id: Mapped[str | None] = mapped_column(String(64))
+    principal_email: Mapped[str | None] = mapped_column(String(320), index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active"
+    )
+    registered_by: Mapped[str | None] = mapped_column(String(320))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by: Mapped[str | None] = mapped_column(String(320))
+    revoke_reason: Mapped[str | None] = mapped_column(String(500))
+    graph_node: Mapped[str | None] = mapped_column(String(36))
+
+
+class AgentMandate(Base, TenantMixin, TimestampMixin):
+    """What a person authorised an agent to do, when, and for how much
+    (FR-28.5). Versioned; each version carries the previous one's digest."""
+
+    __tablename__ = "agent_mandates"
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_id", "version", name="uq_agent_mandates_version"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[dict] = mapped_column(JSONType, default=dict)
+    valid_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    valid_to: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="proposed"
+    )
+    proposed_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(320))
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    revoked_by: Mapped[str | None] = mapped_column(String(320))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(String(500))
+    prev_digest: Mapped[str | None] = mapped_column(String(64))
+    digest: Mapped[str | None] = mapped_column(String(64))
+    signature: Mapped[str | None] = mapped_column(String(64))
+
+
+class AgentAction(Base, TenantMixin, TimestampMixin):
+    """One evaluated agent action and the decision on it: the decision
+    ledger, written before the governed write (or from an imported log)."""
+
+    __tablename__ = "agent_actions"
+    __table_args__ = (
+        Index(
+            "ix_agent_actions_agent_time",
+            "tenant_id",
+            "agent_id",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id"), nullable=False, index=True
+    )
+    mandate_id: Mapped[str | None] = mapped_column(String(36))
+    mandate_version: Mapped[int | None] = mapped_column(Integer)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_table: Mapped[str | None] = mapped_column(String(32))
+    subject_ref: Mapped[str | None] = mapped_column(String(128), index=True)
+    transaction_node: Mapped[str | None] = mapped_column(String(36))
+    vendor_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    category: Mapped[str | None] = mapped_column(String(64))
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    currency: Mapped[str | None] = mapped_column(String(8))
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    reasons: Mapped[list] = mapped_column(JSONType, default=list)
+    explanation: Mapped[str | None] = mapped_column(String(1000))
+    mode: Mapped[str | None] = mapped_column(String(16))
+    source: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="inline"
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finding_id: Mapped[str | None] = mapped_column(String(36))
+    request_id: Mapped[str | None] = mapped_column(String(64))
+    # executed | failed, stamped by the call site after its write; unstamped
+    # (a crash, an imported log) still counts toward spend.
+    outcome: Mapped[str | None] = mapped_column(String(16))
+
+
+class ApiRateWindow(Base, TenantMixin, TimestampMixin):
+    """How many `/v2` requests one caller made in one minute (rate limit)."""
+
+    __tablename__ = "api_rate_windows"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "principal", "window_start", name="uq_api_rate_window"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    principal: Mapped[str] = mapped_column(String(128), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class ApiIdempotency(Base, TenantMixin, TimestampMixin):
+    """A `/v2` POST sent with an `Idempotency-Key`: its body's hash and, once
+    it finished, the answer a retry gets back. Kept 24 hours."""
+
+    __tablename__ = "api_idempotency"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "principal", "key", name="uq_api_idempotency_key"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    principal: Mapped[str] = mapped_column(String(128), nullable=False)
+    key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="in_progress"
+    )
+    status_code: Mapped[int | None] = mapped_column(Integer)
+    body: Mapped[dict | list | None] = mapped_column(JSONType)
+    content_type: Mapped[str | None] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 TENANT_TABLES = (
     "users",
     "record_locks",
@@ -932,4 +1524,26 @@ TENANT_TABLES = (
     "grn_lines",
     "supporting_documents",
     "sso_domains",
+    "graph_nodes",
+    "graph_edges",
+    "entity_links",
+    "trust_history_imports",
+    "history_records",
+    "trust_findings",
+    "trust_finding_citations",
+    "trust_finding_events",
+    "trust_audits",
+    "trust_audit_runs",
+    "trust_audit_samples",
+    "trust_explanation_ratings",
+    "trust_holds",
+    "trust_evidence_requests",
+    "api_keys",
+    "webhook_endpoints",
+    "webhook_outbox",
+    "agents",
+    "agent_mandates",
+    "agent_actions",
+    "api_rate_windows",
+    "api_idempotency",
 )

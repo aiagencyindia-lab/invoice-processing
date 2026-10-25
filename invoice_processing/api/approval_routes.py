@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -105,13 +105,37 @@ def _tenant_users(tenant_id: str) -> dict[str, str]:
     }
 
 
+def _active_controllers(tenant_id: str) -> list[str]:
+    from .admin_routes import _provisioner  # noqa: PLC0415
+
+    return [
+        u["email"].casefold()
+        for u in _provisioner().list_users(tenant_id)
+        if u["role"] == "controller" and u["is_active"]
+    ]
+
+
+def controller_needed(tenant_id: str) -> bool:
+    """Whether a rule names a controller step or an invoice waits on one:
+    then the account must keep an active controller, since no approver or
+    admin can sign that step off in their place."""
+    repo = _repo()
+    return any(
+        s.get("kind") == "role" and s.get("value") == "controller"
+        for r in repo.list_rules(tenant_id)
+        if r["enabled"]
+        for s in r["steps"]
+    ) or repo.has_pending(tenant_id, "role", "controller")
+
+
 def _fold(email: str) -> str:
     return email.strip().casefold()
 
 
-# Roles that can decide a step. Anyone else named on a chain would be a seat
-# nobody can fill: the act endpoint needs approver.
-APPROVING = ("approver", "admin")
+def _approving(role) -> bool:
+    """Whether this role can decide a step. Anyone else named on a chain
+    would be a seat nobody can fill: the act endpoint needs approver."""
+    return ROLE_RANK.get(role, -1) >= ROLE_RANK["approver"]
 
 
 def _need_users(
@@ -129,10 +153,10 @@ def _need_users(
             raise HTTPException(
                 400, f"{e} is not a user of this account, so {what}."
             )
-        if approving and known[e] not in APPROVING:
+        if approving and not _approving(known[e]):
             raise HTTPException(
                 400,
-                f"{e} is a {known[e]}, so {what}; only an approver or admin "
+                f"{e} is a {known[e]}, so {what}; only an approver, controller or admin "
                 "can approve.",
             )
     return out
@@ -218,6 +242,18 @@ def _check_rule(repo, tenant_id: str, kind, match, steps) -> tuple[dict, list]:
                 400,
                 f"Approver group {v!r} has no members, so nobody could approve.",
             )
+        elif (
+            k == "role"
+            and v == "controller"
+            and not _active_controllers(tenant_id)
+        ):
+            # Only a controller fills it (approvals.fills): with none, it is
+            # a seat nobody can fill.
+            raise HTTPException(
+                400,
+                "There is no active controller, so nobody could approve a "
+                "controller step.",
+            )
         elif k == "role" and v not in ROLE_RANK:
             raise HTTPException(
                 400,
@@ -237,7 +273,7 @@ def my_queue(
     from . import service  # noqa: PLC0415
 
     repo, t = _repo(), principal.tenant_id
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     steps = repo.mine(
         t,
         email=principal.email,
@@ -274,7 +310,7 @@ def my_queue(
         overdue = False
         if due:
             when = datetime.fromisoformat(due)
-            overdue = when.replace(tzinfo=when.tzinfo or timezone.utc) < now
+            overdue = when.replace(tzinfo=when.tzinfo or UTC) < now
         items.append(
             {
                 "case_id": s["case_id"],
@@ -313,7 +349,7 @@ def invoice_chain(
         steps,
         repo=repo,
         documents=service.get_documents(),
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
     )
     if current is not None and not principal.can("approver"):
         # act needs the approver role before any seat counts; a seat holder
@@ -487,7 +523,10 @@ def update_rule(
     # Re-validate only what the caller changed: a user who has since left must
     # not block disabling the rule that names them. A new kind or match is
     # checked against the merged rule so the two cannot disagree.
-    if {"kind", "match", "steps"} & request.model_fields_set:
+    # Switching a rule on puts its seats back in play: a controller step
+    # needs an active controller again (`_check_rule`).
+    enabling = request.enabled is True and not before["enabled"]
+    if enabling or {"kind", "match", "steps"} & request.model_fields_set:
         kind = request.kind or before["kind"]
         match, steps = _check_rule(
             repo,

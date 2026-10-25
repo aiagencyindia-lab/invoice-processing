@@ -8,6 +8,8 @@ cannot drift apart.
 
 from __future__ import annotations
 
+import re
+
 BANK_FIELDS = ("bank_account_number", "bank_iban")
 MASK_PREFIX = "…"
 
@@ -42,3 +44,20 @@ def mask_correction(record: dict) -> dict:
         "old_value": mask_bank(record.get("old_value")),
         "new_value": mask_bank(record.get("new_value")),
     }
+
+
+_IFSC = re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b")
+# Digits with space, dot or dash separators, so 1234.5678.9012 is one number.
+_LONG_NUMBER = re.compile(r"\d(?:[ .-]?\d){7,}")
+
+
+def mask_text(text: str) -> str:
+    """Free text (an email body, a provider's error) with every IFSC and every
+    number of eight digits or more cut to its last four."""
+
+    def one(m: re.Match) -> str:
+        digits = re.sub(r"\D", "", m.group())
+        return mask_bank(digits) if len(digits) >= 8 else m.group()
+
+    text = _IFSC.sub(lambda m: mask_bank(m.group()), text)
+    return _LONG_NUMBER.sub(one, text)

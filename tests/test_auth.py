@@ -213,6 +213,9 @@ class TestRoles:
             ("approver", "clerk", True),
             ("clerk", "approver", False),
             ("viewer", "clerk", False),
+            # A controller ranks with approver and never as admin.
+            ("controller", "approver", True),
+            ("controller", "admin", False),
         ],
     )
     def test_rank_ordering(self, role, required, expected):
@@ -486,3 +489,97 @@ class TestRefusalsAreRecorded:
         )
         assert app.post("/approve", headers=bearer("boss")).status_code == 200
         assert audit.events == []
+
+
+# ---------------------------------------------------------------------------
+# API keys (Wave 3): a second way in, never a way to change tenant
+# ---------------------------------------------------------------------------
+
+
+class TestApiKeys:
+    KEY = "ik_abcd1234_secret"
+    MACHINE = Principal(
+        user_id="api-key:k1",
+        email="ci@api-key.tenant-globex",
+        tenant_id="tenant-globex",
+        role="viewer",
+    )
+
+    @pytest.fixture
+    def keyed(self, app, monkeypatch):
+        calls = []
+
+        def resolve(token):
+            calls.append(token)
+            return self.MACHINE if token == self.KEY else None
+
+        monkeypatch.setattr(auth, "_api_key_resolver", resolve)
+        return app, calls
+
+    def test_the_key_header_identifies_the_machine(self, keyed):
+        app, calls = keyed
+        body = app.get("/whoami", headers={"X-API-Key": self.KEY}).json()
+        assert body["tenant_id"] == "tenant-globex" and calls == [self.KEY]
+
+    def test_a_key_as_a_bearer_token_works_too(self, keyed):
+        app, _ = keyed
+        body = app.get("/whoami", headers=bearer(self.KEY)).json()
+        assert body["email"] == "ci@api-key.tenant-globex"
+
+    def test_a_signed_in_user_is_never_turned_into_a_key(self, keyed):
+        app, calls = keyed
+        headers = {**bearer("acme-token"), "X-API-Key": self.KEY}
+        assert app.get("/whoami", headers=headers).json()["tenant_id"] == (
+            "tenant-acme"
+        )
+        assert calls == []
+
+    def test_an_unknown_key_is_refused(self, keyed):
+        app, _ = keyed
+        r = app.get("/whoami", headers={"X-API-Key": "ik_nope_x"})
+        assert r.status_code == 401
+
+    def test_a_key_with_no_resolver_installed_is_refused(
+        self, app, monkeypatch
+    ):
+        monkeypatch.setattr(auth, "_api_key_resolver", None)
+        r = app.get("/whoami", headers=bearer(self.KEY))
+        assert r.status_code == 401
+
+
+class TestRequireExactRole:
+    """The Controller's own power is an exact role, never the ladder: an
+    admin or an approver ranks at or above a controller and must not pass."""
+
+    def _client(self, monkeypatch, principal):
+        from fastapi import Depends, FastAPI  # noqa: PLC0415
+        from fastapi.testclient import TestClient  # noqa: PLC0415
+
+        from invoice_processing.api.auth import (  # noqa: PLC0415
+            current_principal,
+            require_exact_role,
+        )
+
+        app = FastAPI()
+
+        @app.get("/only")
+        def only(p=Depends(require_exact_role("controller"))):  # noqa: B008
+            return {"ok": p.role}
+
+        app.dependency_overrides[current_principal] = lambda: principal
+        return TestClient(app)
+
+    @pytest.mark.parametrize(
+        ("user_id", "role", "status"),
+        [
+            ("u1", "controller", 200),
+            ("u2", "admin", 403),
+            ("u3", "approver", 403),
+            ("api-key:k1", "controller", 403),  # a key never holds it
+        ],
+    )
+    def test_only_a_controller_person_passes(
+        self, monkeypatch, user_id, role, status
+    ):
+        p = Principal(user_id, "e@x.y", "t", role)
+        assert self._client(monkeypatch, p).get("/only").status_code == status

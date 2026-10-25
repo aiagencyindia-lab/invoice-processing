@@ -1,0 +1,70 @@
+{
+ "finding": {
+  "id": "f-stmt-unapplied-credit",
+  "type": "STMT-UNAPPLIED-CREDIT",
+  "transaction_node": "n-stmt",
+  "status": "detected",
+  "impact": "250.00",
+  "currency": "INR",
+  "confidence": 0.8,
+  "engine_version": "leakage-1",
+  "rule_version": "r",
+  "model_version": "none",
+  "summary": "The vendor's statement shows a credit we never applied.",
+  "details": {
+   "doc_number": "CN-7"
+  },
+  "citations": [
+   {
+    "node_id": "n-stmt",
+    "excerpt": "CN-7 -250.00"
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-stmt": {
+   "kind": "vendor_statement_line",
+   "attrs": {
+    "doc_number": "CN-7",
+    "amount": "-250.00"
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ],
+  [
+   "n-stmt",
+   "n-ven",
+   "issued_by"
+  ]
+ ],
+ "expect": {
+  "payable_now": "250.00",
+  "payable_correct": "0.00",
+  "delta": "250.00"
+ }
+}

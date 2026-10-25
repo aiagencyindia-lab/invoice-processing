@@ -16,7 +16,7 @@ import json
 import math
 import uuid
 from collections.abc import Iterator
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import and_, delete, exists, func, or_, select, text, update
@@ -82,7 +82,7 @@ def _iso(value: datetime | None) -> str | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+        value = value.replace(tzinfo=UTC)
     return value.isoformat()
 
 
@@ -225,7 +225,7 @@ class PgCaseRepository:
             elif invoice.decided_at is None and case_projection.is_touchless(
                 artifacts
             ):
-                invoice.decided_at = datetime.now(timezone.utc)
+                invoice.decided_at = datetime.now(UTC)
 
             # The case id *is* the document id everywhere in this system, so
             # the link needs no extra bookkeeping -- but it is only set when
@@ -669,6 +669,7 @@ class PgDocumentRepository:
                 "sender": d.sender,
                 "reply_to": d.reply_to,
                 "kind": d.kind,
+                "storage_key": d.storage_key,
             }
 
     def create(self, tenant_id: str, **fields) -> str:
@@ -764,6 +765,9 @@ _ENTITY_TYPES = {
     "access": "user",
     "sign_in": "user",
     "audit": "audit_trail",
+    # v2 trust layer: trust_history_imported, trust_finding_*, trust_dead_lettered.
+    "trust": "trust",
+    "entity": "entity_link",
 }
 
 
@@ -869,7 +873,7 @@ class PgRecordLocks:
     def _to_dict(lock: RecordLock) -> dict:
         expires = lock.expires_at
         if expires is not None and expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
+            expires = expires.replace(tzinfo=UTC)
         return {
             "case_id": lock.case_id,
             "holder": lock.holder,
@@ -893,8 +897,8 @@ class PgRecordLocks:
         if expires is None:
             return False
         if expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
-        return expires > datetime.now(timezone.utc)
+            expires = expires.replace(tzinfo=UTC)
+        return expires > datetime.now(UTC)
 
     def get(self, tenant_id: str, case_id: str) -> dict | None:
         """The live lock on this case, or None. A lapsed lock reads as absent."""
@@ -911,7 +915,7 @@ class PgRecordLocks:
         doing what it would do anyway rather than through a second endpoint
         nobody remembers to call.
         """
-        expires_at = datetime.now(timezone.utc) + ttl
+        expires_at = datetime.now(UTC) + ttl
         with tenant_session(tenant_id, self.url) as session:
             values = {
                 "id": str(uuid.uuid4()),
@@ -1101,6 +1105,17 @@ class PgVendorRepository:
             ).all()
             return [self._vendor_dict(session, v) for v in rows]
 
+    def normalized_names(self, tenant_id: str) -> set[str]:
+        """Every vendor's matching key, in one query."""
+        with tenant_session(tenant_id, self.url) as session:
+            return set(
+                session.scalars(
+                    select(Vendor.normalized_name).where(
+                        Vendor.tenant_id == tenant_id
+                    )
+                )
+            )
+
     def get(self, tenant_id: str, vendor_id: str) -> dict | None:
         with tenant_session(tenant_id, self.url) as session:
             try:
@@ -1272,7 +1287,7 @@ class PgVendorRepository:
             ):
                 raise SelfApproval(decided_by)
             vendor = self._vendor(session, tenant_id, change.vendor_id)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if action == "approve":
                 for f in BANK_FIELDS:
                     setattr(
@@ -1556,6 +1571,23 @@ class PgApprovalRepository:
             # we see its new status. A no-op on SQLite (see `decide`).
             query = query.with_for_update()
         return list(session.scalars(query))
+
+    def has_pending(self, tenant_id: str, kind: str, value: str) -> bool:
+        """Whether any invoice waits on a step held by this seat."""
+        with tenant_session(tenant_id, self.url) as session:
+            return (
+                session.scalar(
+                    select(ApprovalStep.id)
+                    .where(
+                        ApprovalStep.tenant_id == tenant_id,
+                        ApprovalStep.status == ApprovalStep.PENDING,
+                        ApprovalStep.assignee_kind == kind,
+                        ApprovalStep.assignee_value == value,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
 
     def chain(self, tenant_id: str, case_id: str) -> list[dict]:
         with tenant_session(tenant_id, self.url) as session:
@@ -1962,7 +1994,7 @@ class PgPurchaseOrderRepository:
         """Step-2.3 quantities per PO line on invoices approved after `since`."""
         # ponytail: scans this tenant's approved PO invoices on every match;
         # index/materialise if a PO gathers thousands.
-        since = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+        since = since if since.tzinfo else since.replace(tzinfo=UTC)
         billed: dict[int, float] = {}
         # The record, not the projected columns: a projection that failed
         # after an approval must not drop that approval from billed.
@@ -1989,7 +2021,7 @@ class PgPurchaseOrderRepository:
             except (KeyError, TypeError, ValueError):
                 continue  # no readable decision time: not counted as billed
             if decided.tzinfo is None:
-                decided = decided.replace(tzinfo=timezone.utc)
+                decided = decided.replace(tzinfo=UTC)
             if decided <= since:
                 continue
             for v in (fields.get("phase2") or {}).get("validations") or []:
@@ -2029,7 +2061,7 @@ class PgPurchaseOrderRepository:
         POs absent from `orders`, in the same transaction -- refused for a PO
         with goods received, since receipts are evidence and are never
         deleted. A scan-confirmed PO is not the ERP's to drop."""
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         created = updated = lines = 0
         seen: set[str] = set()
         with tenant_session(tenant_id, self.url) as session:
@@ -2145,7 +2177,7 @@ class PgPurchaseOrderRepository:
         source: str = "upload", now: datetime | None = None,
         document_id: str | None = None,
     ) -> dict:  # fmt: skip
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         recorded: list[str] = []
         skipped: list[str] = []
         po_numbers: list[str] = []
@@ -2222,6 +2254,17 @@ class PgPurchaseOrderRepository:
             "skipped_duplicates": skipped,
             "po_numbers": po_numbers,
         }
+
+    def existing_numbers(self, tenant_id: str) -> set[str]:
+        """Every stored PO number (the normalized key), in one query."""
+        with tenant_session(tenant_id, self.url) as session:
+            return set(
+                session.scalars(
+                    select(PurchaseOrder.po_number).where(
+                        PurchaseOrder.tenant_id == tenant_id
+                    )
+                )
+            )
 
     def list_orders(self, tenant_id: str) -> list[dict]:
         with tenant_session(tenant_id, self.url) as session:
@@ -2525,7 +2568,7 @@ class PgSupportingDocumentRepository:
             "status": status,
             "reviewed_by": reviewed_by,
             "note": note,
-            "reviewed_at": datetime.now(timezone.utc),
+            "reviewed_at": datetime.now(UTC),
         }
         if extracted is not None:
             values["extracted"] = extracted  # the clerk's corrected version
@@ -2853,7 +2896,7 @@ def _aware(value: datetime | None) -> datetime | None:
     # SQLite hands back naive datetimes for timezone-aware columns.
     if value is None:
         return None
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def _rate(numerator: int, denominator: int) -> float | None:
@@ -2954,7 +2997,7 @@ class KpiRepository:
         since: datetime | None,
         now: datetime | None = None,
     ) -> dict:
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         with tenant_session(tenant_id, self.url) as session:
             rows = self._rows(session, tenant_id, since)
 
@@ -3764,7 +3807,7 @@ class SheetRepository:
         """The tiles above the sheet, from the same filters as the grid."""
 
         statement = self._base(tenant_id, filters).subquery()
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = datetime.now(UTC).date().isoformat()
         month = today[:7]
         decided_at = statement.c.fields["workflow"]["decided_at"].as_string()
 
@@ -3972,8 +4015,8 @@ def _export_is_stale(job) -> bool:
         return False
     started = job.created_at
     if started.tzinfo is None:
-        started = started.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - started > STALE_EXPORT_AFTER
+        started = started.replace(tzinfo=UTC)
+    return datetime.now(UTC) - started > STALE_EXPORT_AFTER
 
 
 class PgExportJobs:

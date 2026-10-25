@@ -60,6 +60,17 @@ SETTABLE: dict[str, type | tuple[type, ...]] = {
     # each organisation sets for itself, like the bank-change window. Whole
     # days and at least one: a zero SLA escalates every step on creation.
     "approval_sla_days": int,
+    # v2 trust engines: off until an operator turns one on, per engine.
+    "trust_engine_modes": dict,
+    # Which adapter answers each external capability; "fake" until a real
+    # provider is configured (spec §4.6).
+    "trust_providers": dict,
+    # Engine thresholds by name (see trust/thresholds.py); unset names keep
+    # their defaults.
+    "trust_thresholds": dict,
+    # Date ranges the organisation was shut down ([from, to] ISO dates): a
+    # service billed for one is implausible (reality checks, FR-23.4).
+    "trust_shutdown_periods": list,
 }
 
 # Settings the validation engine knows nothing about, with their defaults.
@@ -71,11 +82,33 @@ NON_ENGINE_DEFAULTS: dict[str, Any] = {
     # Off. A rule starts by being watched, not obeyed.
     "rules_binding": False,
     "approval_sla_days": 3,
+    "trust_engine_modes": {},
+    "trust_providers": {},
+    "trust_thresholds": {},
+    "trust_shutdown_periods": [],
 }
 
 # Shown alongside each field in the UI so an administrator can tell what a
 # setting does without reading the rulebook.
 DESCRIPTIONS: dict[str, str] = {
+    "trust_engine_modes": (
+        "Per engine (leakage, payment, provenance, gst_itc, reality): off, "
+        "shadow, "
+        "advisory or enforcing. Only enforcing places holds."
+    ),
+    "trust_thresholds": (
+        "Per threshold name (e.g. payment.amount_zscore): a number that "
+        "overrides the engine default; names not set keep their default."
+    ),
+    "trust_shutdown_periods": (
+        "Date ranges the organisation was shut down, as [from, to] pairs "
+        '(e.g. [["2026-12-24", "2027-01-02"]]); services billed for '
+        "them are flagged."
+    ),
+    "trust_providers": (
+        "Per capability (bank_verification, gstin, ...): the adapter name; "
+        "fake answers from fixtures until a real provider is set."
+    ),
     "approval_sla_days": (
         "Whole days (1 or more) an approval step may wait before it is "
         "escalated to the approver's manager, or an admin."
@@ -163,6 +196,22 @@ class SettingsError(ValueError):
     """The submitted settings were refused. Carries a reviewer-readable why."""
 
 
+def _shutdown_period(pair) -> list[str]:
+    from datetime import date  # noqa: PLC0415
+
+    if isinstance(pair, str):  # one line of the settings form: "from, to"
+        pair = [p for p in pair.replace(",", " ").split() if p]
+    try:
+        start, end = (date.fromisoformat(str(d)) for d in pair)
+    except (TypeError, ValueError):
+        raise SettingsError(
+            "Each shutdown period is [from, to] as ISO dates."
+        ) from None
+    if end < start:
+        raise SettingsError("A shutdown period cannot end before it starts.")
+    return [start.isoformat(), end.isoformat()]
+
+
 def validate(payload: dict) -> dict:
     """Return the accepted subset, or raise with the first problem found."""
     if not isinstance(payload, dict):
@@ -213,6 +262,45 @@ def validate(payload: dict) -> dict:
                     "examine."
                 )
             cleaned[key] = sorted(wanted)
+        elif key == "trust_engine_modes":
+            from .trust.modes import ENGINES, MODES  # noqa: PLC0415
+
+            cleaned[key] = {}
+            for engine, mode in value.items():
+                if engine not in ENGINES:
+                    raise SettingsError(
+                        f"No such engine: {engine}. "
+                        f"Engines: {', '.join(ENGINES)}."
+                    )
+                if mode not in MODES:
+                    raise SettingsError(
+                        f"{engine} mode must be one of {', '.join(MODES)}."
+                    )
+                cleaned[key][engine] = mode
+        elif key == "trust_thresholds":
+            from .trust.thresholds import DEFAULTS  # noqa: PLC0415
+
+            cleaned[key] = {}
+            for name, number in value.items():
+                if name not in DEFAULTS:
+                    raise SettingsError(f"No such threshold: {name}.")
+                if (
+                    isinstance(number, bool)
+                    or not isinstance(number, (int, float))
+                    or not math.isfinite(number)
+                ):
+                    raise SettingsError(f"{name} must be a number.")
+                cleaned[key][name] = number
+        elif key == "trust_shutdown_periods":
+            cleaned[key] = [_shutdown_period(p) for p in value]
+        elif key == "trust_providers":
+            from .trust.modes import CAPABILITIES  # noqa: PLC0415
+
+            cleaned[key] = {}
+            for capability, name in value.items():
+                if capability not in CAPABILITIES:
+                    raise SettingsError(f"No such capability: {capability}.")
+                cleaned[key][capability] = str(name).strip() or "fake"
         elif key == "organization_tax_ids":
             cleaned[key] = [str(t).strip() for t in value if str(t).strip()]
         elif key == "organization_names":

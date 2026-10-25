@@ -1,0 +1,422 @@
+"""What each governed route calls just before its write (FR-28.2, U1).
+
+Read the `agents` mode first: `off` returns before anything else is read or
+built. Then find the agent behind the principal; none → the route proceeds as
+it always did, except U9's owner check on an invoice decision. For an agent:
+lock it, evaluate, record, and in enforcing refuse a BLOCK with a 403 whose
+body explains it. Nothing here writes the governed table, so a refusal
+leaves it untouched.
+
+A failure is a 503 in enforcing (the action was not taken) and a logged
+no-op otherwise (B8). A mode that cannot be read is a logged no-op: the
+route then meets the same database failure it always did.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import logging
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
+
+from fastapi import HTTPException
+
+from ...db.session import tenant_session
+from .. import modes, thresholds
+from . import ENGINE, behaviour
+from .policy import Action, Decision, Reason, evaluate_action
+from .record import person as record_person
+from .record import record
+
+logger = logging.getLogger(__name__)
+
+UNAVAILABLE = "Agent control is unavailable; the action was not taken."
+CHAIN = ("invoice.approve", "invoice.reject")
+
+
+def _fold(email) -> str:
+    return (email or "").strip().casefold()
+
+
+def check(principal, action, *, settings_store=None, now=None, store=None):
+    """`action` is an `Action`, or a zero-argument builder of one (or of a
+    list, checked in order, the first refusal stopping the rest). A builder
+    runs only when the engine is on, so an engine-off route reads nothing
+    extra. Returns the decision (a list for a list), or None when the guard
+    has nothing to say."""
+    try:
+        mode = modes.engine_mode(principal.tenant_id, ENGINE, settings_store)
+    except Exception as exc:
+        # The settings live in the database the write is about to use: let
+        # the route meet that failure as it always has.
+        _log(exc)
+        return None
+    if mode == "off":
+        return None
+    try:
+        return _check(
+            principal,
+            action,
+            mode=mode,
+            settings_store=settings_store,
+            now=now or datetime.now(UTC),
+            store=store,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log(exc)
+        if mode == "enforcing":
+            raise HTTPException(503, UNAVAILABLE) from None
+        return None
+
+
+class Settle:
+    """Handed to the governed route: `written()` right after the write
+    commits, so a failure in the bookkeeping that follows does not turn a
+    committed write into "failed" (the cap would lose real money)."""
+
+    def __init__(self):
+        self.committed = False
+
+    def written(self) -> None:
+        self.committed = True
+
+
+@contextmanager
+def settling(principal, decision):
+    """Wrap the governed write: stamp the ledger row `executed` when the
+    body finishes, or when it raises after `written()`; `failed` when it
+    raises before (and re-raise). Spend skips a failed one, so a retry the
+    route then refuses (409 "already decided") costs the agent nothing.
+    No-op when the guard had nothing to say."""
+    decisions = [
+        d
+        for d in (decision if isinstance(decision, list) else [decision])
+        if d is not None and d.action_id
+    ]
+    ids = [d.action_id for d in decisions]
+    later = [d.action_id for d in decisions if d.defer]
+    settle = Settle()
+    try:
+        yield settle
+    except BaseException:
+        _settle(principal, ids, "executed" if settle.committed else "failed")
+        if settle.committed:
+            _defer(principal, later)
+        raise
+    _settle(principal, ids, "executed")
+    _defer(principal, later)
+
+
+def _settle(principal, ids, outcome) -> None:
+    if not ids:
+        return
+    try:
+        from ...api import service  # noqa: PLC0415
+
+        store = service.get_agent_store()
+        for action_id in ids:
+            store.set_outcome(principal.tenant_id, action_id, outcome)
+    except Exception as exc:
+        # The write's own result stands; an unstamped row still counts.
+        _log(exc)
+
+
+def _log(exc: Exception) -> None:
+    logger.warning("agent_guard_failed", extra={"error": type(exc).__name__})
+
+
+def _check(principal, action, *, mode, settings_store, now, store):
+    if store is None:
+        from ...api import service  # noqa: PLC0415 - asked from the API
+
+        store = service.get_agent_store()
+    if store is None:
+        return None  # no table: nothing can be registered
+    built = action() if callable(action) else action
+    many = isinstance(built, list)
+    # Once per request, however many actions it carries.
+    agent = (
+        store.by_principal(principal.tenant_id, principal.user_id)
+        if principal.user_id
+        else None
+    )
+    out = []
+    for a in built if many else [built]:
+        try:
+            out.append(
+                _one(
+                    agent,
+                    principal,
+                    a,
+                    mode=mode,
+                    settings_store=settings_store,
+                    now=now,
+                    store=store,
+                )
+            )
+        except Exception as exc:
+            if not isinstance(exc, HTTPException) and mode != "enforcing":
+                raise  # below enforcing the route proceeds: they are written
+            # A later action refused (or the guard failed in enforcing): the
+            # ones already allowed are not written either, so the ledger must
+            # not show them as taken.
+            _settle(
+                principal,
+                [d.action_id for d in out if d and d.action_id],
+                "failed",
+            )
+            raise
+    return out if many else out[0]
+
+
+def _one(agent, principal, action: Action, *, mode, settings_store, now, store):
+    tenant = principal.tenant_id
+    if agent is None:
+        if action.kind in CHAIN:
+            return _owner_check(principal, action, mode=mode, store=store)
+        return None
+    from ... import tenant_settings  # noqa: PLC0415 - avoids an import cycle
+
+    settings = thresholds.merged(
+        tenant_settings.effective(tenant, settings_store).get(
+            "trust_thresholds"
+        )
+    )
+    ctx = principal.context()
+    # Held from the spend read to the ledger row, so two approvals cannot
+    # both fit one cap (B17). The decision is recorded in this same session.
+    with tenant_session(tenant, store.url) as s:
+        store.lock_agent(s, tenant, agent["id"])
+        mandate = store.current_mandate(tenant, agent["id"], now)
+        decision = evaluate_action(
+            ctx,
+            action,
+            agent=agent,
+            mandate=mandate,
+            store=store,
+            settings=settings,
+            now=now,
+            decider=None,
+            skip=behaviour.DEFERRED,
+        )
+        decision = _record(
+            ctx, decision, action, agent, mandate, store, mode, now, s=s
+        )
+    # The document read and the model call run in the worker, once the write
+    # has happened (`settling`): never inline (PRD inline p95 <= 2 s).
+    if action.text is not None:
+        decision = dataclasses.replace(decision, defer=True)
+    return _answer(decision, mode)
+
+
+def _defer(principal, ids) -> None:
+    """Queue the deferred detectors for actions whose write happened."""
+    if not ids:
+        return
+    from ...api import service  # noqa: PLC0415
+    from ...worker.queue import OUTAGE_AFTER_FAILURES  # noqa: PLC0415
+    from ...worker.runner import enqueue_agent_injection  # noqa: PLC0415
+
+    try:
+        queue, run_id = service.get_queue(), principal.context().run_id or ""
+    except Exception as exc:
+        _log(exc)  # the writes stand; these actions go unscanned
+        return
+    in_a_row = 0
+    for action_id in ids:
+        try:
+            enqueue_agent_injection(
+                queue, principal.tenant_id, action_id, run_id
+            )
+            in_a_row = 0
+        except Exception as exc:
+            # The write stands; this action goes unscanned (logged). The
+            # rest are still tried, unless the broker looks down.
+            _log(exc)
+            in_a_row += 1
+            if in_a_row >= OUTAGE_AFTER_FAILURES:
+                return
+
+
+def _owner_check(principal, action: Action, *, mode, store):
+    """A person deciding a chain an agent they own already decided (U9).
+    The only time the guard touches a human."""
+    deciders = {_fold(d) for d in action.prior_deciders}
+    if not deciders or not principal.email:
+        return None
+    tenant = principal.tenant_id
+    mine = [
+        a
+        for a in store.by_owner(tenant, principal.email)
+        if _fold(a.get("principal_email")) in deciders
+    ]
+    if not mine:
+        return None
+    agent = mine[0]
+    verb = "approve" if action.kind == "invoice.approve" else "decide"
+    reason = Reason(
+        "same_owner_chain",
+        "AGENT-SAME-OWNER-CHAIN",
+        "BLOCK",
+        f"You and your agent {agent['name']} cannot both {verb} this invoice.",
+    )
+    decision = Decision(
+        "BLOCK", (reason,), reason.message, agent_id=agent["id"]
+    )
+    from ...api import service  # noqa: PLC0415
+
+    # The person acted: a finding, nothing on the agent's ledger.
+    record_person(
+        principal.context(),
+        decision,
+        action,
+        agent=agent,
+        principal=principal,
+        findings=service.get_finding_store(),
+        mode=mode,
+    )
+    return _answer(decision, mode)
+
+
+def _record(ctx, decision, action, agent, mandate, store, mode, now, s=None):
+    from ...api import service  # noqa: PLC0415
+
+    action_id = record(
+        ctx,
+        decision,
+        action,
+        agent=agent,
+        mandate=mandate,
+        store=store,
+        findings=service.get_finding_store(),
+        graph=store.graph,
+        mode=mode,
+        source="inline",
+        refused=mode == "enforcing" and decision.decision == "BLOCK",
+        now=now,
+        s=s,
+    )
+    return dataclasses.replace(decision, action_id=action_id)
+
+
+def _answer(decision: Decision, mode: str) -> Decision:
+    if mode == "enforcing" and decision.decision == "BLOCK":
+        raise HTTPException(
+            403,
+            {
+                "detail": decision.explanation,
+                "action_id": decision.action_id,
+                "reasons": [
+                    {"type": r.type, "message": r.message}
+                    for r in decision.reasons
+                ],
+            },
+        )
+    return decision
+
+
+# -- what the invoice routes build -------------------------------------------
+
+
+def _amount(value) -> Decimal | None:
+    try:
+        return Decimal(str(value)) if value not in (None, "") else None
+    except InvalidOperation:
+        return None
+
+
+def invoice_action(ctx, artifacts: dict, kind: str) -> Action:
+    """The `Action` for approving, rejecting or exporting this invoice, from
+    the artifacts the route already read plus the lookups the rules need."""
+    from ... import approval_flow, po_matching  # noqa: PLC0415
+    from ...api import service  # noqa: PLC0415
+    from . import inputs  # noqa: PLC0415
+
+    t = ctx.tenant_id
+    invoice = (artifacts.get("extraction") or {}).get("invoice") or {}
+    name = str(invoice.get("vendor_name") or "")
+    vendors = service.get_vendors()
+    vendor = (vendors.find_by_name(t, name) if vendors and name else None) or {}
+    approvals = service.get_approvals()
+    steps = approvals.chain(t, ctx.case_id) if approvals else []
+
+    return Action(
+        kind=kind,
+        subject_table="invoices",
+        subject_ref=f"invoices:{ctx.case_id}",
+        vendor_key=po_matching.normalize_vendor(name) or None,
+        vendor_id=vendor.get("id"),
+        category=vendor.get("kind") or None,
+        amount=None
+        if kind == "invoice.reject"
+        else _amount(invoice.get("invoice_total_inc_tax")),
+        # As the mandate names it: spend sums match the currency exactly.
+        currency=str(invoice.get("currency") or "").strip().upper() or None,
+        transaction_node=service._trust_node(t, ctx.case_id),
+        initiated_by=approval_flow.uploader_of(ctx, service.get_documents()),
+        prior_deciders=tuple(
+            s["decided_by"]
+            for s in steps
+            if s["status"] != "pending" and s.get("decided_by")
+        ),
+        vendor_verified=bool(vendor.get("bank_verified_at")),
+        vendor_verified_by=vendor.get("bank_verified_by"),
+        # Read only if a detector asks: the PDF text layer and email body.
+        text=inputs.invoice_text(t, ctx.case_id),
+    )
+
+
+def po_action(ctx, records: list[dict], repo) -> list[Action]:
+    """One `po.create` per cleaned record whose number is not stored (a
+    stored PO the upload updates is not a create), keyed as the repository
+    stores it. The amount is recorded, never summed by caps (B9)."""
+    from ... import po_matching  # noqa: PLC0415
+    from ...api import service  # noqa: PLC0415
+
+    t = ctx.tenant_id
+    stored = repo.existing_numbers(t)
+    vendors = service.get_vendors()
+    out = []
+    for r in records:
+        number = po_matching.normalize_po_number(r["po_number"])
+        if number in stored:
+            continue
+        name = str(r.get("vendor_name") or "")
+        vendor = (
+            vendors.find_by_name(t, name) if vendors and name else None
+        ) or {}
+        out.append(
+            Action(
+                kind="po.create",
+                subject_table="purchase_orders",
+                subject_ref=f"purchase_orders:{number}",
+                vendor_key=po_matching.normalize_vendor(name) or None,
+                vendor_id=vendor.get("id"),
+                category=None,
+                amount=_amount(r.get("total_amount")),
+                currency=str(r.get("currency") or "").strip().upper() or None,
+            )
+        )
+    return out
+
+
+def document_action(
+    ctx, data: bytes, filename: str | None, *, vendor: dict | None = None
+) -> Action:
+    """The `document.upload` for these bytes: the same bytes are the same
+    subject. Not scanned at upload (`text=None`): nothing has acted on it."""
+    from ... import po_matching  # noqa: PLC0415
+
+    vendor = vendor or {}
+    return Action(
+        kind="document.upload",
+        subject_table="documents",
+        subject_ref=f"documents:{hashlib.sha256(data).hexdigest()[:32]}",
+        vendor_key=po_matching.normalize_vendor(vendor.get("name") or "")
+        or None,
+        vendor_id=vendor.get("id"),
+    )

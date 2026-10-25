@@ -16,10 +16,11 @@ import logging
 import os
 import sys
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
+from sentry_sdk.utils import BadDsn
 
 HANDLER_NAME = "ledgerly"
 TEXT_FORMAT = "%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s"
@@ -88,9 +89,7 @@ class JsonFormatter(logging.Formatter):
         except (TypeError, ValueError):  # a bad %-format must not lose the line
             msg = f"{record.msg} {record.args!r}"
         line = {
-            "ts": datetime.fromtimestamp(
-                record.created, timezone.utc
-            ).isoformat(),
+            "ts": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "msg": msg,
@@ -181,17 +180,27 @@ def init_sentry(service: str) -> bool:
     dsn = os.getenv("SENTRY_DSN", "")
     if not dsn:
         return False
-    sentry_sdk.init(
-        dsn=dsn,
-        environment=os.getenv("ENV", "") or "unknown",
-        release=os.getenv("RAILWAY_GIT_COMMIT_SHA") or None,
-        send_default_pii=False,
-        max_request_body_size="never",
-        traces_sample_rate=0,
-        integrations=[
-            LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)
-        ],
-        before_send=scrub,
-    )
+    try:
+        sentry_sdk.init(
+            dsn=dsn,
+            environment=os.getenv("ENV", "") or "unknown",
+            release=os.getenv("RAILWAY_GIT_COMMIT_SHA") or None,
+            send_default_pii=False,
+            max_request_body_size="never",
+            traces_sample_rate=0,
+            integrations=[
+                LoggingIntegration(
+                    level=logging.INFO, event_level=logging.ERROR
+                )
+            ],
+            before_send=scrub,
+        )
+    except BadDsn:
+        # Monitoring is not a control: a mistyped DSN crash-looped both
+        # processes on Railway. Never log the value, it is a credential.
+        logging.getLogger(__name__).warning(
+            "SENTRY_DSN is not a valid DSN; running without Sentry."
+        )
+        return False
     sentry_sdk.set_tag("service", service)
     return True

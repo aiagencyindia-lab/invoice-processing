@@ -3,15 +3,16 @@ refuse plainly without a database."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 
 from invoice_processing.api import auth
 from invoice_processing.api.service import app
-from invoice_processing.db.models import Base, Invoice, Tenant
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.models import Invoice, Tenant
+from invoice_processing.db.session import tenant_session
 
 TENANT = "tenant-acme"
 CLAIMS = {
@@ -38,9 +39,7 @@ def db(scratch_db, monkeypatch):
     url = scratch_db("kpi-api.db")
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.delenv("CLOUD_SQL_INSTANCE", raising=False)
-    engine = get_engine(url)
-    Base.metadata.drop_all(engine)
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(Tenant(id=TENANT, slug="acme", name="Acme"))
         session.flush()
@@ -50,7 +49,7 @@ def db(scratch_db, monkeypatch):
                 case_id="c1",
                 routing="REVIEW",
                 decision="ACCEPT",
-                created_at=datetime.now(timezone.utc) - timedelta(days=2),
+                created_at=datetime.now(UTC) - timedelta(days=2),
                 fields={},
             )
         )

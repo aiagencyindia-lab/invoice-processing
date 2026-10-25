@@ -1,0 +1,124 @@
+{
+ "finding": {
+  "id": "f-leak-rate",
+  "type": "LEAK-RATE",
+  "transaction_node": "n-inv",
+  "status": "detected",
+  "impact": "100.00",
+  "currency": "INR",
+  "confidence": 0.9,
+  "engine_version": "leakage-1",
+  "rule_version": "r",
+  "model_version": "none",
+  "summary": "Unit price above what the contract allows.",
+  "details": {
+   "line": "n-line",
+   "quantity": "10",
+   "unit_price": "60.00",
+   "contract_rate": "50",
+   "allowed_unit_price": "50.00",
+   "clauses": [
+    "n-rate"
+   ],
+   "needs_review": true
+  },
+  "citations": [
+   {
+    "node_id": "n-inv",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-con",
+    "excerpt": null
+   },
+   {
+    "node_id": "n-line",
+    "excerpt": "steel rod 12mm"
+   },
+   {
+    "node_id": "n-rate",
+    "excerpt": "INR 50 per unit of steel rod"
+   }
+  ]
+ },
+ "nodes": {
+  "n-inv": {
+   "kind": "invoice",
+   "ref_table": "invoices",
+   "ref_id": "i1",
+   "attrs": {
+    "invoice_number": "INV-1041",
+    "amount": "1000.00",
+    "currency": "INR",
+    "invoice_date": "2026-03-10",
+    "case_id": "case-1"
+   }
+  },
+  "n-ven": {
+   "kind": "vendor",
+   "ref_table": "vendors",
+   "ref_id": "v1",
+   "attrs": {
+    "name": "Acme Steel"
+   }
+  },
+  "n-con": {
+   "kind": "contract",
+   "ref_table": "documents",
+   "ref_id": "doc-c",
+   "attrs": {
+    "filename": "msa.pdf",
+    "vendor_id": "v1"
+   }
+  },
+  "n-line": {
+   "kind": "invoice_line",
+   "attrs": {
+    "line_number": 1,
+    "description": "steel rod 12mm",
+    "quantity": "10",
+    "unit_price": "60.00"
+   }
+  },
+  "n-rate": {
+   "kind": "contract_clause",
+   "attrs": {
+    "type": "rate",
+    "params": {
+     "price": "50"
+    },
+    "page": 2,
+    "excerpt": "INR 50 per unit of steel rod",
+    "confidence": 0.8,
+    "reviewed": false
+   }
+  }
+ },
+ "edges": [
+  [
+   "n-inv",
+   "n-ven",
+   "issued_by"
+  ],
+  [
+   "n-line",
+   "n-inv",
+   "part_of"
+  ],
+  [
+   "n-rate",
+   "n-con",
+   "part_of"
+  ],
+  [
+   "n-con",
+   "n-ven",
+   "governs"
+  ]
+ ],
+ "expect": {
+  "payable_now": "1000.00",
+  "payable_correct": "900.00",
+  "delta": "100.00"
+ }
+}

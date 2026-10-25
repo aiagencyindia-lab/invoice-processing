@@ -187,6 +187,31 @@ class BookUnavailable(Refused):
     """The PO book could not be read to re-check the match (503)."""
 
 
+class PaymentHold(Refused):
+    """A trust engine in enforcing mode holds this payment (409)."""
+
+
+def payment_hold(ctx) -> dict | None:
+    """The trust layer's hold on this payment ({held, message, holds,
+    waiting, transaction_node}), or None when it is not held. See
+    trust/gate.py."""
+    from .trust import gate  # noqa: PLC0415 - optional layer, loaded on use
+
+    detail = gate.payment_hold_detail(ctx.tenant_id, ctx.case_id)
+    return detail if detail["held"] else None
+
+
+def override_of(held: dict | None) -> dict | None:
+    """What an administrator's override let through: the message they saw
+    and the findings it named, so a finding raised later still holds."""
+    if not held:
+        return None
+    return {
+        "message": held["message"],
+        "finding_ids": [h["finding_id"] for h in held["holds"]],
+    }
+
+
 def over_billed(ctx, artifacts: dict) -> tuple[str | None, dict | None]:
     """Why approving now would bill more than was received or ordered, and
     the step-2.3 entry to store if the approval goes through.
@@ -299,6 +324,9 @@ class Decision:
     appended_second: bool
     # Step 2.3 matched live for an "unchecked" hold, to store on approval.
     three_way: dict | None = None
+    # The payment hold an administrator overrode, carried to export:
+    # {message, finding_ids} (see `override_of`).
+    hold_overridden: dict | None = None
 
 
 def decide(
@@ -350,11 +378,20 @@ def decide(
         documents=documents,
         now=now,
     )
+    # An admin's override stands in for an absent approver, never for a
+    # controller: that seat is finance sign-off (approvals.fills).
+    controller_seat = why is None and (
+        current["assignee_kind"],
+        current["assignee_value"],
+    ) == ("role", "controller")
     overridden = bool(refusal and override_reason)
-    if refusal and not (principal.can("admin") and override_reason):
+    if refusal and (
+        controller_seat or not (principal.can("admin") and override_reason)
+    ):
         raise Refused(refusal)
     pending = [s for s in repo.chain(t, case) if s["status"] == "pending"]
     recheck = None
+    held = None
     if approve and pending and pending[-1]["id"] == current["id"]:
         # Only the decision that would complete the chain is re-checked:
         # that is when the invoice starts counting as billed.
@@ -362,6 +399,10 @@ def decide(
         if over and not (principal.can("admin") and override_reason):
             raise OverBilled(over)
         overridden = overridden or bool(over and override_reason)
+        held = payment_hold(ctx)
+        if held and not (principal.can("admin") and override_reason):
+            raise PaymentHold(held["message"])
+        overridden = overridden or bool(held and override_reason)
 
     acting_for = None
     if why and why.startswith("delegate for"):
@@ -412,7 +453,13 @@ def decide(
         )
         completed, second = False, True
     return Decision(
-        step, completed, why or "override", overridden, second, recheck
+        step,
+        completed,
+        why or "override",
+        overridden,
+        second,
+        recheck,
+        override_of(held),
     )
 
 

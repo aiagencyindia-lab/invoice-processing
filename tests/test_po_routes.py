@@ -6,6 +6,7 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 
 from invoice_processing.adapters import JsonlAuditSink
 from invoice_processing.api import auth, po_routes, service
@@ -15,7 +16,7 @@ from invoice_processing.db.repositories import (
     PgCaseRepository,
     PgPurchaseOrderRepository,
 )
-from invoice_processing.db.session import create_all, get_engine, tenant_session
+from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
 from invoice_processing.worker.queue import LocalQueue
 
@@ -80,8 +81,7 @@ def _client(token):
 @pytest.fixture
 def env(tmp_path, monkeypatch, scratch_db):
     url = scratch_db("po_routes.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(
             models.Tenant(id=TENANT, name="Acme", slug="acme", status="active")
@@ -522,6 +522,88 @@ def test_grn_import_queues_a_rematch_per_held_case(env, tmp_path, monkeypatch):
         # The upload's own request, so the re-match's lines join it.
         "request_id": r.headers["x-request-id"],
     }
+
+
+class FlakyQueue(LocalQueue):
+    """Refuses the first publish, then works: one stalled broker call."""
+
+    def __init__(self, root):
+        super().__init__(root)
+        self.failed = 0
+
+    def publish(self, payload, **attributes):
+        if not self.failed:
+            self.failed += 1
+            raise TimeoutError("broker stalled")
+        return super().publish(payload, **attributes)
+
+
+def test_one_failed_rematch_does_not_skip_the_rest(env, tmp_path, monkeypatch):
+    cases = PgCaseRepository(env["repo"].url)
+    queue = FlakyQueue(tmp_path / "q")
+    monkeypatch.setattr(service, "_cases", cases)
+    monkeypatch.setattr(service, "get_queue", lambda: queue)
+    for case_id in ("held-1", "held-2"):
+        ctx = RunContext(tenant_id=TENANT, case_id=case_id)
+        cases.put_artifact(
+            ctx,
+            "extraction",
+            {"invoice": {"po_number": "PO-9001", "_routing": "REVIEW"}},
+        )
+        cases.put_artifact(
+            ctx, "phase2", {"validations": [{"step": "2.3", "passed": False}]}
+        )
+        cases.project_case(ctx, cases.get_artifacts(ctx))
+
+    po_import(env, {"purchase_orders": [ORDER]})
+    r = grn_import(env, {"goods_receipts": [GRN]})
+    assert r.status_code == 200 and r.json()["rematch_queued"] == 1
+    assert queue.depth() == 1
+    (event,) = [
+        e
+        for e in env["events"]()
+        if e["event_type"] == "three_way_rematch_enqueue_failed"
+    ]
+    assert event["payload"]["queued"] == 1
+    assert event["payload"]["failed"] == 1
+
+
+def test_a_dead_broker_is_tried_twice_not_once_per_case(
+    env, tmp_path, monkeypatch
+):
+    """Each try can wait seconds; an outage must not cost that per case."""
+    cases = PgCaseRepository(env["repo"].url)
+    calls = []
+
+    class Down(LocalQueue):
+        def publish(self, payload, **attributes):
+            calls.append(payload["case_id"])
+            raise TimeoutError("broker down")
+
+    monkeypatch.setattr(service, "_cases", cases)
+    monkeypatch.setattr(service, "get_queue", lambda: Down(tmp_path / "q"))
+    for i in range(4):
+        ctx = RunContext(tenant_id=TENANT, case_id=f"held-{i}")
+        cases.put_artifact(
+            ctx,
+            "extraction",
+            {"invoice": {"po_number": "PO-9001", "_routing": "REVIEW"}},
+        )
+        cases.put_artifact(
+            ctx, "phase2", {"validations": [{"step": "2.3", "passed": False}]}
+        )
+        cases.project_case(ctx, cases.get_artifacts(ctx))
+
+    po_import(env, {"purchase_orders": [ORDER]})
+    r = grn_import(env, {"goods_receipts": [GRN]})
+    assert r.status_code == 200 and r.json()["rematch_queued"] == 0
+    assert len(calls) == 2
+    (event,) = [
+        e
+        for e in env["events"]()
+        if e["event_type"] == "three_way_rematch_enqueue_failed"
+    ]
+    assert event["payload"]["failed"] == 4
 
 
 def test_a_po_line_carries_its_gl_account(env):

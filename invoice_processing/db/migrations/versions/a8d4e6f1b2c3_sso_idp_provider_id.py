@@ -5,7 +5,7 @@ provider created for that customer's Entra tenant; this is its id
 (`oidc.<name>`). Set by the operator, never by a tenant admin.
 
 Revision ID: a8d4e6f1b2c3
-Revises: d1a2b3c4e5f6
+Revises: d4e5f6a7b8c9
 Create Date: 2026-10-14
 """
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "a8d4e6f1b2c3"
-down_revision: str | None = "d1a2b3c4e5f6"
+down_revision: str | None = "d4e5f6a7b8c9"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

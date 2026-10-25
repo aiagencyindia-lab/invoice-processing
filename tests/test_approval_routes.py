@@ -4,10 +4,11 @@ last. Without rules the endpoint behaves as before: one approver, done."""
 import json
 import shutil
 import threading
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from fresh_schema import fresh_schema
 from golden import GOLDEN_CASES
 
 from invoice_processing import approval_flow
@@ -28,8 +29,6 @@ from invoice_processing.db.repositories import (
     PgUserDirectory,
 )
 from invoice_processing.db.session import (
-    create_all,
-    get_engine,
     tenant_session,
 )
 from invoice_processing.ports import RunContext
@@ -38,10 +37,25 @@ TENANT = "tenant-acme"
 CASE = "case_005"
 
 
+def held(*codes):
+    """A gate that holds on these findings (ids = codes, for reading)."""
+    detail = {
+        "held": True,
+        "message": f"Payment is held: {'; '.join(codes)}.",
+        "holds": [
+            {"finding_id": c, "type": c, "engine": "payment", "summary": c}
+            for c in codes
+        ],
+        "waiting": [],
+        "transaction_node": "n-1",
+    }
+    return lambda t, c, **k: detail
+
+
 class FakeVerifier:
     def verify(self, token):
         role, _, who = token.partition(":")
-        if role not in ("viewer", "clerk", "approver", "admin"):
+        if role not in ("viewer", "clerk", "approver", "controller", "admin"):
             raise auth.AuthError("Invalid token")
         return {
             "sub": f"u-{token}",
@@ -55,8 +69,7 @@ class FakeVerifier:
 @pytest.fixture
 def env(tmp_path, monkeypatch, scratch_db):
     url = scratch_db("approvals.db")
-    models.Base.metadata.drop_all(get_engine(url))
-    create_all(url)
+    fresh_schema(url)
     with tenant_session(TENANT, url) as session:
         session.add(
             models.Tenant(id=TENANT, name="Acme", slug="acme", status="active")
@@ -588,9 +601,7 @@ def test_delegation_rules(env):
 def route_case(env):
     ctx = RunContext(tenant_id=TENANT, case_id=CASE)
     artifacts = service.get_cases().get_artifacts(ctx)
-    approval_flow.route(
-        ctx, artifacts, repo=env["repo"], now=datetime.now(timezone.utc)
-    )
+    approval_flow.route(ctx, artifacts, repo=env["repo"], now=datetime.now(UTC))
 
 
 def test_mine_for_a_group_member(env):
@@ -985,7 +996,7 @@ def escalate_a_to_b(env):
         session.query(models.User).filter_by(
             email="a@x.test"
         ).one().manager_email = "b@x.test"
-    later = datetime.now(timezone.utc) + timedelta(days=60)
+    later = datetime.now(UTC) + timedelta(days=60)
     assert approval_flow.escalate_overdue(env["repo"], None, now=later) == 1
     (step,) = env["repo"].chain(TENANT, CASE)
     assert step["escalated_to"] == "b@x.test"
@@ -1171,7 +1182,7 @@ def po_env(env, monkeypatch):
         TENANT,
         [PO_ORDER],
         uploaded_by="a@x.test",
-        now=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        now=datetime(2026, 10, 1, tzinfo=UTC),
     )
     orders.record_receipts(
         TENANT,
@@ -1482,3 +1493,140 @@ def test_an_unchecked_hold_refuses_on_any_live_hold_not_only_quantity(po_env):
     assert r.json()["detail"].startswith(
         "Purchase-order lines were not checked when this invoice was processed"
     )
+
+
+def test_final_approval_is_refused_while_payment_is_held(env, monkeypatch):
+    from invoice_processing.trust import gate  # noqa: PLC0415
+
+    monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-X"))
+    two_tier(env)
+    first = act(env, "approver:a")
+    assert first.status_code == 200 and first.json()["completed"] is False
+    second = act(env, "approver:b")
+    assert second.status_code == 409 and "PAY-X" in second.json()["detail"]
+    assert not (env["root"] / CASE / "workflow.json").exists()
+
+
+def test_admin_override_with_reason_passes_a_payment_hold(env, monkeypatch):
+    from invoice_processing.trust import gate  # noqa: PLC0415
+
+    monkeypatch.setattr(gate, "payment_hold_detail", held("PAY-X"))
+    r = act(env, "admin:boss", override_reason="Called the vendor on file")
+    assert r.status_code == 200 and r.json()["completed"] is True
+
+
+def test_a_controller_decides_an_approver_step(env):
+    """No rule: the fallback chain asks for the approver role, and a
+    controller ranks with approver."""
+    env["add_users"]("cora@x.test", role="controller")
+    assert act(env, "controller:cora").status_code == 200, act
+    assert workflow(env)["decision"] == "approve"
+
+
+def test_a_controller_can_be_a_user_step_a_delegate_and_a_manager(env):
+    env["add_users"]("cora@x.test", role="controller")
+    assert (
+        make_rule(
+            env, steps=[{"kind": "user", "value": "cora@x.test"}]
+        ).status_code
+        == 201
+    )
+    r = delegation(env, "approver:a", delegate_email="cora@x.test")
+    assert r.status_code == 201, r.text
+    admin = env["client"]("admin:boss")
+    users = admin.get("/api/admin/users").json()["users"]
+    a = next(u for u in users if u["email"] == "a@x.test")
+    r = admin.patch(
+        f"/api/admin/users/{a['id']}", json={"manager_email": "cora@x.test"}
+    )
+    assert r.status_code == 200, r.text
+
+
+CONTROLLER_STEP = {"kind": "role", "value": "controller"}
+
+
+def set_user(env, email, **patch):
+    admin = env["client"]("admin:boss")
+    users = admin.get("/api/admin/users").json()["users"]
+    user = next(u for u in users if u["email"] == email)
+    return admin.patch(f"/api/admin/users/{user['id']}", json=patch)
+
+
+def test_a_controller_role_step_needs_an_active_controller(env):
+    r = make_rule(env, steps=[CONTROLLER_STEP])
+    assert r.status_code == 400 and "controller" in r.text
+    env["add_users"]("cora@x.test", role="controller")
+    assert set_user(env, "cora@x.test", is_active=False).status_code == 200
+    assert make_rule(env, steps=[CONTROLLER_STEP]).status_code == 400
+    assert set_user(env, "cora@x.test", is_active=True).status_code == 200
+    assert make_rule(env, steps=[CONTROLLER_STEP]).status_code == 201
+
+
+def test_only_a_controller_decides_a_controller_step(env):
+    """Not an admin, not an approver: the ladder does not reach this seat."""
+    env["add_users"]("cora@x.test", role="controller")
+    assert make_rule(env, steps=[CONTROLLER_STEP]).status_code == 201
+    for token in ("admin:boss", "approver:a"):
+        r = act(env, token)
+        assert r.status_code == 403, (token, r.text)
+        assert "role:controller" in r.json()["detail"]
+    r = act(env, "controller:cora")
+    assert r.status_code == 200, r.text
+    assert workflow(env)["decision"] == "approve"
+
+
+def test_an_admin_override_does_not_pass_a_controller_step(env):
+    """The override exists for an absent approver; a controller step is
+    finance sign-off that an admin never gives in their place."""
+    env["add_users"]("cora@x.test", role="controller")
+    assert make_rule(env, steps=[CONTROLLER_STEP]).status_code == 201
+    r = act(env, "admin:boss", override_reason="The CFO asked")
+    assert r.status_code == 403 and "role:controller" in r.json()["detail"]
+    assert env["repo"].current(TENANT, CASE)["status"] == "pending"
+
+
+def test_a_disabled_controller_rule_does_not_hold_the_last_controller(env):
+    env["add_users"]("cora@x.test", role="controller")
+    rule = make_rule(env, steps=[CONTROLLER_STEP]).json()
+    admin = env["client"]("admin:boss")
+    r = admin.patch(
+        f"/api/approvals/rules/{rule['id']}", json={"enabled": False}
+    )
+    assert r.status_code == 200, r.text
+    assert set_user(env, "cora@x.test", role="approver").status_code == 200
+
+
+def test_enabling_a_controller_rule_needs_an_active_controller(env):
+    env["add_users"]("cora@x.test", role="controller")
+    rule = make_rule(env, steps=[CONTROLLER_STEP]).json()
+    admin = env["client"]("admin:boss")
+    path = f"/api/approvals/rules/{rule['id']}"
+    assert admin.patch(path, json={"enabled": False}).status_code == 200
+    assert set_user(env, "cora@x.test", role="approver").status_code == 200
+    r = admin.patch(path, json={"enabled": True})
+    assert r.status_code == 400 and "controller" in r.text
+
+
+def test_the_last_controller_cannot_be_removed_while_a_rule_needs_one(env):
+    env["add_users"]("cora@x.test", role="controller")
+    assert make_rule(env, steps=[CONTROLLER_STEP]).status_code == 201
+    r = set_user(env, "cora@x.test", role="approver")
+    assert r.status_code == 409 and "controller" in r.json()["detail"]
+    assert set_user(env, "cora@x.test", is_active=False).status_code == 409
+    env["add_users"]("carl@x.test", role="controller")
+    assert set_user(env, "cora@x.test", role="approver").status_code == 200
+
+
+def test_the_last_controller_cannot_be_removed_while_a_step_waits(env):
+    """The rule is gone, but an invoice already waits on a controller."""
+    env["add_users"]("cora@x.test", role="controller")
+    rule = make_rule(env, steps=[CONTROLLER_STEP]).json()
+    act(env, "approver:a")  # routes the invoice: the step now exists
+    assert env["repo"].current(TENANT, CASE)["assignee_value"] == "controller"
+    env["repo"].delete_rule(TENANT, rule["id"])
+    assert set_user(env, "cora@x.test", role="approver").status_code == 409
+
+
+def test_the_last_controller_can_go_when_nothing_needs_one(env):
+    env["add_users"]("cora@x.test", role="controller")
+    assert set_user(env, "cora@x.test", role="approver").status_code == 200
