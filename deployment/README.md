@@ -91,9 +91,13 @@ migrates as the owner) → §2 → read VERIFY.
 
 The API service's deploy settings live in `deployment/railway.api.json`
 (start command, pre-deploy migrate, health check, draining, restart policy);
-the `invoice-processing` service's config-file path points at it, so the file
+the `invoice-processing` service's config-file path
+(`/deployment/railway.api.json`, from the repo root) points at it, so the file
 wins over the dashboard. Change them there, in a PR. The `app` service reads
-no config file (root directory `frontend`). Variables stay in Railway.
+no config file (root directory `frontend`); keep any default-named
+`railway.json` or `railway.toml` out of the repo, or Railway would apply it to
+`app` as well. Variables stay in Railway. The image always builds from the
+root `Dockerfile`.
 
 ## Health
 
