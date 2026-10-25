@@ -191,7 +191,7 @@ def test_a_key_resolves_as_the_production_app_role(monkeypatch):
         owner = db.owner_url.render_as_string(hide_password=False)
         app = db.app_url.render_as_string(hide_password=False)
         with tenant_session(ACME, owner) as s:
-            s.add(models.Tenant(id=ACME, name="a", slug="a", status="active"))
+            s.add(models.Tenant(id=ACME, name="a", slug="acme", status="active"))
         _, key = apikeys.create(ADMIN, "erp", "viewer", url=app)
         monkeypatch.setenv("DATABASE_URL", app)
         p = apikeys.resolve(key)
@@ -248,3 +248,12 @@ def test_a_new_key_of_a_suspended_tenant_is_none(env):
     with tenant_session(ACME, url) as s:
         s.get(models.Tenant, ACME).status = "suspended"
     assert apikeys.resolve(key) is None
+
+
+def test_a_key_is_never_minted_for_a_slug_it_could_not_carry(env):
+    """A one-letter or odd slug would make a key no lookup can parse."""
+    url, audit, _ = env
+    with tenant_session(ACME, url) as s:
+        s.get(models.Tenant, ACME).slug = "a"
+    with pytest.raises(ValueError):
+        apikeys.create(ADMIN, "erp", "viewer", audit=audit, url=url)

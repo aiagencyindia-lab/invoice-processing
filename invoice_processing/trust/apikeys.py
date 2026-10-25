@@ -30,8 +30,9 @@ PREFIX = "ik_"
 ROLES = ("viewer", "clerk", "approver")
 # Slugs are `[a-z0-9][a-z0-9-]{1,62}` (provision.SLUG_PATTERN): no `_`, so
 # the first one ends the slug.
+_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{1,62}")
 _TOKEN = re.compile(
-    r"^ik_([a-z0-9][a-z0-9-]{1,62})_([0-9a-f]{8})_([A-Za-z0-9_-]{16,})$"
+    rf"^ik_({_SLUG.pattern})_([0-9a-f]{{8}})_([A-Za-z0-9_-]{{16,}})$"
 )
 _LEGACY = re.compile(r"^ik_([0-9a-f]{8})_([A-Za-z0-9_-]{16,})$")
 
@@ -82,8 +83,8 @@ def create(
                 "An active agent already uses this key name; pick another."
             )
         slug = s.scalar(select(Tenant.slug).where(Tenant.id == ctx.tenant_id))
-        if not slug:
-            raise ValueError("The tenant has no slug to put in the key.")
+        if not slug or not _SLUG.fullmatch(slug):
+            raise ValueError("The tenant's slug cannot be carried in a key.")
         key = ApiKey(
             tenant_id=ctx.tenant_id,
             name=name,
