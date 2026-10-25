@@ -27,6 +27,7 @@ from invoice_processing.shared_libraries.acting.general_invoice_agent import (
     _money,
 )
 from invoice_processing.tenant_settings import JsonTenantSettings
+from invoice_processing.worker import queue as queue_module
 from invoice_processing.worker import runner
 from invoice_processing.worker.queue import (
     LocalQueue,
@@ -44,8 +45,10 @@ from invoice_processing.worker.queue import (
 class FakeFuture:
     def __init__(self, value):
         self._value = value
+        self.timeout = None
 
     def result(self, timeout=None):
+        self.timeout = timeout
         return self._value
 
 
@@ -55,7 +58,8 @@ class FakePublisher:
 
     def publish(self, topic, data, **attributes):
         self.published.append((topic, data, attributes))
-        return FakeFuture("msg-1")
+        self.future = FakeFuture("msg-1")
+        return self.future
 
 
 class FakeSubscriber:
@@ -113,6 +117,17 @@ class TestPubSubQueue:
         assert topic == "projects/proj/topics/t"
         assert json.loads(data.decode()) == {"tenant_id": "t-1"}
         assert attributes == {"tenant_id": "t-1"}
+
+    def test_publish_waits_at_most_five_seconds_for_the_broker(self, pubsub):
+        """Every enqueue runs on a request; a stalled broker must not hold it
+        for 30 s. A timeout raises, and callers log it and carry on."""
+        queue, publisher, _ = pubsub
+        queue.publish({"tenant_id": "t-1"})
+        assert (
+            publisher.future.timeout
+            == 5
+            == queue_module.PUBLISH_TIMEOUT_SECONDS
+        )
 
     def test_pull_decodes_into_messages(self, pubsub):
         queue, _, subscriber = pubsub

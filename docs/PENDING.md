@@ -231,9 +231,10 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         the worker reads the text and asks the model (`agents/later.py`);
         a yes raises its own `AGENT-INJECTION` finding seconds later. An
         unreachable queue leaves that action unscanned (logged).
-  - [ ] `PubSubQueue.publish` waits up to 30 s for the broker on the request
-        path (every enqueue, this one included); a slow Pub/Sub still breaks
-        the inline p95. Shorten it, or publish without waiting, if it shows.
+  - [x] `PubSubQueue.publish` waits at most 5 s for the broker (2026-10-25,
+        was 30 s); it still waits for the message id, so a failed publish
+        stays an error in the request's log and the document stays
+        republishable.
   - [x] Imported log rows are judged at their time (2026-10-23): an agent
         is revoked only from its `revoked_at`.
   - [x] `/actions/evaluate` and `/actions/import` answer 409 while the
