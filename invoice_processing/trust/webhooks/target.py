@@ -1,18 +1,25 @@
 """Is a webhook host inside our own network? Checked when an endpoint is
-saved and again before every delivery, since a public name can be pointed
+saved and again at every delivery, since a public name can be pointed
 inward later.
 
-ponytail: the check resolves, then `requests` resolves again to connect, so
-a name rebinding inside that gap still gets through. Pin the checked address
-in a transport adapter if an attacker-run DNS server is in scope.
+A delivery goes out through `post`, which resolves the name once, checks
+every answer and connects to the address it checked: a name that rebinds
+between a check and a second lookup has no second lookup to win.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import socket
+from types import SimpleNamespace
 
+import certifi
+import urllib3
 from urllib3.util import parse_url
+
+
+class Refused(Exception):
+    """The url is internal or ambiguous; nothing was sent."""
 
 
 def addresses(host: str) -> list[str]:
@@ -62,3 +69,57 @@ def refused(url: str, resolve=None) -> bool:
     if parsed.auth or not parsed.host:
         return True
     return internal(host(url), resolve)
+
+
+def _pool(scheme: str, address: str, port: int, name: str, timeout: float):
+    """A connection to the checked address that still speaks to `name`:
+    TLS server name and certificate check against the real host."""
+    if scheme == "https":
+        return urllib3.HTTPSConnectionPool(
+            address,
+            port,
+            timeout=timeout,
+            retries=False,
+            cert_reqs="CERT_REQUIRED",
+            ca_certs=certifi.where(),
+            server_hostname=name,
+            assert_hostname=name,
+        )
+    return urllib3.HTTPConnectionPool(
+        address, port, timeout=timeout, retries=False
+    )
+
+
+def post(url: str, *, data: str, headers: dict, timeout: float, resolve=None):
+    """POST to `url` at the address this call checked. Raises `Refused`
+    before connecting when the url is ambiguous or any answer is internal.
+    Never follows a redirect; returns an object with `status_code`."""
+    if refused(url, resolve=lambda h: []):  # parse-level checks only
+        raise Refused(url)
+    parsed = parse_url(url)
+    if parsed.scheme not in ("http", "https"):
+        raise Refused(url)
+    name = host(url)
+    try:
+        found = [str(ipaddress.ip_address(name))]
+    except ValueError:
+        try:
+            found = (resolve or addresses)(name)
+        except OSError as exc:
+            raise ConnectionError(f"{name} does not resolve") from exc
+    if not found or any(_inward(a) for a in found):
+        raise Refused(url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    shown = f"[{name}]" if ":" in name else name
+    response = _pool(parsed.scheme, found[0], port, name, timeout).urlopen(
+        "POST",
+        parsed.request_uri,
+        body=data,
+        headers={
+            **headers,
+            "Host": shown if parsed.port is None else f"{shown}:{port}",
+        },
+        redirect=False,
+        retries=False,
+    )
+    return SimpleNamespace(status_code=response.status)

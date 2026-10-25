@@ -32,6 +32,9 @@ MAX_BACKOFF_MINUTES = 64
 PER_TENANT = 10
 
 
+REFUSED = "The url is internal or ambiguous; not sent."
+
+
 def sign(secret: str, ts: str, body: str) -> str:
     """`sha256=` + hex HMAC-SHA256 of `"{ts}.{body}"` under the endpoint's secret."""
     mac = hmac.new(secret.encode(), f"{ts}.{body}".encode(), hashlib.sha256)
@@ -43,9 +46,9 @@ def due(
 ) -> int:
     """Attempt up to `limit` due rows across active tenants; the number tried."""
     if post is None:
-        import requests  # noqa: PLC0415
-
-        post = requests.post
+        # Resolves once, checks, connects to the checked address, never
+        # follows a redirect (target.post).
+        post = _target.post
     # `tenants` has no RLS; the outbox forces it, so each tenant is read in
     # its own session. A suspended tenant's events wait, as its approvals do.
     with Session(get_engine(url)) as s:
@@ -105,15 +108,7 @@ def _sweep_tenant(tenant_id, now, post, limit, audit, url) -> int:
         # since the endpoint was saved.
         if _target.refused(target):
             unreachable.add(target)
-            _record(
-                tenant_id,
-                row_id,
-                now,
-                None,
-                "The url is internal or ambiguous; not sent.",
-                audit,
-                url,
-            )
+            _record(tenant_id, row_id, now, None, REFUSED, audit, url)
             continue
         try:
             response = post(
@@ -127,13 +122,16 @@ def _sweep_tenant(tenant_id, now, post, limit, audit, url) -> int:
                     "X-Trust-Signature": sign(secret, ts, body),
                 },
                 timeout=TIMEOUT_SECONDS,
-                # A redirect would re-send the signed body to wherever it
-                # points, http:// included; a 3xx is a failed attempt.
-                allow_redirects=False,
             )
             status = response.status_code
+            # A 3xx is a failed attempt: following it would re-send the
+            # signed body to wherever it points, http:// included.
             if not 200 <= status < 300:
                 error = f"HTTP {status}"
+        except _target.Refused:
+            # The send's own lookup answered inward (a rebinding name).
+            unreachable.add(target)
+            error = REFUSED
         except Exception as exc:
             unreachable.add(target)
             error = mask_text(f"{type(exc).__name__}: {exc}")[:500]
