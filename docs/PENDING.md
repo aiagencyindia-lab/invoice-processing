@@ -2,45 +2,42 @@
 
 Everything paused or unfinished. Keep this list current: tick nothing off
 until it is done and verified, and move finished items to "Done" with the
-date. Last updated 2026-10-14.
+date. Last updated 2026-10-25.
 
-## Production (Railway) — PAUSED
+## Production (Railway) — LIVE
 
-Project `ledgerly` (`b2683d9c-cc99-44fc-a2c4-d271487f1181`) on the
+Project `ledgerly-new` (`9bd2d348-41a3-412a-9484-20a7e1077b75`) on the
 **aixaitools** Railway account, workspace "My Projects", environment
-`production`. Services: `Postgres`, `ledgerly` (API + worker, volume
+`production` (`ddaa420c-639d-4942-943f-3ea87f38b489`). Services: `Postgres`
+(volume `postgres-volume`), `invoice-processing` (API + worker, volume
 `ledgerly-volume` at `/data`), `app` (frontend,
-`app-production-79d5e.up.railway.app`). Google project `rasayan` for Gemini
-and sign-in (service account `ledgerly-prod`).
+`app-production-d37f.up.railway.app`, the only public domain). Google
+project `rasayan` for Gemini and sign-in (service account `ledgerly-prod`).
+The old paused `ledgerly` project (`b2683d9c…`) no longer exists.
 
-Paused 2026-10-14 with `railway down` on all three services. The volumes
-(database and documents) are kept. The GitHub source is **disconnected**
-from `ledgerly` and `app` while paused: every push to `main` auto-deploys
-them, which silently un-paused production once (after #50).
+**Every merge to `main` deploys to production**: the GitHub source is
+connected to `invoice-processing` and `app`. The pre-deploy step migrates
+(checked 2026-10-25: `main` 0eacd9d running, schema at `d4e5f6a7b8c9`); the
+processes run with `RUN_MIGRATIONS` off.
 
-- [ ] **Resume**, in this order: `Postgres` → Redeploy, wait until active;
-      then reconnect the repo, which deploys `main`:
+- [ ] **Restore check** against live production, *before* sealing: it only
+      reads (schema version, forced RLS, policies, the app role's limits).
+      Postgres has no TCP proxy, so `railway run` from a laptop cannot reach
+      it; run it inside the service instead. Expect PASS:
       ```bash
-      railway service source connect --repo aiagencyindia-lab/invoice-processing --branch main -p b2683d9c-cc99-44fc-a2c4-d271487f1181 -e production -s ledgerly
-      railway service source connect --repo aiagencyindia-lab/invoice-processing --branch main -p b2683d9c-cc99-44fc-a2c4-d271487f1181 -e production -s app
-      ```
-      Check `app` still builds from root directory `frontend` (Settings →
-      Source). Not `railway redeploy` on `ledgerly`: its last listed
-      deployment is an old failed build.
-- [ ] **Restore check** against live production, *before* sealing (sealed
-      variables are not given to `railway run`). Expect PASS:
-      ```bash
-      railway run -p b2683d9c-cc99-44fc-a2c4-d271487f1181 -e production -s ledgerly -- sh -c './.venv/bin/python -m invoice_processing.db.restore_check --restored "$(printf %s "$MIGRATE_DATABASE_URL" | sed "s#@[^/]*/#@<tcp-proxy-host:port>/#")"'
+      railway ssh -p 9bd2d348-41a3-412a-9484-20a7e1077b75 -e production -s invoice-processing -- sh -c './.venv/bin/python -m invoice_processing.db.restore_check --restored "$MIGRATE_DATABASE_URL"'
       ```
 - [ ] **Seal** `DATABASE_URL`, `MIGRATE_DATABASE_URL`,
-      `GOOGLE_CREDENTIALS_JSON` on `ledgerly` (operator).
+      `GOOGLE_CREDENTIALS_JSON` on `invoice-processing` (operator; still
+      readable on 2026-10-25).
 - [ ] **Backups**: `Postgres` → point-in-time recovery + daily;
       `ledgerly-volume` → daily schedule (operator). Record the retention.
-- [ ] **Remove the Postgres TCP proxy** (public database endpoint, added
-      only for bootstrap).
+      Not verifiable from the CLI.
+- [x] **No public database endpoint** (2026-10-25): `Postgres` has no TCP
+      proxy and no domain.
 - [ ] **Docs PR**: backup retention and the smoke-test result in
-      `SECURITY.md` / `deployment/BACKUP_RESTORE.md`; the move to the
-      aixaitools account and the project ids in `deployment/README.md`.
+      `SECURITY.md` / `deployment/BACKUP_RESTORE.md`; the project ids in
+      `deployment/README.md`.
 - [ ] **Deploy settings into git**: start command, pre-deploy migrate and
       60 s draining were applied with `railway config apply` from a file
       outside the repo. Commit a `.railway/railway.ts` (variables
@@ -53,6 +50,8 @@ Gotchas found on the first deploy:
   exist; its own log says which.
 - A malformed `SENTRY_DSN` used to crash both processes (fixed in #49:
   now a warning).
+- `railway domain` with no subcommand *creates* a public domain when the
+  service has none; list them with `railway domain list -s <service>`.
 
 ## Spend cleanup (operator)
 
