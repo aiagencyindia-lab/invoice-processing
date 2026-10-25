@@ -9,6 +9,7 @@ from sqlalchemy import delete, func, select, update
 
 from ...db.models import (
     GraphEdge,
+    TrustEvidenceRequest,
     TrustFinding,
     TrustFindingCitation,
     TrustFindingEvent,
@@ -267,6 +268,19 @@ class FindingStore:
                 )
             if to_status == holds.LIFTS:
                 holds.lift(s, ctx, finding_id, by=actor, reason=reason)
+            if was == "needs_vendor_input":
+                # Released by other evidence or decided by a person: nobody
+                # is owed the proof any more. Fulfilled requests stay as
+                # they are; the open ones close with the finding.
+                s.execute(
+                    update(TrustEvidenceRequest)
+                    .where(
+                        TrustEvidenceRequest.tenant_id == ctx.tenant_id,
+                        TrustEvidenceRequest.finding_id == finding_id,
+                        TrustEvidenceRequest.status == "open",
+                    )
+                    .values(status="cancelled")
+                )
             return {**out, "previous": was}
 
     def get(self, tenant_id: str, finding_id: str) -> dict | None:
