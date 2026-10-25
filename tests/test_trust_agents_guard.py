@@ -895,6 +895,29 @@ def test_an_unreachable_queue_does_not_fail_the_write(env, monkeypatch, caplog):
     assert "agent_guard_failed" in caplog.text
 
 
+def test_one_failed_injection_job_does_not_skip_the_rest(
+    tmp_path, monkeypatch, caplog
+):
+    sent, calls = [], []
+
+    class Flaky:
+        def publish(self, payload, **attributes):
+            calls.append(payload["action_id"])
+            if len(calls) == 1:
+                raise TimeoutError("broker stalled")
+            sent.append(payload["action_id"])
+            return "m"
+
+    monkeypatch.setattr(service, "get_queue", Flaky)
+    principal = Principal(
+        user_id="u", email="bot@x.test", tenant_id=TENANT, role="approver"
+    )
+    with caplog.at_level(logging.WARNING):
+        guard._defer(principal, ["a-1", "a-2", "a-3"])
+    assert calls == ["a-1", "a-2", "a-3"] and sent == ["a-2", "a-3"]
+    assert "agent_guard_failed" in caplog.text
+
+
 def test_a_write_that_fails_queues_nothing(env, monkeypatch):
     """Queued after the write: a 409 retry leaves no job to scan an action
     that never happened."""

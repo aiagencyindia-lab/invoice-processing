@@ -473,27 +473,39 @@ def queue_rematches(principal: Principal, po_numbers: list[str]) -> int:
     from ..worker.runner import enqueue_rematch  # noqa: PLC0415
     from . import service  # noqa: PLC0415
 
-    queued = 0
+    queued, failed, error = 0, 0, None
     try:
         cases, queue = service.get_cases(), service.get_queue()
         for po_number in po_numbers:
             for case_id in cases.held_by_receipt(
                 principal.tenant_id, po_number
             ):
-                enqueue_rematch(
-                    queue,
-                    principal.tenant_id,
-                    case_id,
-                    po_number,
-                    request_id=auth.current_request_id.get(""),
-                )
-                queued += 1
+                # One stalled publish must not leave the rest unqueued.
+                try:
+                    enqueue_rematch(
+                        queue,
+                        principal.tenant_id,
+                        case_id,
+                        po_number,
+                        request_id=auth.current_request_id.get(""),
+                    )
+                    queued += 1
+                except Exception as exc:
+                    failed, error = failed + 1, exc
+                    logger.exception("A re-match job could not be queued")
     except Exception as exc:
+        error = exc
         logger.exception("Re-match jobs could not be queued")
+    if error is not None:
         _audit().emit(
             principal.context(),
             "three_way_rematch_enqueue_failed",
-            {"po_numbers": po_numbers, "queued": queued, "error": str(exc)},
+            {
+                "po_numbers": po_numbers,
+                "queued": queued,
+                "failed": failed,
+                "error": str(error),
+            },
         )
     return queued
 

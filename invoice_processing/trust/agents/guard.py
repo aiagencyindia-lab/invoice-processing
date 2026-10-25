@@ -222,13 +222,18 @@ def _defer(principal, ids) -> None:
 
     try:
         queue, run_id = service.get_queue(), principal.context().run_id or ""
-        for action_id in ids:
+    except Exception as exc:
+        _log(exc)  # the writes stand; these actions go unscanned
+        return
+    for action_id in ids:
+        try:
             enqueue_agent_injection(
                 queue, principal.tenant_id, action_id, run_id
             )
-    except Exception as exc:
-        # The write stands; the action goes unscanned (logged).
-        _log(exc)
+        except Exception as exc:
+            # The write stands; this action goes unscanned (logged), and
+            # the rest are still queued.
+            _log(exc)
 
 
 def _owner_check(principal, action: Action, *, mode, store):

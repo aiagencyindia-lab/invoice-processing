@@ -235,10 +235,9 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         was 30 s); it still waits for the message id, so a failed publish
         stays an error in the request's log and the document stays
         republishable.
-  - [ ] PO re-matches (`po_routes.py`) and deferred injection scans
-        (`guard.py`) enqueue in a loop inside one `try`: the first failed
-        publish skips the rest of that batch (logged). Move the `try` into
-        the loop if it shows.
+  - [x] PO re-matches (`po_routes.py`) and deferred injection scans
+        (`guard.py`) catch a failed publish per item (2026-10-25): one
+        stalled publish no longer skips the rest of the batch.
   - [x] Imported log rows are judged at their time (2026-10-23): an agent
         is revoked only from its `revoked_at`.
   - [x] `/actions/evaluate` and `/actions/import` answer 409 while the
