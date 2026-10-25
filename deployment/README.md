@@ -87,6 +87,14 @@ writable by the app again until §2 revokes it.
 Order on Railway: §1 → set the secret variables → first deploy (pre-deploy
 migrates as the owner) → §2 → read VERIFY.
 
+## Deploy settings
+
+The API service's deploy settings live in `deployment/railway.api.json`
+(start command, pre-deploy migrate, health check, draining, restart policy);
+the `invoice-processing` service's config-file path points at it, so the file
+wins over the dashboard. Change them there, in a PR. The `app` service reads
+no config file (root directory `frontend`). Variables stay in Railway.
+
 ## Health
 
 `GET /healthz` needs no sign-in: 200 `{"status": "ok"}` when the database
