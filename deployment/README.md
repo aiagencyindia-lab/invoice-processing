@@ -104,6 +104,12 @@ railway config plan     # must show only the change you meant
 railway config apply
 ```
 
+An apply covers the whole project: anything live that the file does not list
+(a database or volume added in the dashboard since) is planned for
+**deletion**. Run `railway config pull --variables unmanaged --force` before
+editing so the file starts from what is live, read the plan, and never pass
+`--yes --confirm-destructive`.
+
 `railway config plan` against the live project showed no changes when the file
 was added (2026-10-26). Railway no longer accepts `railway.json` /
 `railway.toml` config files. The image always builds from the root

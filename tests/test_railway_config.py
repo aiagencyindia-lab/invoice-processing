@@ -43,6 +43,8 @@ def test_the_health_check_is_a_public_route(monkeypatch):
 def test_variables_stay_out_of_code():
     """Secrets live in Railway; the file must never carry or manage them."""
     assert "variables: { managed: false }" in IAC
+    # A pull with --include-variables or preserved values would show here.
+    assert IAC.count("variables:") == 1 and "preserve(" not in IAC
     assert "postgres://" not in IAC and "postgresql://" not in IAC
 
 
