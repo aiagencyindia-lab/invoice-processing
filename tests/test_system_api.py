@@ -562,6 +562,18 @@ class TestRetry:
             == 403
         )
 
+    def test_a_queue_that_times_out_answers_503(self, env, monkeypatch):
+        """A stalled broker gets "try again", not a bare 500."""
+        doc_id = add_document(env, sha="r8")
+
+        def stalled(payload, **attributes):
+            raise TimeoutError
+
+        monkeypatch.setattr(env["queue"], "publish", stalled)
+        r = env["client"]("approver").post(f"/api/documents/{doc_id}/retry")
+        assert r.status_code == 503
+        assert "retry" in r.json()["detail"].lower()
+
     def test_unknown_document_is_404(self, env):
         assert (
             env["client"]("approver")

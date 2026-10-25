@@ -41,6 +41,12 @@ logger = logging.getLogger(__name__)
 # messages come back within a coffee break.
 DEFAULT_ACK_DEADLINE_SECONDS = 600
 
+# How long an enqueue waits for Pub/Sub to confirm. It runs on the request
+# path, and a healthy broker answers in milliseconds; past this the caller's
+# own error handling takes over. The client keeps retrying in the background,
+# so a timed-out message may still arrive later: never compensate for it.
+PUBLISH_TIMEOUT_SECONDS = 5
+
 
 @dataclass
 class Message:
@@ -288,7 +294,7 @@ class PubSubQueue:
             json.dumps(payload, default=str).encode("utf-8"),
             **attributes,
         )
-        return future.result(timeout=30)
+        return future.result(timeout=PUBLISH_TIMEOUT_SECONDS)
 
     def pull(self, max_messages: int = 1) -> list[Message]:
         response = self.subscriber.pull(
