@@ -86,6 +86,8 @@ MICROSOFT_NOT_SET_UP = (
 # The public provider lookup's limits, per caller and in total, per minute.
 LOOKUPS_PER_IP = 20
 LOOKUPS_OVERALL = 600
+# Past this many tracked callers, those quiet for a minute are dropped.
+FORGET_AFTER_KEYS = 10_000
 
 
 class _Window:
@@ -100,23 +102,38 @@ class _Window:
     def __init__(self):
         self._lock = threading.Lock()
         self._calls: dict[str, deque] = {}
+        self._pruned_at = float("-inf")
 
     def clear(self) -> None:
         with self._lock:
             self._calls.clear()
+            self._pruned_at = float("-inf")
 
-    def take(self, key: str, limit: int, now: float) -> int:
-        """0 when the call may go ahead, else seconds until it may."""
+    def take(self, keys: list[str], limits: list[int], now: float) -> int:
+        """0 when the call may go ahead (and is counted against every key),
+        else seconds until it may; a refused call counts against none."""
         with self._lock:
-            calls = self._calls.setdefault(key, deque())
-            while calls and calls[0] <= now - 60:
-                calls.popleft()
-            if len(calls) >= limit:
-                return max(1, int(calls[0] + 60 - now) + 1)
-            calls.append(now)
-            if len(self._calls) > 10_000:  # forget idle callers
-                for k in [k for k, v in self._calls.items() if not v]:
+            if (
+                len(self._calls) > FORGET_AFTER_KEYS
+                and now - self._pruned_at >= 60
+            ):
+                # Callers silent for a minute have nothing left to count.
+                self._pruned_at = now
+                for k in [
+                    k for k, v in self._calls.items() if v[-1] <= now - 60
+                ]:
                     del self._calls[k]
+            waits = []
+            for key, limit in zip(keys, limits, strict=True):
+                calls = self._calls.get(key, deque())
+                while calls and calls[0] <= now - 60:
+                    calls.popleft()
+                if len(calls) >= limit:
+                    waits.append(max(1, int(calls[0] + 60 - now) + 1))
+            if waits:
+                return max(waits)
+            for key in keys:
+                self._calls.setdefault(key, deque()).append(now)
             return 0
 
 
@@ -128,8 +145,10 @@ def _lookup_allowed() -> None:
 
     now = time.monotonic()
     wait = LOOKUP_LIMIT.take(
-        "ip:" + auth.current_client_ip.get(""), LOOKUPS_PER_IP, now
-    ) or LOOKUP_LIMIT.take("*", LOOKUPS_OVERALL, now)
+        ["ip:" + auth.current_client_ip.get(""), "*"],
+        [LOOKUPS_PER_IP, LOOKUPS_OVERALL],
+        now,
+    )
     if wait:
         raise HTTPException(
             status_code=429,

@@ -407,6 +407,20 @@ class TestLookupLimit:
         now[0] += 61
         assert self._ask("203.0.113.7").status_code == 404
 
+    def test_callers_gone_quiet_are_forgotten(self):
+        """Rotated addresses must not pile up for ever."""
+        window = signup._Window()
+        for i in range(signup.FORGET_AFTER_KEYS + 5):
+            window.take([f"ip:{i}"], [20], now=1000.0)
+        window.take(["ip:fresh"], [20], now=1061.0)
+        assert len(window._calls) == 1
+
+    def test_a_refused_call_spends_nothing(self):
+        window = signup._Window()
+        assert window.take(["ip:a", "*"], [5, 1], now=1.0) == 0
+        assert window.take(["ip:a", "*"], [5, 1], now=2.0) > 0
+        assert len(window._calls["ip:a"]) == 1
+
     def test_many_addresses_still_meet_an_overall_cap(self, env, monkeypatch):
         """Rotating the forwarded address does not get past the total."""
         monkeypatch.setattr(signup, "LOOKUPS_OVERALL", 5)
