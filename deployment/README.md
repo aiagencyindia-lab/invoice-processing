@@ -89,11 +89,15 @@ migrates as the owner) → §2 → read VERIFY.
 
 ## Health
 
-There is no unauthenticated health route. A deploy is gated by the start
-script instead: preflight refusing the configuration, or either process
-exiting, stops the container, and Railway marks the deploy failed rather
-than routing traffic to it. Check the `ledgerly` deploy logs for
-"Refusing to start" after any variable change.
+`GET /healthz` needs no sign-in: 200 `{"status": "ok"}` when the database
+answers, 503 `{"status": "unavailable"}` otherwise. Set it as the
+Healthcheck Path of the API service so Railway only switches traffic to a
+deploy whose database answers. The start script gates a deploy too:
+preflight refusing the configuration, or either process exiting, stops the
+container, and Railway marks the deploy failed. Check the API service's
+deploy logs for "Refusing to start" after any variable change. Adding
+`connect_timeout=5` to `DATABASE_URL` keeps a hung database from holding a
+probe.
 
 ## Smoke test
 
