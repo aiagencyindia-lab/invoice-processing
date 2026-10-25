@@ -470,30 +470,47 @@ def queue_rematches(principal: Principal, po_numbers: list[str]) -> int:
     The receipts are already stored, so a failure here is logged and audited
     rather than refused; the invoices simply stay held.
     """
+    from ..worker.queue import OUTAGE_AFTER_FAILURES  # noqa: PLC0415
     from ..worker.runner import enqueue_rematch  # noqa: PLC0415
     from . import service  # noqa: PLC0415
 
-    queued = 0
+    queued, failed, error, in_a_row = 0, 0, None, 0
     try:
         cases, queue = service.get_cases(), service.get_queue()
         for po_number in po_numbers:
             for case_id in cases.held_by_receipt(
                 principal.tenant_id, po_number
             ):
-                enqueue_rematch(
-                    queue,
-                    principal.tenant_id,
-                    case_id,
-                    po_number,
-                    request_id=auth.current_request_id.get(""),
-                )
-                queued += 1
+                # One stalled publish must not leave the rest unqueued; a
+                # dead broker leaves them all, without a wait for each.
+                if in_a_row >= OUTAGE_AFTER_FAILURES:
+                    failed += 1
+                    continue
+                try:
+                    enqueue_rematch(
+                        queue,
+                        principal.tenant_id,
+                        case_id,
+                        po_number,
+                        request_id=auth.current_request_id.get(""),
+                    )
+                    queued, in_a_row = queued + 1, 0
+                except Exception as exc:
+                    failed, error, in_a_row = failed + 1, exc, in_a_row + 1
+                    logger.exception("A re-match job could not be queued")
     except Exception as exc:
+        error = exc
         logger.exception("Re-match jobs could not be queued")
+    if error is not None:
         _audit().emit(
             principal.context(),
             "three_way_rematch_enqueue_failed",
-            {"po_numbers": po_numbers, "queued": queued, "error": str(exc)},
+            {
+                "po_numbers": po_numbers,
+                "queued": queued,
+                "failed": failed,
+                "error": str(error),
+            },
         )
     return queued
 

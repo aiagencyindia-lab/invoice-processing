@@ -218,17 +218,28 @@ def _defer(principal, ids) -> None:
     if not ids:
         return
     from ...api import service  # noqa: PLC0415
+    from ...worker.queue import OUTAGE_AFTER_FAILURES  # noqa: PLC0415
     from ...worker.runner import enqueue_agent_injection  # noqa: PLC0415
 
     try:
         queue, run_id = service.get_queue(), principal.context().run_id or ""
-        for action_id in ids:
+    except Exception as exc:
+        _log(exc)  # the writes stand; these actions go unscanned
+        return
+    in_a_row = 0
+    for action_id in ids:
+        try:
             enqueue_agent_injection(
                 queue, principal.tenant_id, action_id, run_id
             )
-    except Exception as exc:
-        # The write stands; the action goes unscanned (logged).
-        _log(exc)
+            in_a_row = 0
+        except Exception as exc:
+            # The write stands; this action goes unscanned (logged). The
+            # rest are still tried, unless the broker looks down.
+            _log(exc)
+            in_a_row += 1
+            if in_a_row >= OUTAGE_AFTER_FAILURES:
+                return
 
 
 def _owner_check(principal, action: Action, *, mode, store):
