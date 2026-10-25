@@ -88,8 +88,11 @@ Branch `phase3/microsoft-sign-in`: built and reviewed; spec
 - [ ] After the live test: require the `tid` check (today it applies only
       when Firebase passes `firebase.sign_in_attributes.tid`), once the
       token shows where it lands.
-- [ ] The public provider lookup (`POST /api/sso/microsoft`) has no rate
-      limit (one query per call; reveals only that a domain uses Microsoft).
+- [x] The public provider lookup (`POST /api/sso/microsoft`) is rate
+      limited (2026-10-25): 20 a minute per caller address, 600 overall,
+      429 with `Retry-After`. In-process (one container); the caller key is
+      the forwarded address, which a client can set, so the overall cap is
+      the real bound.
 
 ## v2 Trust layer
 
@@ -341,7 +344,6 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   otherwise, with no sign-in. It is Railway's Healthcheck Path on
   `invoice-processing` (set 2026-10-25): a deploy whose database does not
   answer is never switched to.
-- No rate limit on the Microsoft provider lookup (branch).
 - Logs: thread-pool lines carry blank ids; a client disconnect logs at
   ERROR; `AUTH_DISABLED` warns per request locally.
 - Benchmark: known wrong MV-035, TECH-INV-030/031; dataset defects

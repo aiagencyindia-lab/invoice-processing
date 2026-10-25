@@ -21,7 +21,10 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
+import time
 import unicodedata
+from collections import deque
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -80,6 +83,80 @@ MICROSOFT_NOT_SET_UP = (
 )
 
 
+# The public provider lookup's limits, per caller and in total, per minute.
+LOOKUPS_PER_IP = 20
+LOOKUPS_OVERALL = 600
+# Past this many tracked callers, those quiet for a minute are dropped.
+FORGET_AFTER_KEYS = 10_000
+
+
+class _Window:
+    """Calls per key in the last minute.
+
+    ponytail: in-process and per container (Railway runs one); a shared
+    limit needs the database or an edge rule. The caller key is the first
+    forwarded address, which a client can set, so the overall cap is what
+    bounds a caller who rotates it.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._calls: dict[str, deque] = {}
+        self._pruned_at = float("-inf")
+
+    def clear(self) -> None:
+        with self._lock:
+            self._calls.clear()
+            self._pruned_at = float("-inf")
+
+    def take(self, keys: list[str], limits: list[int], now: float) -> int:
+        """0 when the call may go ahead (and is counted against every key),
+        else seconds until it may; a refused call counts against none."""
+        with self._lock:
+            if (
+                len(self._calls) > FORGET_AFTER_KEYS
+                and now - self._pruned_at >= 60
+            ):
+                # Callers silent for a minute have nothing left to count.
+                self._pruned_at = now
+                for k in [
+                    k for k, v in self._calls.items() if v[-1] <= now - 60
+                ]:
+                    del self._calls[k]
+            waits = []
+            for key, limit in zip(keys, limits, strict=True):
+                calls = self._calls.get(key, deque())
+                while calls and calls[0] <= now - 60:
+                    calls.popleft()
+                if len(calls) >= limit:
+                    waits.append(max(1, int(calls[0] + 60 - now) + 1))
+            if waits:
+                return max(waits)
+            for key in keys:
+                self._calls.setdefault(key, deque()).append(now)
+            return 0
+
+
+LOOKUP_LIMIT = _Window()
+
+
+def _lookup_allowed() -> None:
+    from . import auth  # noqa: PLC0415
+
+    now = time.monotonic()
+    wait = LOOKUP_LIMIT.take(
+        ["ip:" + auth.current_client_ip.get(""), "*"],
+        [LOOKUPS_PER_IP, LOOKUPS_OVERALL],
+        now,
+    )
+    if wait:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many lookups; try again in a minute.",
+            headers={"Retry-After": str(wait)},
+        )
+
+
 @router.post("/api/sso/microsoft")
 def microsoft_provider(email: str = Body("", embed=True)) -> dict:
     """Which OIDC provider a work address signs in through.
@@ -93,6 +170,7 @@ def microsoft_provider(email: str = Body("", embed=True)) -> dict:
     from .. import sso  # noqa: PLC0415
     from . import auth  # noqa: PLC0415
 
+    _lookup_allowed()
     email = email if isinstance(email, str) and len(email) <= 320 else ""
     raw = sso.domain_of(email) if "@" in email else ""
     not_set_up = HTTPException(

@@ -372,6 +372,63 @@ class TestAllOrNothing:
         assert row.after["slug"] == "acme"
 
 
+@pytest.fixture(autouse=True)
+def _fresh_lookup_limit():
+    """The lookup's limiter is process state; each test starts empty."""
+    signup.LOOKUP_LIMIT.clear()
+    yield
+    signup.LOOKUP_LIMIT.clear()
+
+
+class TestLookupLimit:
+    """A public, unauthenticated lookup: per address and overall caps."""
+
+    def _ask(self, ip):
+        return TestClient(app).post(
+            "/api/sso/microsoft",
+            json={"email": "pat@unbound.com"},
+            headers={"x-forwarded-for": ip},
+        )
+
+    def test_one_caller_is_limited_per_minute(self, env):
+        for _ in range(signup.LOOKUPS_PER_IP):
+            assert self._ask("203.0.113.7").status_code == 404
+        r = self._ask("203.0.113.7")
+        assert r.status_code == 429
+        assert int(r.headers["retry-after"]) >= 1
+        assert self._ask("198.51.100.9").status_code == 404
+
+    def test_the_window_moves_on(self, env, monkeypatch):
+        now = [1000.0]
+        monkeypatch.setattr(signup.time, "monotonic", lambda: now[0])
+        for _ in range(signup.LOOKUPS_PER_IP):
+            self._ask("203.0.113.7")
+        assert self._ask("203.0.113.7").status_code == 429
+        now[0] += 61
+        assert self._ask("203.0.113.7").status_code == 404
+
+    def test_callers_gone_quiet_are_forgotten(self):
+        """Rotated addresses must not pile up for ever."""
+        window = signup._Window()
+        for i in range(signup.FORGET_AFTER_KEYS + 5):
+            window.take([f"ip:{i}"], [20], now=1000.0)
+        window.take(["ip:fresh"], [20], now=1061.0)
+        assert len(window._calls) == 1
+
+    def test_a_refused_call_spends_nothing(self):
+        window = signup._Window()
+        assert window.take(["ip:a", "*"], [5, 1], now=1.0) == 0
+        assert window.take(["ip:a", "*"], [5, 1], now=2.0) > 0
+        assert len(window._calls["ip:a"]) == 1
+
+    def test_many_addresses_still_meet_an_overall_cap(self, env, monkeypatch):
+        """Rotating the forwarded address does not get past the total."""
+        monkeypatch.setattr(signup, "LOOKUPS_OVERALL", 5)
+        for i in range(5):
+            assert self._ask(f"203.0.113.{i}").status_code == 404
+        assert self._ask("203.0.113.99").status_code == 429
+
+
 class TestMicrosoftLookup:
     def _bind(self, env, provider="microsoft", provider_id="oidc.acme"):
         from invoice_processing.db.repositories import (  # noqa: PLC0415
