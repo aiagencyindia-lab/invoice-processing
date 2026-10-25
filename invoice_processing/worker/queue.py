@@ -43,7 +43,8 @@ DEFAULT_ACK_DEADLINE_SECONDS = 600
 
 # How long an enqueue waits for Pub/Sub to confirm. It runs on the request
 # path, and a healthy broker answers in milliseconds; past this the caller's
-# own error handling takes over (the client keeps retrying in the background).
+# own error handling takes over. The client keeps retrying in the background,
+# so a timed-out message may still arrive later: never compensate for it.
 PUBLISH_TIMEOUT_SECONDS = 5
 
 
