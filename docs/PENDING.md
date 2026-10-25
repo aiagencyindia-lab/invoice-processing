@@ -237,7 +237,9 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         republishable.
   - [x] PO re-matches (`po_routes.py`) and deferred injection scans
         (`guard.py`) catch a failed publish per item (2026-10-25): one
-        stalled publish no longer skips the rest of the batch.
+        stalled publish no longer skips the rest of the batch; two failures
+        in a row stop the batch (a dead broker costs two timeouts, not one
+        per item).
   - [x] Imported log rows are judged at their time (2026-10-23): an agent
         is revoked only from its `revoked_at`.
   - [x] `/actions/evaluate` and `/actions/import` answer 409 while the

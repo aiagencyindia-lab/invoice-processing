@@ -470,17 +470,22 @@ def queue_rematches(principal: Principal, po_numbers: list[str]) -> int:
     The receipts are already stored, so a failure here is logged and audited
     rather than refused; the invoices simply stay held.
     """
+    from ..worker.queue import OUTAGE_AFTER_FAILURES  # noqa: PLC0415
     from ..worker.runner import enqueue_rematch  # noqa: PLC0415
     from . import service  # noqa: PLC0415
 
-    queued, failed, error = 0, 0, None
+    queued, failed, error, in_a_row = 0, 0, None, 0
     try:
         cases, queue = service.get_cases(), service.get_queue()
         for po_number in po_numbers:
             for case_id in cases.held_by_receipt(
                 principal.tenant_id, po_number
             ):
-                # One stalled publish must not leave the rest unqueued.
+                # One stalled publish must not leave the rest unqueued; a
+                # dead broker leaves them all, without a wait for each.
+                if in_a_row >= OUTAGE_AFTER_FAILURES:
+                    failed += 1
+                    continue
                 try:
                     enqueue_rematch(
                         queue,
@@ -489,9 +494,9 @@ def queue_rematches(principal: Principal, po_numbers: list[str]) -> int:
                         po_number,
                         request_id=auth.current_request_id.get(""),
                     )
-                    queued += 1
+                    queued, in_a_row = queued + 1, 0
                 except Exception as exc:
-                    failed, error = failed + 1, exc
+                    failed, error, in_a_row = failed + 1, exc, in_a_row + 1
                     logger.exception("A re-match job could not be queued")
     except Exception as exc:
         error = exc

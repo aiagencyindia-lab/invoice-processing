@@ -918,6 +918,22 @@ def test_one_failed_injection_job_does_not_skip_the_rest(
     assert "agent_guard_failed" in caplog.text
 
 
+def test_a_dead_broker_is_tried_twice_not_once_per_action(monkeypatch):
+    calls = []
+
+    class Down:
+        def publish(self, payload, **attributes):
+            calls.append(payload["action_id"])
+            raise TimeoutError("broker down")
+
+    monkeypatch.setattr(service, "get_queue", Down)
+    principal = Principal(
+        user_id="u", email="bot@x.test", tenant_id=TENANT, role="approver"
+    )
+    guard._defer(principal, ["a-1", "a-2", "a-3", "a-4"])
+    assert calls == ["a-1", "a-2"]
+
+
 def test_a_write_that_fails_queues_nothing(env, monkeypatch):
     """Queued after the write: a 409 retry leaves no job to scan an action
     that never happened."""
