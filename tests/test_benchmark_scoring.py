@@ -385,3 +385,59 @@ class TestACleanRunExitsCleanly:
     def test_undecided_invoices_are_still_counted(self, tmp_path):
         out = self._write(tmp_path, {"total": 14, "errors_or_no_decision": 2})
         assert run.undecided(out) == 2
+
+
+class TestDrain:
+    """Since v2 every processed document queues a trust job; the harness
+    must run the queue dry per invoice or it scores the wrong document."""
+
+    class Worker:
+        def __init__(self, outcomes):
+            self.outcomes = list(outcomes)
+            self.pulled = 0
+
+        def run_once(self, max_messages=1):
+            self.pulled += 1
+            return [self.outcomes.pop(0)] if self.outcomes else []
+
+    def test_a_queued_trust_job_does_not_stand_in_for_the_document(self):
+        # The previous invoice's trust job is first in the queue.
+        worker = self.Worker(["trust-evaluated", "done", "trust-evaluated"])
+        assert stack_main.drain(worker) == "done"
+        assert worker.outcomes == []  # the queue is empty before scoring
+
+    def test_a_retry_is_run_again_until_it_settles(self):
+        worker = self.Worker(["retry", "retry", "done", "trust-evaluated"])
+        assert stack_main.drain(worker) == "done"
+
+    def test_an_empty_queue_says_so(self):
+        assert stack_main.drain(self.Worker([])) == "no-message"
+
+    def test_a_dead_letter_is_the_outcome(self):
+        worker = self.Worker(["dead-lettered:permanent"])
+        assert stack_main.drain(worker) == "dead-lettered:permanent"
+
+    def test_a_follow_up_that_fails_does_not_replace_the_documents_outcome(
+        self,
+    ):
+        """Review finding: the first settled outcome is the document's."""
+        worker = self.Worker(["done", "retry", "trust-evaluated"])
+        assert stack_main.drain(worker) == "done"
+        worker = self.Worker(["done", "dead-lettered:exhausted"])
+        assert stack_main.drain(worker) == "done"
+        worker = self.Worker(["done", "skipped:already-done"])
+        assert stack_main.drain(worker) == "done"
+        assert worker.outcomes == []
+
+    def test_the_clock_stops_when_the_document_settles(self):
+        """Wall time stays comparable with runs before v2's trust jobs."""
+        ticks = iter([5.0, 99.0])
+        worker = self.Worker(["done", "trust-evaluated"])
+        settled = []
+        assert (
+            stack_main.drain(
+                worker, on_settled=lambda: settled.append(next(ticks))
+            )
+            == "done"
+        )
+        assert settled == [5.0]
