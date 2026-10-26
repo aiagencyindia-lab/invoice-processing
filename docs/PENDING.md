@@ -224,11 +224,10 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         longer verify: re-approve (propose + approve a new version) any
         mandate approved earlier. No database holds one yet (the Wave 4
         tables were never deployed; production is on the v1 schema).
-  - [ ] Approve and revoke seal in a second session after the state change
-        commits. A revoke of the very version being approved, landing
-        between the two, can leave it revoked with an "active" seal: it then
-        never verifies (fails closed, silently). Lock the row while sealing
-        if this ever matters.
+  - [x] Approve and revoke seal in a second session after the state change
+        commits; the reseal now locks the row (2026-10-26), so a revoke
+        landing in between is signed as revoked, not overwritten with the
+        "active" seal (proven on Postgres with two connections).
   - [ ] Replaying an entire earlier mandate row (signature included) from a
         backup is undetectable from inside the database when no later
         version exists (e.g. un-revoking an agent's only mandate together
