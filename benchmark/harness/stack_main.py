@@ -131,19 +131,32 @@ def load_profile(path: str, company: str) -> dict:
 
 # Follow-up jobs a processed document queues (v2 trust work): run, never
 # reported as the document's own outcome.
-FOLLOW_UPS = ("trust-synced", "trust-evaluated", "trust-audited")
+FOLLOW_UPS = (
+    "trust-synced",
+    "trust-evaluated",
+    "trust-audited",
+    "rematched",
+    "agent-injection-classified",
+)
 
 
-def drain(worker) -> str:
+def drain(worker, on_settled=None) -> str:
     """Run the worker until the queue is empty and return the document's own
-    outcome. One message per invoice is not enough since v2: each processed
-    document queues a trust job, which the next invoice would pull instead
-    of its own document, so every later invoice was scored before it ran."""
+    outcome: the first one that settles (not a retry, not a follow-up). One
+    message per invoice is not enough since v2: each processed document
+    queues a trust job, which the next invoice would pull instead of its own
+    document, so every later invoice was scored before it ran.
+
+    `on_settled` runs once, when the document's outcome is known, so the
+    caller can stop its clock before the follow-ups run (wall time stays
+    comparable with runs from before v2)."""
     outcome = "no-message"
     while outcomes := worker.run_once(max_messages=1):
-        if outcomes[0] in FOLLOW_UPS:
-            continue
-        outcome = outcomes[0]  # a retry is pulled again until it settles
+        got = outcomes[0]
+        if outcome == "no-message" and got != "retry" and got not in FOLLOW_UPS:
+            outcome = got
+            if on_settled is not None:
+                on_settled()
     return outcome
 
 
@@ -291,9 +304,12 @@ def main(argv=None) -> int:
             enqueue_document(service.get_queue(), ctx, result)
 
         outcome = "ingest-duplicate"
+        settled = []
         if not result.duplicate or interrupted:
-            outcome = drain(worker)
-        wall = time.time() - started
+            outcome = drain(
+                worker, on_settled=lambda s=settled: s.append(time.time())
+            )
+        wall = (settled[0] if settled else time.time()) - started
 
         artifacts = cases.get_artifacts(
             RunContext(tenant_id=tenant_id, case_id=result.document_id)
