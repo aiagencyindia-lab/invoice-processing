@@ -377,14 +377,18 @@ def test_a_reseal_waits_for_a_revoke_in_flight_and_signs_what_it_left(env):
     )  # holds the row lock, not committed yet
     done = threading.Event()
     worker = threading.Thread(
-        target=lambda: (mandates.reseal(ADMIN_B, store, [m["id"]]), done.set())
+        target=lambda: (mandates.reseal(ADMIN_B, store, [m["id"]]), done.set()),
+        daemon=True,
     )
-    worker.start()
-    time.sleep(0.5)
-    assert not done.is_set()  # waiting on the revoke, not racing it
-    tx.commit()
-    worker.join(10)
-    revoker.close()
+    try:
+        worker.start()
+        time.sleep(0.5)
+        assert not done.is_set()  # waiting on the revoke, not racing it
+    finally:
+        # Always release the row, so a failure never stalls the next test.
+        tx.commit()
+        worker.join(10)
+        revoker.close()
     [row] = store.mandates(T, agent_id)
     assert row["status"] == "revoked" and mandates.verify(row, None)
 
