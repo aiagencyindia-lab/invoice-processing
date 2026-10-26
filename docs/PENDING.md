@@ -2,7 +2,7 @@
 
 Everything paused or unfinished. Keep this list current: tick nothing off
 until it is done and verified, and move finished items to "Done" with the
-date. Last updated 2026-10-25.
+date. Last updated 2026-10-26.
 
 ## Production (Railway) — LIVE
 
@@ -40,9 +40,10 @@ processes run with `RUN_MIGRATIONS` off.
       (`volumeInstanceBackupScheduleUpdate`), and record the retention.
 - [x] **No public database endpoint** (2026-10-25): `Postgres` has no TCP
       proxy and no domain.
-- [ ] **Docs PR**: backup retention and the smoke-test result in
-      `SECURITY.md` / `deployment/BACKUP_RESTORE.md`; the project ids in
-      `deployment/README.md`.
+- [x] `deployment/README.md` names the live project, services and domain,
+      and records the smoke and restore-check results (2026-10-26).
+- [ ] Backup retention in `SECURITY.md` / `deployment/BACKUP_RESTORE.md`,
+      once backups exist.
 - [x] **Deploy settings into git** (2026-10-26): `.railway/railway.ts`
       (Railway IaC, variables unmanaged) describes the live project;
       `railway config plan` showed no changes. Applied by hand with
@@ -82,7 +83,7 @@ Branch `phase3/microsoft-sign-in`: built and reviewed; spec
       (issuer `https://login.microsoftonline.com/<tid>/v2.0`, code flow,
       Entra optional `email` claim, redirect
       `https://rasayan.firebaseapp.com/__/auth/handler`).
-- [ ] PR, review, merge.
+- [x] PR, review, merge (#116, 2026-10-25).
 - [ ] After the live test: require the `tid` check (today it applies only
       when Firebase passes `firebase.sign_in_attributes.tid`), once the
       token shows where it lands.
@@ -220,10 +221,9 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         by a later version by the action's time; the signature now covers
         the state (`status`, `revoked_*`) and every approve, supersede and
         revoke reseals the rows it changed.
-  - [ ] Signatures made before 2026-10-23 sign the digest alone and no
-        longer verify: re-approve (propose + approve a new version) any
-        mandate approved earlier. No database holds one yet (the Wave 4
-        tables were never deployed; production is on the v1 schema).
+  - [x] Signatures made before 2026-10-23 (digest only) would no longer
+        verify; none exists anywhere: production reached the v2 schema
+        after that date and holds no tenants (checked 2026-10-26).
   - [ ] Approve and revoke seal in a second session after the state change
         commits. A revoke of the very version being approved, landing
         between the two, can leave it revoked with an "active" seal: it then
@@ -269,8 +269,9 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   - [ ] A detector that keeps raising is now only the `agent_rule_failed`
         warning (error type); alert on it once logs reach a monitor.
   - [x] `replace_vendors` reads the vendor keys in one query (2026-10-23).
-  - [ ] FR-28.1 "our own agents register automatically" is moot: no
-        in-house agent performs a governed write today.
+  - [x] FR-28.1 "our own agents register automatically" is moot: no
+        in-house agent performs a governed write today (revisit if one
+        does).
   - [x] Deferred from Wave 4 → **Wave 5** (program plan
         `docs/superpowers/plans/2026-10-23-v2-wave5-program.md`):
     - [x] Scaffold (`v2/w5-scaffold`): `record()` is one transaction (the
