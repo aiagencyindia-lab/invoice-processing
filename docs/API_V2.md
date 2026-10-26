@@ -7,10 +7,10 @@ The `/v2` API exposes the trust layer to other systems: findings, explanations, 
 An admin creates a key under **Integrations** (or with `POST /api/integrations/api-keys {name, role}`). The response shows the key once:
 
 ```
-ik_<8 hex prefix>_<secret>
+ik_<account slug>_<8 hex prefix>_<secret>
 ```
 
-Ledgerly stores only a SHA-256 hash of the secret. Send the key either way:
+Ledgerly stores only a SHA-256 hash of the secret. Keys issued before 2026-10-26 have no slug (`ik_<prefix>_<secret>`) and keep working. Send the key either way:
 
 ```
 X-API-Key: ik_…

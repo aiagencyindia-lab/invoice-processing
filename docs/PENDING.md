@@ -161,10 +161,9 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         gone (each built route is probed in its branch's own test module).
   - [x] The API key resolver refuses keys of a tenant that is not `active`
         (`suspended`/`purged`), tested in `tests/test_trust_api_keys.py`.
-  - [ ] An API key request costs one query per active tenant (FORCE RLS on
-        `api_keys` blocks a cross-tenant prefix lookup). Put the tenant in
-        the key (`ik_{tenant_slug}_{prefix}_{secret}`) or add a lookup
-        policy before tenants number in the hundreds.
+  - [x] API keys carry the tenant (2026-10-26): new keys are
+        `ik_{tenant_slug}_{prefix}_{secret}`, so a request reads one tenant.
+        Keys made before keep resolving by asking each active tenant.
   - [x] Ruff's `target-version` is `py311`, matching `requires-python`
         (every `timezone.utc` is now `UTC`).
   - [x] Webhook hosts that resolve to internal addresses are refused on

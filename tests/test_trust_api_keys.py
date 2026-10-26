@@ -38,9 +38,10 @@ def _events(path):
 def test_create_shows_the_key_once_and_keeps_only_its_hash(env):
     url, audit, _ = env
     row, key = apikeys.create(ADMIN, "erp", "clerk", audit=audit, url=url)
-    assert key.startswith(f"ik_{row['prefix']}_")
+    # The tenant's slug rides in the key, so a lookup reads one tenant.
+    assert key.startswith(f"ik_acme_{row['prefix']}_")
     assert len(row["prefix"]) == 8
-    secret = key[len(f"ik_{row['prefix']}_") :]
+    secret = key[len(f"ik_acme_{row['prefix']}_") :]
     with tenant_session(ACME, url) as s:
         stored = s.scalars(select(models.ApiKey)).one()
     assert stored.key_hash == hashlib.sha256(secret.encode()).hexdigest()
@@ -118,7 +119,11 @@ def test_a_wrong_secret_or_unknown_prefix_is_none(env):
     url, audit, _ = env
     _, key = apikeys.create(ADMIN, "erp", "viewer", audit=audit, url=url)
     assert apikeys.resolve(key + "x") is None
-    assert apikeys.resolve(f"ik_00000000_{key.split('_', 2)[2]}") is None
+    secret = key.split("_", 3)[3]
+    assert apikeys.resolve(f"ik_acme_00000000_{secret}") is None
+    # Another tenant's slug on this key's prefix and secret finds nothing.
+    prefix = key.split("_", 3)[2]
+    assert apikeys.resolve(f"ik_globex_{prefix}_{secret}") is None
 
 
 def test_a_revoked_key_is_none_and_both_changes_are_audited(env):
@@ -186,7 +191,9 @@ def test_a_key_resolves_as_the_production_app_role(monkeypatch):
         owner = db.owner_url.render_as_string(hide_password=False)
         app = db.app_url.render_as_string(hide_password=False)
         with tenant_session(ACME, owner) as s:
-            s.add(models.Tenant(id=ACME, name="a", slug="a", status="active"))
+            s.add(
+                models.Tenant(id=ACME, name="a", slug="acme", status="active")
+            )
         _, key = apikeys.create(ADMIN, "erp", "viewer", url=app)
         monkeypatch.setenv("DATABASE_URL", app)
         p = apikeys.resolve(key)
@@ -207,3 +214,48 @@ def test_a_failed_use_stamp_does_not_refuse_the_key(env, monkeypatch):
 
     monkeypatch.setattr(apikeys, "_stamp", broken)
     assert apikeys.resolve(key).tenant_id == ACME
+
+
+def test_a_new_key_reads_only_its_own_tenant(env, monkeypatch):
+    url, audit, _ = env
+    _, key = apikeys.create(ADMIN, "erp", "viewer", audit=audit, url=url)
+    monkeypatch.setattr(
+        apikeys, "_scan", lambda *a, **k: pytest.fail("scanned every tenant")
+    )
+    assert apikeys.resolve(key).tenant_id == ACME
+
+
+def test_a_key_made_before_the_slug_still_resolves(env):
+    """`ik_{prefix}_{secret}` keys keep working through the old scan."""
+    url, _, _ = env
+    secret = "s" * 43
+    with tenant_session(ACME, url) as s:
+        s.add(
+            models.ApiKey(
+                tenant_id=ACME,
+                name="legacy",
+                role="viewer",
+                key_prefix="0123abcd",
+                key_hash=hashlib.sha256(secret.encode()).hexdigest(),
+                created_by="a@acme.test",
+            )
+        )
+    p = apikeys.resolve(f"ik_0123abcd_{secret}")
+    assert p is not None and p.tenant_id == ACME
+
+
+def test_a_new_key_of_a_suspended_tenant_is_none(env):
+    url, audit, _ = env
+    _, key = apikeys.create(ADMIN, "erp", "viewer", audit=audit, url=url)
+    with tenant_session(ACME, url) as s:
+        s.get(models.Tenant, ACME).status = "suspended"
+    assert apikeys.resolve(key) is None
+
+
+def test_a_key_is_never_minted_for_a_slug_it_could_not_carry(env):
+    """A one-letter or odd slug would make a key no lookup can parse."""
+    url, audit, _ = env
+    with tenant_session(ACME, url) as s:
+        s.get(models.Tenant, ACME).slug = "a"
+    with pytest.raises(ValueError):
+        apikeys.create(ADMIN, "erp", "viewer", audit=audit, url=url)
