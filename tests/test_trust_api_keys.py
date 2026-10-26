@@ -191,7 +191,9 @@ def test_a_key_resolves_as_the_production_app_role(monkeypatch):
         owner = db.owner_url.render_as_string(hide_password=False)
         app = db.app_url.render_as_string(hide_password=False)
         with tenant_session(ACME, owner) as s:
-            s.add(models.Tenant(id=ACME, name="a", slug="acme", status="active"))
+            s.add(
+                models.Tenant(id=ACME, name="a", slug="acme", status="active")
+            )
         _, key = apikeys.create(ADMIN, "erp", "viewer", url=app)
         monkeypatch.setenv("DATABASE_URL", app)
         p = apikeys.resolve(key)
