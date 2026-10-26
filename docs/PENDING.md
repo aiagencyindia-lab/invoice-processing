@@ -61,15 +61,12 @@ Gotchas found on the first deploy:
 
 ## Spend cleanup (operator)
 
-- [ ] Delete the old Railway project `invoice-processing`
-      (`b3a3bee6-b209-49a8-9332-c9d496ed59bc`, aixaitools): crashed API,
-      wired to the closed GCP project `project-cb9934aa-…`.
-- [ ] Delete the unused `ledgerly` (`94573ffd-…`) in the **shramiksmart**
-      workspace: an empty Postgres plus an undeployed staged patch. Check
-      the workspace before deleting — the production `ledgerly` has the
-      same name.
-- [ ] Decide on `lovely-consideration` and `responsible-integrity`
-      (shramiksmart workspace, unknown purpose).
+- [x] Old Railway project `invoice-processing` (`b3a3bee6-…`, aixaitools;
+      crashed API on the closed GCP project) deleted 2026-10-26; Railway
+      removes it on 2026-10-28. Production (`ledgerly-new`) untouched.
+- [x] The shramiksmart workspace items (unused `ledgerly` `94573ffd-…`,
+      `lovely-consideration`, `responsible-integrity`): done by the operator
+      (2026-10-26).
 
 ## Microsoft sign-in
 
