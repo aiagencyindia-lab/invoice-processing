@@ -247,7 +247,9 @@ def reseal(ctx, store, mandate_ids) -> None:
     revoking must always work."""
     for mandate_id in mandate_ids:
         with tenant_session(ctx.tenant_id, store.url) as s:
-            row = s.get(AgentMandate, mandate_id)
+            # Locked: a revoke committing between approve() and this seal
+            # would otherwise be overwritten with the state read before it.
+            row = s.get(AgentMandate, mandate_id, with_for_update=True)
             if row is None or row.tenant_id != ctx.tenant_id:
                 continue
             try:
