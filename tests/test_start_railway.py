@@ -50,8 +50,8 @@ def test_the_api_stops_within_a_bound_on_shutdown():
 
 def test_the_runbook_sets_what_the_first_deploy_needs():
     """Review findings: without draining seconds Railway SIGKILLs at once;
-    without PORT on ledgerly, ${{ledgerly.PORT}} is empty and every /api
-    request from the frontend fails."""
+    without PORT on the API service, ${{invoice-processing.PORT}} is empty
+    and every /api request from the frontend fails."""
     runbook = (SCRIPT.parent.parent / "deployment" / "README.md").read_text()
     assert "RAILWAY_DEPLOYMENT_DRAINING_SECONDS" in runbook
-    assert "| ledgerly | `PORT` | `8000`" in runbook
+    assert "| invoice-processing | `PORT` | `8000`" in runbook
