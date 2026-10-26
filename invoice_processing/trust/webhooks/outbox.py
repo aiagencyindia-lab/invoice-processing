@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 
 from ...db.models import WebhookEndpoint, WebhookOutbox
+from ...db.session import tenant_session
 from . import EVENTS
+
+# Delivered or dead-lettered rows kept this long (the endpoint's delivery
+# list shows them); a row still owed a delivery is never purged.
+RETENTION_DAYS = 90
 
 
 def emit(
@@ -48,3 +53,22 @@ def emit(
         )
         added += 1
     return added
+
+
+def purge_finished(
+    tenant_id: str, now: datetime, *, days: int = RETENTION_DAYS, url=None
+) -> int:
+    """Daily housekeeping (the worker's retention sweep): delivered or dead
+    rows older than `days`. Returns rows gone."""
+    cutoff = now - timedelta(days=days)
+    with tenant_session(tenant_id, url) as s:
+        gone = s.execute(
+            delete(WebhookOutbox).where(
+                WebhookOutbox.tenant_id == tenant_id,
+                or_(
+                    WebhookOutbox.delivered_at < cutoff,
+                    WebhookOutbox.dead_at < cutoff,
+                ),
+            )
+        ).rowcount
+    return int(gone or 0)
