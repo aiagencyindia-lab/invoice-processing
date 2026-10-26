@@ -94,7 +94,7 @@ function FindingsView() {
       {summary ? (
         <div className="tiles">
           <Tile label="Open" value={String(open)} hint="detected, triaged, needs vendor input" />
-          <Tile label="Holds open" value={String(summary.hold_open)} hint="Payment Trust" />
+          <Tile label="Holds open" value={String(summary.hold_open)} hint="placed and not lifted" />
           <Tile label="Recovered" value={String(summary.by_status.recovered ?? 0)} />
           <Tile label="Prevented" value={String(summary.by_status.prevented ?? 0)} />
         </div>
