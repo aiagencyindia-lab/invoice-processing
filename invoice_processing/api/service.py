@@ -1059,10 +1059,12 @@ def list_invoices(
     ]
     read = read_cases(cases, principal.tenant_id, case_ids)
     items = []
+    touchless = 0
     for case_id in case_ids:
         artifacts, _ = read[case_id]
         if artifacts:
             items.append(_summarize(case_id, artifacts))
+            touchless += case_projection.is_touchless(artifacts)
 
     items.sort(
         key=lambda i: (
@@ -1077,6 +1079,9 @@ def list_invoices(
             "total": len(items),
             "needs_review": sum(1 for i in items if i["routing"] == "REVIEW"),
             "auto": sum(1 for i in items if i["routing"] == "AUTO"),
+            # The KPI page's definition: read confidently *and* accepted.
+            # `auto` alone counts the invoices the rules rejected too.
+            "touchless": touchless,
         },
     }
 
@@ -1911,7 +1916,9 @@ def stats(principal: Annotated[Principal, Depends(current_principal)]) -> dict:
     return {
         **listing["counts"],
         "touchless_rate": (
-            round(listing["counts"]["auto"] / len(items), 3) if items else None
+            round(listing["counts"]["touchless"] / len(items), 3)
+            if items
+            else None
         ),
         "corrections": len(corrections),
         "corrected_fields": sorted({c["field_path"] for c in corrections}),
