@@ -355,6 +355,13 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   answer is never switched to.
 - Logs: thread-pool lines carry blank ids; a client disconnect logs at
   ERROR; `AUTH_DISABLED` warns per request locally.
+- Feature check 2026-10-27 (`docs/feature-check-2026-10-27.md`) found:
+  - [ ] Dashboard touchless rate (`/api/stats`, all `AUTO`, rejections
+        included) disagrees with the KPI page (accepted only): 54% vs 17%.
+  - [ ] Findings "Holds open" counts shadow findings of hold types (165)
+        where no hold exists (trust posture: 0).
+  - [ ] A misread GSTIN makes a second vendor with the same name; filters
+        list it twice with nothing to tell them apart.
 - Benchmark: known wrong MV-035, TECH-INV-030/031; dataset defects
   MFG-INV-020, MFG-INV-039, SVC-INV-019.
 - `rasayan` still lists `localhost` as an authorized sign-in domain and is
