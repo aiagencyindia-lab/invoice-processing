@@ -358,6 +358,69 @@ def test_a_hold_awaiting_vendor_proof_is_released_once_the_proof_clears_it(
     assert _held(url) == [("T-HOLD7", False)]
 
 
+def test_releasing_a_finding_cancels_its_open_evidence_requests(env):
+    """Cleared by other evidence (a GRN import, say): nobody is still owed
+    the proof, so the request leaves the open list with the finding."""
+    from invoice_processing.trust.reality.requests import (  # noqa: PLC0415
+        RequestStore,
+    )
+
+    url, _, _ = env
+    finding_model.register_type("T-HOLD9", "hold", engine="payment", hold=True)
+    state = {"emit": True}
+    ev.RUNNERS["payment"] = lambda ectx: (
+        [finding_for(ectx, "T-HOLD9")] if state["emit"] else []
+    )
+    run(env, modes={"payment": "enforcing"})
+    store, requests = FindingStore(url), RequestStore(url)
+    [f] = store.list(T, type="T-HOLD9")
+    human = RunContext(tenant_id=T, case_id="", run_id="h", actor="c@x.test")
+    store.transition(human, f["id"], "triaged", actor="c@x.test")
+    store.transition(human, f["id"], "needs_vendor_input", actor="c@x.test")
+    asked = requests.create(human, f["id"], owner="ap@x.test", due_date=None,
+                            note=None, requested_by="c@x.test")  # fmt: skip
+    state["emit"] = False
+    run(env, modes={"payment": "enforcing"})
+    assert store.get(T, f["id"])["status"] == "rejected"
+    assert requests.get(T, asked["id"])["status"] == "cancelled"
+    assert requests.list(T, status="open") == []
+
+
+def test_a_person_deciding_also_cancels_open_requests_but_not_fulfilled(env):
+    from invoice_processing.trust.reality.requests import (  # noqa: PLC0415
+        RequestStore,
+    )
+
+    url, _, _ = env
+    finding_model.register_type("T-HOLD10", "hold", engine="payment", hold=True)
+    ev.RUNNERS["payment"] = lambda ectx: [finding_for(ectx, "T-HOLD10")]
+    run(env, modes={"payment": "enforcing"})
+    store, requests = FindingStore(url), RequestStore(url)
+    [f] = store.list(T, type="T-HOLD10")
+    human = RunContext(tenant_id=T, case_id="", run_id="h", actor="c@x.test")
+    store.transition(human, f["id"], "triaged", actor="c@x.test")
+    store.transition(human, f["id"], "needs_vendor_input", actor="c@x.test")
+    done = requests.create(human, f["id"], owner="ap@x.test", due_date=None,
+                           note=None, requested_by="c@x.test")  # fmt: skip
+    requests.fulfil(human, done["id"], "doc-1")
+    still = requests.create(human, f["id"], owner="ap@x.test", due_date=None,
+                            note=None, requested_by="c@x.test")  # fmt: skip
+    store.transition(human, f["id"], "accepted", actor="c@x.test")
+    assert requests.get(T, done["id"])["status"] == "fulfilled"
+    assert requests.get(T, still["id"])["status"] == "cancelled"
+    # Each request closed this way leaves its own audit row, as a manual
+    # cancel does.
+    with tenant_session(T, url) as s:
+        rows = s.query(models.AuditEvent).all()
+    cancelled = [
+        r.after for r in rows if r.action == "trust_evidence_cancelled"
+    ]
+    assert cancelled == [
+        {"request_id": still["id"], "finding_id": f["id"],
+         "cause": "finding_accepted"}
+    ]  # fmt: skip
+
+
 def test_a_clean_run_also_releases_a_hold_engines_cleared_insight(env):
     """An ITC-at-risk amount must not outlive the hold it was priced from."""
     url, _, _ = env

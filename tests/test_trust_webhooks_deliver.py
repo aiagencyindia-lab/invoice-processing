@@ -412,3 +412,36 @@ def test_a_name_that_rebinds_at_send_time_is_not_sent(env):
     (row,) = rows(url)
     assert row.delivered_at is None
     assert row.last_error == "The url is internal or ambiguous; not sent."
+
+
+def test_finished_rows_are_purged_after_the_retention(env):
+    """Delivered and dead rows older than 90 days go; anything still owed a
+    delivery stays, however old."""
+    url, _, _ = env
+    endpoint(url)
+    for _ in range(4):
+        emit(url, now=NOW - timedelta(days=200))
+    old_done, old_dead, pending, recent = rows(url)
+    with tenant_session(ACME, url) as s:
+        for row, field, days in (
+            (old_done, "delivered_at", 91),
+            (old_dead, "dead_at", 91),
+            (recent, "delivered_at", 10),
+        ):
+            setattr(s.get(models.WebhookOutbox, row.id), field,
+                    NOW - timedelta(days=days))  # fmt: skip
+    assert outbox.purge_finished(ACME, NOW, days=90, url=url) == 2
+    assert {r.id for r in rows(url)} == {pending.id, recent.id}
+
+
+def test_purging_one_tenant_leaves_another_alone(env):
+    url, _, _ = env
+    endpoint(url, tenant=GLOBEX)
+    emit(url, tenant=GLOBEX, now=NOW - timedelta(days=200))
+    (row,) = rows(url, GLOBEX)
+    with tenant_session(GLOBEX, url) as s:
+        s.get(models.WebhookOutbox, row.id).delivered_at = NOW - timedelta(
+            days=200
+        )
+    assert outbox.purge_finished(ACME, NOW, days=90, url=url) == 0
+    assert len(rows(url, GLOBEX)) == 1

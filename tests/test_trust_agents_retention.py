@@ -195,3 +195,14 @@ def test_the_daily_sweep_also_purges_v2_limits(env, monkeypatch):
     )
     env["worker"]._purge_agent_actions_if_due()
     assert sorted(seen) == sorted([A, B])
+
+
+def test_the_daily_sweep_also_purges_finished_webhook_rows(env, monkeypatch):
+    from invoice_processing.trust.webhooks import outbox  # noqa: PLC0415
+
+    seen = []
+    monkeypatch.setattr(
+        outbox, "purge_finished", lambda t, now, **kw: seen.append(t) or 0
+    )
+    env["worker"]._purge_agent_actions_if_due()
+    assert sorted(seen) == sorted([A, B])
