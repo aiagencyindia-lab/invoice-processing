@@ -122,8 +122,14 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         name the ~50k ceiling); index by key before a tenant passes it.
   - [ ] Leakage findings are never auto-released by a clean run (only engines
         that can hold are); decide the policy for insight findings.
-  - [ ] A contract or invoice node re-version closes its `part_of` /
-        `evidences` edges until the next evaluation of that document.
+  - [x] A node re-version closes its open edges (2026-10-26, kept by
+        decision): it is the only thing that retires a stale edge, since no
+        engine closes edges it no longer finds. Engine edges (`part_of`,
+        `governed_by`, `evidences`, `acted_on`) are rebuilt by the
+        re-evaluation every processed document queues, seconds later, and
+        provenance finds invoice versions by `document_id`, not by edge.
+        Carrying edges over would keep stale ones open for ever; doing it
+        right needs every engine to close what it no longer finds.
 - [x] **Wave 2 (Surfaces)** — program plan
       `docs/superpowers/plans/2026-10-16-v2-wave2-program.md`; specs
       `docs/superpowers/specs/2026-10-16-v2-wave2-*.md`.
