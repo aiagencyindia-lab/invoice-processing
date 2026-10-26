@@ -19,7 +19,7 @@ export function FindingRow({ finding, onTriage }: { finding: TrustFinding; onTri
         ) : null}
       </td>
       <td>{f.summary ?? "—"}</td>
-      <td>{vendorLabel(f.vendor)}</td>
+      <td>{vendorLabel(f.vendor, "—")}</td>
       <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{money(f.impact, f.currency)}</td>
       <td>
         <span className={`badge ${statusBadge(f.status)}`}>{STATUS_LABELS[f.status] ?? f.status}</span>

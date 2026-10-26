@@ -59,7 +59,7 @@ def env(scratch_db):
         CTX,
         kind="vendor",
         natural_key="vendors:v2",
-        attrs={"name": "Acme Steel Two"},
+        attrs={"name": "Acme Steel Two", "gstin": "27AAACA9999A1Z1"},
         natural_keys={"pan": GSTIN[2:12], "name": "acme steel two"},
     )
     g.upsert_node(
@@ -295,6 +295,7 @@ def test_vendor_profile(env):
     assert [k["subkind"] for k in p["kyc"]] == ["pan"]
     (twin,) = p["network"]
     assert twin["vendor"]["name"] == "Acme Steel Two"
+    assert twin["vendor"]["tax_id"] == "27AAACA9999A1Z1"
     assert "pan" in twin["shared"]
     assert any(s.startswith("link:") for s in twin["shared"])
     assert p["timeline"] == [
