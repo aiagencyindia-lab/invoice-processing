@@ -83,7 +83,7 @@ def env(tmp_path, monkeypatch, scratch_db):
         natural_key="vendors:v1",
         ref_table="vendors",
         ref_id="v1",
-        attrs={"name": "Acme Steel"},
+        attrs={"name": "Acme Steel", "abn": "51824753556"},
     )
     invoice = graph.upsert_node(
         ctx,
@@ -222,6 +222,10 @@ def test_posture(env):
     r = c.get("/api/trust/posture")
     assert r.status_code == 200, r.text
     assert r.json()["found"] == {"count": 1, "impact": "1000.00"}
+    # Two vendors can share a name; the tax id tells them apart.
+    assert [(v["name"], v["tax_id"]) for v in r.json()["by_vendor"]] == [
+        ("Acme Steel", "51824753556")
+    ]
     assert c.get("/api/trust/posture?since=2099-01-01").json()["found"] == {
         "count": 0,
         "impact": "0.00",
