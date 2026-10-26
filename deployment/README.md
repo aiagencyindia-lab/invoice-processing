@@ -6,12 +6,13 @@ Rasayan web app. Design: docs/superpowers/specs/2026-10-14-railway-production-de
 
 ## Layout
 
-Railway project `ledgerly`:
+Railway project `ledgerly-new` (`9bd2d348-41a3-412a-9484-20a7e1077b75`, environment
+`production`, aixaitools account):
 
 | Service | Source | Settings |
 |---|---|---|
-| `ledgerly` (API + worker) | repo root, `Dockerfile` | start command `sh scripts/start-railway.sh`; pre-deploy `python -m invoice_processing.db.migrate`; volume mounted at `/data` |
-| `app` (frontend) | `frontend/`, `frontend/Dockerfile` | public domain; proxies `/api` to `ledgerly` over the private network |
+| `invoice-processing` (API + worker) | repo root, `Dockerfile` | start command `sh scripts/start-railway.sh`; pre-deploy `python -m invoice_processing.db.migrate`; volume mounted at `/data` |
+| `app` (frontend) | `frontend/`, `frontend/Dockerfile` | public domain `app-production-d37f.up.railway.app` (the only one); proxies `/api` to `invoice-processing` over the private network |
 | `Postgres` | Railway template | its own volume |
 
 `scripts/start-railway.sh` runs the worker and the API together and exits
@@ -28,21 +29,21 @@ no one can read them back from the dashboard after they are set.
 
 | Service | Variable | Value | Who |
 |---|---|---|---|
-| ledgerly | `ENV` | `production` | operator |
-| ledgerly | `PORT` | `8000` (so `${{ledgerly.PORT}}` below resolves; the start script listens on it) | operator |
-| ledgerly | `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` | `60`: the grace a redeploy gives before SIGKILL (Railway's default is 0, which kills an in-flight extraction) | operator |
-| ledgerly | `STATE_DIR` | `/data` | operator |
-| ledgerly | `RUN_MIGRATIONS` | `0` (the pre-deploy step migrates, as the owner) | operator |
-| ledgerly | `GOOGLE_CLOUD_PROJECT`, `PROJECT_ID` | `rasayan` | operator |
-| ledgerly | `GOOGLE_GENAI_USE_VERTEXAI` | `TRUE` | operator |
-| ledgerly | `APPLY_IDENTITY_CLAIMS` | `1` | operator |
-| ledgerly | `ALLOW_SELF_SIGNUP` | `1`, or unset to close sign-up | operator |
-| ledgerly | `LOG_LEVEL` | `INFO`; `WARNING` to quieten | operator |
-| ledgerly | `GOOGLE_CREDENTIALS_JSON` | the `ledgerly-prod@rasayan` key (JSON) | **you** |
-| ledgerly | `DATABASE_URL` | app role: `postgresql+pg8000://ledgerly_app:<pw>@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/railway` | **you** |
-| ledgerly | `MIGRATE_DATABASE_URL` | owner role, same host | **you** |
-| ledgerly | `SENTRY_DSN` | the Sentry project's DSN | **you** |
-| app | `API_ORIGIN` | `http://${{ledgerly.RAILWAY_PRIVATE_DOMAIN}}:${{ledgerly.PORT}}` (read at build time; needs `PORT` set on `ledgerly`) | operator |
+| invoice-processing | `ENV` | `production` | operator |
+| invoice-processing | `PORT` | `8000` (so `${{invoice-processing.PORT}}` below resolves; the start script listens on it) | operator |
+| invoice-processing | `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` | `60`: the grace a redeploy gives before SIGKILL (Railway's default is 0, which kills an in-flight extraction) | operator |
+| invoice-processing | `STATE_DIR` | `/data` | operator |
+| invoice-processing | `RUN_MIGRATIONS` | `0` (the pre-deploy step migrates, as the owner) | operator |
+| invoice-processing | `GOOGLE_CLOUD_PROJECT`, `PROJECT_ID` | `rasayan` | operator |
+| invoice-processing | `GOOGLE_GENAI_USE_VERTEXAI` | `TRUE` | operator |
+| invoice-processing | `APPLY_IDENTITY_CLAIMS` | `1` | operator |
+| invoice-processing | `ALLOW_SELF_SIGNUP` | `1`, or unset to close sign-up | operator |
+| invoice-processing | `LOG_LEVEL` | `INFO`; `WARNING` to quieten | operator |
+| invoice-processing | `GOOGLE_CREDENTIALS_JSON` | the `ledgerly-prod@rasayan` key (JSON) | **you** |
+| invoice-processing | `DATABASE_URL` | app role: `postgresql+pg8000://ledgerly_app:<pw>@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/railway` | **you** |
+| invoice-processing | `MIGRATE_DATABASE_URL` | owner role, same host | **you** |
+| invoice-processing | `SENTRY_DSN` | the Sentry project's DSN | **you** |
+| app | `API_ORIGIN` | `http://${{invoice-processing.RAILWAY_PRIVATE_DOMAIN}}:${{invoice-processing.PORT}}` (read at build time; needs `PORT` set on `invoice-processing`) | operator |
 | app | `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` (`rasayan.firebaseapp.com`), `NEXT_PUBLIC_FIREBASE_PROJECT_ID` (`rasayan`) | Identity Platform's public web values (build time) | operator |
 
 `LOG_FORMAT` unset gives JSON under `ENV=production`. Railway sets
@@ -133,7 +134,13 @@ probe.
 2. Upload one PDF; the worker banner is green and the invoice is processed.
 3. `python -m invoice_processing.db.restore_check --restored <owner url>` →
    `PASS`.
-4. The `ledgerly` logs show preflight passing and the worker starting.
+4. The `invoice-processing` logs show preflight passing and the worker starting.
+
+Results: steps 1–2 passed on the first deploy (2026-10-14, an earlier
+project). Step 3 passed against live production on 2026-10-26, run inside the
+service over SSH (`DATABASE_URL`, `MIGRATE_DATABASE_URL` and
+`GOOGLE_CREDENTIALS_JSON` are sealed since, so `railway run` no longer gets
+them). The database held no tenants yet.
 
 The Dockerfile pins uv 0.5.11 and `uv.lock` is written by uv 0.9.28; uv
 0.5.11 passes `uv lock --check` on it (2026-10-14). If a build fails on the
