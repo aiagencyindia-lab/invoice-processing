@@ -28,11 +28,11 @@ processes run with `RUN_MIGRATIONS` off.
       railway ssh -p 9bd2d348-41a3-412a-9484-20a7e1077b75 -e production -s invoice-processing -- sh -c 'cd /app && ./.venv/bin/python -m invoice_processing.db.restore_check --restored "$MIGRATE_DATABASE_URL"'
       ```
       Run it again against a restored copy once backups exist.
-- [ ] **Seal** `DATABASE_URL`, `MIGRATE_DATABASE_URL`,
-      `GOOGLE_CREDENTIALS_JSON` on `invoice-processing` (operator, in the
-      dashboard: Variables → ⋮ → Seal). The CLI's `environment edit`
-      ignores `isSealed`; the API patch would need the values re-sent.
-      Irreversible: the values cannot be read back afterwards.
+- [x] **Sealed** `DATABASE_URL`, `MIGRATE_DATABASE_URL`,
+      `GOOGLE_CREDENTIALS_JSON` on `invoice-processing` (2026-10-26, in the
+      dashboard). Nobody can read them back; changing one means pasting a
+      new value. `railway run` no longer receives them (use `railway ssh`
+      for the restore check, which runs inside the service).
 - [ ] **Backups**: none exist (checked 2026-10-25). Volume backup
       schedules need a **Railway Pro** workspace; point-in-time recovery
       for `Postgres` also needs a bucket. Decide on Pro, then: daily +
