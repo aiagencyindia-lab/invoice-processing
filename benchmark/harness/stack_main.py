@@ -129,6 +129,24 @@ def load_profile(path: str, company: str) -> dict:
     return {"settings": settings, "masters": profile["masters"]}
 
 
+# Follow-up jobs a processed document queues (v2 trust work): run, never
+# reported as the document's own outcome.
+FOLLOW_UPS = ("trust-synced", "trust-evaluated", "trust-audited")
+
+
+def drain(worker) -> str:
+    """Run the worker until the queue is empty and return the document's own
+    outcome. One message per invoice is not enough since v2: each processed
+    document queues a trust job, which the next invoice would pull instead
+    of its own document, so every later invoice was scored before it ran."""
+    outcome = "no-message"
+    while outcomes := worker.run_once(max_messages=1):
+        if outcomes[0] in FOLLOW_UPS:
+            continue
+        outcome = outcomes[0]  # a retry is pulled again until it settles
+    return outcome
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     company = args.company
@@ -274,10 +292,7 @@ def main(argv=None) -> int:
 
         outcome = "ingest-duplicate"
         if not result.duplicate or interrupted:
-            outcome = "retry"
-            while outcome == "retry":
-                outcomes = worker.run_once(max_messages=1)
-                outcome = outcomes[0] if outcomes else "no-message"
+            outcome = drain(worker)
         wall = time.time() - started
 
         artifacts = cases.get_artifacts(
