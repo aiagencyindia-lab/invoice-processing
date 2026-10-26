@@ -16,6 +16,7 @@ from invoice_processing.ports import RunContext
 from invoice_processing.trust.agents import mandates
 from invoice_processing.trust.agents.store import AgentStore
 from invoice_processing.trust.graph.store import GraphStore
+from tests.pg_roles import pg_only
 
 T = "tenant-acme"
 NOW = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
@@ -353,6 +354,43 @@ def test_revoking_an_already_revoked_mandate_reseals_nothing(env):
     mandates.revoke(ADMIN_A, store, m["id"], "again")
     [row] = store.mandates(T, agent_id)
     assert not mandates.verify(row, None)
+
+
+@pg_only
+def test_a_reseal_waits_for_a_revoke_in_flight_and_signs_what_it_left(env):
+    """approve() signs in a second session. A revoke of the same version
+    committing in between must not be overwritten with the "active" seal:
+    the reseal locks the row, so it signs the state the revoke left."""
+    import threading  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    store, agent_id, url = env
+    m = mandates.approve(ADMIN_B, store, propose(store, agent_id)["id"])
+    revoker = create_engine(url).connect()
+    tx = revoker.begin()
+    revoker.execute(
+        update(models.AgentMandate)
+        .where(models.AgentMandate.id == m["id"])
+        .values(status="revoked", revoked_by="a@acme.test", revoked_at=NOW)
+    )  # holds the row lock, not committed yet
+    done = threading.Event()
+    worker = threading.Thread(
+        target=lambda: (mandates.reseal(ADMIN_B, store, [m["id"]]), done.set()),
+        daemon=True,
+    )
+    try:
+        worker.start()
+        time.sleep(0.5)
+        assert not done.is_set()  # waiting on the revoke, not racing it
+    finally:
+        # Always release the row, so a failure never stalls the next test.
+        tx.commit()
+        worker.join(10)
+        revoker.close()
+    [row] = store.mandates(T, agent_id)
+    assert row["status"] == "revoked" and mandates.verify(row, None)
 
 
 # -- counterparties by vendor id (U3) -----------------------------------------
