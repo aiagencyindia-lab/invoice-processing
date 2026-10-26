@@ -184,9 +184,10 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         construction (the reality fault family plants invoice lines from its
         own evidence; a kind with nothing checked passes). Real coverage is
         the AC-23 partner gate below.
-  - [ ] Evidence requests stay `open` when a finding is released by other
-        evidence (e.g. a GRN import) rather than by its uploaded proof;
-        cancel them on release if the open list gets noisy.
+  - [x] Evidence requests close with their finding (2026-10-26): when a
+        finding leaves `needs_vendor_input` (released by other evidence or
+        decided by a person), its open requests are cancelled in the same
+        transaction; fulfilled ones are kept.
   - [x] Decided (2026-10-22): a clean run in any mode releases the
         engine's open findings, holds placed while enforcing included; mode
         decides whether a hold is placed, not what is found. Pinned in
