@@ -492,7 +492,7 @@ def list_findings(
 def findings_summary(
     principal: Annotated[Principal, Depends(require_role("viewer"))],
 ):
-    from ..trust.findings import model as fm  # noqa: PLC0415
+    from ..trust import holds  # noqa: PLC0415
 
     store, graph = _findings(), _graph()
     tenant = principal.tenant_id
@@ -500,9 +500,9 @@ def findings_summary(
     for v in out["vendors"]:
         node = graph.node(tenant, v["node"])
         v["name"] = (node or {}).get("attrs", {}).get("name")
-    out["hold_open"] = store.count(
-        tenant, statuses=OPEN_STATUSES, types=sorted(fm.HOLD_TYPES)
-    )
+    # The ledger, not hold-type findings: an engine in shadow or advisory
+    # writes those findings but holds nothing (trust posture reads the same).
+    out["hold_open"] = holds.open_count(tenant)
     return out
 
 
