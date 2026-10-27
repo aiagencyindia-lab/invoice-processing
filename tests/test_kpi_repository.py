@@ -7,6 +7,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fresh_schema import fresh_schema
 
+from invoice_processing.adapters import JsonlCorrectionStore
+from invoice_processing.api import service
+from invoice_processing.api.auth import Principal
 from invoice_processing.db import repositories
 from invoice_processing.db.models import (
     ApprovalStep,
@@ -19,6 +22,7 @@ from invoice_processing.db.models import (
 from invoice_processing.db.repositories import (
     BUCKETS,
     KpiRepository,
+    PgCaseRepository,
     exception_bucket,
     percentile,
 )
@@ -392,3 +396,23 @@ class TestCases:
         body = KpiRepository(db).cases(ACME, None, "low_confidence")
         assert len(body["case_ids"]) == 2
         assert body["truncated"] is True
+
+
+class TestDashboardStats:
+    def test_dashboard_touchless_is_the_kpi_pages(
+        self, db, monkeypatch, tmp_path
+    ):
+        """With the invoices in the database, /api/stats reads the KPI
+        summary: an accepted invoice whose approval chain nobody finished is
+        not touchless on either page."""
+        with tenant_session(ACME, db) as session:
+            seed(session, "auto", decided=days_ago(0.9))
+            seed(session, "chain", chain=True, decided=days_ago(0.9))
+        monkeypatch.setattr(service, "_cases", PgCaseRepository(db))
+        monkeypatch.setattr(
+            service, "_corrections", JsonlCorrectionStore(tmp_path / "c.jsonl")
+        )
+        body = service.stats(Principal("u", "u@acme.test", ACME, "admin"))
+        kpi = KpiRepository(db).summary(ACME, None)
+        assert (body["touchless"], body["touchless_rate"]) == (1, 0.5)
+        assert body["touchless_rate"] == kpi["touchless_rate"]

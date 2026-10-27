@@ -58,13 +58,13 @@ export default function DashboardPage() {
         <Tile
           label="Auto-routed"
           value={String(stats?.auto ?? "—")}
-          hint="Cleared without review"
+          hint="Read confidently; the rules still decide"
         />
         <Tile
           label="Touchless rate"
           value={percent(stats?.touchless_rate)}
           href="/kpis"
-          hint={stats?.total ? `of ${stats.total} invoices · see KPIs` : "no invoices yet"}
+          hint={stats?.total ? `${stats.touchless} of ${stats.total} accepted untouched · see KPIs` : "no invoices yet"}
         />
         <Tile
           label="Corrections"
