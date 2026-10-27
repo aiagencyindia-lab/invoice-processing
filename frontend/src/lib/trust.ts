@@ -97,3 +97,11 @@ export function statusBadge(status: string): string {
   if (status === "detected") return "badge-warn";
   return "badge";
 }
+
+/** A vendor's name with its tax id: a misread GSTIN is a vendor of its own,
+ *  and two of them would otherwise read the same. */
+export function vendorLabel(v: { node?: string; name: string | null; tax_id?: string | null } | null | undefined, fallback?: string): string {
+  if (!v) return fallback ?? "—";
+  const name = v.name ?? fallback ?? v.node ?? "—";
+  return v.tax_id ? `${name} · ${v.tax_id}` : name;
+}

@@ -78,7 +78,7 @@ def env(tmp_path, monkeypatch, scratch_db):
         natural_key="vendors:v1",
         ref_table="vendors",
         ref_id="v1",
-        attrs={"name": "Acme Steel"},
+        attrs={"name": "Acme Steel", "gstin": "27AAACA1234A1Z5"},
     )
     invoice = graph.upsert_node(
         CTX,
@@ -179,7 +179,11 @@ def test_list_carries_vendor_engine_and_hold_and_pages(env):
     out = env["client"]("viewer").get("/api/trust/findings?limit=1").json()
     assert out["total"] == 2 and out["limit"] == 1 and out["offset"] == 0
     [row] = out["findings"]
-    assert row["vendor"] == {"node": env["vendor"], "name": "Acme Steel"}
+    assert row["vendor"] == {
+        "node": env["vendor"],
+        "name": "Acme Steel",
+        "tax_id": "27AAACA1234A1Z5",
+    }
     assert row["engine"] in ("leakage", "payment") and isinstance(
         row["hold"], bool
     )
@@ -217,7 +221,12 @@ def test_summary_names_vendors(env):
     # placed, so the tile counts the ledger, as trust posture does.
     assert out["hold_open"] == 0
     assert out["vendors"] == [
-        {"node": env["vendor"], "name": "Acme Steel", "count": 2}
+        {
+            "node": env["vendor"],
+            "name": "Acme Steel",
+            "tax_id": "27AAACA1234A1Z5",
+            "count": 2,
+        }
     ]
 
 
@@ -229,6 +238,7 @@ def test_detail_resolves_citations_sources_lineage_and_transitions(env):
         env["client"]("viewer").get(f"/api/trust/findings/{env['leak']}").json()
     )
     assert out["vendor"]["name"] == "Acme Steel"
+    assert out["vendor"]["tax_id"] == "27AAACA1234A1Z5"
     by_node = {c["node_id"]: c for c in out["citations"]}
     inv = by_node[env["invoice"]]
     assert inv["node"]["kind"] == "invoice"

@@ -10,6 +10,7 @@ from decimal import Decimal
 
 from ..audit import ledger
 from ..findings import model as finding_model
+from ..graph.locate import tax_id
 from . import KIND
 from .readiness import hold_rows
 
@@ -62,7 +63,7 @@ def summary(
             group["impact"] += _impact(f)
     by_vendor.pop(None, None)
     names = {
-        n["id"]: n["attrs"].get("name")
+        n["id"]: (n["attrs"].get("name"), tax_id(n["attrs"]))
         for n in graph.nodes(tenant_id, kind="vendor")
     }
     top = sorted(
@@ -113,7 +114,8 @@ def summary(
         "by_vendor": [
             {
                 "node": n,
-                "name": names.get(n),
+                "name": names.get(n, (None, None))[0],
+                "tax_id": names.get(n, (None, None))[1],
                 "count": g["count"],
                 "impact": ledger.money(g["impact"]),
             }

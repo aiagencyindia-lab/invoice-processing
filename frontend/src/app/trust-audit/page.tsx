@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api, ApiError, can, type Me, type TrustAudit, type TrustFindingSummary, type VendorList } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
+import { vendorLabel } from "@/lib/trust";
 
 const EMPTY = {
   name: "",
@@ -39,9 +40,9 @@ export default function TrustAuditPage() {
   // graph knows, with the finding count where there is one.
   const { data: summary } = usePoll<TrustFindingSummary>("/api/trust/findings/summary");
   const { data: master } = usePoll<VendorList>("/api/vendors");
-  const vendors = new Map<string, { node: string; name: string | null; count: number }>();
-  for (const v of master?.vendors ?? []) if (v.node) vendors.set(v.node, { node: v.node, name: v.name, count: 0 });
-  for (const v of summary?.vendors ?? []) vendors.set(v.node, { ...v, name: v.name ?? vendors.get(v.node)?.name ?? null });
+  const vendors = new Map<string, { node: string; name: string | null; tax_id?: string | null; count: number }>();
+  for (const v of master?.vendors ?? []) if (v.node) vendors.set(v.node, { node: v.node, name: v.name, tax_id: v.tax_id, count: 0 });
+  for (const v of summary?.vendors ?? []) vendors.set(v.node, { ...v, name: v.name ?? vendors.get(v.node)?.name ?? null, tax_id: v.tax_id ?? vendors.get(v.node)?.tax_id });
   const [form, setForm] = useState(EMPTY);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -160,7 +161,7 @@ export default function TrustAuditPage() {
                     })
                   }
                 />
-                {vendor.name ?? vendor.node} ({vendor.count})
+                {vendorLabel(vendor)} ({vendor.count})
               </label>
             ))}
             <label className="stack" style={{ gap: 2, fontSize: 12.5 }}>

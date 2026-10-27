@@ -7,7 +7,7 @@ import { DimensionMeter, percent } from "@/components/trust/DimensionMeter";
 import { Tile } from "@/components/Tile";
 import type { TrustPosture } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
-import { money } from "@/lib/trust";
+import { money, vendorLabel } from "@/lib/trust";
 
 const WINDOWS: { days: number; label: string }[] = [
   { days: 30, label: "30 days" },
@@ -162,7 +162,7 @@ function PostureBody({ days }: { days: number }) {
                     data.by_vendor.map((row) => (
                       <tr key={row.node}>
                         <td>
-                          <Link href={`/findings?vendor=${encodeURIComponent(row.node)}`}>{row.name ?? row.node}</Link>
+                          <Link href={`/findings?vendor=${encodeURIComponent(row.node)}`}>{vendorLabel(row)}</Link>
                         </td>
                         <td>{row.count}</td>
                         <td>{money(row.impact)}</td>

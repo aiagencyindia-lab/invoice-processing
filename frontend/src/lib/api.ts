@@ -855,7 +855,7 @@ export type ActionResult = {
 // Why engine and the Trust Audit workspace. The Python side is the source of
 // truth; a change there lands here first, then in the pages.
 
-export type TrustVendor = { node: string; name: string | null };
+export type TrustVendor = { node: string; name: string | null; tax_id?: string | null };
 
 export type TrustFindingEvent = {
   from_status: string | null;
@@ -1272,7 +1272,7 @@ export type TrustPosture = {
   written_off: string;
   open_exposure: string;
   by_type: Record<string, { count: number; impact: string }>;
-  by_vendor: { node: string; name: string | null; count: number; impact: string }[];
+  by_vendor: { node: string; name: string | null; tax_id?: string | null; count: number; impact: string }[];
   pre_payment_share: number | null;
   provenance_distribution: Record<string, number>;
   verification_coverage: { identity: number | null; reality: number | null; authenticity: number | null };

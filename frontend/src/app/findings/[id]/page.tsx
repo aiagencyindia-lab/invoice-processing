@@ -20,7 +20,7 @@ import {
   type TrustFindingDetail,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
-import { DIMENSION_LABELS, ENGINE_LABELS, MONEY_STATUSES, STATUS_LABELS, money, statusBadge } from "@/lib/trust";
+import { DIMENSION_LABELS, ENGINE_LABELS, MONEY_STATUSES, STATUS_LABELS, money, statusBadge, vendorLabel } from "@/lib/trust";
 
 const TABS = ["Why", "Evidence", "Lineage", "History"] as const;
 type Tab = (typeof TABS)[number];
@@ -145,7 +145,7 @@ export default function FindingDetailPage() {
               <span className="badge badge-error">evidence overdue</span>
             ) : null}
             <span className="muted" style={{ fontSize: 12.5 }}>
-              {detail.vendor?.name ?? "Unknown vendor"} · {detail.engine ? (ENGINE_LABELS[detail.engine] ?? detail.engine) : "—"}
+              {vendorLabel(detail.vendor, "Unknown vendor")} · {detail.engine ? (ENGINE_LABELS[detail.engine] ?? detail.engine) : "—"}
               {detail.confidence !== null ? ` · ${Math.round(detail.confidence * 100)}% confidence` : ""}
             </span>
           </div>

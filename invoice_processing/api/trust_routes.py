@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
-from ..trust.graph.locate import source_of, vendor_of
+from ..trust.graph.locate import source_of, tax_id, vendor_of
 from ..trust.history import mapping as mp
 from ..trust.history.readers import read_table
 from .auth import Principal, require_role
@@ -499,7 +499,8 @@ def findings_summary(
     out = store.summary(tenant)
     for v in out["vendors"]:
         node = graph.node(tenant, v["node"])
-        v["name"] = (node or {}).get("attrs", {}).get("name")
+        attrs = (node or {}).get("attrs", {})
+        v["name"], v["tax_id"] = attrs.get("name"), tax_id(attrs)
     # The ledger, not hold-type findings: an engine in shadow or advisory
     # writes those findings but holds nothing (trust posture reads the same).
     out["hold_open"] = holds.open_count(tenant)
