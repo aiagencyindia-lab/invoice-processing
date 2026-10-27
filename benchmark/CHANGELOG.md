@@ -1703,3 +1703,48 @@ The 2026-10-13 "existing miss at 4.2" for `MFG-INV-020` is withdrawn.
 2 of the 5 misses in the `after-genai` run (98.3%, 295/300).
 
 **Regression.** None; no code changed.
+
+---
+
+## 2026-10-27 — First full run on v2: harness drains the queue
+
+**Problem.** The first 300-invoice run since the v2 trust layer scored 163 of
+300 invoices with no decision.
+
+**Root cause.** The harness, not the product. Since v2 every processed
+document queues a `trust.evaluate` job (`worker/runner.py`). `stack_main.py`
+pulled one message per invoice, so the next invoice ran the previous one's
+trust job and was scored before its own document was processed.
+
+**Fix.** `stack_main.drain` runs the queue dry per invoice and reports the
+document's own first settled outcome; trust, rematch and agent-injection
+follow-ups are run but not reported, and the clock stops when the document
+settles so processing time stays comparable (PR #132).
+
+**Files.** `benchmark/harness/stack_main.py`,
+`tests/test_benchmark_scoring.py::TestDrain`.
+
+**Full live run, 300 invoices (`after-2026-10-27`, `5674cc5`), against `after-genai` (10-14).**
+
+| | `after-genai` | `after-2026-10-27` |
+|---|---|---|
+| Decision accuracy | 98.3% | **98.3%** |
+| Wrong accepts / wrong rejects | 3 / 2 | 3 / 2 |
+| Routed to a clerk (purchase orders) | 6, all correct | 6, all correct |
+| Rejection reason exact / family / wrong | 222 / 21 / 3 | 219 / 22 / 5 |
+| Posted untouched (of 45 clean) | 39 | 40 |
+| Extraction: header / totals / lines / tax | 97.8 / 99.2 / 91.6 / 99.8% | 97.8 / 98.9 / 91.5 / 99.8% |
+| Cost | $3.99 | $3.57 |
+| Median / p95 processing | 51.5 s / 109.5 s | 48.3 s / 102.8 s |
+| Errors or no decision | 0 | 0 |
+
+The five misses are the known ones: `MFG-INV-020` and `MFG-INV-039` (dataset
+errors, see 10-14), `TECH-INV-031` accepted, and `TECH-INV-034` and
+`TECH-INV-052` rejected at 3.2. None is new against `after` (09-05), which
+also missed `TECH-INV-025` and `MFG-INV-064`.
+
+**Result.** v2 changes no decision: the trust layer runs after each document
+without moving accuracy, routing or extraction. Two more reasons scored wrong
+is within run-to-run variance of the model.
+
+**Regression.** None; no product code changed.
