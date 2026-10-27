@@ -15,7 +15,7 @@ import {
   type TrustFindingSummary,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
-import { ENGINE_LABELS, STATUS_LABELS } from "@/lib/trust";
+import { ENGINE_LABELS, STATUS_LABELS, vendorLabel } from "@/lib/trust";
 
 const OPEN = ["detected", "triaged", "needs_vendor_input"];
 const PAGE = 50;
@@ -94,7 +94,7 @@ function FindingsView() {
       {summary ? (
         <div className="tiles">
           <Tile label="Open" value={String(open)} hint="detected, triaged, needs vendor input" />
-          <Tile label="Holds open" value={String(summary.hold_open)} hint="Payment Trust" />
+          <Tile label="Holds open" value={String(summary.hold_open)} hint="placed and not lifted" />
           <Tile label="Recovered" value={String(summary.by_status.recovered ?? 0)} />
           <Tile label="Prevented" value={String(summary.by_status.prevented ?? 0)} />
         </div>
@@ -129,7 +129,7 @@ function FindingsView() {
             <option value="">Any</option>
             {(summary?.vendors ?? []).map((v) => (
               <option key={v.node} value={v.node}>
-                {v.name ?? v.node} ({v.count})
+                {vendorLabel(v)} ({v.count})
               </option>
             ))}
           </select>

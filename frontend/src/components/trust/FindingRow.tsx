@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { TrustFinding } from "@/lib/api";
-import { ENGINE_LABELS, STATUS_LABELS, money, statusBadge } from "@/lib/trust";
+import { ENGINE_LABELS, STATUS_LABELS, money, statusBadge, vendorLabel } from "@/lib/trust";
 
 /** One queue row. `onTriage` is given only when the viewer may triage and the
  *  finding is still `detected`; the page decides both. */
@@ -19,7 +19,7 @@ export function FindingRow({ finding, onTriage }: { finding: TrustFinding; onTri
         ) : null}
       </td>
       <td>{f.summary ?? "—"}</td>
-      <td>{f.vendor?.name ?? "—"}</td>
+      <td>{vendorLabel(f.vendor, "—")}</td>
       <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{money(f.impact, f.currency)}</td>
       <td>
         <span className={`badge ${statusBadge(f.status)}`}>{STATUS_LABELS[f.status] ?? f.status}</span>

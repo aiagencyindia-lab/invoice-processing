@@ -33,6 +33,12 @@ def source_of(graph, tenant_id: str, node: dict | None) -> dict | None:
     return None
 
 
+def tax_id(attrs: dict) -> str | None:
+    """A vendor node's tax id: what tells apart two vendors with one name
+    (a misread GSTIN resolves to a vendor of its own)."""
+    return attrs.get("gstin") or attrs.get("abn")
+
+
 def vendor_of(graph, tenant_id: str, node_id: str) -> dict | None:
     """The vendor a transaction (or contract) node belongs to, by its edge."""
     for kind in ("issued_by", "governs"):
@@ -42,5 +48,6 @@ def vendor_of(graph, tenant_id: str, node_id: str) -> dict | None:
                 return {
                     "node": vendor["id"],
                     "name": vendor["attrs"].get("name"),
+                    "tax_id": tax_id(vendor["attrs"]),
                 }
     return None

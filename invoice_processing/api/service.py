@@ -1059,10 +1059,16 @@ def list_invoices(
     ]
     read = read_cases(cases, principal.tenant_id, case_ids)
     items = []
+    touchless = 0
     for case_id in case_ids:
         artifacts, _ = read[case_id]
         if artifacts:
             items.append(_summarize(case_id, artifacts))
+            # Without a database there are no approval chains; a person's
+            # decision is the one other thing the KPI page leaves out.
+            touchless += case_projection.is_touchless(
+                artifacts
+            ) and not case_projection.decided_at(artifacts)
 
     items.sort(
         key=lambda i: (
@@ -1077,6 +1083,9 @@ def list_invoices(
             "total": len(items),
             "needs_review": sum(1 for i in items if i["routing"] == "REVIEW"),
             "auto": sum(1 for i in items if i["routing"] == "AUTO"),
+            # The KPI page's definition: read confidently *and* accepted.
+            # `auto` alone counts the invoices the rules rejected too.
+            "touchless": touchless,
         },
     }
 
@@ -1908,11 +1917,21 @@ def stats(principal: Annotated[Principal, Depends(current_principal)]) -> dict:
     listing = list_invoices(principal)
     items = listing["invoices"]
     corrections = get_corrections().list(principal.tenant_id)
+    counts = listing["counts"]
+    rate = round(counts["touchless"] / len(items), 3) if items else None
+    from ..db.repositories import KpiRepository, PgCaseRepository  # noqa: PLC0415
+
+    cases = get_cases()
+    if isinstance(cases, PgCaseRepository):
+        # One definition: the KPI page's, which also leaves out an invoice
+        # whose approval chain nobody has finished. Only where the invoices
+        # are rows; cases on disk have no approval chains to leave out.
+        kpi = KpiRepository(cases.url).summary(principal.tenant_id, None)
+        counts = {**counts, "touchless": kpi["touchless"]}
+        rate = kpi["touchless_rate"]
     return {
-        **listing["counts"],
-        "touchless_rate": (
-            round(listing["counts"]["auto"] / len(items), 3) if items else None
-        ),
+        **counts,
+        "touchless_rate": rate,
         "corrections": len(corrections),
         "corrected_fields": sorted({c["field_path"] for c in corrections}),
     }

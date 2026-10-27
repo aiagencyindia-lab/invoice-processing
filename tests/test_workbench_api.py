@@ -428,12 +428,14 @@ class TestStats:
         ):
             assert key in body
 
-    def test_touchless_rate_matches_the_counts(self, client):
+    def test_touchless_counts_accepted_invoices_only(self, client):
+        # The golden cases are all read confidently (AUTO), but the rules
+        # reject two of them: a rejection waits on a person, as on the KPI
+        # page, so only case_002 is touchless.
         body = client.get("/api/stats").json()
-        if body["total"]:
-            assert body["touchless_rate"] == round(
-                body["auto"] / body["total"], 3
-            )
+        assert body["auto"] == 3
+        assert body["touchless"] == 1
+        assert body["touchless_rate"] == round(1 / 3, 3)
 
 
 class TestRoot:

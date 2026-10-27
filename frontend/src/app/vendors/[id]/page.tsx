@@ -6,7 +6,7 @@ import { useState } from "react";
 import { DimensionMeter, percent } from "@/components/trust/DimensionMeter";
 import { api, ApiError, can, type Me, type VendorDocumentList, type VendorList, type VendorTrustProfile } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
-import { DIMENSION_LABELS } from "@/lib/trust";
+import { DIMENSION_LABELS, vendorLabel } from "@/lib/trust";
 
 const SUBKINDS: Record<string, string> = {
   gst_certificate: "GST certificate",
@@ -152,7 +152,7 @@ function VendorView({ id }: { id: string }) {
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
                 {profile.network.map((link) => (
                   <li key={link.vendor.node}>
-                    {link.vendor.name ?? link.vendor.node} · shares {link.shared.join(", ")}
+                    {vendorLabel(link.vendor)} · shares {link.shared.join(", ")}
                   </li>
                 ))}
               </ul>

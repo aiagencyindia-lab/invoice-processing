@@ -11,6 +11,7 @@ from sqlalchemy import select
 from ...db.models import TrustFindingCitation
 from ...db.session import tenant_session
 from ..findings.model import DECIDED
+from ..graph.locate import tax_id
 from ..types import DIMENSIONS
 from . import KIND, score_key
 
@@ -123,7 +124,7 @@ def _network(graph, links, tenant_id, vendor) -> list[dict]:
     for other in graph.nodes(tenant_id, kind="vendor"):
         if other["id"] == vendor["id"]:
             continue
-        names[other["id"]] = other["attrs"].get("name")
+        names[other["id"]] = other["attrs"]
         theirs = other.get("natural_keys") or {}
         for k, v in mine.items():
             if k != "name" and v and theirs.get(k) == v:
@@ -137,7 +138,14 @@ def _network(graph, links, tenant_id, vendor) -> list[dict]:
             if other in names:
                 shared[other].add(f"link:{link['status']}")
     return [
-        {"vendor": {"node": n, "name": names.get(n)}, "shared": sorted(keys)}
+        {
+            "vendor": {
+                "node": n,
+                "name": names.get(n, {}).get("name"),
+                "tax_id": tax_id(names.get(n, {})),
+            },
+            "shared": sorted(keys),
+        }
         for n, keys in sorted(shared.items())
     ]
 

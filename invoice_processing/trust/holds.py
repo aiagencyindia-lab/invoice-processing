@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ..db.models import TrustFinding, TrustHold
 from ..db.session import tenant_session
@@ -121,6 +121,20 @@ def open_for(
             }
             for r in rows
         ]
+
+
+def open_count(tenant_id: str, *, url: str | None = None) -> int:
+    """Holds placed and not lifted, across every invoice."""
+    with tenant_session(tenant_id, url) as s:
+        return int(
+            s.scalar(
+                select(func.count()).where(
+                    TrustHold.tenant_id == tenant_id,
+                    TrustHold.lifted_at.is_(None),
+                )
+            )
+            or 0
+        )
 
 
 def reconcile(

@@ -129,6 +129,37 @@ def load_profile(path: str, company: str) -> dict:
     return {"settings": settings, "masters": profile["masters"]}
 
 
+# Follow-up jobs a processed document queues (v2 trust work): run, never
+# reported as the document's own outcome.
+FOLLOW_UPS = (
+    "trust-synced",
+    "trust-evaluated",
+    "trust-audited",
+    "rematched",
+    "agent-injection-classified",
+)
+
+
+def drain(worker, on_settled=None) -> str:
+    """Run the worker until the queue is empty and return the document's own
+    outcome: the first one that settles (not a retry, not a follow-up). One
+    message per invoice is not enough since v2: each processed document
+    queues a trust job, which the next invoice would pull instead of its own
+    document, so every later invoice was scored before it ran.
+
+    `on_settled` runs once, when the document's outcome is known, so the
+    caller can stop its clock before the follow-ups run (wall time stays
+    comparable with runs from before v2)."""
+    outcome = "no-message"
+    while outcomes := worker.run_once(max_messages=1):
+        got = outcomes[0]
+        if outcome == "no-message" and got != "retry" and got not in FOLLOW_UPS:
+            outcome = got
+            if on_settled is not None:
+                on_settled()
+    return outcome
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     company = args.company
@@ -273,12 +304,12 @@ def main(argv=None) -> int:
             enqueue_document(service.get_queue(), ctx, result)
 
         outcome = "ingest-duplicate"
+        settled = []
         if not result.duplicate or interrupted:
-            outcome = "retry"
-            while outcome == "retry":
-                outcomes = worker.run_once(max_messages=1)
-                outcome = outcomes[0] if outcomes else "no-message"
-        wall = time.time() - started
+            outcome = drain(
+                worker, on_settled=lambda s=settled: s.append(time.time())
+            )
+        wall = (settled[0] if settled else time.time()) - started
 
         artifacts = cases.get_artifacts(
             RunContext(tenant_id=tenant_id, case_id=result.document_id)
