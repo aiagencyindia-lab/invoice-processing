@@ -50,3 +50,43 @@ Afterwards `benchmark/harness/prod_cleanup.py --apply` removed the documents,
 invoices, findings, pipeline runs and stored objects. Audit events are kept:
 they record that these documents were ingested and processed, which stays true
 after the documents are gone.
+
+The run above was on GCP (Cloud SQL and a GCS bucket). The steps below are
+how a production run is done on Railway, where production now lives.
+
+## Railway
+
+Production is one container running the API and the worker
+(`invoice-processing`, project `ledgerly-new`), Postgres, and a volume at
+`/data`. The database secrets are sealed, so `railway run` does not receive
+them: the harness runs **inside the service, over SSH**, as the deployed image
+and with its own credentials. Nothing may merge to `main` while it runs: a
+merge redeploys and kills the processes (a run resumes without `--fresh`, but
+its tenants must then stay until it has).
+
+`--production` uses the service's database and keeps everything else to the
+run: `STATE_DIR` is pointed at `<out>/stacks/<C>/state`, so the queue, stored
+documents and master data are the run's own and never the deployed worker's
+`/data`. The harness's worker heartbeats are rows in the shared database, so
+while it runs the health check sees a live worker even if the deployed one
+died; check the deployed worker's own row (its pid) rather than the newest.
+
+```bash
+SSH="ssh -F <ssh_config from railway ssh> ledgerly-api"
+# The PDFs are not in git or the image (33 MB).
+tar czf - -C <dataset dir> documents | $SSH 'tar xzf - -C /app/benchmark/dataset'
+# One process per company, detached so a dropped connection does not end it.
+$SSH 'cd /app && mkdir -p /tmp/bench && for C in A B C; do
+  GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-credentials.json nohup setsid \
+  ./.venv/bin/python -u -m benchmark.harness.stack_main --company $C \
+    --out /tmp/bench/runs/prod --profile benchmark/harness/profiles/after.json \
+    --production --fresh > /tmp/bench/prod-$C.log 2>&1 < /dev/null & done'
+# Pull it back and score it locally.
+$SSH 'tar czf - -C /tmp/bench/runs prod' | tar xzf - -C benchmark/runs/
+python -m benchmark.harness.score benchmark/runs/prod --profile benchmark/harness/profiles/after.json
+```
+
+Afterwards the bench tenants are removed completely, with the product's own
+purge and then `prod_cleanup --remove-tenants` (see its docstring), and
+`/tmp/bench` and the copied PDFs are deleted. Production is left holding only
+its real tenants.

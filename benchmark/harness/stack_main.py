@@ -48,9 +48,9 @@ def parse_args(argv=None):
         "--production",
         action="store_true",
         help=(
-            "use the database and bucket named by the environment instead of a "
-            "scratch one; run it under `railway run` so that environment is the "
-            "deployed service's own"
+            "use the database the environment names instead of a scratch "
+            "one; run it inside the deployed service (Railway: over SSH into "
+            "invoice-processing) so that environment is the service's own"
         ),
     )
     return p.parse_args(argv)
@@ -60,29 +60,32 @@ def configure_environment(root: Path, *, production: bool = False) -> None:
     """Point this process at its stores.
 
     Locally that is a scratch SQLite file and a scratch directory. With
-    `production` it is whatever database and bucket the ambient environment
-    names -- the point of that mode being to exercise Cloud SQL and GCS rather
-    than SQLite and local files.
+    `production` it is whatever database the ambient environment names, and
+    the bucket too when one is set (GCP); on Railway there is none, and
+    documents go to the local blob store, which is that deployment's own.
 
-    Two things are forced even in production mode. The queue stays local, so
-    the documents this process ingests are processed by *this* code rather than
-    picked up by the deployed worker running something else; and the data
-    directory stays local, because it holds the rulebook and the tenant's
-    reference files this run needs to read.
+    Everything else stays this process's even in production mode. The queue,
+    stored documents and master-data files live under STATE_DIR, which on Railway is the volume the deployed worker reads: a
+    shared queue let that worker race the harness for bench documents, and
+    let the harness pull the pilot's jobs. So STATE_DIR is pointed at this
+    run's own directory, and PUBSUB is dropped. The data directory stays
+    local too, because it holds the rulebook and the tenant's reference files
+    this run needs to read. (The worker heartbeat is a `worker_heartbeats`
+    row in that database, beside the deployed worker's: while a run is going,
+    the health check counts the harness as a live worker.)
     """
     data = root / "data"
     data.mkdir(parents=True, exist_ok=True)
     os.environ["INVOICE_DATA_DIR"] = str(data)
     if production:
-        if not (
-            os.getenv("CLOUD_SQL_INSTANCE") or os.getenv("DATABASE_URL")
-        ) or not os.getenv("GCS_BUCKET"):
+        if not (os.getenv("CLOUD_SQL_INSTANCE") or os.getenv("DATABASE_URL")):
             raise SystemExit(
-                "Production mode needs CLOUD_SQL_INSTANCE (or DATABASE_URL) "
-                "and GCS_BUCKET in the environment. Run it under `railway run "
-                "--service api -- ...` so the service's own configuration is "
-                "what gets exercised."
+                "Production mode needs CLOUD_SQL_INSTANCE or DATABASE_URL in "
+                "the environment. Run it inside the deployed service (Railway: "
+                "over SSH into invoice-processing) so the service's own "
+                "configuration is what gets exercised."
             )
+        os.environ["STATE_DIR"] = str(root / "state")
         # Never the deployed worker's queue: it runs the code that is deployed,
         # which is not the code under test, and it belongs to the pilot.
         for key in ("PUBSUB_TOPIC", "PUBSUB_SUBSCRIPTION"):
