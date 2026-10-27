@@ -162,6 +162,7 @@ export type Stats = {
   total: number;
   needs_review: number;
   auto: number;
+  touchless: number;
   touchless_rate: number | null;
   corrections: number;
   corrected_fields: string[];
@@ -281,7 +282,7 @@ export type InvoiceSummary = {
 
 export type InvoiceList = {
   invoices: InvoiceSummary[];
-  counts: { total: number; needs_review: number; auto: number };
+  counts: { total: number; needs_review: number; auto: number; touchless: number };
 };
 
 export type InvoiceField = {

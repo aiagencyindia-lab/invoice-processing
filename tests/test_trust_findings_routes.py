@@ -14,6 +14,7 @@ from invoice_processing.db import models
 from invoice_processing.db.repositories import PgDocumentRepository
 from invoice_processing.db.session import tenant_session
 from invoice_processing.ports import RunContext
+from invoice_processing.trust import holds
 from invoice_processing.trust.findings import model as finding_model
 from invoice_processing.trust.findings.model import Citation, FindingSpec
 from invoice_processing.trust.findings.store import FindingStore
@@ -216,7 +217,9 @@ def test_list_filters_by_engine_hold_vendor_and_open(env):
 def test_summary_names_vendors(env):
     out = env["client"]("viewer").get("/api/trust/findings/summary").json()
     assert out["by_status"] == {"detected": 2}
-    assert out["hold_open"] == 1
+    # A hold-type finding is not a hold: in shadow or advisory nothing is
+    # placed, so the tile counts the ledger, as trust posture does.
+    assert out["hold_open"] == 0
     assert out["vendors"] == [
         {
             "node": env["vendor"],
@@ -451,3 +454,16 @@ def test_a_contract_whose_blob_is_gone_is_404_not_500(env, monkeypatch):
         .status_code
         == 404
     )
+
+
+def test_summary_counts_holds_placed_and_not_lifted(env):
+    def hold_open():
+        c = env["client"]("viewer")
+        return c.get("/api/trust/findings/summary").json()["hold_open"]
+
+    with tenant_session(T, env["url"]) as s:
+        holds.place(s, CTX, s.get(models.TrustFinding, env["pay"]))
+    assert hold_open() == 1
+    with tenant_session(T, env["url"]) as s:
+        holds.lift(s, CTX, env["pay"], by="u", reason="cleared")
+    assert hold_open() == 0
