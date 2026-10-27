@@ -40,6 +40,8 @@ what it found. Local only; production has not been checked this way.
 
 ## Found
 
+All three fixed 2026-10-27: #134, #135, #136.
+
 1. **Two touchless rates.** The dashboard says 54% (47 of 87); the KPI page
    says 17% (15 of 87). `/api/stats` counts every invoice routed `AUTO`,
    including the ones the rules rejected; the KPI page counts only accepted
