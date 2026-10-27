@@ -1,23 +1,40 @@
 """Remove what a production benchmark run left behind.
 
-    railway run --service api -- ./.venv/bin/python -m benchmark.harness.prod_cleanup
-    railway run --service api -- ./.venv/bin/python -m benchmark.harness.prod_cleanup --apply
+On Railway everything runs inside the service, over SSH (the database
+secrets are sealed, so `railway run` no longer receives them):
 
-Deletes the documents, invoices and stored objects belonging to the `bench-`
-tenants, and nothing else. Three things it deliberately does not do:
+    # 1. Empty each bench tenant with the product's own purge (owner role):
+    #    every row, audit events included, and its stored documents.
+    STATE_DIR=<the run's stacks/<C>/state> \
+      python -m invoice_processing.admin.provision suspend-tenant \
+        --tenant bench-a --operator <you> --reason benchmark
+    STATE_DIR=... python -m invoice_processing.admin.provision purge-tenant \
+        --tenant bench-a --operator <you> --confirm bench-a \
+        --skip-grace --reason benchmark
+    # 2. Then drop the purged rows themselves (dry run without --apply).
+    python -m benchmark.harness.prod_cleanup --remove-tenants --apply
+
+The audit trail used to be undeletable by anything, which is why the tenant
+rows were kept; the offboarding purge (2026-10-13, `audit_events_purge`) now
+removes a tenant's trail as the owner role, so a purged bench tenant is an
+empty tombstone and `--remove-tenants` deletes it. It refuses a bench tenant
+that is not purged, because deleting its row would strand (or be refused by)
+the rows still pointing at it. A sweep of the deployed worker that read the
+tenant list just before the suspension can still write a row after the purge;
+the DELETE then fails on its foreign key, and running `purge-tenant` again
+(it accepts a purged tenant) clears it.
+
+Without `--remove-tenants` this is the older, partial cleanup: one DELETE
+per table for the v1 tables (documents, invoices and their children) and the
+stored objects in GCS_BUCKET when one is set. It leaves the v2 trust tables
+and audit events; use the purge above for a production run.
+
+Two things it never does:
 
 * **It does not touch a tenant whose id does not start with `bench-`.** The
   prefix is checked before anything is read or deleted, because a cleanup
   script that can reach the pilot's data is a worse risk than the rows it
   removes.
-* **It cannot delete audit events, and neither can anything else.** The trail
-  is append-only in the database, not by convention: `audit_events` has SELECT
-  and INSERT policies and no others, under FORCE ROW LEVEL SECURITY, so a
-  DELETE affects zero rows and reports success. That is why the tenant rows
-  themselves stay -- `audit_events` holds a foreign key to `tenants.id`, so
-  removing a tenant would mean dropping that policy on a production database
-  to tidy up an empty row. See `--remove-tenants`, which explains this and
-  refuses.
 * **It does not delete a prefix it was not told about.** Objects are namespaced
   `t/<tenant>/`, and the tenants it cleans are the `bench-` rows in the
   database. A local run that wrote to the bucket under a tenant id no longer in
@@ -56,7 +73,7 @@ def main(argv=None) -> int:
     p.add_argument(
         "--remove-tenants",
         action="store_true",
-        help="refuses, and explains why the tenant rows have to stay",
+        help="drop the bench tenant rows, once each has been purged",
     )
     p.add_argument(
         "--rows-only",
@@ -69,16 +86,6 @@ def main(argv=None) -> int:
         help=f"only tenants whose id starts with this (must itself start {PREFIX!r})",
     )
     args = p.parse_args(argv)
-    if args.remove_tenants:
-        raise SystemExit(
-            "A tenant row cannot be removed while its audit events exist, and "
-            "its audit events cannot be removed at all: `audit_events` carries "
-            "SELECT and INSERT policies and no others, under FORCE ROW LEVEL "
-            "SECURITY, so a DELETE quietly affects nothing. Removing the row "
-            "would mean dropping that policy on the production database, which "
-            "is a real control traded away for three empty rows that cost "
-            "nothing and make the next run a --seed-only away."
-        )
     prefix = args.tenant_prefix
     if not prefix.startswith(PREFIX):
         raise SystemExit(
@@ -86,8 +93,11 @@ def main(argv=None) -> int:
         )
     if not (os.getenv("CLOUD_SQL_INSTANCE") or os.getenv("DATABASE_URL")):
         raise SystemExit(
-            "No database configured. Run this under `railway run --service api`."
+            "No database configured. Run this inside the service "
+            "(Railway: over SSH into invoice-processing)."
         )
+    if args.remove_tenants:
+        return remove_tenants(prefix, apply=args.apply)
 
     from sqlalchemy import delete, func, select
 
@@ -193,6 +203,50 @@ def main(argv=None) -> int:
         )
     else:
         print(f"\nDeleted {total} rows. Audit events are kept, by design.")
+    return 0
+
+
+def remove_tenants(prefix: str, *, apply: bool) -> int:
+    """Delete the `prefix` tenant rows, every one of which must be purged."""
+    from sqlalchemy import delete, select
+
+    from invoice_processing import offboarding
+    from invoice_processing.db.models import Tenant
+    from invoice_processing.db.session import tenant_session
+
+    try:
+        # Before any engine exists, so every connection is the owner's.
+        offboarding.require_owner_role()
+    except offboarding.OffboardingError as exc:
+        raise SystemExit(str(exc)) from None
+    with tenant_session("") as session:
+        found = {
+            str(t.id): t.status
+            for t in session.scalars(select(Tenant)).all()
+            if str(t.id).startswith(prefix)
+        }
+    if not found:
+        print(f"No tenants starting with {prefix!r}. Nothing to do.")
+        return 0
+    waiting = sorted(
+        t for t, status in found.items() if status != offboarding.PURGED
+    )
+    if waiting:
+        raise SystemExit(
+            f"Not purged yet: {', '.join(waiting)}. Suspend and purge each with "
+            "`python -m invoice_processing.admin.provision` first; nothing was "
+            "removed."
+        )
+    for tenant_id in sorted(found):
+        print(f"{tenant_id}: purged", flush=True)
+        if apply:
+            with tenant_session(tenant_id) as session:
+                session.execute(delete(Tenant).where(Tenant.id == tenant_id))
+            print(f"  removed {tenant_id}", flush=True)
+    if not apply:
+        print(
+            f"\nDry run: {len(found)} tenant rows would be removed. Re-run with --apply."
+        )
     return 0
 
 

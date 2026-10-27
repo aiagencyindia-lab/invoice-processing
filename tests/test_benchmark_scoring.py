@@ -367,6 +367,120 @@ class TestALocalRunStaysLocal:
         assert not os.getenv("GCS_BUCKET")
 
 
+class TestAProductionRunKeepsItsOwnState:
+    """On Railway the deployed worker reads `/data/queue` (STATE_DIR) and
+    stores documents on that volume; there is no bucket. A production run
+    must use the real database and keep everything else to itself: a shared
+    queue let the deployed worker race the harness for bench documents."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_environment(self):
+        before = dict(os.environ)
+        try:
+            yield
+        finally:
+            os.environ.clear()
+            os.environ.update(before)
+
+    def test_a_database_is_enough_and_state_is_its_own(self, tmp_path):
+        os.environ.update(
+            DATABASE_URL="postgresql+pg8000://app@db/ledgerly",
+            STATE_DIR="/data",
+            PUBSUB_TOPIC="jobs",
+        )
+        os.environ.pop("GCS_BUCKET", None)
+        stack_main.configure_environment(tmp_path, production=True)
+        assert (
+            os.environ["DATABASE_URL"] == "postgresql+pg8000://app@db/ledgerly"
+        )
+        assert os.environ["STATE_DIR"] == str(tmp_path / "state")
+        assert "PUBSUB_TOPIC" not in os.environ
+
+    def test_without_a_database_it_refuses(self, tmp_path):
+        for key in ("DATABASE_URL", "CLOUD_SQL_INSTANCE"):
+            os.environ.pop(key, None)
+        with pytest.raises(SystemExit):
+            stack_main.configure_environment(tmp_path, production=True)
+
+
+class TestRemovingBenchTenants:
+    """The product's purge empties a tenant, audit trail included, and
+    leaves its row as a `purged` tombstone; the bench rows then go too, so
+    production holds only real tenants again."""
+
+    @pytest.fixture
+    def url(self, scratch_db, monkeypatch):
+        from fresh_schema import fresh_schema  # noqa: PLC0415
+
+        from invoice_processing.db.models import Tenant  # noqa: PLC0415
+        from invoice_processing.db.session import tenant_session  # noqa: PLC0415
+
+        target = scratch_db("cleanup.db")
+        fresh_schema(target)
+        for tenant_id, status in (
+            ("bench-a", "purged"),
+            ("bench-b", "active"),
+            ("aixai", "active"),
+        ):
+            with tenant_session(tenant_id, target) as session:
+                session.add(
+                    Tenant(
+                        id=tenant_id,
+                        slug=tenant_id,
+                        name=tenant_id,
+                        status=status,
+                    )
+                )
+        monkeypatch.setenv("DATABASE_URL", target)
+        monkeypatch.setenv("MIGRATE_DATABASE_URL", target)
+        return target
+
+    def _ids(self, url):
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from invoice_processing.db.models import Tenant  # noqa: PLC0415
+        from invoice_processing.db.session import tenant_session  # noqa: PLC0415
+
+        with tenant_session("", url) as session:
+            return sorted(session.scalars(select(Tenant.id)).all())
+
+    def test_refuses_while_a_bench_tenant_is_not_purged(self, url):
+        from benchmark.harness import prod_cleanup  # noqa: PLC0415
+
+        with pytest.raises(SystemExit, match="bench-b"):
+            prod_cleanup.main(["--remove-tenants", "--apply"])
+        assert self._ids(url) == ["aixai", "bench-a", "bench-b"]
+
+    def test_removes_purged_bench_rows_only_with_apply(self, url):
+        from sqlalchemy import update  # noqa: PLC0415
+
+        from benchmark.harness import prod_cleanup  # noqa: PLC0415
+        from invoice_processing.db.models import Tenant  # noqa: PLC0415
+        from invoice_processing.db.session import tenant_session  # noqa: PLC0415
+
+        with tenant_session("bench-b", url) as session:
+            session.execute(
+                update(Tenant)
+                .where(Tenant.id == "bench-b")
+                .values(status="purged")
+            )
+        assert prod_cleanup.main(["--remove-tenants"]) == 0
+        assert self._ids(url) == ["aixai", "bench-a", "bench-b"]
+        assert prod_cleanup.main(["--remove-tenants", "--apply"]) == 0
+        assert self._ids(url) == ["aixai"]
+
+    def test_it_connects_as_the_owner(self, url, scratch_db, monkeypatch):
+        """The app role in DATABASE_URL names an empty database here: the
+        tenants are only found through MIGRATE_DATABASE_URL."""
+        from benchmark.harness import prod_cleanup  # noqa: PLC0415
+
+        if url.startswith("postgresql"):
+            pytest.skip("one database on the Postgres job")
+        monkeypatch.setenv("DATABASE_URL", scratch_db("app-role.db"))
+        with pytest.raises(SystemExit, match="bench-b"):
+            prod_cleanup.main(["--remove-tenants"])
+
+
 class TestACleanRunExitsCleanly:
     """The scorer counts with a Counter, and a Counter writes no key it never
     incremented: a run where every invoice was decided has no
