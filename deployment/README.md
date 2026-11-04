@@ -1,8 +1,9 @@
-# Production (Railway + Google project `rasayan`)
+# Production (Railway + Google)
 
-Ledgerly runs on Railway; Gemini (Vertex AI) and sign-in (Identity
-Platform) run on the Google project `rasayan`, which is shared with the
-Rasayan web app. Design: docs/superpowers/specs/2026-10-14-railway-production-design.md.
+Ledgerly runs on Railway. Gemini (Vertex AI) runs on the Google project
+`ledgerly-513708` (since 2026-11-04; it was `rasayan`, and the service had
+drifted to `ledgerly-aiagency`, whose billing is off). Sign-in (Identity
+Platform) verifies tokens for the project named in `GOOGLE_CLOUD_PROJECT`. Design: docs/superpowers/specs/2026-10-14-railway-production-design.md.
 
 ## Layout
 
@@ -34,12 +35,15 @@ no one can read them back from the dashboard after they are set.
 | invoice-processing | `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` | `60`: the grace a redeploy gives before SIGKILL (Railway's default is 0, which kills an in-flight extraction) | operator |
 | invoice-processing | `STATE_DIR` | `/data` | operator |
 | invoice-processing | `RUN_MIGRATIONS` | `0` (the pre-deploy step migrates, as the owner) | operator |
-| invoice-processing | `GOOGLE_CLOUD_PROJECT`, `PROJECT_ID` | `rasayan` | operator |
+| invoice-processing | `PROJECT_ID` | `ledgerly-513708`: the Vertex project (the pipeline reads it before `GOOGLE_CLOUD_PROJECT`) | operator |
+| invoice-processing | `LOCATION` | `global` (the 3.x models are served there) | operator |
+| invoice-processing | `GEMINI_FLASH_MODEL`, `GEMINI_PRO_MODEL` | `gemini-3.5-flash`, `gemini-3.1-pro-preview` (`ledgerly-513708` has no 2.5 access) | operator |
+| invoice-processing | `GOOGLE_CLOUD_PROJECT` | the Identity Platform project sign-in tokens are issued for; live value `ledgerly-aiagency` (2026-11-04) | operator |
 | invoice-processing | `GOOGLE_GENAI_USE_VERTEXAI` | `TRUE` | operator |
 | invoice-processing | `APPLY_IDENTITY_CLAIMS` | `1` | operator |
 | invoice-processing | `ALLOW_SELF_SIGNUP` | `1`, or unset to close sign-up | operator |
 | invoice-processing | `LOG_LEVEL` | `INFO`; `WARNING` to quieten | operator |
-| invoice-processing | `GOOGLE_CREDENTIALS_JSON` | the `ledgerly-prod@rasayan` key (JSON) | **you** |
+| invoice-processing | `GOOGLE_CREDENTIALS_JSON` | the Vertex service account's key (JSON); live: `ledgerly@ledgerly-513708` | **you** |
 | invoice-processing | `DATABASE_URL` | app role: `postgresql+pg8000://ledgerly_app:<pw>@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/railway` | **you** |
 | invoice-processing | `MIGRATE_DATABASE_URL` | owner role, same host | **you** |
 | invoice-processing | `SENTRY_DSN` | the Sentry project's DSN | **you** |
@@ -49,7 +53,10 @@ no one can read them back from the dashboard after they are set.
 `LOG_FORMAT` unset gives JSON under `ENV=production`. Railway sets
 `RAILWAY_GIT_COMMIT_SHA`, which becomes the Sentry release.
 
-## Google side (`rasayan`)
+## Google side
+
+As first set up, on `rasayan` (Vertex has since moved to `ledgerly-513708`,
+whose service account needs `roles/aiplatform.user`):
 
 - Service account `ledgerly-prod@rasayan.iam.gserviceaccount.com` with
   `roles/aiplatform.user` and `roles/firebaseauth.admin`, nothing else.

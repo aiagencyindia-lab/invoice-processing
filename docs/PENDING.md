@@ -11,8 +11,10 @@ Project `ledgerly-new` (`9bd2d348-41a3-412a-9484-20a7e1077b75`) on the
 `production` (`ddaa420c-639d-4942-943f-3ea87f38b489`). Services: `Postgres`
 (volume `postgres-volume`), `invoice-processing` (API + worker, volume
 `ledgerly-volume` at `/data`), `app` (frontend,
-`app-production-d37f.up.railway.app`, the only public domain). Google
-project `rasayan` for Gemini and sign-in (service account `ledgerly-prod`).
+`app-production-d37f.up.railway.app`, the only public domain). Gemini on
+Google project `ledgerly-513708` (`gemini-3.5-flash` /
+`gemini-3.1-pro-preview`, `LOCATION=global`, since 2026-11-04);
+`GOOGLE_CLOUD_PROJECT` (sign-in audience) is `ledgerly-aiagency`.
 The old paused `ledgerly` project (`b2683d9c…`) no longer exists.
 
 **Every merge to `main` deploys to production**: the GitHub source is
@@ -361,6 +363,10 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   rows.
 - Benchmark: known wrong MV-035, TECH-INV-030/031; dataset defects
   MFG-INV-020, MFG-INV-039, SVC-INV-019.
+- Sign-in still verifies against `ledgerly-aiagency`, whose billing is off;
+  not checked whether Identity Platform sign-in still works there.
+- `MODEL_PRICING` (`general_invoice_agent.py`) has no gemini-3.x entries, so
+  production cost figures are priced as 2.5-flash.
 - `rasayan` still lists `localhost` as an authorized sign-in domain and is
   shared with the Rasayan web app.
 
