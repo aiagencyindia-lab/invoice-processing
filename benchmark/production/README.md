@@ -90,3 +90,38 @@ Afterwards the bench tenants are removed completely, with the product's own
 purge and then `prod_cleanup --remove-tenants` (see its docstring), and
 `/tmp/bench` and the copied PDFs are deleted. Production is left holding only
 its real tenants.
+
+### Result, 2026-11-05 (`e4c22e3`, Gemini 3.x)
+
+The first run on Railway, and the first on the models production now uses:
+`gemini-3.5-flash` and `gemini-3.1-pro-preview` at `LOCATION=global`, project
+`ledgerly-513708`. Report: [`railway-2026-11-05/report.md`](railway-2026-11-05/report.md).
+Compared with the same code and models run locally the day before
+(`g3-2026-11-04`) and with the local Gemini 2.5 run (`after-2026-10-27`):
+
+| | Railway, 3.x | Local, 3.x | Local, 2.5 |
+|---|---|---|---|
+| Decision accuracy | 98.3% | 98.3% | 98.3% |
+| Correct / wrong accepts, wrong rejects | 43 / 3, 2 | 43 / 3, 2 | 43 / 3, 2 |
+| Routed to a clerk (purchase orders) | 6, all correct | 6, all correct | 6, all correct |
+| Accepted but routed to review | 6 | 5 | 5 |
+| Rejection reason exact / family / wrong | 219 / 21 / 6 | 219 / 21 / 6 | 219 / 22 / 5 |
+| Extraction: header / totals / lines / tax | 99.3 / 99.1 / 91.7 / 99.8% | 99.2 / 99.6 / 91.5 / 100% | 97.8 / 98.9 / 91.5 / 99.8% |
+| Documents not extracted | 1 | 2 | 0 |
+| Median / p95 processing | 57.7 s / 133.5 s | 67.9 s / 138.1 s | 48.3 s / 102.8 s |
+| Errors or no decision | 0 | 0 | 0 |
+
+**Four decisions differ from the local 3.x run, and none is the infrastructure.**
+`TECH-INV-052` (clean) was accepted on Railway and wrongly rejected locally
+("Vendor tax ID invalid"); `MFG-INV-045` (clean) went the other way, wrongly
+rejected on Railway ("Missing Work Authorization Form"). `TECH-INV-006` and
+`MFG-INV-089` were correctly rejected by both, for different reasons. The
+totals are identical.
+
+Cost is not reported: `MODEL_PRICING` has no 3.x entries, so the ~$1.05 the
+report shows prices every call as `gemini-2.5-flash` and is not comparable
+with earlier runs.
+
+Cleanup left production with its one real tenant (`aixai`): each bench tenant's
+purge deleted ~2,000 rows, audit events included, and 91 stored documents;
+`/data` was unchanged and the deployed worker kept running throughout.

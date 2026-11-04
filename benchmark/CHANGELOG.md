@@ -1748,3 +1748,27 @@ without moving accuracy, routing or extraction. Two more reasons scored wrong
 is within run-to-run variance of the model.
 
 **Regression.** None; no product code changed.
+
+## 2026-11-05 — First production run on Railway, on Gemini 3.x
+
+**Problem.** Production Gemini was failing every call (`403`): the service
+pointed at `ledgerly-aiagency`, whose billing is off. The replacement project,
+`ledgerly-513708`, offers no gemini-2.5 models.
+
+**What was done.** Run locally first on `gemini-3.5-flash` +
+`gemini-3.1-pro-preview` at `LOCATION=global` (`g3-2026-11-04`); production
+was then switched to them (variables only, no code). The harness gained a
+Railway production mode (PR #137: own `STATE_DIR`, no bucket needed,
+`prod_cleanup --remove-tenants`), then a 14-invoice smoke and the full 300 ran
+inside the deployed container over SSH (`prod-2026-11-05`).
+
+**Result.** 98.3% decision accuracy in all three runs (Railway 3.x, local
+3.x, local 2.5); 3 wrong accepts and 2 wrong rejects each; 0 errors. Header
+extraction improves on 3.x (99.3% against 97.8%). Railway processing median
+57.7 s against 67.9 s locally on 3.x and 48.3 s on 2.5. Four decisions differ
+from the local 3.x run, net zero (`TECH-INV-052` and `MFG-INV-045` swap
+right and wrong; two reasons change). Details:
+`benchmark/production/README.md`.
+
+**Regression.** None; no product code changed. Cost is unmeasured until
+`MODEL_PRICING` has 3.x entries.
