@@ -118,9 +118,13 @@ rejected on Railway ("Missing Work Authorization Form"). `TECH-INV-006` and
 `MFG-INV-089` were correctly rejected by both, for different reasons. The
 totals are identical.
 
-Cost is not reported: `MODEL_PRICING` has no 3.x entries, so the ~$1.05 the
-report shows prices every call as `gemini-2.5-flash` and is not comparable
-with earlier runs.
+The ~$1.05 the report shows prices every call as `gemini-2.5-flash`:
+`MODEL_PRICING` had no 3.x entries then (added 2026-11-06). Repriced from the
+run's audit logs (267 documents, 1.30M tokens; the 2.5-flash total and the
+token count give ~0.999M input and ~0.301M output), the run cost **$4.21 if
+every call were 3.5-flash and $5.61 if every call were 3.1-pro**. PDF
+extraction, which carries most of the tokens, runs on 3.1-pro, so the real
+figure is near the top: about **$0.02 (~₹1.8) per invoice**.
 
 Cleanup left production with its one real tenant (`aixai`): each bench tenant's
 purge deleted ~2,000 rows, audit events included, and 91 stored documents;
