@@ -586,3 +586,59 @@ def test_replay(world, scenario):
         for k, v in details.items():
             assert types[code]["details"][k] == v
     assert "50100234567891" not in json.dumps(findings, default=str)
+
+
+# -- on-demand verification (POST /v2/bank-accounts/{id}/verify) -------------
+
+
+def verify(world, graph, links, node, script=None):
+    url, _ = world
+    registry = Registry(graph)
+    fakes.install(registry)
+    provider = fakes.FakeProvider(script)
+    registry.register("bank_verification", "fake", lambda: provider)
+    out = payment.verify_account(
+        CTX,
+        node,
+        graph=graph,
+        links=links,
+        providers=registry,
+        settings={},
+        url=url,
+    )
+    return out, provider
+
+
+def vendor_node(graph):
+    return graph.nodes_by_ref(T, "vendors", ["ven-1"])["ven-1"]
+
+
+def test_verify_account_returns_evidence_and_never_marks_verified(world):
+    graph, links = build(world)
+    answer = {"result": "verified", "account_name": "Acme Steel Pvt Ltd"}
+    out, provider = verify(
+        world, graph, links, vendor_node(graph), {ACCOUNT: answer}
+    )
+    assert provider.calls == [(ACCOUNT, "HDFC0001234", "Acme Steel Pvt Ltd")]
+    assert out["result"] == "verified"
+    assert out["provider_status"] == "ok"
+    assert out["name_match"] == 1.0
+    assert ACCOUNT not in json.dumps(out)  # masked
+    assert graph.node(T, out["evidence_node"])["kind"] == "provider_evidence"
+    # Evidence only: marking an account verified stays a two-person change.
+    with tenant_session(T, world[0]) as s:
+        assert s.get(models.Vendor, "ven-1").bank_verified_at is None
+
+
+def test_verify_account_without_an_account_calls_no_provider(world):
+    graph, links = build(world, vendor={"bank_account_number": None})
+    out, provider = verify(world, graph, links, vendor_node(graph))
+    assert out["result"] is None and out["reason"] == "no_account_on_file"
+    assert provider.calls == []
+
+
+def test_verify_account_refuses_a_node_that_is_not_a_vendor(world):
+    graph, links = build(world)
+    inv = graph.nodes_by_ref(T, "invoices", ["inv-1"])["inv-1"]
+    assert verify(world, graph, links, inv)[0] is None
+    assert verify(world, graph, links, "no-such-node")[0] is None

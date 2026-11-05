@@ -170,6 +170,14 @@ def vendor_trust(node_id: str, principal: Viewer):
     return trust_score_routes.vendor_trust(node_id=node_id, principal=principal)
 
 
+@router.post("/bank-accounts/{node_id}/verify")
+def verify_bank_account(node_id: str, principal: Clerk):
+    """A bank account is named by its vendor's node: the account on file."""
+    return trust_routes.verify_bank_account(
+        node_id=node_id, principal=principal
+    )
+
+
 @router.post("/documents/{document_id}/authenticity")
 def document_authenticity(document_id: str, principal: Viewer):
     return trust_provenance_routes.score_document(
