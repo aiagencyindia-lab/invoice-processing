@@ -61,6 +61,13 @@ def test_pdf_date_parses_offsets_and_partial_forms():
     assert pdfmeta.pdf_date("20250102030405-02'00'").isoformat() == (
         "2025-01-02T03:04:05-02:00"
     )
+    # Word and many other writers put a zero offset after the Z.
+    assert pdfmeta.pdf_date("D:20240101120000Z00'00'") == datetime(
+        2024, 1, 1, 12, tzinfo=utc
+    )
+    assert pdfmeta.pdf_date("D:20240101120000Z00'00") == datetime(
+        2024, 1, 1, 12, tzinfo=utc
+    )
     assert pdfmeta.pdf_date("yesterday") is None
     assert pdfmeta.pdf_date(None) is None
     assert pdfmeta.pdf_date("D:20251399") is None
@@ -92,6 +99,14 @@ def test_oversize_bytes_are_skipped_without_parsing(monkeypatch, caplog):
     assert [
         r.reason for r in caplog.records if r.msg == "provenance_skipped"
     ] == ["too_large"]
+
+
+def test_a_damaged_pdf_is_logged_as_unreadable_not_as_not_pdf(caplog):
+    with caplog.at_level(logging.INFO):
+        assert pdfmeta.facts(b"%PDF-1.4\nnot really a pdf") is None
+    assert [
+        r.reason for r in caplog.records if r.msg == "provenance_skipped"
+    ] == ["unreadable"]
 
 
 def test_only_the_first_max_pages_are_read(monkeypatch):
