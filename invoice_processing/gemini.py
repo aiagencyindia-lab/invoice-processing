@@ -82,11 +82,38 @@ def pdf_part(data: bytes) -> types.Part:
 
 
 def token_counts(response) -> tuple[int, int]:
-    """(prompt, candidates) token counts; the SDK leaves either as None."""
+    """(prompt, output) token counts; the SDK leaves any as None. Output
+    includes thinking, which Vertex bills at the output rate."""
     usage = getattr(response, "usage_metadata", None)
     if usage is None:
         return 0, 0
-    return usage.prompt_token_count or 0, usage.candidates_token_count or 0
+    output = (usage.candidates_token_count or 0) + (
+        usage.thoughts_token_count or 0
+    )
+    return usage.prompt_token_count or 0, output
+
+
+DEFAULT_THINKING_LEVEL = "low"
+
+
+def thinking_config(model_name: str) -> types.ThinkingConfig | None:
+    """How hard a Gemini 3 model thinks before answering.
+
+    Thinking is billed as output, and at the model's default it was most of
+    the bill (Nov 2026: ~92% of spend was output for calls that return a
+    small JSON). Every call here reads or classifies a document, so `low` by
+    default; GEMINI_THINKING_LEVEL overrides it (minimal/low/medium/high;
+    empty leaves it to the model). 2.5 models take a budget, not a level, and
+    are left alone.
+    """
+    if not model_name.rsplit("/", maxsplit=1)[-1].startswith("gemini-3"):
+        return None
+    level = os.getenv("GEMINI_THINKING_LEVEL", DEFAULT_THINKING_LEVEL).strip()
+    if not level:
+        return None
+    return types.ThinkingConfig(
+        thinking_level=types.ThinkingLevel(level.upper())
+    )
 
 
 @dataclass(frozen=True)
@@ -107,6 +134,7 @@ class Model:
             temperature=self.temperature,
             seed=self.seed,
             response_mime_type=self.response_mime_type,
+            thinking_config=thinking_config(self.name),
             http_options=types.HttpOptions(timeout=timeout_ms()),
         )
         response = client().models.generate_content(
