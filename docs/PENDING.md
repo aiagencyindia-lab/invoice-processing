@@ -363,10 +363,6 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   rows.
 - Benchmark: known wrong MV-035, TECH-INV-030/031; dataset defects
   MFG-INV-020, MFG-INV-039, SVC-INV-019.
-- Sign-in still verifies against `ledgerly-aiagency`, whose billing is off;
-  not checked whether Identity Platform sign-in still works there.
-- `MODEL_PRICING` (`general_invoice_agent.py`) has no gemini-3.x entries, so
-  production cost figures are priced as 2.5-flash.
 - `rasayan` still lists `localhost` as an authorized sign-in domain and is
   shared with the Rasayan web app.
 
@@ -377,6 +373,17 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
 - GitHub: branch protection on `main`; Dependabot security updates.
 
 ## Done
+
+- 2026-11-06 — Sign-in on `ledgerly-aiagency` (billing off) still works:
+  Identity Toolkit answers `createAuthUri` with the app's public key, the
+  Railway domain is an authorized domain, and a signed-in browser's hourly
+  `/api/me` returned 200 through 2026-11-04 (token refresh and backend
+  verification). A fresh Google sign-in was not watched end to end.
+- 2026-11-06 — `MODEL_PRICING` prices `gemini-3.5-flash` ($1.50/$9.00 per
+  1M) and `gemini-3.1-pro-preview` ($2.00/$12.00); the 2026-11-05 production
+  run repriced to ~$0.02 an invoice (`benchmark/production/README.md`).
+- 2026-11-06 — Deploy of `7f8b3ae` (#141): both services SUCCESS, Railway's
+  `/healthz` healthcheck passed.
 
 - 2026-10-14 — Production first deploy on Railway; smoke test passed
   (Google sign-up, one PDF processed to a decision in ~46 s).

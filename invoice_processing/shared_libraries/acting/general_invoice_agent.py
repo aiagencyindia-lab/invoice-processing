@@ -580,10 +580,16 @@ def _get_metrics() -> dict:
     return _metrics_store["METRICS"]
 
 
-# Pricing per 1M tokens
+# Pricing per 1M tokens (USD, standard tier, checked 2026-11-06). An unlisted
+# model is priced as 2.5-flash, so add the production models here when they
+# change (deployment/README.md names them).
+# ponytail: one price per model; 3.1 Pro charges more above 200k-token prompts
+# ($4/$18), which no invoice reaches. Add the tier if long contracts do.
 MODEL_PRICING = {
     "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
     "gemini-2.5-pro": {"input": 1.25, "output": 10.00},
+    "gemini-3.5-flash": {"input": 1.50, "output": 9.00},
+    "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00},
 }
 
 
