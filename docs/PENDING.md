@@ -119,7 +119,29 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         checked it, a few seconds after processing.
   - [ ] Partner gates: AC-19 clause coverage on real contracts, AC-20 ≥ 0.5% of
         spend, AC-21 at a design partner.
-  - [ ] Deferred review minors, per engine PR description (#55–#58).
+  - [x] Deferred review minors (#55–#58), triaged 2026-11-06. Fixed: PDF
+        dates written `Z00'00'` now parse; a damaged PDF logs `unreadable`,
+        not `not_pdf` (and a too-large one logs once); an escalation taking
+        effect today is on the radar; a credit note reusing its invoice's
+        number is not DUP-NEAR. Already fixed: provider error strings are
+        masked (`providers/registry.py`).
+  - [ ] Minors that need a decision, not code:
+    - Provenance template history counts every version of the vendor,
+      approved or not (all / approved only / all but rejected).
+    - GST "new large first" fires on any invoice inside `new_vendor_days`
+      (age window / first invoice only / first N).
+    - A vendor-master GSTIN that differs from the invoice's is never compared
+      (GST-UNVERIFIED reason / own advisory type / leave to Payment).
+    - GSTN status names outside active/cancelled/suspended become
+      GST-UNVERIFIED; map them in the real provider adapter when it lands.
+    - LEAK-TERM flags every pre-term invoice on a first history import
+      (only after term end / skip imported history / one per contract).
+    - The model budget (25 calls per evaluation) is below `leakage.max_pages`
+      (40); pages past it are skipped and only counted.
+  - [ ] Benchmark gaps from the same PRs: GST-UNVERIFIED and DUP-SPLIT are not
+        gated; nothing guards a tenant with no vendors in the fault builders.
+  - [ ] GST/ITC batch runs query edges and the vendor node per invoice
+        (`_vendor_of`); load them once, as Payment does.
   - [ ] Per-document evaluations read the whole tenant graph (ponytail notes
         name the ~50k ceiling); index by key before a tenant passes it.
   - [ ] Leakage findings are never auto-released by a clean run (only engines

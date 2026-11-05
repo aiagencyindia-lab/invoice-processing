@@ -477,7 +477,11 @@ def radar(ectx, view: View) -> list[FindingSpec]:
             events.append(("RADAR-RENEWAL", end, [c.first("term")], {}))
         esc = c.first("escalator")
         if esc is not None and start is not None:
-            nxt = add_years(start, max(years_between(start, today), 0) + 1)
+            # The next anniversary on or after today; the start is not one.
+            k = max(years_between(start, today), 0)
+            nxt = add_years(start, k)
+            if k == 0 or nxt != today:
+                nxt = add_years(start, k + 1)
             if end is None or nxt <= end:
                 events.append(
                     (

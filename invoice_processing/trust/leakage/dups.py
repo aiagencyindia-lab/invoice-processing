@@ -112,6 +112,10 @@ def _near_and_cross(view, txns, window) -> list[FindingSpec]:
             i -= 1
             if not na or _same_record(a, b):
                 continue
+            # A credit note often carries the number of the invoice it
+            # reverses; it is not a second charge.
+            if any(t.amount is not None and t.amount < 0 for t in (a, b)):
+                continue
             same_amount = a.amount is not None and a.amount == b.amount
             if na == nb or (
                 same_amount

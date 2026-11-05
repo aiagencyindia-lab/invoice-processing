@@ -348,8 +348,7 @@ def _ledger(
     facts = pdfmeta.facts(
         ectx.blobs.get(doc["storage_key"]) if data is None else data
     )
-    if facts is None:
-        logger.info("provenance_skipped", extra={"reason": "not_pdf"})
+    if facts is None:  # facts() logs why
         return None, []
     if invoice_node is not None:
         attrs = tenant.invoices[invoice_node]["attrs"]
