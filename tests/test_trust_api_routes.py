@@ -51,6 +51,7 @@ PROBED = {
     "/v2/findings",
     "/v2/findings/{finding_id}/decision",
     "/v2/vendors/{node_id}/trust",
+    "/v2/bank-accounts/{node_id}/verify",
     "/v2/documents/{document_id}/authenticity",
     "/v2/evidence/{node_id}",
     "/v2/trust-audits",
@@ -1012,7 +1013,7 @@ def _calls(d):
         # A vendor route names the vendor's node, not the invoice's.
         values = (
             {**fill, "node_id": d["vendor"]}
-            if template.startswith("/v2/vendors/")
+            if template.startswith(("/v2/vendors/", "/v2/bank-accounts/"))
             else fill
         )
         return re.sub(r"\{(\w+)\}", lambda g: values[g.group(1)], template)
@@ -1045,6 +1046,7 @@ def _calls(d):
             {"decision": "reject", "reason": "probe"},
         ),
         ("get", "/v2/vendors/{node_id}/trust", None),
+        ("post", "/v2/bank-accounts/{node_id}/verify", None),
         ("post", "/v2/documents/{document_id}/authenticity", None),
         ("get", "/v2/evidence/{node_id}", None),
         ("post", "/v2/trust-audits", {"name": "probe"}),
@@ -1100,7 +1102,7 @@ class TestIsolation:
     leak rather than pass on a refusal."""
 
     @pytest.mark.parametrize("via", ["bearer", "key"])
-    @pytest.mark.parametrize("i", range(25))
+    @pytest.mark.parametrize("i", range(26))
     def test_a_foreign_tenant_sees_nothing_of_acme(self, env, via, i):
         acme = env["acme"]
         method, template, path, body = _calls(acme)[i]

@@ -39,6 +39,7 @@ A transaction id is the invoice's evidence-graph node id. It is the `transaction
 | GET | `/v2/findings` | viewer | `GET /api/trust/findings` (same filters: `status`, `open`, `type`, `engine`, `vendor`, `hold`, `since`, `until`, `limit`, `offset`) |
 | POST | `/v2/findings/{finding_id}/decision` | clerk; approver for `accept`/`reject` | `POST /api/trust/findings/{id}/transition`. The body is `{decision: accept\|reject\|needs_vendor_input, reason}`. A `detected` finding is triaged first. `reject` needs a `reason`. |
 | GET | `/v2/vendors/{node_id}/trust` | viewer | `GET /api/trust/vendors/{node_id}/trust` |
+| POST | `/v2/bank-accounts/{node_id}/verify` | clerk | `POST /api/trust/vendors/{node_id}/bank-verification`. `node_id` is the vendor's node; the account verified is the one on file. Returns the provider's answer (`result`, `name_match`, masked `account`) and its `evidence_node`. Evidence only: it never marks the account verified (that stays a two-person bank change) and raises no finding. |
 | POST | `/v2/documents/{document_id}/authenticity` | viewer | `POST /api/trust/documents/{document_id}/authenticity` |
 | GET | `/v2/evidence/{node_id}` | viewer | `GET /api/trust/nodes/{node_id}` |
 | POST | `/v2/trust-audits` | approver | `POST /api/trust/audits` |

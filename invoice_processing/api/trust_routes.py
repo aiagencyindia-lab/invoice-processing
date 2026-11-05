@@ -628,6 +628,34 @@ def get_node(
     }
 
 
+@router.post("/api/trust/vendors/{node_id}/bank-verification")
+def verify_bank_account(
+    node_id: str,
+    principal: Annotated[Principal, Depends(require_role("clerk"))],
+):
+    """FR-21.1 on demand: the tenant's bank-verification provider's answer
+    about this vendor's account on file, kept as evidence. Clerk, because a
+    real provider charges per call. It never marks the account verified."""
+    from .. import tenant_settings  # noqa: PLC0415
+    from ..trust import payment  # noqa: PLC0415
+    from ..trust.evaluate import _default_providers  # noqa: PLC0415
+    from ..trust.graph.links import LinkStore  # noqa: PLC0415
+
+    graph = _graph()
+    out = payment.verify_account(
+        principal.context(),
+        node_id,
+        graph=graph,
+        links=LinkStore(graph.url),
+        providers=_default_providers(graph),
+        settings=tenant_settings.effective(principal.tenant_id),
+        url=graph.url,
+    )
+    if out is None:
+        raise HTTPException(404, "Unknown vendor.")
+    return out
+
+
 @router.get("/api/trust/lineage/{node_id}")
 def get_lineage(
     node_id: str,

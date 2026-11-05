@@ -182,9 +182,13 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
         (`HTTPS_PROXY`) are not honoured on that path.
   - [x] `?as_of` on a transaction's trust reads its own score node
         (`GraphStore.open_node(..., as_of=)`), not every score node.
-  - [ ] PRD §9 endpoints not built in Wave 3 and not otherwise listed:
-        `POST /v2/bank-accounts/{id}/verify` and `POST /v2/evidence/sources`
-        (registering a live connector, which waits on real connectors).
+  - [x] `POST /v2/bank-accounts/{node_id}/verify` (2026-11-06): asks the
+        tenant's bank-verification provider about a vendor's account on file
+        and returns the answer with its evidence node; evidence only (never
+        marks verified, raises no finding). Clerk. Only the fake provider is
+        installed until a real one exists.
+  - [ ] PRD §9 `POST /v2/evidence/sources` (registering a live connector)
+        waits on real connectors.
   - [ ] The `reality_coverage_*` benchmark gates are partly true by
         construction (the reality fault family plants invoice lines from its
         own evidence; a kind with nothing checked passes). Real coverage is

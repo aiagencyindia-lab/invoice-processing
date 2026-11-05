@@ -401,6 +401,61 @@ def _verification(ectx, world, inv, vendor_node, m, amount, currency):
     return out
 
 
+def verify_account(
+    ctx, vendor_node: str, *, graph, links, providers, settings: dict, url
+) -> dict | None:
+    """FR-21.1 on demand: ask the tenant's `bank_verification` provider about
+    the vendor's account on file and return its answer, with the evidence
+    node the registry keeps. None when `vendor_node` is not a vendor.
+
+    Evidence only: the vendor is never marked verified here (that stays a
+    two-person bank change), and no finding is raised; the next evaluation
+    of an invoice decides PAY-UNVERIFIED as it always does.
+    # ponytail: _World loads the tenant's vendors and history for one
+    # account; build the master alone if verification runs in bulk.
+    """
+    from ..engine import EngineContext  # noqa: PLC0415 - import cycle
+
+    node = graph.node(ctx.tenant_id, vendor_node)
+    if node is None or node.get("kind") != "vendor":
+        return None
+    ectx = EngineContext(
+        ctx=ctx,
+        mode="advisory",
+        document=None,
+        invoice_node=None,
+        graph=graph,
+        links=links,
+        findings=None,
+        providers=providers,
+        settings=settings,
+        decider=None,
+        blobs=None,
+        url=url,
+    )
+    world = _World(ectx)
+    m = world.master(vendor_node)
+    out = {
+        "vendor": vendor_node,
+        "account": masking.mask_bank(m.account) if m.account else None,
+        "verified_by_bank_change": m.verified_at,
+        "result": None,
+    }
+    if not m.account:
+        return {**out, "reason": "no_account_on_file"}
+    res = world.verify(m)
+    ok = res.status == "ok"
+    return {
+        **out,
+        "provider": res.provider,
+        "provider_status": res.status,
+        "result": res.data.get("result") if ok else None,
+        "name_match": _name_score(res.data, m) if ok else None,
+        "name_match_min": ectx.threshold("payment.name_match_min"),
+        "evidence_node": res.evidence_node,
+    }
+
+
 def _anomaly(ectx, world, inv, vendor_node, amount, currency):
     attrs = inv["attrs"]
     others = [
