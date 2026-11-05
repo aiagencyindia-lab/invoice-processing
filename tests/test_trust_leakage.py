@@ -784,6 +784,13 @@ def test_dup_near_outside_window_is_clean(env):
     assert found(env, "DUP-NEAR") == []
 
 
+def test_a_credit_note_reusing_its_invoice_number_is_not_a_duplicate(env):
+    ven = vendor(env)
+    invoice(env, ven, "INV-1", "2025-03-01", 1000, live=False)
+    invoice(env, ven, "INV-1", "2025-03-04", -1000, live=False, ref="cn-1")
+    assert found(env, "DUP-NEAR") == []
+
+
 def test_dup_cross_two_vendor_nodes_one_canonical(env):
     _, _, links = env
     a = vendor(env, ref_id="ven-a", name="Acme Steel")
@@ -882,6 +889,19 @@ def test_radar_escalator_anniversary(env):
     assert f.transaction_node == cid
     assert f.details["escalates_on"] == "2025-10-01"
     assert found(env, "RADAR-RENEWAL") == []
+
+
+def test_radar_escalator_taking_effect_today_is_flagged(env):
+    ven = vendor(env)
+    cid = steel_contract(env, ven, start="2024-09-01", end="2027-08-31")
+    clause(env, cid, "escalator", {"pct": "5"}, "Prices escalate by 5% yearly.")
+    [f] = found(env, "RADAR-ESCALATOR")  # NOW is 2025-09-01, the anniversary
+    assert f.details["escalates_on"] == "2025-09-01"
+    # The contract's first day is its start, not an escalation.
+    on_start = found(
+        env, "RADAR-ESCALATOR", now=datetime(2024, 9, 1, tzinfo=UTC)
+    )
+    assert [x.details["escalates_on"] for x in on_start] == []
 
 
 # -- Task 9: scope and runtime ------------------------------------------------

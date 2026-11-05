@@ -19,7 +19,7 @@ MAX_PAGES = 40
 
 _DATE = re.compile(
     r"(?:D:)?(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?"
-    r"(Z|[+-]\d{2}(?:'?\d{2})?)?'?"
+    r"(Z(?:00'?00)?|[+-]\d{2}(?:'?\d{2})?)?'?"
 )
 # A subset-embedded font is named "ABCDEF+Arial"; the prefix changes per file.
 _SUBSET = re.compile(r"^[A-Z]{6}\+")
@@ -47,7 +47,7 @@ def pdf_date(value) -> datetime | None:
     y, mo, d, h, mi, s, tz = match.groups()
     try:
         offset = timedelta(0)
-        if tz and tz != "Z":
+        if tz and not tz.startswith("Z"):
             digits = tz[1:].replace("'", "")
             offset = timedelta(
                 hours=int(digits[:2]), minutes=int(digits[2:] or 0)
@@ -85,8 +85,10 @@ def _lines(chars) -> dict:
 
 
 def facts(data: bytes) -> dict | None:
-    """The document's provenance facts, None when it is not a readable PDF."""
+    """The document's provenance facts, None when it is not a readable PDF
+    (logged here, with the reason)."""
     if not data.startswith(b"%PDF"):
+        logger.info("provenance_skipped", extra={"reason": "not_pdf"})
         return None
     if len(data) > MAX_BYTES:
         logger.info("provenance_skipped", extra={"reason": "too_large"})
@@ -110,6 +112,7 @@ def facts(data: bytes) -> dict | None:
                     (amounts if _AMOUNT.search(text) else body).update(names)
             page_count = len(pdf.pages)
     except Exception:  # pdfminer raises many types on a damaged or locked file
+        logger.info("provenance_skipped", extra={"reason": "unreadable"})
         return None
     created = pdf_date(meta.get("CreationDate"))
     modified = pdf_date(meta.get("ModDate"))
