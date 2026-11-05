@@ -181,16 +181,19 @@ def test_thinking_tokens_count_as_output():
     assert gemini.token_counts(response) == (100, 420)
 
 
-def test_gemini_3_thinks_at_a_low_level_by_default(monkeypatch):
+def test_gemini_3_flash_thinks_low_and_pro_medium_by_default(monkeypatch):
     rec = Recorder()
     _use(monkeypatch, rec)
-    monkeypatch.delenv("GEMINI_THINKING_LEVEL", raising=False)
+    monkeypatch.delenv("GEMINI_FLASH_THINKING_LEVEL", raising=False)
+    monkeypatch.delenv("GEMINI_PRO_THINKING_LEVEL", raising=False)
     gemini.Model("gemini-3.5-flash").generate_content("p")
     gemini.Model(
         "publishers/google/models/gemini-3.1-pro-preview"
     ).generate_content("p")
-    for _, _, config in rec.calls:
-        assert config.thinking_config.thinking_level == types.ThinkingLevel.LOW
+    flash, pro = (c.thinking_config.thinking_level for _, _, c in rec.calls)
+    assert flash == types.ThinkingLevel.LOW
+    # Extraction runs on Pro: low misread printed totals in the smoke run.
+    assert pro == types.ThinkingLevel.MEDIUM
 
 
 def test_the_thinking_level_is_configurable_and_can_be_left_to_the_model(
@@ -198,19 +201,19 @@ def test_the_thinking_level_is_configurable_and_can_be_left_to_the_model(
 ):
     rec = Recorder()
     _use(monkeypatch, rec)
-    monkeypatch.setenv("GEMINI_THINKING_LEVEL", "high")
+    monkeypatch.setenv("GEMINI_FLASH_THINKING_LEVEL", "high")
+    monkeypatch.setenv("GEMINI_PRO_THINKING_LEVEL", "")
     gemini.Model("gemini-3.5-flash").generate_content("p")
-    monkeypatch.setenv("GEMINI_THINKING_LEVEL", "")
-    gemini.Model("gemini-3.5-flash").generate_content("p")
-    first, second = (c for _, _, c in rec.calls)
-    assert first.thinking_config.thinking_level == types.ThinkingLevel.HIGH
-    assert second.thinking_config is None
+    gemini.Model("gemini-3.1-pro-preview").generate_content("p")
+    flash, pro = (c for _, _, c in rec.calls)
+    assert flash.thinking_config.thinking_level == types.ThinkingLevel.HIGH
+    assert pro.thinking_config is None
 
 
 def test_gemini_2_5_gets_no_thinking_level(monkeypatch):
     """2.5 models take a thinking budget, not a level, and reject a level."""
     rec = Recorder()
     _use(monkeypatch, rec)
-    monkeypatch.delenv("GEMINI_THINKING_LEVEL", raising=False)
+    monkeypatch.delenv("GEMINI_FLASH_THINKING_LEVEL", raising=False)
     gemini.Model("gemini-2.5-flash").generate_content("p")
     assert rec.calls[0][2].thinking_config is None

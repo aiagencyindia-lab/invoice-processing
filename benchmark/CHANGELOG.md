@@ -1772,3 +1772,38 @@ right and wrong; two reasons change). Details:
 
 **Regression.** None; no product code changed. Cost is unmeasured until
 `MODEL_PRICING` has 3.x entries.
+
+## 2026-11-06 — Gemini 3 thinking was most of the bill, and uncounted
+
+**Problem.** The November Vertex bill (₹5,637 gross, covered by credits) was
+~92% output tokens, for calls that return a small JSON. The app's own cost
+figures were several times lower.
+
+**Root cause.** Gemini 3 thinks before answering and Vertex bills thinking at
+the output rate. No thinking level was set, so every call used the model's
+default, and `gemini.token_counts` read only `candidates_token_count`, never
+`thoughts_token_count`.
+
+**Fix.** `gemini.Model` sends a thinking level to `gemini-3*` models: Flash
+`low`, Pro `medium` (`GEMINI_FLASH_THINKING_LEVEL`,
+`GEMINI_PRO_THINKING_LEVEL`; empty leaves it to the model). Token counts
+include thinking; the ALF engine uses the same count. Files:
+`invoice_processing/gemini.py`, `shared_libraries/alf_engine.py`,
+`tests/test_gemini.py`.
+
+**Result.** Smoke subset (14 invoices, local, `ledgerly-513708`, 3.5-flash +
+3.1-pro), thinking counted:
+
+| Thinking | Cost / invoice | Median s | Ex-tax totals | Lines | Decisions |
+|---|---|---|---|---|---|
+| model default | $0.0825 (₹7.9) | 71.7 | 11/11 | 0.818 | baseline |
+| Flash low, Pro medium (new default) | $0.0553 (₹5.3) | 49.8 | 11/11 | 0.909 | identical |
+| all low | $0.0300 (₹2.9) | 31.3 | 9/11 | 0.909 | identical |
+
+All-low misread two printed ex-tax totals (`MFG-INV-012`, `MFG-INV-073`), so
+Pro stays at `medium`. Two of the 14 (`TECH-INV-072`, `MFG-INV-073`) are
+accepted in every smoke run: they are duplicates whose originals are not in
+the subset, so step 3.1 has nothing to match.
+
+**Regression.** None in the smoke subset. A full 300 run on the new defaults
+has not been done.

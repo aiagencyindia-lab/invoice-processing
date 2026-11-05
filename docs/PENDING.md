@@ -375,6 +375,9 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
 
 ## Known gaps
 
+- Pro at `low` thinking would cost ₹2.9 an invoice but misread 2 of 11
+  printed ex-tax totals in the smoke run; try it only with a full 300 run.
+
 - One container on Railway (scale up, not out); documents on one volume.
   Upgrade path: S3 adapter + shared queue + separate worker.
 - `GET /healthz` (2026-10-25) answers 200 when the database answers, 503
@@ -406,8 +409,11 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
   `/api/me` returned 200 through 2026-11-04 (token refresh and backend
   verification). A fresh Google sign-in was not watched end to end.
 - 2026-11-06 — `MODEL_PRICING` prices `gemini-3.5-flash` ($1.50/$9.00 per
-  1M) and `gemini-3.1-pro-preview` ($2.00/$12.00); the 2026-11-05 production
-  run repriced to ~$0.02 an invoice (`benchmark/production/README.md`).
+  1M) and `gemini-3.1-pro-preview` ($2.00/$12.00).
+- 2026-11-06 — Gemini 3 thinking: recorded cost now counts thinking tokens
+  (billed as output; ~92% of the November bill), and Flash thinks `low`, Pro
+  `medium` (`GEMINI_FLASH_THINKING_LEVEL` / `GEMINI_PRO_THINKING_LEVEL`).
+  Smoke subset: ₹7.9 → ₹5.3 an invoice, same decisions and extraction.
 - 2026-11-06 — Deploy of `7f8b3ae` (#141): both services SUCCESS, Railway's
   `/healthz` healthcheck passed.
 
