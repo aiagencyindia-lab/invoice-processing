@@ -1045,9 +1045,7 @@ class LLMActionExecutor:
             revised = LLMActionExecutor._parse_response(response_text)
 
             # Extract token usage
-            usage = response.usage_metadata
-            prompt_tokens = usage.prompt_token_count
-            completion_tokens = usage.candidates_token_count
+            prompt_tokens, completion_tokens = gemini.token_counts(response)
 
             logger.info(
                 f"[LLM] {rule_id} completed in {latency_ms:.0f}ms "
@@ -1169,9 +1167,7 @@ class LLMActionExecutor:
             patches = LLMActionExecutor._parse_response(response_text)
 
             # Extract token usage
-            usage = response.usage_metadata
-            prompt_tokens = usage.prompt_token_count
-            completion_tokens = usage.candidates_token_count
+            prompt_tokens, completion_tokens = gemini.token_counts(response)
 
             logger.info(
                 f"[LLM-PATCH] {rule_id} completed in {latency_ms:.0f}ms "

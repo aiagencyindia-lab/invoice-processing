@@ -118,13 +118,17 @@ rejected on Railway ("Missing Work Authorization Form"). `TECH-INV-006` and
 `MFG-INV-089` were correctly rejected by both, for different reasons. The
 totals are identical.
 
-The ~$1.05 the report shows prices every call as `gemini-2.5-flash`:
-`MODEL_PRICING` had no 3.x entries then (added 2026-11-06). Repriced from the
-run's audit logs (267 documents, 1.30M tokens; the 2.5-flash total and the
-token count give ~0.999M input and ~0.301M output), the run cost **$4.21 if
-every call were 3.5-flash and $5.61 if every call were 3.1-pro**. PDF
-extraction, which carries most of the tokens, runs on 3.1-pro, so the real
-figure is near the top: about **$0.02 (~₹1.8) per invoice**.
+The ~$1.05 the report shows prices every call as `gemini-2.5-flash` and,
+like every cost figure before 2026-11-06, leaves out Gemini 3's thinking
+tokens, which Vertex bills at the output rate. A first repricing from the
+audit logs ($0.02 an invoice) inherited that omission and was wrong. The
+November Vertex bill showed output at ~92% of spend.
+
+Measured on the 14-invoice smoke subset on 2026-11-06, thinking included
+(`thinking-*-2026-11-06` runs): **$0.0825 (₹7.9) an invoice at the models'
+default thinking**, which is what this run used. With the defaults since then
+(Flash `low`, Pro `medium`) it is **$0.055 (₹5.3)**, with the same decisions
+and extraction; see `benchmark/CHANGELOG.md`.
 
 Cleanup left production with its one real tenant (`aixai`): each bench tenant's
 purge deleted ~2,000 rows, audit events included, and 91 stored documents;
