@@ -1807,3 +1807,33 @@ the subset, so step 3.1 has nothing to match.
 
 **Regression.** None in the smoke subset. A full 300 run on the new defaults
 has not been done.
+
+## 2026-11-06 — The classifier paid Gemini to copy out text the PDF already had
+
+**Problem.** Measured per call on the smoke subset (current defaults), one
+Flash call per document — transcribing the whole PDF to text for the
+classifier — was ~29% of model spend and recorded no tokens or cost. The
+real cost was $0.078 an invoice; the run recorded $0.055. Every cost figure
+above, including the 2026-11-06 thinking table, is low by that call.
+
+**Root cause.** `extract_pdf_with_fallback` sent every PDF to Gemini first
+and used pdfplumber only if Gemini failed. `extract_pdf_with_gemini` called
+the model without updating the run's metrics.
+
+**Fix.** pdfplumber first; Gemini only when the PDF has no text layer (a
+scan) or cannot be read. One `_record_usage` now counts every call,
+transcription included. Files: `shared_libraries/acting/general_invoice_agent.py`,
+`tests/test_pdf_text.py`.
+
+**Result.** Smoke subset, same models and thinking, counted per SDK call:
+
+| | Real cost / invoice | Recorded | Median s | Decisions |
+|---|---|---|---|---|
+| before | $0.078 (₹7.5) | $0.055 | 51.5 | baseline |
+| after | $0.069 (₹6.6) | $0.069 | 42.4 | 14/14 identical, same reasons and document types |
+
+7 of the 14 smoke PDFs are scans and still go to Gemini, so the saving here
+is 12%. On a supplier mix of digital PDFs it approaches the full ~29%.
+
+**Regression.** None in the smoke subset; full suite green. A full 300 run
+has not been done.

@@ -128,7 +128,9 @@ Measured on the 14-invoice smoke subset on 2026-11-06, thinking included
 (`thinking-*-2026-11-06` runs): **$0.0825 (₹7.9) an invoice at the models'
 default thinking**, which is what this run used. With the defaults since then
 (Flash `low`, Pro `medium`) it is **$0.055 (₹5.3)**, with the same decisions
-and extraction; see `benchmark/CHANGELOG.md`.
+and extraction; see `benchmark/CHANGELOG.md`. Both figures leave out an
+unrecorded PDF-to-text call: counted per call, the new defaults cost $0.078,
+and $0.069 (₹6.6) once digital PDFs are read locally (same changelog).
 
 Cleanup left production with its one real tenant (`aixai`): each bench tenant's
 purge deleted ~2,000 rows, audit events included, and 91 stored documents;

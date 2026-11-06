@@ -834,6 +834,7 @@ Return the text exactly as it appears, preserving numbers, dates, amounts, and s
 Do not summarize - extract complete text content."""
 
     response = _generate(model, [pdf_part, prompt])
+    _record_usage(_gcp_config.GEMINI_FLASH_MODEL, response)
 
     if _gcp_config.API_CALL_DELAY_SECONDS > 0:
         time.sleep(_gcp_config.API_CALL_DELAY_SECONDS)
@@ -841,20 +842,33 @@ Do not summarize - extract complete text content."""
     return response.text
 
 
+def _has_text(markdown: str) -> bool:
+    """True when pdfplumber found real text, not just its page headers."""
+    if markdown.startswith("[PDF extraction failed"):
+        return False
+    text = re.sub(r"## Page \d+|---|\s", "", markdown)
+    return len(text) > _MIN_PDF_CONTENT_LENGTH
+
+
 def extract_pdf_with_fallback(pdf_path: Path) -> tuple[str, str]:
-    """Extract PDF with Gemini as default, pdfplumber as fallback"""
+    """The PDF's own text layer first; Gemini only for a scan without one.
+
+    Transcribing every PDF with Gemini was ~29% of the model spend
+    (2026-11-06 smoke run) for text most supplier PDFs already carry.
+    """
+    content = extract_pdf_to_markdown(pdf_path)
+    if _has_text(content):
+        return content, "pdfplumber"
     _ensure_gcp_initialized()
     if _gcp_config.PROJECT_ID:
         try:
-            content = extract_pdf_with_gemini(pdf_path)
-            if content and len(content.strip()) > _MIN_PDF_CONTENT_LENGTH:
-                return content, "gemini"
+            scanned = extract_pdf_with_gemini(pdf_path)
+            if scanned and len(scanned.strip()) > _MIN_PDF_CONTENT_LENGTH:
+                return scanned, "gemini"
         except LlmUnavailable:
             raise  # the service, not the document: see llm_guard
         except Exception as e:
-            print(f"    Gemini extraction failed: {e}, using pdfplumber...")
-
-    content = extract_pdf_to_markdown(pdf_path)
+            print(f"    Gemini extraction failed: {e}")
     return content, "pdfplumber"
 
 
@@ -960,13 +974,28 @@ def clean_extraction(invoice_data: dict, pages: list[str]) -> dict:
     return invoice_data
 
 
+def _record_usage(model_name: str, response) -> None:
+    """Count one call's tokens and cost into this run's metrics."""
+    metrics = _get_metrics()
+    prompt_tokens, completion_tokens = gemini.token_counts(response)
+    metrics["llm_calls"] += 1
+    metrics["total_tokens"]["prompt"] += prompt_tokens
+    metrics["total_tokens"]["completion"] += completion_tokens
+    pricing = MODEL_PRICING.get(
+        model_name.rsplit("/", maxsplit=1)[-1],
+        MODEL_PRICING["gemini-2.5-flash"],
+    )
+    metrics["total_cost_usd"] += (
+        prompt_tokens * pricing["input"] + completion_tokens * pricing["output"]
+    ) / 1_000_000
+
+
 def call_gemini(
     prompt: str,
     model_name: str | None = None,
     response_schema: type[BaseModel] | None = None,
 ) -> tuple[Any, float]:
     """Call Gemini API with optional structured output"""
-    metrics = _get_metrics()
     model_name = model_name or _gcp_config.GEMINI_FLASH_MODEL
     model = _model_for(model_name, 0)
 
@@ -974,18 +1003,7 @@ def call_gemini(
     response = _generate(model, prompt)
     latency_ms = (time.time() - start_time) * 1000
 
-    # Update metrics
-    prompt_tokens, completion_tokens = gemini.token_counts(response)
-    metrics["llm_calls"] += 1
-    metrics["total_tokens"]["prompt"] += prompt_tokens
-    metrics["total_tokens"]["completion"] += completion_tokens
-
-    pricing = MODEL_PRICING.get(
-        model_name.split("/")[-1], MODEL_PRICING["gemini-2.5-flash"]
-    )
-    cost = (prompt_tokens / 1_000_000) * pricing["input"]
-    cost += (completion_tokens / 1_000_000) * pricing["output"]
-    metrics["total_cost_usd"] += cost
+    _record_usage(model_name, response)
 
     if _gcp_config.API_CALL_DELAY_SECONDS > 0:
         time.sleep(_gcp_config.API_CALL_DELAY_SECONDS)
@@ -1004,7 +1022,6 @@ def call_gemini_with_pdf(
     response_schema: type[BaseModel] | None = None,
 ) -> tuple[Any, float]:
     """Call Gemini with PDF as input"""
-    metrics = _get_metrics()
     model_name = model_name or _gcp_config.GEMINI_PRO_MODEL
     model = _model_for(model_name, 0)
 
@@ -1017,18 +1034,7 @@ def call_gemini_with_pdf(
     response = _generate(model, [pdf_part, prompt])
     latency_ms = (time.time() - start_time) * 1000
 
-    # Update metrics
-    prompt_tokens, completion_tokens = gemini.token_counts(response)
-    metrics["llm_calls"] += 1
-    metrics["total_tokens"]["prompt"] += prompt_tokens
-    metrics["total_tokens"]["completion"] += completion_tokens
-
-    pricing = MODEL_PRICING.get(
-        model_name.split("/")[-1], MODEL_PRICING["gemini-2.5-flash"]
-    )
-    cost = (prompt_tokens / 1_000_000) * pricing["input"]
-    cost += (completion_tokens / 1_000_000) * pricing["output"]
-    metrics["total_cost_usd"] += cost
+    _record_usage(model_name, response)
 
     if _gcp_config.API_CALL_DELAY_SECONDS > 0:
         time.sleep(_gcp_config.API_CALL_DELAY_SECONDS)
