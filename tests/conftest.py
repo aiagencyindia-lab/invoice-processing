@@ -111,6 +111,16 @@ def never_report_to_real_sentry(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def never_call_gemini_decisions(monkeypatch):
+    """No test reaches the real Decisions API through a key in `.env`.
+
+    Blanked for the same reason as SENTRY_DSN above. Tests of Decision 1
+    set a fake key and stub the HTTP call themselves.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+
+
+@pytest.fixture(autouse=True)
 def never_touch_real_cloud_storage(monkeypatch):
     """Fail loudly if a test would construct a real GCS client.
 

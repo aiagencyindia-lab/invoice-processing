@@ -18,7 +18,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from .. import gemini
+from .. import decisions, gemini
 from ..llm_guard import (
     LlmBudgetExceeded,
     LlmCallTimeout,
@@ -121,6 +121,49 @@ class GeminiDecider:
         return response.text, self.model_name
 
 
+_SCORE_LEVELS = ("none", "low", "medium", "high", "certain")
+
+
+def _ask_decision1(
+    state: dict, questions: Sequence[Question]
+) -> tuple[str, str]:
+    """Gemini Decision 1 asked natively, replied in a Decider's JSON shape."""
+    asked = {}
+    for i, q in enumerate(questions):
+        if q.kind == "choice":
+            criteria = {f"o{j}": o for j, o in enumerate(q.options)}
+            asked[f"q{i}"] = {
+                "type": "choice",
+                "instructions": q.text,
+                "criteria": criteria,
+            }
+        elif q.kind == "yes_no":
+            asked[f"q{i}"] = {"type": "noul", "instructions": q.text}
+        else:
+            levels = list(q.options) or list(_SCORE_LEVELS)
+            asked[f"q{i}"] = {
+                "type": "score",
+                "instructions": q.text,
+                "criteria": levels,
+            }
+    answers, _ = decisions.ask(
+        "Record:\n" + json.dumps(state, default=str, sort_keys=True), asked
+    )
+    items = []
+    for i, q in enumerate(questions):
+        a = answers[f"q{i}"]
+        if q.kind == "choice":
+            value, p = q.options[int(a["choice"][1:])], a["confidence"]
+        elif q.kind == "yes_no":
+            value = a["noul"] >= 0.5
+            p = a["noul"] if value else 1 - a["noul"]
+        else:  # the weighted level index, scaled to 0..1
+            value = a["score"] / (len(asked[f"q{i}"]["criteria"]) - 1)
+            p = a["confidence"]
+        items.append({"id": q.id, "value": value, "probability": p})
+    return json.dumps({"answers": items}), decisions.MODEL
+
+
 class FakeDecider:
     """Scripted answers for tests and fakes; `fail=True` behaves like an outage."""
 
@@ -153,7 +196,16 @@ def decide(
     replies: dict[str, _Item] = {}
     version = "fallback"
     try:
-        text, version = decider(_prompt(state, questions))
+        if decisions.enabled() and isinstance(decider, GeminiDecider):
+            try:
+                text, version = _ask_decision1(state, questions)
+            except Exception as exc:  # Gemini is the fallback
+                logger.warning(
+                    "trust_decision1_error", extra={"error": type(exc).__name__}
+                )
+                text, version = decider(_prompt(state, questions))
+        else:
+            text, version = decider(_prompt(state, questions))
         replies = {
             item.id: item for item in _Reply.model_validate_json(text).answers
         }

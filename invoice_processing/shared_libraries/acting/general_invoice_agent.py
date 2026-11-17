@@ -64,6 +64,7 @@ try:
     from ... import (
         bank_check,
         confidence,
+        decisions,
         duplicates,
         extraction_cleanup,
         gemini,
@@ -99,6 +100,7 @@ except ImportError:  # executed as a script: no parent package context
     from invoice_processing import (
         bank_check,
         confidence,
+        decisions,
         duplicates,
         extraction_cleanup,
         gemini,
@@ -974,6 +976,42 @@ def clean_extraction(invoice_data: dict, pages: list[str]) -> dict:
     return invoice_data
 
 
+def _record_decision(input_tokens: int) -> None:
+    """Count one Decision 1 request: input only, output is free."""
+    metrics = _get_metrics()
+    metrics["llm_calls"] += 1
+    metrics["total_tokens"]["prompt"] += input_tokens
+    metrics["total_cost_usd"] += decisions.cost_usd(input_tokens)
+
+
+_DOC_TYPE_HINTS = {
+    TAX_INVOICE: "A tax invoice: titled as one, with a supplier tax registration and tax stated or itemised.",
+    NON_TAX_INVOICE: "Billed as an invoice but with no tax registration or no tax charged, including a Bill of Supply or a composition-scheme invoice.",
+    "receipt": "Records a payment already made.",
+    "quotation": "An offer or estimate, often 'valid for N days'.",
+    "proforma_invoice": "Titled proforma; a request for payment in advance, not a tax invoice.",
+    "credit_note": "Reverses an earlier invoice.",
+    "purchase_order": "The buyer's own order document.",
+    GOODS_RECEIPT: "A goods or material receipt note (GRN/MRN) recording what the buyer's stores received; not a delivery challan.",
+    "delivery_challan": "A delivery or dispatch note from the supplier, usually without prices.",
+    "statement": "A statement of account listing several invoices.",
+    "unreadable": "Nothing legible could be recovered from the page.",
+    "other": "None of the above.",
+}
+
+_ITEM_CODE_HINTS = {
+    "LABOUR": "Work by technicians, engineers or tradespeople: service calls, inspections, diagnostics, calibration, testing, repair labour.",
+    "LABOUR_AH": "After-hours or overtime labour only.",
+    "PARTS": "Physical materials, components, equipment, replacement parts, filters, coils, fittings, valves, units, supplies, consumables.",
+    "FREIGHT": "Delivery, shipping, freight charges.",
+    "TRAVEL": "Travel time, mileage, kilometre charges, travel allowances.",
+    "CALLOUT": "Call-out fees, attendance fees, minimum charges for site visits.",
+    "HIRE": "Equipment hire or rental charges.",
+    "CLEANING": "Cleaning services, janitorial work.",
+    "OTHER": "Only if the line truly fits none of the others.",
+}
+
+
 def _record_usage(model_name: str, response) -> None:
     """Count one call's tokens and cost into this run's metrics."""
     metrics = _get_metrics()
@@ -1284,6 +1322,11 @@ Return ONLY this JSON:
   "reasoning": "brief explanation"
 }}"""
 
+        if decisions.enabled():
+            try:
+                return self._analyze_with_decisions(content[:8000])
+            except Exception as e:  # Gemini below is the fallback
+                print(f"    Decision 1 analysis failed ({e}); asking Gemini")
         try:
             result, _ = call_gemini(
                 prompt, _gcp_config.GEMINI_FLASH_MODEL, DocumentContent
@@ -1295,6 +1338,49 @@ Return ONLY this JSON:
             print(f"    Warning: Document analysis failed: {e}")
             self.fell_back = True
             return self._classify_by_keyword(content)
+
+    @staticmethod
+    def _analyze_with_decisions(text: str) -> DocumentContent:
+        counts = {
+            "n0": "None",
+            "n1": "One",
+            "n2": "Two",
+            "n3": "Three",
+            "n4": "Four",
+            "n5": "Five or more",
+        }
+        a, tokens = decisions.ask(
+            text,
+            {
+                "has_invoice": {
+                    "type": "noul",
+                    "instructions": "Does this document contain an invoice: an invoice number, a line-items table with amounts, totals, and the supplier's business and tax details?",
+                },
+                "has_work_authorization": {
+                    "type": "noul",
+                    "instructions": "Does it contain a work authorization (WAF): a work-authorization header, site attendance records, authorized hours or technician signatures?",
+                },
+                "document_type": {
+                    "type": "choice",
+                    "instructions": "What does the document say it is, not what it resembles? Its own title is the strongest evidence, and a disclaimer such as 'this is not a tax invoice' settles it.",
+                    "criteria": _DOC_TYPE_HINTS,
+                },
+                "invoice_count": {
+                    "type": "choice",
+                    "instructions": "How many distinct invoices does this file contain? Count distinct invoice numbers, not pages: several pages of one invoice is one.",
+                    "criteria": counts,
+                },
+            },
+        )
+        _record_decision(tokens)
+        doc = a["document_type"]
+        return DocumentContent(
+            has_invoice=a["has_invoice"]["noul"] >= 0.5,
+            has_work_authorization=a["has_work_authorization"]["noul"] >= 0.5,
+            invoice_count=int(a["invoice_count"]["choice"][1:]),
+            document_type=doc["choice"],
+            reasoning=f"{decisions.MODEL}: {doc['choice']} p={doc['confidence']:.2f}",
+        )
 
     # Document-title phrases and the type each names.
     _TITLE_PHRASES: ClassVar[dict[str, str]] = {
@@ -2962,6 +3048,24 @@ class TransformerAgent(BaseAgent):
         """
         if not descriptions:
             return []
+
+        if decisions.enabled() and len(descriptions) <= 1000:
+            try:
+                a, tokens = decisions.ask(
+                    "Classify invoice line items into item codes. Physical items are PARTS; service work is LABOUR; prefer a specific code over OTHER.",
+                    {
+                        f"l{i}": {
+                            "type": "choice",
+                            "instructions": f'Item code for the line item "{d}"',
+                            "criteria": _ITEM_CODE_HINTS,
+                        }
+                        for i, d in enumerate(descriptions)
+                    },
+                )
+                _record_decision(tokens)
+                return [a[f"l{i}"]["choice"] for i in range(len(descriptions))]
+            except Exception as e:  # Gemini below is the fallback
+                print(f"    Decision 1 item codes failed ({e}); asking Gemini")
 
         items_block = "\n".join(
             f'  {i + 1}. "{desc}"' for i, desc in enumerate(descriptions)
