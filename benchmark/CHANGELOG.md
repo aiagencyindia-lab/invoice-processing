@@ -1837,3 +1837,20 @@ is 12%. On a supplier mix of digital PDFs it approaches the full ~29%.
 
 **Regression.** None in the smoke subset; full suite green. A full 300 run
 has not been done.
+
+## 2026-11-17 — Closed-set questions moved to Gemini Decision 1
+
+- **Problem:** document typing, line-item (GL) coding and the v2 trust questions paid Gemini output and thinking tokens to pick from a fixed list.
+- **Root cause:** a generative model was being used for questions with closed answers.
+- **Fix:** when `GEMINI_API_KEY` (AI Studio) is set, these go to `gemini-decision-1` ($0.10 per 1M input, no output cost). Gemini stays the fallback on any failure. Extraction, scan transcription and everything that writes text stay on Gemini. `GEMINI_DECISIONS=off` turns it off.
+- **Files:** `invoice_processing/decisions.py`, `general_invoice_agent.py`, `trust/decide.py`.
+- **Tests:** `tests/test_decisions.py`; the conftest blanks the key so no test calls the live API.
+- **Result (smoke, 14 docs):**
+
+  | | Cost per invoice | Median time | Same decision |
+  |---|---|---|---|
+  | Before | $0.069 | 42.3 s | — |
+  | After | $0.054 | 43.4 s | 14/14 |
+
+  There were no Decision 1 fallbacks. Fields fully correct went from 9 to 10 docs, which is noise.
+- **Regression:** none seen. Production is unchanged until the key is set on Railway.
