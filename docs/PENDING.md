@@ -400,6 +400,7 @@ Wave 0 plan: `docs/superpowers/plans/2026-10-14-v2-wave0-foundation.md`.
 - ERP connectors (wait for a design partner's ERP).
 - Custom domain and auth domain.
 - GitHub: branch protection on `main`; Dependabot security updates.
+- Cheap extraction path (proposed 2026-11-17, parked on the user's word). Read the text with free OCR (pdfplumber, or Tesseract/PaddleOCR for scans), find candidate values with patterns, have Gemini Decision 1 pick each field from those candidates with the PDF attached, then confirm with the totals arithmetic. Pro runs only for an invoice where a field is unresolved. First step: measure on the 300-invoice benchmark -- the share of invoices fully confirmed without Pro, and the wrong-field rate among confirmed fields (must be close to zero). Needs PR #154.
 
 ## Done
 
