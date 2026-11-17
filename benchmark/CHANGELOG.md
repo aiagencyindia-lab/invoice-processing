@@ -1854,3 +1854,20 @@ has not been done.
 
   There were no Decision 1 fallbacks. Fields fully correct went from 9 to 10 docs, which is noise.
 - **Regression:** none seen. Production is unchanged until the key is set on Railway.
+
+## 2026-11-17 — Scanned PDFs read by Cloud Vision OCR
+
+- **Problem:** Gemini Flash transcribed every scan (7 of 14 smoke PDFs) for classification, billed as output tokens. The same call hit a Vertex 429 once in the Decision 1 run.
+- **Root cause:** a generative model was used for plain OCR.
+- **Fix:** `extract_pdf_with_vision` uses Vision `files:annotate` (DOCUMENT_TEXT_DETECTION, 5 pages per request, $0.0015 a page counted in run cost). Gemini runs only if Vision fails. `GOOGLE_VISION_OCR=off` turns it off. The Vision API is enabled on ledgerly-513708.
+- **Files:** `general_invoice_agent.py`.
+- **Tests:** `tests/test_pdf_text.py` (order, fallback, 5-page batches and billing). The conftest switches Vision off.
+- **Result (smoke, 14 docs, Decision 1 on in both runs):**
+
+  | | Cost per invoice | Median time | LLM calls mean | Same decision |
+  |---|---|---|---|---|
+  | Before | $0.054 | 43.4 s | 3.5 | — |
+  | After | $0.044 | 37.3 s | 2.9 | 14/14 |
+
+  There were no Vision fallbacks. Fields fully correct: 10 docs, unchanged.
+- **Regression:** none seen.
