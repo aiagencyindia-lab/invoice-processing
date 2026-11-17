@@ -112,12 +112,13 @@ def never_report_to_real_sentry(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def never_call_gemini_decisions(monkeypatch):
-    """No test reaches the real Decisions API through a key in `.env`.
+    """No test reaches the real Decisions or Vision API through `.env` or ADC.
 
     Blanked for the same reason as SENTRY_DSN above. Tests of Decision 1
     set a fake key and stub the HTTP call themselves.
     """
     monkeypatch.setenv("GEMINI_API_KEY", "")
+    monkeypatch.setenv("GOOGLE_VISION_OCR", "off")
 
 
 @pytest.fixture(autouse=True)
