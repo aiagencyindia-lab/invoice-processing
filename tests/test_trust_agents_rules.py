@@ -52,7 +52,9 @@ def sealed(env, agent=None, **caps):
         agent["id"],
         scope={**SCOPE, "caps": caps},
         valid_from=NOW - timedelta(days=1),
-        valid_to=NOW + timedelta(days=30),
+        # The store stamps approved_at with the real clock, so the window has
+        # to reach past today; 30 days from NOW expired on 2026-11-21.
+        valid_to=NOW + timedelta(days=3650),
     )
     return mandates.approve(ADMIN_B, env["store"], m["id"])
 
