@@ -844,6 +844,71 @@ Do not summarize - extract complete text content."""
     return response.text
 
 
+_VISION_URL = "https://vision.googleapis.com/v1/files:annotate"
+_VISION_PAGES_PER_CALL = 5  # the synchronous files:annotate limit
+VISION_USD_PER_PAGE = 0.0015  # after the first 1,000 pages a month
+
+
+def extract_pdf_with_vision(pdf_path: Path) -> str:
+    """Cloud Vision document OCR: a scan's text at $1.50 per 1,000 pages.
+
+    Off with GOOGLE_VISION_OCR=off. Any failure (API not enabled, quota)
+    raises, and the caller falls back to Gemini.
+    """
+    import base64  # noqa: PLC0415
+
+    import google.auth  # noqa: PLC0415
+    from google.auth.transport.requests import (  # noqa: PLC0415
+        AuthorizedSession,
+    )
+
+    if os.getenv("GOOGLE_VISION_OCR", "on") == "off":
+        raise RuntimeError("Vision OCR switched off")
+    creds, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    session = AuthorizedSession(creds)
+    data = Path(pdf_path).read_bytes()
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            total = len(pdf.pages)
+    except Exception:  # unreadable to pdfplumber: Vision's default 5 pages
+        total = _VISION_PAGES_PER_CALL
+    content = base64.b64encode(data).decode()
+    pages: list[str] = []
+    for first in range(1, total + 1, _VISION_PAGES_PER_CALL):
+        last = min(first + _VISION_PAGES_PER_CALL, total + 1)
+        r = session.post(
+            _VISION_URL,
+            headers={"x-goog-user-project": _gcp_config.PROJECT_ID},
+            json={
+                "requests": [
+                    {
+                        "inputConfig": {
+                            "content": content,
+                            "mimeType": "application/pdf",
+                        },
+                        "features": [{"type": "DOCUMENT_TEXT_DETECTION"}],
+                        "pages": list(range(first, last)),
+                    }
+                ]
+            },
+            timeout=60,
+        )
+        r.raise_for_status()
+        resp = r.json()["responses"][0]
+        if "error" in resp:
+            raise RuntimeError(resp["error"].get("message", "Vision error"))
+        for page in resp.get("responses", []):
+            if "error" in page:
+                raise RuntimeError(page["error"].get("message", "Vision error"))
+            pages.append(page.get("fullTextAnnotation", {}).get("text", ""))
+    _get_metrics()["total_cost_usd"] += len(pages) * VISION_USD_PER_PAGE
+    return "\n---\n".join(
+        f"## Page {i}\n\n{text}" for i, text in enumerate(pages, 1)
+    )
+
+
 def _has_text(markdown: str) -> bool:
     """True when pdfplumber found real text, not just its page headers."""
     if markdown.startswith("[PDF extraction failed"):
@@ -853,7 +918,7 @@ def _has_text(markdown: str) -> bool:
 
 
 def extract_pdf_with_fallback(pdf_path: Path) -> tuple[str, str]:
-    """The PDF's own text layer first; Gemini only for a scan without one.
+    """The PDF's own text layer first, then Cloud Vision OCR, then Gemini.
 
     Transcribing every PDF with Gemini was ~29% of the model spend
     (2026-11-06 smoke run) for text most supplier PDFs already carry.
@@ -863,6 +928,12 @@ def extract_pdf_with_fallback(pdf_path: Path) -> tuple[str, str]:
         return content, "pdfplumber"
     _ensure_gcp_initialized()
     if _gcp_config.PROJECT_ID:
+        try:
+            scanned = extract_pdf_with_vision(pdf_path)
+            if _has_text(scanned):
+                return scanned, "vision"
+        except Exception as e:  # Gemini below is the fallback
+            print(f"    Vision OCR failed ({e}); asking Gemini")
         try:
             scanned = extract_pdf_with_gemini(pdf_path)
             if scanned and len(scanned.strip()) > _MIN_PDF_CONTENT_LENGTH:
