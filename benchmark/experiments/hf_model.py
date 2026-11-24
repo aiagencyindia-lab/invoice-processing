@@ -274,7 +274,9 @@ def ask(
     # raw_decode stops at the first object: replies sometimes carry two
     got = json.JSONDecoder().raw_decode(text[start:])[0]
     lines = got.get("lines") or []
-    if not isinstance(lines, list) or not all(isinstance(x, dict) for x in lines):
+    if not isinstance(lines, list) or not all(
+        isinstance(x, dict) for x in lines
+    ):
         raise ValueError("reply has the wrong shape")  # an error goes to Pro
     return got, d.get("usage") or {}
 
